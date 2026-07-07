@@ -1,0 +1,15 @@
+[package]
+name = "deix_kernel"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "deix_kernel"
+crate-type = ["staticlib"]
+path = "src/lib.rs"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
