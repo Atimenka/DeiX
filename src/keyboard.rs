@@ -208,3 +208,38 @@ pub fn read_char() -> u8 {
         unsafe { core::arch::asm!("hlt") };
     }
 }
+
+/// Читает строку до Enter (используется DS REPL и другими интерактивными
+/// инструментами). Показывает вводимые символы на экране.
+pub fn read_line() -> alloc::string::String {
+    #[allow(unused_imports)]
+    let mut buf = [0u8; 256];
+    let mut len = 0usize;
+    loop {
+        let c = read_char();
+        match c {
+            b'\n' => {
+                crate::print!("\n");
+                break;
+            }
+            0x08 => {
+                if len > 0 {
+                    len -= 1;
+                    crate::print!("\u{8}");
+                }
+            }
+            byte if byte >= 0x20 && byte < 0x7F => {
+                if len < 256 {
+                    buf[len] = byte;
+                    len += 1;
+                    let s = [byte];
+                    if let Ok(s) = core::str::from_utf8(&s) {
+                        crate::print!("{}", s);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    core::str::from_utf8(&buf[..len]).unwrap_or("").into()
+}

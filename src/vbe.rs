@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Драйвер Bochs VBE Display Interface (DISPI) — открытый, задокументированный
 //! интерфейс, который эмулирует QEMU (device "VGA"/"std vga", PCI ID
 //! 1234:1111) и Bochs. Даёт настоящий линейный framebuffer с произвольным

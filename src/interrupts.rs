@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! IDT (Interrupt Descriptor Table): обработчики исключений процессора
 //! (division by zero, page fault, double fault, ...) и аппаратных
 //! прерываний (таймер, клавиатура) через контроллер PIC 8259.

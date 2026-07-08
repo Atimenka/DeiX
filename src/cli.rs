@@ -241,6 +241,8 @@ pub fn execute(line: &str) {
         "whoami" => cmd_whoami(),
         "users" => cmd_users(),
         "encrypt" => cmd_encrypt(rest),
+        "browser" => cmd_gpu_mode(""),
+        "files" => cmd_gpu_mode(""),
         "crash" => cmd_crash(rest),
         "reboot" => cmd_reboot(),
         "halt" => cmd_halt(),

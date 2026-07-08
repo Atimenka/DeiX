@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Сквозное шифрование диска для ext2 — "Crypto Storage Engine".
 //!
 //! РЕАЛИЗОВАННАЯ СХЕМА: byte-совместима с настоящим Linux dm-crypt в

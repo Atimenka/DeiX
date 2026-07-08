@@ -40,6 +40,7 @@ struct Package {
 // tools/*.asm ДО сборки cargo — см. шаг [2/6] в build.sh).
 static HELLO_MEX: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/build/hello.mex"));
 static SYSINFO_MEX: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/build/sysinfo.mex"));
+static NETPING_MEX: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/build/netping.mex"));
 
 static CATALOG: &[Package] = &[
     Package {
@@ -55,6 +56,13 @@ static CATALOG: &[Package] = &[
         description_en: "Demo .mex program that prints kernel uptime via the syscall table.",
         description_ru: "Демо-программа .mex, печатающая аптайм ядра через таблицу системных функций.",
         files: &[("SYSINFO.MEX", SYSINFO_MEX)],
+    },
+    Package {
+        name: "netping",
+        version: "1.0",
+        description_en: "Network ping .mex utility (v1.1 API: get_mac, get_ip, ping).",
+        description_ru: "Сетевая .mex утилита ping (v1.1 API: get_mac, get_ip, ping).",
+        files: &[("NETPING.MEX", NETPING_MEX)],
     },
     Package {
         name: "motd",

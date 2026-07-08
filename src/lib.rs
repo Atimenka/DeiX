@@ -3,29 +3,45 @@
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
 
+
 extern crate alloc;
 
 mod allocator;
 mod ata;
 mod auth;
+mod autostart;
+mod browser;
 mod cli;
 mod cp866;
 mod crypto;
 mod crypto_storage;
+mod dp;
+mod ds;
+mod duil;
+mod dxinit;
+mod elf;
 mod ext2;
 mod fat16;
+mod fileman;
 mod font;
 mod font_cyrillic;
 mod font_full;
+mod fs;
 mod gpu;
+mod hda;
+mod initrd;
 mod install;
 mod interrupts;
 mod keyboard;
 mod lang;
 mod mex;
+mod mexapi;
+mod mm;
+mod module;
 mod mouse;
 mod net;
 mod nouveau;
+mod nv3d;
 mod pci;
 mod pkg;
 mod port;
@@ -37,11 +53,13 @@ mod spinlock;
 mod sync;
 mod timer;
 mod ui;
+mod usermode;
 mod vbe;
 mod vga;
 mod vgaglobal;
 mod vmmouse;
 mod wifi;
+mod xhci;
 
 use core::panic::PanicInfo;
 
@@ -116,6 +134,30 @@ pub extern "C" fn kernel_main() -> ! {
     }
 
     println!("Default language: English. Type 'lang ru' to switch to Russian.");
+
+    // Инициализируем менеджер памяти (физический + виртуальный).
+    mm::phys::init();
+    println!("  [mm] Physical page allocator: OK");
+    mm::print_stats();
+
+    // Загружаем метаданные файловой системы.
+    fs::load_meta_db();
+    println!("  [fs] File access control + TrustedInstaller: OK");
+
+    // Инициализируем Ring 3 (GDT + TSS + syscall MSR).
+    usermode::init();
+    usermode::setup_syscall_table();
+
+    // Загружаем модули из initrd (ранняя ФС) если вкомпилированы.
+    initrd::init();
+
+    // Загружаем модули ядра (.kmod файлы) с ext2-диска.
+    // Модули расширяют функциональность ядра: сеть, графика, криптография.
+    // Если модуль не найден на диске — система продолжает работу без него.
+    module::load_boot_modules();
+
+    // Выполняем скрипт автозапуска (AUTOSTART.CFG) если существует.
+    autostart::run();
 
     // Экран входа — до первого запуска создаёт первый аккаунт, при
     // последующих запусках требует ввод логина/пароля (сверяется с

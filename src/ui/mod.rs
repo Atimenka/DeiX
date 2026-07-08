@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! UI-драйвер: оконный менеджер поверх программного 2D-рендерера
 //! (renderer.rs) с настоящим интерактивным циклом отрисовки — рабочий
 //! стол, перетаскиваемые окна с заголовком/кнопками, курсор мыши в
@@ -54,6 +55,21 @@ pub enum WindowContent {
     /// Простой текстовый просмотрщик (TXT reader) — показывает
     /// содержимое одного файла с прокруткой (стрелки вверх/вниз).
     /// Открывается кликом на файл в окне Files.
+    Browser {
+        url: String,
+        html_lines: Vec<String>,
+        links: Vec<(String, String)>,
+        title: String,
+        scroll: usize,
+        loading: bool,
+        error: Option<String>,
+    },
+    FmGui {
+        entries: Vec<crate::fs::FileMeta>,
+        current_idx: usize,
+        scroll: usize,
+        sort_by: u8,
+    },
     TextViewer {
         filename: String,
         lines: Vec<String>,
@@ -156,6 +172,29 @@ impl Window {
             maximized: false,
             restore_geometry: (x, y, 300, 170),
             content: WindowContent::About,
+        }
+    }
+
+    fn new_browser(x: i32, y: i32, url: &str) -> Self {
+        Window {
+            x, y, width: 580, height: 400,
+            title: alloc::format!("Browser — {}", url), minimized: false, maximized: false,
+            restore_geometry: (x, y, 580, 400),
+            content: WindowContent::Browser {
+                url: url.into(), html_lines: alloc::vec!["Loading...".into()],
+                links: Vec::new(), title: "Loading...".into(),
+                scroll: 0, loading: true, error: None,
+            },
+        }
+    }
+
+    fn new_fmgui(x: i32, y: i32) -> Self {
+        let entries = crate::fs::list_dir();
+        Window {
+            x, y, width: 500, height: 380,
+            title: "DeiX Files".into(), minimized: false, maximized: false,
+            restore_geometry: (x, y, 500, 380),
+            content: WindowContent::FmGui { entries, current_idx: 0, scroll: 0, sort_by: 0 },
         }
     }
 
@@ -495,7 +534,7 @@ impl Desktop {
                             }
                         }
                     }
-                    WindowContent::Files { .. } | WindowContent::About | WindowContent::DisplaySettings => {
+                    WindowContent::Files { .. } | WindowContent::About | WindowContent::DisplaySettings | WindowContent::Browser { .. } | WindowContent::FmGui { .. } => {
                         // Не принимают клавиатурный ввод.
                         while keyboard::try_read_char().is_some() {}
                     }
@@ -1027,6 +1066,93 @@ fn draw_window(r: &mut Renderer, w: &Window, focused: bool) {
                 let label = format!("{}x{}{}", rw, rh, if is_current { "  (current)" } else { "" });
                 r.draw_text(w.x + 12, line_y, &label, Color::rgb(20, 20, 30), None);
                 line_y += 28;
+            }
+        }
+        WindowContent::Browser { html_lines, title, loading, error, scroll, .. } => {
+            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(30, 30, 36));
+            if *loading {
+                r.draw_text(w.x + 10, content_y + 8, "Loading page...", Color::rgb(100, 200, 255), None);
+            } else if let Some(e) = error {
+                r.draw_text(w.x + 10, content_y + 8, &format!("ERROR: {}", e), Color::rgb(255, 80, 80), None);
+            } else {
+                r.draw_text(w.x + 10, content_y + 6, truncate(title, (w.width as usize - 20) / 8), Color::rgb(255, 200, 60), None);
+                r.draw_hline(w.x + 4, content_y + 20, w.width - 8, Color::rgb(60, 60, 70));
+                let max_lines = ((w.height as i32 - 32) / 15).max(1) as usize;
+                let start = (*scroll).min(html_lines.len().saturating_sub(1));
+                let end = (start + max_lines).min(html_lines.len());
+                let mut ly = content_y + 24;
+                for i in start..end {
+                    let line = &html_lines[i];
+                    let clean: String = line.chars().filter(|&c| c.is_ascii_graphic() || c == ' ').collect();
+                    r.draw_text(w.x + 8, ly, truncate(&clean, (w.width as usize - 20) / 8), Color::rgb(220, 220, 230), None);
+                    ly += 15;
+                }
+                if html_lines.len() > max_lines {
+                    let indicator = format!("{}/{}", start + 1, html_lines.len());
+                    r.draw_text(w.x + w.width as i32 - 60, content_y + 6, &indicator, Color::rgb(140, 140, 150), None);
+                }
+            }
+        }
+        WindowContent::FmGui { entries, current_idx, scroll, .. } => {
+            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(248, 248, 252));
+            let max_lines = ((w.height as i32 - 16) / 18).max(1) as usize;
+            let start = (*scroll).min(entries.len().saturating_sub(1));
+            let end = (start + max_lines).min(entries.len());
+            let mut ly = content_y + 6;
+            for i in start..end {
+                let e = &entries[i];
+                // zebra striping
+                if i % 2 == 1 { r.fill_rect(w.x + 2, ly - 1, w.width - 4, 18, Color::rgb(238, 242, 248)); }
+                if i == *current_idx { r.fill_rect(w.x + 2, ly - 1, w.width - 4, 18, Color::rgb(180, 210, 245)); }
+                let icon = if e.is_dir { "📁" } else { "📄" };
+                let sys_mark = if e.system { " 🔒" } else { "" };
+                let size_str = if e.is_dir { String::from("<DIR>") } else if e.size < 1024 { format!("{}B", e.size) } else { format!("{}K", e.size/1024) };
+                let line = format!(" {} {:<28} {:>8}{}", icon, e.name, size_str, sys_mark);
+                let color = if e.system { Color::rgb(180, 60, 60) } else if e.is_dir { Color::rgb(20, 50, 160) } else { Color::rgb(30, 30, 40) };
+                r.draw_text(w.x + 6, ly, truncate(&line, (w.width as usize - 16) / 8), color, None);
+                ly += 18;
+            }
+            if entries.len() > max_lines {
+                let indicator = format!("{}/{}", *current_idx + 1, entries.len());
+                r.draw_text(w.x + w.width as i32 - 40, content_y + 4, &indicator, Color::GRAY, None);
+            }
+        }
+        WindowContent::Browser { html_lines, title, loading, error, scroll, .. } => {
+            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(30, 30, 36));
+            if *loading {
+                r.draw_text(w.x + 10, content_y + 8, "Loading page...", Color::rgb(100, 200, 255), None);
+            } else if let Some(e) = error {
+                r.draw_text(w.x + 10, content_y + 8, &format!("ERROR: {}", e), Color::rgb(255, 80, 80), None);
+            } else {
+                r.draw_text(w.x + 10, content_y + 6, title, Color::rgb(255, 200, 60), None);
+                let max_l = ((w.height as i32 - 32) / 15).max(1) as usize;
+                let st = (*scroll).min(html_lines.len().saturating_sub(1));
+                let en = (st + max_l).min(html_lines.len());
+                let mut ly = content_y + 22;
+                for i in st..en {
+                    let cl: String = html_lines[i].chars().filter(|&c| c.is_ascii_graphic() || c == ' ').collect();
+                    r.draw_text(w.x + 8, ly, &cl, Color::rgb(220, 220, 230), None);
+                    ly += 15;
+                }
+            }
+        }
+        WindowContent::FmGui { entries, current_idx, scroll, .. } => {
+            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(248, 248, 252));
+            let max_l = ((w.height as i32 - 16) / 18).max(1) as usize;
+            let st = (*scroll).min(entries.len().saturating_sub(1));
+            let en = (st + max_l).min(entries.len());
+            let mut ly = content_y + 6;
+            for i in st..en {
+                let e = &entries[i];
+                if i % 2 == 1 { r.fill_rect(w.x + 2, ly - 1, w.width - 4, 18, Color::rgb(238, 242, 248)); }
+                if i == *current_idx { r.fill_rect(w.x + 2, ly - 1, w.width - 4, 18, Color::rgb(180, 210, 245)); }
+                let icon = if e.is_dir { "[D]" } else { "[F]" };
+                let sys = if e.system { "🔒" } else { "  " };
+                let sz = if e.is_dir { String::from("<DIR>") } else if e.size < 1024 { format!("{}B", e.size) } else { format!("{}K", e.size/1024) };
+                let line = format!("{} {:.<28} {:>6} {}", icon, e.name, sz, sys);
+                let color = if e.system { Color::rgb(180, 60, 60) } else if e.is_dir { Color::rgb(20, 50, 160) } else { Color::rgb(30, 30, 40) };
+                r.draw_text(w.x + 6, ly, &line, color, None);
+                ly += 18;
             }
         }
     }
