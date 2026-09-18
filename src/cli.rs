@@ -380,6 +380,44 @@ fn cmd_sound(rest: &str) {
                 println!("{}", t!(en: "  (image has no sounds: rebuild with build.sh step [2e/8])", ru: "  (в образе звуков нет: пересоберите — шаг build.sh [2e/8])"));
             }
             println!("{}", t!(en: "play: sound play <start|error|lowbat|fullbat|usbcon|usbdisc>", ru: "играть: sound play <start|error|lowbat|fullbat|usbcon|usbdisc>"));
+            println!("{}", t!(en: "HDA:  sound hda [test|play <name>] - Intel High Definition Audio status & test", ru: "HDA:  sound hda [test|play <имя>] - статус и тест Intel High Definition Audio"));
+        }
+        Some("hda") => {
+            match it.next() {
+                Some("test") => {
+                    if !crate::hda::is_ready() {
+                        println!("{}", t!(
+                            en: "  [hda] Intel HDA is not detected or not initialized.\n  Run QEMU with: -device intel-hda -device hda-duplex",
+                            ru: "  [hda] Intel HDA не обнаружен или не инициализирован.\n  Запустите QEMU с флагами: -device intel-hda -device hda-duplex"
+                        ));
+                    } else {
+                        println!("{}", t!(
+                            en: "  [hda] Playing 440 Hz test tone via Intel HDA (DMA 48 kHz stereo)...",
+                            ru: "  [hda] Воспроизведение тестового тона 440 Гц через Intel HDA (DMA 48 кГц стерео)..."
+                        ));
+                        crate::hda::play_tone(440, 500);
+                        println!("  [hda] OK.");
+                    }
+                }
+                Some("play") => {
+                    let name = it.next().unwrap_or("start");
+                    match crate::sound::play_named(name) {
+                        Ok(()) => println!("  [hda] '{}' ✔", name),
+                        Err(e) => println!("  [hda] {}: {}", t!(en: "playback failed", ru: "ошибка воспроизведения"), e),
+                    }
+                }
+                _ => {
+                    if let Some(info) = crate::hda::get_info() {
+                        println!("{}", info);
+                        println!("{}", t!(en: "  Commands: sound hda test, sound hda play <name>", ru: "  Команды: sound hda test, sound hda play <имя>"));
+                    } else {
+                        println!("{}", t!(
+                            en: "  Intel HDA: Not detected on PCI bus.\n  To enable in QEMU, add:\n    -device intel-hda -device hda-duplex",
+                            ru: "  Intel HDA: не обнаружен на шине PCI.\n  Для включения в QEMU добавьте:\n    -device intel-hda -device hda-duplex"
+                        ));
+                    }
+                }
+            }
         }
         Some("beep") => {
             let hz: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(880);

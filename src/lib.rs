@@ -34,6 +34,7 @@ mod font_full;
 mod fs;
 mod gpu;
 mod hal;
+mod hda;
 mod drivers;
 mod init_parser;
 mod inflate;
@@ -192,6 +193,12 @@ pub extern "C" fn kernel_main() -> ! {
             );
         }
         None => println!("GPU: no display controller found on PCI bus"),
+    }
+
+    if hda::init() {
+        println!("Audio: Intel High Definition Audio (HDA) ready");
+    } else {
+        println!("Audio: PC Speaker (run QEMU with '-device intel-hda -device hda-duplex' for HDA)");
     }
 
     println!("Default language: English. Type 'lang ru' to switch to Russian.");
@@ -362,4 +369,25 @@ pub extern "C" fn kernel_main() -> ! {
     let _ = sound::play_ui(sound::UiSound::Startup);
 
     cli::run();
+}
+
+/// Полный сброс глобальных структур состояния (.data/.bss) перед переносом
+/// ядра на установленный диск (команда `install`). Предотвращает перенос
+/// живых указателей на кучу и мусорных дескрипторов сессии.
+pub fn reset_all_globals() {
+    crate::cli::set_current_user("");
+    crate::cli::set_cwd("");
+    let _ = crate::vgaglobal::end_capture();
+    crate::vgaglobal::early_init_writer();
+    crate::module::reset_loaded_modules();
+    crate::fs::reset_fs_state();
+    crate::renderer::reset_renderer();
+    crate::avb::reset_avb();
+    crate::crashlog::clear_current_crash();
+    crate::crashlog::clear_disk_crash();
+    crate::syslog::clear();
+    crate::recovery_ui::reset_recovery_state();
+    crate::fastbootd_ui::reset_fastbootd_state();
+    crate::crypto_storage::lock();
+    crate::linux::syscall::reset_stats();
 }

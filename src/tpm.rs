@@ -167,7 +167,7 @@ impl TpmDevice {
     pub fn nv_write(&mut self, index: u32, data: &[u8], auth: &[u8]) -> Result<(), TpmError> {
         match self.owner_auth.as_deref() {
             Some(expected) => {
-                match expected == auth {
+                match crate::auth::constant_time_eq(expected, auth) {
                     true => {}
                     false => return Err(TpmError::AuthFailed),
                 }
@@ -201,7 +201,7 @@ impl TpmDevice {
     pub fn nv_lock_write(&mut self, index: u32, auth: &[u8]) -> Result<(), TpmError> {
         match self.owner_auth.as_deref() {
             Some(expected) => {
-                match expected == auth {
+                match crate::auth::constant_time_eq(expected, auth) {
                     true => {}
                     false => return Err(TpmError::AuthFailed),
                 }
@@ -220,7 +220,7 @@ impl TpmDevice {
     pub fn nv_read(&self, index: u32, auth: &[u8]) -> Result<Vec<u8>, TpmError> {
         match self.owner_auth.as_deref() {
             Some(expected) => {
-                match expected == auth {
+                match crate::auth::constant_time_eq(expected, auth) {
                     true => {}
                     false => return Err(TpmError::AuthFailed),
                 }

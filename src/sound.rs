@@ -57,7 +57,13 @@ fn delay_ms(ms: u64) {
 }
 
 /// Звуковой сигнал: частота `hz`, длительность `ms`.
+/// При наличии контроллера Intel HDA выводит чистый звук через DMA (48 кГц стерео);
+/// при отсутствии — откатывается на встроенный PC speaker (порт 0x61).
 pub fn beep(hz: u32, ms: u64) {
+    if crate::hda::is_ready() {
+        crate::hda::play_tone(hz, ms);
+        return;
+    }
     pit_freq(hz);
     speaker_on();
     delay_ms(ms);
@@ -262,8 +268,14 @@ fn play_pcm8(samples: &[u8], rate: u32) {
 /// Играет системный эффект (читает DPS из /super при каждом вызове).
 /// Ошибки не фатальны: если звука нет в старом образе — тихо возвращаем Err,
 /// система продолжает работать беззвучно, как раньше.
+/// Приоритетно использует Intel HDA; при отсутствии — ШИМ на PC speaker.
 pub fn play_ui(sound: UiSound) -> Result<(), &'static str> {
     let raw = load_dps(sound.dps_name())?;
+    if crate::hda::is_ready() {
+        if crate::hda::play_dps(&raw).is_ok() {
+            return Ok(());
+        }
+    }
     let (rate, samples) = parse_dps(&raw)?;
     play_pcm8(samples, rate);
     Ok(())
@@ -272,6 +284,11 @@ pub fn play_ui(sound: UiSound) -> Result<(), &'static str> {
 /// Играет эффект по имени/псевдониму (для CLI `sound play <имя>`).
 pub fn play_named(name: &str) -> Result<(), &'static str> {
     let raw = load_dps(resolve_alias(name))?;
+    if crate::hda::is_ready() {
+        if crate::hda::play_dps(&raw).is_ok() {
+            return Ok(());
+        }
+    }
     let (rate, samples) = parse_dps(&raw)?;
     play_pcm8(samples, rate);
     Ok(())

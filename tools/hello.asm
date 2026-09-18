@@ -30,19 +30,19 @@ _start:
     mov r12, rdi                ; save api pointer
 
     ; Print greeting
-    mov rdi, [r12]              ; api->print function pointer
-    lea rsi, [rel msg]
-    mov rdx, msg_len
-    call rdi
+    lea rdi, [rel msg]
+    mov rsi, msg_len
+    mov rax, [r12]              ; api->print function pointer
+    call rax
 
     ; Print uptime via api->uptime_ms
     mov rax, [r12 + 0x18]       ; api->uptime_ms
     call rax
     ; RAX = uptime in ms, just report it's alive
-    mov rdi, [r12]              ; api->print
-    lea rsi, [rel alive_msg]
-    mov rdx, alive_msg_len
-    call rdi
+    lea rdi, [rel alive_msg]
+    mov rsi, alive_msg_len
+    mov rax, [r12]              ; api->print
+    call rax
 
     ; Try to get IP (new v1.1 API)
     mov rax, [r12 + 0x40]       ; api->get_ip
@@ -51,10 +51,10 @@ _start:
     ; If ip_buf is not 0.0.0.0, print it
     cmp byte [rel ip_buf], 0
     je .no_ip
-    mov rdi, [r12]              ; api->print
-    lea rsi, [rel ip_msg]
-    mov rdx, ip_msg_len
-    call rdi
+    lea rdi, [rel ip_msg]
+    mov rsi, ip_msg_len
+    mov rax, [r12]              ; api->print
+    call rax
 
 .no_ip:
     xor eax, eax                ; return 0

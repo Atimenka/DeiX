@@ -33,19 +33,19 @@ SECTOR = 512
 # Карта слотов (совпадает с src/partition_map.rs PARTITION_LAYOUT)
 SLOTS = {
     "/kernel_a": 13313,
-    "/kernel_b": 13825,
-    "/boot_a": 14849,
-    "/boot_b": 15105,
-    "/init_boot": 14337,
-    "/vendor_boot": 14593,
-    "/super": 15361,
-    "/dsm": 15617,
-    "/recovery": 15873,
+    "/kernel_b": 14593,
+    "/init_boot": 15873,
+    "/vendor_boot": 16129,
+    "/boot_a": 16385,
+    "/boot_b": 16641,
+    "/super": 16897,
+    "/dsm": 17153,
+    "/recovery": 17409,
 }
 SLOT_SECS = {  # размеры разделов (секторов)
-    "/kernel_a": 511, "/kernel_b": 511,
-    "/boot_a": 255, "/boot_b": 255,
+    "/kernel_a": 1279, "/kernel_b": 1279,
     "/init_boot": 255, "/vendor_boot": 255,
+    "/boot_a": 255, "/boot_b": 255,
     "/super": 255, "/dsm": 255, "/recovery": 255,
 }
 

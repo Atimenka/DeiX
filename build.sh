@@ -137,6 +137,13 @@ KERNEL_SIZE=$(stat -c%s "$BUILD/kernel.bin")
 KERNEL_SECTORS=$(( (KERNEL_SIZE + 511) / 512 ))
 echo "    kernel.bin: $KERNEL_SIZE байт => $KERNEL_SECTORS секторов (LBA $KERNEL_LBA)"
 
+KERNEL_MAX_SECTORS=1400
+if [ "$KERNEL_SECTORS" -gt "$KERNEL_MAX_SECTORS" ]; then
+    echo "ОШИБКА: kernel.bin ($KERNEL_SECTORS сект) > лимита ($KERNEL_MAX_SECTORS)."
+    echo "Увеличьте KERNEL_SECTORS в boot/boot_sector.asm и boot/ramboot.asm."
+    exit 1
+fi
+
 echo "==> [5/8] Проверяем MBR-загрузчик (512 байт)"
 BOOT_SIZE=$(stat -c%s "$BUILD/boot_sector.bin")
 if [ "$BOOT_SIZE" -ne 512 ]; then
@@ -166,6 +173,9 @@ if [ "$STAGE2_SECTORS2" -ne "$STAGE2_SECTORS" ]; then
     objcopy -O binary "$BUILD/stage2.stripped.elf" "$BUILD/stage2.bin"
 fi
 echo "    stage2.bin (финальный): $(stat -c%s "$BUILD/stage2.bin") байт, kernel LBA=$KERNEL_LBA"
+
+echo "==> [6b/8] Сверяем карту разделов (partition_map, make_deix_fs, deix_ota)"
+python3 tools/check_partition_map.py
 
 echo "==> [7/8] Склеиваем итоговый образ диска"
 

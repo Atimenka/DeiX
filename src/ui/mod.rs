@@ -212,19 +212,21 @@ impl Window {
         }
     }
 
-    /// Открывает файл в TextViewer. Если это .MEX программа — вместо
-    /// показа "текста" (бинарного мусора) пытается её запустить и
-    /// показывает результат выполнения в самом окне (как маленький
-    /// лог), это гораздо полезнее для пользователя, кликающего на
-    /// программу в файловом менеджере, чем нечитаемые байты.
+    /// Открывает файл в TextViewer. Для обычных текстовых файлов читает
+    /// содержимое через ext2. Для .MEX программ не запускает их сразу
+    /// внутри клика мыши (что приводило бы к зависанию UI и дедлокам локов),
+    /// а открывает информационное окно с инструкцией: запуск по нажатию Enter.
     fn new_text_viewer(x: i32, y: i32, filename: &str) -> Self {
+        crate::serial_println!("[ui] new_text_viewer: enter, file={}", filename);
+
         if crate::mex::is_mex_filename(filename) {
-            crate::vgaglobal::begin_capture();
-            crate::cli::IN_GRAPHICAL_TERMINAL.store(true, core::sync::atomic::Ordering::Relaxed);
-            crate::mex::run(filename, "");
-            crate::cli::IN_GRAPHICAL_TERMINAL.store(false, core::sync::atomic::Ordering::Relaxed);
-            let output = crate::vgaglobal::end_capture();
-            let lines: Vec<String> = output.lines().map(String::from).collect();
+            crate::serial_println!("[ui] file is .MEX, showing launcher prompt");
+            let mut lines = Vec::new();
+            lines.push(format!("Program: {}", filename));
+            lines.push(String::from("Format: DeiX EXecutable (.MEX v1.x)"));
+            lines.push(String::new());
+            lines.push(String::from("Press [Enter] to run this program,"));
+            lines.push(format!("or run 'run {}' from Terminal.", filename));
             return Window {
                 title: format!("Run: {}", filename),
                 x,
@@ -243,6 +245,7 @@ impl Window {
             };
         }
 
+        crate::serial_println!("[ui] reading text file: {}", filename);
         let (lines, error) = match ext2::read_file(filename) {
             Ok(data) => match core::str::from_utf8(&data) {
                 Ok(text) => (text.lines().map(String::from).collect(), None),
@@ -253,6 +256,12 @@ impl Window {
             },
             Err(_) => (Vec::new(), Some(String::from("Failed to read file"))),
         };
+
+        crate::serial_println!(
+            "[ui] file read complete: {} lines, error={:?}",
+            lines.len(),
+            error.as_ref().map(|s| s.as_str())
+        );
 
         Window {
             title: format!("View: {}", filename),
@@ -434,10 +443,12 @@ impl Desktop {
     }
 
     fn open_text_viewer(&mut self, screen_w: i32, screen_h: i32, filename: &str) {
+        crate::serial_println!("[ui] open_text_viewer: enter, file={}", filename);
         let x = (60 + (self.windows.len() as i32 * 24)) % (screen_w - 440).max(1);
         let y = (60 + (self.windows.len() as i32 * 24)) % (screen_h - 320).max(1);
         self.windows.push(Window::new_text_viewer(x, y, filename));
         self.focused_window = Some(self.windows.len() - 1);
+        crate::serial_println!("[ui] open_text_viewer: done");
     }
 
     /// Обрабатывает мышь (перетаскивание, закрытие/минимизация, фокус,
@@ -518,7 +529,7 @@ impl Desktop {
                             lines.remove(0);
                         }
                     }
-                    WindowContent::TextViewer { lines, scroll, .. } => {
+                    WindowContent::TextViewer { filename, lines, scroll, .. } => {
                         while let Some(byte) = keyboard::try_read_char() {
                             match byte {
                                 keyboard::ARROW_UP => {
@@ -527,6 +538,14 @@ impl Desktop {
                                 keyboard::ARROW_DOWN => {
                                     if *scroll + 1 < lines.len() {
                                         *scroll += 1;
+                                    }
+                                }
+                                b'\n' | b'\r' => {
+                                    if crate::mex::is_mex_filename(filename) {
+                                        let cmd = format!("run {}", filename);
+                                        lines.push(format!("> {}", cmd));
+                                        run_mini_terminal_command(&cmd, lines);
+                                        *scroll = lines.len().saturating_sub(10);
                                     }
                                 }
                                 _ => {}
@@ -1146,10 +1165,9 @@ fn isqrt_local(n: i32) -> i32 {
 }
 
 fn truncate(s: &str, max_chars: usize) -> &str {
-    if s.len() <= max_chars {
-        s
-    } else {
-        &s[..max_chars]
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
     }
 }
 

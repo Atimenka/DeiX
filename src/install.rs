@@ -502,20 +502,7 @@ fn write_image_to(drive: Drive) -> Result<(), ()> {
     // Перед копированием СБРАСЫВАЕМ критичные .data-глобалы в безопасное
     // состояние: .data копируется как есть (живые указатели на кучу live
     // нельзя переносить), поэтому приводим их к начальному виду.
-    crate::cli::set_current_user("");
-    crate::cli::set_cwd("");
-    let _ = crate::vgaglobal::end_capture();
-    crate::vgaglobal::early_init_writer();
-    crate::module::reset_loaded_modules();
-    crate::fs::reset_fs_state();
-    crate::renderer::reset_renderer();
-    crate::avb::reset_avb();
-    crate::crashlog::clear_current_crash();
-    crate::crashlog::clear_disk_crash();
-    crate::syslog::clear();
-    crate::recovery_ui::reset_recovery_state();
-    crate::fastbootd_ui::reset_fastbootd_state();
-    crate::crypto_storage::lock();
+    crate::reset_all_globals();
 
     // stage2.bin (загрузчик) — секторы 1..STAGE2_SECTORS.
     let stage2_sectors = (STAGE2.len() + 511) / 512;

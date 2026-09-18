@@ -193,7 +193,7 @@ fn hash_password(salt: &[u8; SALT_LEN], password: &str) -> [u8; HASH_LEN] {
 /// быстрее/медленнее. Сравниваем ВСЕ байты всегда, накапливая результат
 /// через побитовое ИЛИ разниц — количество итераций и операций не
 /// зависит от того, где именно первое расхождение.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }

@@ -695,6 +695,9 @@ pub fn list_root() -> Result<Vec<FileEntry>, Ext2Error> {
 /// Читает содержимое файла по номеру инода.
 pub fn read_inode_data(ino: u32) -> Result<Vec<u8>, Ext2Error> {
     let inode = read_inode(ino)?;
+    if inode.size > 8 * 1024 * 1024 {
+        return Err(Ext2Error::DiskError);
+    }
     let mut data = Vec::with_capacity(inode.size as usize);
     let mut left = inode.size as usize;
     for block_num in dir_block_ptrs(&inode) {
@@ -719,6 +722,9 @@ pub fn read_file(name: &str) -> Result<Vec<u8>, Ext2Error> {
     let (_, _, ino) = found.ok_or(Ext2Error::FileNotFound)?;
 
     let inode = read_inode(ino)?;
+    if inode.size > 8 * 1024 * 1024 {
+        return Err(Ext2Error::DiskError);
+    }
     let mut data = Vec::with_capacity(inode.size as usize);
     let mut remaining = inode.size as usize;
 

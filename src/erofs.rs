@@ -502,10 +502,6 @@ pub fn build_image(files: &[(&str, &[u8])]) -> Vec<u8> {
 
     let mut file_blkaddr: Vec<u32> = Vec::with_capacity(files.len());
     for (_, data) in files.iter() {
-        let addr = dir_blkaddr as usize + blocks.len() / bs - dir_data.len() / bs;
-        // адрес = 1 + (уже занятые блоки)
-        let addr = dir_blkaddr as usize + (blocks.len() / bs) - (dir_data.len() / bs) + 0 * addr;
-        let _ = addr;
         let cur_block = dir_blkaddr as usize + blocks.len() / bs;
         file_blkaddr.push(cur_block as u32);
         blocks.extend_from_slice(data);
