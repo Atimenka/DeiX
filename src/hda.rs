@@ -483,7 +483,7 @@ pub fn init() -> bool {
                 addr_lo: (buf_phys + offset) as u32,
                 addr_hi: ((buf_phys + offset) >> 32) as u32,
                 len: PERIOD_SIZE as u32,
-                flags: 1, // bit 0 = IOC
+                flags: 0, // 0 = без прерываний (работаем по поллингу LPIB, чтобы не ловить IRQ storm)
             };
         }
 
@@ -535,10 +535,9 @@ pub fn play_pcm_stereo_48k(samples: &[i16]) {
         return;
     }
 
-    let mut offset = 0usize;
     let dma_ptr = unsafe { core::ptr::addr_of_mut!(AUDIO_DMA_BUF.0) as *mut u8 };
 
-    // Заполняем весь начальный буфер DMA первыми данными
+    // Заполняем начальный буфер DMA первыми данными (до размера BUFFER_SIZE)
     let init_take = total_bytes.min(BUFFER_SIZE);
     unsafe {
         core::ptr::copy_nonoverlapping(raw_bytes.as_ptr(), dma_ptr, init_take);
@@ -546,49 +545,57 @@ pub fn play_pcm_stereo_48k(samples: &[i16]) {
             core::ptr::write_bytes(dma_ptr.add(init_take), 0, BUFFER_SIZE - init_take);
         }
     }
-    offset += init_take;
+
+    let mut write_pos = init_take % BUFFER_SIZE;
+    let mut buffered = init_take;
+    let mut offset = init_take;
+    let mut last_hw_pos = 0usize;
 
     ctrl.start_stream();
 
-    // Потоковая подгрузка данных в циклическом буфере DMA
-    let mut last_period: usize = 0;
     let start_ms = crate::timer::uptime_ms();
-    let expected_duration_ms = (total_bytes as u64 * 1000) / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64) + 200;
+    let expected_duration_ms = (total_bytes as u64 * 1000) / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64) + 500;
 
-    while offset < total_bytes {
-        let lpib = ctrl.stream_position() as usize;
-        let current_period = (lpib / PERIOD_SIZE) % BDL_ENTRIES;
-
-        // Пополняем все периоды, которые контроллер успел воспроизвести
-        while last_period != current_period && offset < total_bytes {
-            let write_period = last_period;
-            let write_dest = unsafe { dma_ptr.add(write_period * PERIOD_SIZE) };
-            let remaining = total_bytes - offset;
-            let chunk_size = remaining.min(PERIOD_SIZE);
-
-            unsafe {
-                core::ptr::copy_nonoverlapping(raw_bytes.as_ptr().add(offset), write_dest, chunk_size);
-                if chunk_size < PERIOD_SIZE {
-                    core::ptr::write_bytes(write_dest.add(chunk_size), 0, PERIOD_SIZE - chunk_size);
-                }
-            }
-            offset += chunk_size;
-            last_period = (last_period + 1) % BDL_ENTRIES;
+    // Непрерывный цикл кольцевого буфера
+    while offset < total_bytes || buffered > 0 {
+        let hw_pos = (ctrl.stream_position() as usize) % BUFFER_SIZE;
+        if hw_pos != last_hw_pos {
+            let consumed = (hw_pos + BUFFER_SIZE - last_hw_pos) % BUFFER_SIZE;
+            last_hw_pos = hw_pos;
+            buffered = buffered.saturating_sub(consumed);
         }
 
-        // Защита от бесконечного зависания
+        // Подгружаем новые сэмплы в освободившееся пространство
+        let free_space = BUFFER_SIZE - buffered;
+        if free_space >= 4096 && offset < total_bytes {
+            let remaining = total_bytes - offset;
+            let to_write = remaining.min(free_space);
+
+            let first_part = to_write.min(BUFFER_SIZE - write_pos);
+            unsafe {
+                core::ptr::copy_nonoverlapping(raw_bytes.as_ptr().add(offset), dma_ptr.add(write_pos), first_part);
+                let second_part = to_write - first_part;
+                if second_part > 0 {
+                    core::ptr::copy_nonoverlapping(raw_bytes.as_ptr().add(offset + first_part), dma_ptr, second_part);
+                }
+            }
+
+            offset += to_write;
+            write_pos = (write_pos + to_write) % BUFFER_SIZE;
+            buffered += to_write;
+        }
+
+        // Если все данные записаны, а в кольцевом буфере осталось меньше 1024 байт — воспроизведение завершено
+        if offset >= total_bytes && buffered <= 1024 {
+            break;
+        }
+
+        // Таймаут для защиты от зависания контроллера
         if crate::timer::uptime_ms().saturating_sub(start_ms) > expected_duration_ms {
             break;
         }
 
-        spin_delay(200);
-    }
-
-    // Дожидаемся завершения воспроизведения остатка (2 периода буфера)
-    let tail_wait_start = crate::timer::uptime_ms();
-    let remaining_tail_ms = ((PERIOD_SIZE * 2) as u64 * 1000) / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64) + 60;
-    while crate::timer::uptime_ms().saturating_sub(tail_wait_start) < remaining_tail_ms {
-        spin_delay(1000);
+        spin_delay(150);
     }
 
     ctrl.stop_stream();
