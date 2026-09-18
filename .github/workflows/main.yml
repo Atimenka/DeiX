@@ -1,0 +1,153 @@
+name: Build DeiX
+
+on:
+  push:
+    branches: [ main, master, dev ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build DeiX (BIOS disk image + ISO)
+    runs-on: ubuntu-latest
+
+    steps:
+      # ---------- 0. Checkout ----------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ---------- 1. Системные зависимости ----------
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            nasm \
+            binutils \
+            gcc \
+            make \
+            python3 \
+            python3-pip \
+            qemu-system-x86 \
+            xorriso \
+            erofs-utils \
+            e2fsprogs \
+            mtools \
+            dosfstools \
+            gdisk \
+            file \
+            xxd
+
+      # ---------- 2. Python-зависимости (Pillow для лого) ----------
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install Pillow
+
+      # ---------- 3. Rust nightly + build-std ----------
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools-preview
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+          cache-on-failure: true
+
+      # ---------- 4. Проверка gcc static-pie ----------
+      - name: Verify gcc static-pie support
+        run: |
+          echo 'int main(){return 0;}' > /tmp/t.c
+          gcc -nostdlib -nostartfiles -static-pie -fPIE -Os \
+              -Wl,--build-id=none -Wl,-z,noseparate-code \
+              -o /tmp/t.elf /tmp/t.c && echo "OK: static-pie собирается"
+
+      # ---------- 5. Сборка (build.sh лежит в корне) ----------
+      - name: Make build.sh executable
+        run: chmod +x ./build.sh
+
+      - name: Run build.sh
+        run: ./build.sh
+        env:
+          RUST_BACKTRACE: "1"
+
+      # ---------- 6. Проверка артефактов ----------
+      - name: Verify artifacts
+        run: |
+          set -e
+          echo "== build/ =="
+          ls -lh build/
+          test -f build/deix_disk.img   || (echo "Нет deix_disk.img"   && exit 1)
+          test -f build/kernel.bin      || (echo "Нет kernel.bin"      && exit 1)
+          test -f build/boot_sector.bin || (echo "Нет boot_sector.bin" && exit 1)
+          echo "== размер образа =="
+          stat -c '%n %s байт' build/deix_disk.img
+          if [ -f build/deix.iso ]; then
+            stat -c '%n %s байт' build/deix.iso
+          else
+            echo "deix.iso не собран (build_iso_ramdisk.py не вызывался?)"
+          fi
+
+      # ---------- 7. Smoke-тест в QEMU (диск) ----------
+      - name: Smoke test in QEMU (disk image)
+        timeout-minutes: 3
+        run: |
+          timeout 5 qemu-system-x86_64 \
+            -drive format=raw,file=build/deix_disk.img \
+            -m 256M \
+            -nographic \
+            -no-reboot \
+            -serial mon:stdio \
+            > qemu_disk.log 2>&1 || true
+          echo "== QEMU disk log (tail) =="
+          tail -n 60 qemu_disk.log || true
+
+      # ---------- 8. Smoke-тест в QEMU (ISO, если есть) ----------
+      - name: Smoke test in QEMU (ISO)
+        if: hashFiles('build/deix.iso') != ''
+        timeout-minutes: 3
+        run: |
+          timeout 5 qemu-system-x86_64 \
+            -cdrom build/deix.iso \
+            -m 256M \
+            -nographic \
+            -no-reboot \
+            -serial mon:stdio \
+            > qemu_iso.log 2>&1 || true
+          echo "== QEMU ISO log (tail) =="
+          tail -n 60 qemu_iso.log || true
+
+      # ---------- 9. Артефакты ----------
+      - name: Upload disk image
+        uses: actions/upload-artifact@v4
+        with:
+          name: deix-disk-image
+          path: |
+            build/deix_disk.img
+            build/kernel.bin
+            build/boot_sector.bin
+            build/stage2.bin
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload ISO (if built)
+        if: hashFiles('build/deix.iso') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: deix-iso
+          path: build/deix.iso
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload QEMU logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-logs
+          path: |
+            qemu_disk.log
+            qemu_iso.log
+          if-no-files-found: ignore
+          retention-days: 7
