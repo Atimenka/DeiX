@@ -258,7 +258,7 @@ pub unsafe fn kexec(image: &[u8]) -> ! {
     );
     #[allow(unreachable_code)]
     {
-        let _ = tramp;
+        let _ = _tramp;
         loop {}
     }
 }

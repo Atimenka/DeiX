@@ -5,7 +5,7 @@
 #![allow(dead_code)]
 
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 /// Состояние пользователя и его активных сессий

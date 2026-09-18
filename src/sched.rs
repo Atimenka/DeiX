@@ -241,6 +241,21 @@ pub fn exit_current() -> ! {
     }
 }
 
+/// Принудительно переводит задачу с заданным ID в состояние Finished.
+pub fn terminate(id: usize) {
+    if id < MAX_TASKS {
+        crate::sync::without_interrupts(|| {
+            let _guard = TABLE_LOCK.lock();
+            unsafe {
+                let tasks = &mut *(&raw mut TASKS);
+                if tasks[id].state != State::Empty {
+                    tasks[id].state = State::Finished;
+                }
+            }
+        });
+    }
+}
+
 /// Формирует начальный кадр на стеке задачи так, чтобы `iretq` в
 /// заглушке «вернулся» в `task_entry`.
 ///

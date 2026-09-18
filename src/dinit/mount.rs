@@ -9,8 +9,7 @@
 #![allow(dead_code)]
 
 use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
+use alloc::string::String;
 use crate::init_parser::{BootStage, MountMode};
 use crate::vault::{evaluate as vault_evaluate, VaultRejection};
 
@@ -109,28 +108,22 @@ impl MountCmd {
         }
 
         let mode = if self.read_only {
-            MountMode::Ro
+            MountMode::ReadOnly
         } else {
-            MountMode::Rw
+            MountMode::ReadWrite
         };
 
         // 2. Оценка через эталонный Vault-движок ядра (src/vault.rs)
         match vault_evaluate(&self.target, &self.fs_type, mode, stage) {
             Ok(()) => Ok(()),
-            Err(VaultRejection::HardLockedSystemRw) => {
-                Err("SECURITY_VIOLATION: Hard-locked system partition reached with RW flags. Boot halted.")
+            Err(VaultRejection::UserdataPolicy(_)) => {
+                Err("SECURITY_WARNING: Userdata RW attempted in invalid stage")
             }
-            Err(VaultRejection::NonErofsDriver) => {
-                Err("SECURITY_VIOLATION: Non-erofs filesystem driver on critical system partition.")
+            Err(VaultRejection::NonExt4Userdata(_)) => {
+                Err("SECURITY_WARNING: Userdata requested non-ext4 filesystem")
             }
-            Err(VaultRejection::TpmMountAttempt) => {
-                Err("SECURITY_VIOLATION: Attempt to mount TPM enclave directly.")
-            }
-            Err(VaultRejection::UserdataRwInInitBoot) => {
-                Err("SECURITY_WARNING: Userdata RW attempted in init_boot stage.")
-            }
-            Err(VaultRejection::UserdataNonExt4) => {
-                Err("SECURITY_WARNING: Userdata requested non-ext4/ext2 filesystem.")
+            Err(VaultRejection::TpmPartitionDenied(_)) => {
+                Err("SECURITY_VIOLATION: Attempt to mount TPM enclave directly")
             }
         }
     }

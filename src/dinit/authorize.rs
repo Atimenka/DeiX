@@ -10,7 +10,6 @@
 #![allow(dead_code)]
 
 use alloc::format;
-use alloc::string::String;
 
 /// Типы файловых операций, подлежащих контролю доступа
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

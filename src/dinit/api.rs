@@ -6,12 +6,9 @@
 
 #![allow(dead_code)]
 
-use alloc::string::String;
 use alloc::vec::Vec;
-use super::namespace::Capabilities;
 use super::authorize::{FileOp, AccessError};
 use super::audit::AuditEntry;
-use super::service::RestartPolicy;
 use super::DINIT;
 use crate::init_parser::BootStage;
 use crate::security_monitor::SecurityEvent;

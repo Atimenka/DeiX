@@ -21,8 +21,7 @@ pub mod audit;
 pub mod api;
 
 use alloc::collections::BTreeMap;
-use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 use crate::spinlock::SpinLock;
 
@@ -31,9 +30,9 @@ use user::UserState;
 use service::{ServiceDescriptor, ServiceStatus, RestartPolicy};
 use mount::{MountPoint, MountCmd};
 use authorize::{FileOp, AccessError, check_permission};
-use audit::{AuditLog, AuditOp, AuditResult, AuditStats};
+use audit::{AuditLog, AuditOp, AuditResult};
 use crate::init_parser::{BootStage, Command, InitParser, INIT_DEIX_SCRIPT};
-use crate::security_monitor::{HeuristicAnalysisEngine, SecurityEvent, ThreatSeverity};
+use crate::security_monitor::{HeuristicAnalysisEngine, SecurityEvent};
 
 /// Состояние супервизора Dinit
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

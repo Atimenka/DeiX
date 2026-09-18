@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 /// Политика перезапуска службы при завершении или сбое
