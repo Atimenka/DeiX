@@ -67,6 +67,7 @@ mod rng;
 mod recovery_ui;
 mod rtl8139;
 mod sched;
+mod security_monitor;
 mod serial;
 mod sound;
 mod syslog;
@@ -307,6 +308,7 @@ pub extern "C" fn kernel_main() -> ! {
     // ядро немедленно останавливается (см. init_parser.rs / vault.rs).
     partition_map::validate_partition_map_report();
     init_parser::boot_report(init_parser::INIT_DEIX_SCRIPT);
+    security_monitor::boot_selfcheck();
     crate::dinit::init();
     crate::serial_println!("[deix] init_boot: Dinit (PID 1, Ring 0) запущен");
 
