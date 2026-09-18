@@ -72,7 +72,7 @@ def main():
         return False
 
     ok = True
-    ok &= wait([b'DeiX v0.1 - mini kernel booted'], 90, 'boot')
+    ok &= wait([b'DeiX v0. - mini kernel booted'], 90, 'boot')
     ok &= wait([b'No user accounts exist yet'], 60, 'first setup prompt')
     os.write(m, b'alice\n'); time.sleep(1.0)
     os.write(m, b'pass123\n')
@@ -111,7 +111,7 @@ def main():
                    '-drive', f'file={TARGET},format=raw,if=ide',
                    '-display', 'none', '-serial', 'stdio', '-monitor', 'none'])
     buf = b''
-    ok &= wait([b'DeiX v0.1 - mini kernel booted'], 90, 'boot from target')
+    ok &= wait([b'DeiX v0. - mini kernel booted'], 90, 'boot from target')
     if ok:
         wait([b'Login'], 30, 'login banner')
         time.sleep(0.8)

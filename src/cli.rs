@@ -535,7 +535,7 @@ fn cmd_help() {
 }
 
 fn cmd_about() {
-    println!("{}", t!(en: "DeiX v0.1 - mini kernel written in Rust", ru: "DeiX v0.1 - мини-ядро на Rust"));
+    println!("{}", t!(en: "DeiX v0.2-beta - mini kernel written in Rust", ru: "DeiX v0.2-beta - мини-ядро на Rust"));
     println!(
         "{}",
         t!(

@@ -125,7 +125,7 @@ pub extern "C" fn kernel_main() -> ! {
     vgaglobal::with_writer(|w| w.clear_screen());
     crate::serial_println!("[deix] C: clear done");
 
-    println!("DeiX v0.1 - mini kernel booted successfully!");
+    println!("DeiX v0.2-beta - mini kernel booted successfully!");
     crate::serial_println!("[deix] D: println done");
     println!("Long mode: OK | Paging: OK | VGA text driver: OK");
     crate::serial_println!("[deix] E: long mode println");

@@ -91,7 +91,7 @@ def send(s, delay=0.5):
         os.write(master, s.encode('utf-8'))
 
 def boot_marker():
-    return b'DeiX v0.1 - mini kernel booted successfully!'
+    return b'DeiX v0. - mini kernel booted successfully!'
 
 def ensure_cli():
     """Доводим до CLI: если аккаунтов нет — первичная настройка (alice),

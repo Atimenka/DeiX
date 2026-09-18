@@ -108,7 +108,7 @@ try:
     # ==== Фаза 1: первичная настройка ====
     print('=== Фаза 1: первичная настройка (создание пользователя alice) ===', flush=True)
     start_qemu()
-    wait_for([b'DeiX v0.1 - mini kernel booted successfully!'], desc='первый бут')
+    wait_for([b'DeiX v0. - mini kernel booted successfully!'], desc='первый бут')
     wait_for([b'No user accounts exist yet'], desc='заводской образ: аккаунтов нет', timeout=60)
     snapshot('фаза 1 до создания')
     send('alice\n')
@@ -126,7 +126,7 @@ try:
     print('=== Фаза 2: вход после reboot #1 ===', flush=True)
     buf = b''
     start_qemu()
-    wait_for([b'DeiX v0.1 - mini kernel booted successfully!'], desc='второй бут', timeout=120)
+    wait_for([b'DeiX v0. - mini kernel booted successfully!'], desc='второй бут', timeout=120)
     wait_for([b'Disk is encrypted'], desc='диск зашифрован (DEIXCRYP найден)', timeout=60)
     wait_for([b'Login'], desc='экран входа', timeout=30)
     time.sleep(1.0)
@@ -149,7 +149,7 @@ try:
     print('=== Фаза 3: вход после reboot #2 ===', flush=True)
     buf = b''
     start_qemu()
-    wait_for([b'DeiX v0.1 - mini kernel booted successfully!'], desc='третий бут', timeout=120)
+    wait_for([b'DeiX v0. - mini kernel booted successfully!'], desc='третий бут', timeout=120)
     wait_for([b'Disk is encrypted'], desc='диск зашифрован (DEIXCRYP найден)', timeout=60)
     wait_for([b'Login'], desc='экран входа', timeout=30)
     time.sleep(1.0)

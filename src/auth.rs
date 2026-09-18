@@ -370,7 +370,7 @@ pub fn run_login_screen() -> String {
     // (crypto_storage::try_unlock), затем проверяет пользователя.
     println!();
     println!("=====================================");
-    println!("           DeiX v0.1 - Login          ");
+    println!("        DeiX v0.2-beta - Login        ");
     println!("=====================================");
     if crate::crypto_storage::is_encryption_enabled() {
         println!("Disk is encrypted (XTS-AES-256). Your account password unlocks it.");

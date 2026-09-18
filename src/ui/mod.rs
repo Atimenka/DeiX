@@ -1060,7 +1060,7 @@ fn draw_window(r: &mut Renderer, w: &Window, focused: bool) {
             r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(250, 250, 250));
             let uptime_s = timer::uptime_ms() / 1000;
             let lines = [
-                String::from("DeiX v0.1"),
+                String::from("DeiX v0.2-beta"),
                 String::from("A mini x86_64 OS written in Rust"),
                 String::from("Bootloader: BIOS MBR (no GRUB)"),
                 String::from("Filesystem: ext2 (real, e2fsck-clean)"),
