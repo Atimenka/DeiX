@@ -1,355 +1,257 @@
-# 🪐 DeiX OS (v0.2-dev)
+# 🪐 DeiX OS (v0.3-dev · development)
 
-A modern, highly-secure 64-bit Operating System written from scratch in **Rust** and **Assembly** for `x86_64` architecture. Developed in a unique collaboration between a Human Architect and an AI Agent.
+A modern, highly-secure 64-bit Operating System written from scratch in **Rust** and **Assembly** for the `x86_64` architecture. Developed in a unique collaboration between a Human Architect and an AI Agent.
 
-Операционная система нового поколения, написанная с нуля на **Rust** и **Ассемблере** под архитектуру `x86_64`. Разработана в уникальном тандеме Человека-Архитектора и ИИ-Агента.
+Операционная система нового поколения, написанная с нуля на **Rust** и **Ассемблере** под `x86_64`. Ветка `development` — актуальная: сюда попали итоги KISS-рефакторинга (−38 % кода, −12 146 строк), подсистема безопасности с LUKS-слотами, графический вход, открытый драйвер NVIDIA и UI-звуки.
 
----
-
-## ⚡ What's New in v0.2
-
-### 🧠 Ring 3 User Mode + Syscalls
-Hardware isolation via GDT/TSS + `syscall`/`sysret`. Programs run in unprivileged ring 3 with 11 system calls (`print`, `read_char`, `uptime_ms`, `ping`, `get_mac`, `get_ip`, `open`, `read`, `write`, `close`).
-
-### 📦 Module System (`.kmod`)
-Kernel modules loaded from ext2 disk at boot: `NET.KMOD`, `CRYPTO.KMOD`, `GFX.KMOD`. Module API (KernelApi): print, alloc, files, PCI, ports, timer. No more monolithic binary.
-
-### 🌐 MEX API v1.1 — Network Functions
-Network access from `.mex` programs: `ping()`, `get_mac()`, `get_ip()`, `arp_resolve()`. Fully backward-compatible with v1.0.
-
-### 💬 DeiX Script (DS) — Shell Scripting Language
-Built-in interpreter with variables, conditionals (`if/else`), loops (`for/while`), commands. Used for `AUTOSTART.CFG`, `DXINIT.CFG`, and `*.dxs` scripts. Interactive REPL via `ds -i`.
-
-### 🎨 DUIL — DeiX UI Language
-Declarative XML-like markup for GUI: `<window>`, `<button>`, `<label>`, `<terminal>`, `<vbox>`, `<hbox>`.
-
-### 🚀 dxinit — Boot Manager
-Systemd-like init system. Services in stages (`early` → `middle` → `late`). Dependency resolution, auto-restart. Config: `/etc/DXINIT.CFG`.
-
-### 🎮 NVIDIA Open 3D Driver
-Based on nouveau documentation (freedesktop.org). Supports NV04–NV40 PGRAPH 3D engine with triangle rendering. Requires Falcon firmware for NV50+ (available at freedesktop.org/nouveau/linux-firmware).
-
-### 🖥️ ELF Loader + glibc Compatibility
-Loads static ELF64 binaries (glibc `--static` / musl). New address space per process, user stack, brk heap.
-
-### 🗂️ Memory Manager
-Buddy allocator (4K page bitmap), 4-level x86_64 page tables, virtual memory allocation, map/unmap, TLB management.
-
-### 🔌 New Drivers (skeleton)
-- **xHCI USB 3.0**: PCI probe, MMIO registers, reset/start, DCBAA, Command Ring
-- **HD Audio**: CORB/RIRB, widget graph, PCM setup
-- **DisplayPort/HDMI**: AUX channel, DPCD, link training, EDID, DDC/I2C
-- **Initrd**: Early filesystem for pre-ATA module loading
+**Ядро:** ~0.5 МБ (Rust `#![no_std]` + NASM stage2) · **Образ диска:** 10 МиБ · **Код:** ~25 000 строк Rust, 92 файла · фиксированное железо, реальное железо и QEMU.
 
 ---
 
-## ⚡ Core Features (v0.1)
+## ⚡ Новое в development (после v0.2)
 
-### 🦀 Pure Rust Kernel (`#![no_std]`)
-- **Long Mode:** boots directly into 64-bit mode
-- **Safe Memory:** heap allocator + page tables under Rust's ownership rules
-- **Микроядерная база:** memory management + component isolation
+### 🔐 LUKS-криптография со слотами паролей
+Несколько паролей на один том — как в настоящем LUKS: мастер-ключ шифруется
+каждым паролем-слотом. `PBKDF2-HMAC-SHA512` для вывода ключей. Управление —
+`crypt status/addpass/delpass/iter`. Том совместим с Linux `cryptsetup`
+(XTS-AES-256).
 
-### 🎨 Procedural Desktop
-- Live-animated diagonal background lines (procedural)
-- Z-Order Window Manager with drag-and-drop
-- Dynamic resolution up to 1280x1024 (Bochs VBE)
+### 🖥️ Графический вход и аккаунты
+GUI-экран входа (VBE): создание первого аккаунта, вход с маскировкой пароля,
+**экран блокировки** (`lock`), профили пользователей (`/users/<имя>/files`,
+`/users/<имя>/configs` — команда `profile`). Том шифруется **прямо из
+графического входа** — раньше USERS.DB читался обычным 7-Zip, это исправлено.
+`AUTOSTART.CFG` выполняется только ПОСЛЕ успешной аутентификации.
 
-### 🔐 Ironclad Security
-- **Ring 3 isolation:** GDT, TSS, `syscall` hardware switching
-- **Salted SHA-256 hashing** for user passwords (`USERS.DB`)
-- **AES-256-XTS full-disk encryption** (compatible with Linux `cryptsetup`)
+### 🔊 UI-звуковые эффекты (PC speaker, ШИМ)
+Системные звуки как в Android (`/system/media/audio/ui`): `start` при входе,
+`error` на неверный пароль, `usbcon` при загрузке с флешки; `lowbat`/`fullbat`/
+`usbdisc` — API готово, появятся с ACPI/USB-стеком. WAV конвертируются на
+сборке в компактный DPS1 (8 кГц/8-бит/моно) и лежат в EROFS `/super` — ядро
+не растёт ни на байт. Команда `sound` — список и ручное воспроизведение.
 
-### 🌐 Network & Localization
-- RTL8139 NIC driver + IPv4/ARP/ICMP stack
-- IEEE 802.11 Wi-Fi protocol + WPA2-PSK handshake
-- Hardware Cyrillic font in VGA Plane 2
-- Russian/English UI localization (`lang ru`/`lang en`)
+### 🧩 HAL + открытый драйвер NVIDIA
+Прослойка драйверов (`src/hal`, MMIO) и открытый драйвер NVIDIA
+(`src/drivers/nvidia.rs`, на базе nouveau): `hal` — самопроверка на RTL8139,
+`nvidia` — поиск и опознание карты, дамп регистров в файл для отладки на
+реальном железе.
+
+### 📁 ext2 с настоящими подкаталогами
+Многоуровневые каталоги, `mkdir_p`, файлы по путям (`read_file_path` и ко) —
+менять ФС на ext4/NTFS не понадобилось.
+
+### 🌐 TCP + HTTP/1.0
+Минимальный TCP (RFC 793) и HTTP-клиент (GET, статусы, тело до 2 МиБ) поверх
+RTL8139. Главный потребитель — `ota fetch`: OTA-пакет скачивается «по воздуху»
+с host-сервера и прошивается в неактивный слот (A/B).
+
+### 💾 Загрузка с USB (ramboot)
+Boot from флешки/Ventoy: весь образ дочитывается в RAM (0x2000000), дальше
+разделы работают из памяти — аппаратный диск может вообще отсутствовать.
+При этом играется звук `usbcon`.
+
+### 🧠 Intel microcode
+Обновление микрокода CPU из встроенного блоба (`data/mc-06-2a-07.bin`),
+команда `microcode`. На реальном железе применение аккуратно отключено
+там, где оно вызывало перезагрузку.
+
+### 🐛 Фиксы реального железа
+- **Triple fault** при загрузке — пустая IDT и неверный порядок
+  инициализации; исправлено, проверено на железе.
+- ramboot раньше читал **чужой диск** вместо флешки — исправлено.
+- VGA: сброс Sequencer при возврате в текстовый режим, очистка 0xB8000;
+  буфер ядра поднят выше VGA-памяти.
+
+### 🧹 KISS-рефакторинг (−12 146 строк, −38 %)
+Из ядра вынесены подсистемы без реальных потребителей — подробности и
+доказательства в `REFACTOR_REPORT.md`.
+
+| Удалено | Почему |
+|---|---|
+| Wi-Fi 802.11 + WPA2-PSK | единственная реализация драйвера — `NoWifiHardware` |
+| DS-скрипты, DUIL, композитор | самодостаточные интерпретаторы без связи с ядром |
+| Браузер, nv3d, DisplayPort, xHCI, HDA | модули-сироты (ноль вызовов) |
+| pacman, Arch ABI-мост, ELF-дубль, FAT16 | демо-показы/дубли живых механизмов |
+| dxinit, fileman, security_monitor | параллельные механизмы при живых `init_parser`/GUI |
 
 ---
 
-## 📂 Project Structure
+## ⚡ База ядра
+
+- **🦀 Pure Rust `#![no_std]`**, загрузка сразу в long mode: `boot_sector` (MBR)
+  → `stage2` (32-бит вход → long mode → ATA-ридер ядра) → `kernel.bin` @ 0x100000.
+  Лимит размера ядра снят (до ~2 МиБ — ядро читается уже в 64-битном режиме).
+- **🛡 Ring 3 + syscall/sysret** — аппаратная изоляция (GDT+TSS), самопроверка при загрузке.
+- **🧵 Вытесняющая многозадачность** — планировщик с naked-заглушкой IRQ0
+  (`threads list/test`).
+- **🔁 kexec** — перезапуск ядра из `/kernel_a|b` без BIOS (`kexec check/a/b`),
+  счётчик поколений вне `.bss` (0x1360000).
+- **📦 A/B-слоты + OTA** — `/kernel_a|b`, `/boot_a|b`, активный слот в BCB;
+  `ota check/fetch/apply/rollback`, откат через `bcb slot`.
+- **🧾 Настоящий EROFS** (магия `0xE0F5E1E2`, проходит `fsck.erofs`) во всех
+  системных разделах; `kernel.tar.gz` — настоящий gzip, ядро распаковывает
+  своим inflate (`src/inflate.rs`).
+- **🔒 Цепочка загрузки с верификацией** — `/dsm` → `/init_boot` → `/vendor_boot`
+  → `/boot` → `/kernel`; повреждённый раздел = «ЗАГРУЗКА ОСТАНОВЛЕНА»
+  (аналог Android RED state), AVB-маркер.
+- **🥽 Режимы загрузки по BCB**: **DSM** (emergency-прошивка по COM1,
+  READ/WRITE/FLASH/ERASE/VERIFY SHA-256), **fastbootd** (полный прошивальщик,
+  oem unlock/lock), **recovery** (TWRP-style: Install OTA, Nandroid backup/restore,
+  factory reset, sideload).
+- **🔎 Отладчик как в Android** — `bugreport` (полный отчёт → экран + файл),
+  `dmesg` (кольцевой журнал), `crashlog` (tombstone паники сырыми секторами —
+  переживает перезагрузку).
+- **🐧 Linux-совместимость** — ELF-загрузчик + слой Linux syscalls
+  (`src/linux/`), `linux run/info`.
+- **🎨 Графика и UI** — VBE до 1280x1024, мышь, графические диалоги,
+  кириллический шрифт (VGA Plane 2), локализация en/ru (`lang`).
+- **🌐 Сеть** — RTL8139 + ARP + IPv4 + ICMP + TCP + HTTP (`ifconfig`, `arp`,
+  `ping`).
+- **📦 MEX-приложения** — собственный формат программ (`run`, `pkg`),
+  собираются `mexcc`/`mexmake` (инструменты в `tools/`).
+
+---
+
+## 🗂️ Карта разделов (10 МиБ, MBR + extended)
+
+| Раздел | LBA | Секторов | ФС | Назначение |
+|---|---|---|---|---|
+| `/system` | 4096 | 8192 | ext2 rw | рабочий том ядра (USERS.DB, AUTOSTART.CFG, профили) |
+| `/TPM` | 12288 | 512 | скрытый 0xDA | маркер TPM (пароли/ключи — не читается из ОС) |
+| `/userdata` | 12800 | 512 | ext2 rw | данные Ring 3 |
+| `/kernel_a` | 13313 | 1279 | EROFS ro | слот A: `kernel.tar.gz` (gzip, inflate в ядре) |
+| `/kernel_b` | 14593 | 1279 | EROFS ro | слот B |
+| `/init_boot` | 15873 | 255 | EROFS ro | `bootloader.bin` |
+| `/vendor_boot` | 16129 | 255 | EROFS ro | `vendor.bin` (HAL) |
+| `/boot_a` | 16385 | 255 | EROFS ro | `fastbootd.bin`, `recovery.bin` |
+| `/boot_b` | 16641 | 255 | EROFS ro | слот B |
+| `/super` | 16897 | 255 | EROFS ro | `system.img` + **UI-звуки (`*.dps`)** |
+| `/dsm` | 17153 | 255 | EROFS ro | `dsm.bin` (emergency) |
+| `/recovery` | 17409 | 255 | EROFS ro | `recovery.bin` |
+| `/OTA` | 17664 | 2816 | ext2 | скачанные OTA-пакеты (сырое хранилище ядра) |
+
+> ⚠️ Правило синхронизации: карта должна совпадать в трёх местах —
+> `src/partition_map.rs`, `tools/make_deix_fs.py` (`PRIMARY`/`LOGICALS`),
+> `tools/deix_ota.py` (`SLOTS`). Иначе bootchain не найдёт dsm.bin.
+
+---
+
+## 💻 CLI
+
+```
+help about echo clear uptime color cpuid mem lang
+ifconfig arp ping gpu [info|nvinfo|mode] sound [list|play|beep]
+ls cat write rm pkg run install bigfile
+useradd passwd whoami users encrypt crypt
+nvidia hal microcode logo linux profile lock
+threads kexec crash bugreport dmesg crashlog
+reboot [normal|recovery|fastbootd|dsm] bcb ota adb dev root halt
+```
+
+Полная справка — внутри системы: `help`.
+
+---
+
+## 🔊 UI-звуки
+
+| Файл | Когда звучит |
+|---|---|
+| `start.dps` | вход выполнен, система готова |
+| `error.dps` | неверный пароль (GUI и текстовый логин) |
+| `usbcon.dps` | загрузка с USB-флешки (RAM-диск) |
+| `usbdisc.dps` | API готово — событие появится с USB-стеком |
+| `lowbat.dps` / `fullbat.dps` | API готово — события появятся с ACPI |
+
+Конвейер: `assets/*.wav` --(build.sh [2e/8], `tools/wav2dps.py`)-->
+`build/sounds/*.dps` --(`tools/make_deix_fs.py`)--> EROFS `/super` -->
+ШИМ-проигрыватель PC speaker (`src/sound.rs`). Ручная проверка: `sound`,
+`sound start`, `sound beep 880 200`. В QEMU звук спикера:
+`-audiodev pa,id=snd0 -machine pcspk-audiodev=snd0`.
+
+---
+
+## 🚀 Быстрый старт
+
+```bash
+# Зависимости: rustup nightly + x86_64-unknown-none, nasm, qemu-system-x86
+./build.sh        # nasm → cargo → ld → образ диска → разделы → ISO
+./run.sh          # QEMU, VGA-окно
+./run_iso.sh      # QEMU, загрузка с ISO
+```
+
+```bash
+# Headless (весь вывод в терминал):
+qemu-system-x86_64 -drive file=build/deix_disk.img,format=raw,if=ide \
+  -m 256M -display none -serial stdio -no-reboot
+
+# С сетью и звуком PC speaker:
+qemu-system-x86_64 -drive file=build/deix_disk.img,format=raw,if=ide \
+  -m 256M -serial stdio -netdev user,id=n0 -device rtl8139,netdev=n0 \
+  -audiodev pa,id=snd0 -machine pcspk-audiodev=snd0
+```
+
+При первом запуске система попросит создать аккаунт — он же ключ
+шифрования диска (XTS-AES-256). Подробности: `BUILD_AND_TEST.md`,
+`TERMUX_SETUP.md`, `ARCH_SETUP.md`, `USB_BOOT.md`.
+
+## 🧪 Тестирование (QEMU)
+
+```bash
+python3 tools/qemu_mode_test.py dsm|fastbootd|recovery|install|os|crash
+python3 tools/qemu_scenario_reboot.py   # пароль переживает 2 перезагрузки
+python3 tools/qemu_install_test.py      # установка на второй диск + загрузка
+```
+
+Бут-логи прошлых прогонов: `docs/QEMU_BOOT_LOG_*.txt`.
+
+---
+
+## 📂 Структура проекта
 
 ```
 DeiX/
-├── boot/              # NASM bootloader (MBR + long mode)
-├── src/               # Rust kernel source (~17,000 lines)
-│   ├── lib.rs         # Entry point (kernel_main)
-│   ├── cli.rs         # Command-line interface (~30 commands)
-│   ├── mm/            # Memory manager (phys + virt)
-│   ├── crypto/        # AES, SHA-256/512, HMAC-SHA1, PBKDF2, XTS
-│   ├── net/           # Ethernet, ARP, IPv4, ICMP
-│   ├── wifi/          # IEEE 802.11, WPA2-PSK, EAPOL
-│   ├── ui/            # Window manager + desktop renderer
-│   ├── ds.rs          # DeiX Script interpreter
-│   ├── duil.rs        # DUIL UI language parser
-│   ├── dxinit.rs      # Boot manager (systemd-like)
-│   ├── elf.rs         # ELF64 static loader
-│   ├── usermode.rs    # Ring 3 + syscall/sysret
-│   ├── module.rs      # .kmod module loader
-│   ├── nv3d.rs        # NVIDIA open 3D driver
-│   ├── xhci.rs        # USB 3.0 xHCI driver
-│   ├── hda.rs         # HD Audio driver
-│   ├── dp.rs          # DisplayPort/HDMI driver
-│   ├── initrd.rs      # Initial RAM disk
-│   └── autostart.rs   # Autostart script runner
-├── tools/             # Build tools
-│   ├── mexcc.py       # Cross-compiler (C/C++/Rust → .mex)
-│   ├── mex_pack.py    # .bin → .mex packer
-│   ├── kmod_pack.py   # .bin → .kmod packer
-│   ├── hello.asm      # Demo .mex program
-│   ├── sysinfo.asm    # System info .mex
-│   └── netping.asm    # Network ping .mex
-├── docs/              # Documentation
-│   └── MEX_FORMAT.md  # .mex format specification (v1.1)
-├── build.sh           # Build script (NASM + cargo + ld)
-├── run.sh             # QEMU launch script
-└── run_iso.sh         # ISO boot script
-```
-
----
-
-## 🏗 Архитектура загрузки (двухчастная, лимит размера ядра снят)
-
-```
-Сектор 0          boot_sector.bin (512 Б, MBR — BIOS грузит сам)
-Секторы 1..K      stage2.bin (загрузчик: 32-бит вход -> long mode -> копирует kernel)
-Секторы K+1..M    kernel.bin (ядро, база 0x100000; грузится через BIOS int13 в 0x11000,
-                   затем stage2 копирует в 0x100000 и прыгает)
-```
-
-- Ядро больше НЕ ограничено 1 МиБ/real mode: stage2 (маленький, 1 сектор) читает
-  kernel.bin через BIOS int13 и копирует в high memory. Область загрузчика — до
-  ext2-тома (LBA 4096), т.е. ~4090 секторов (~2 МиБ) под ядро.
-- **ПОЛНАЯ ЦЕПОЧКА ЗАГРУЗКИ через ВСЕ разделы** (не пустышки!, порядок по ТЗ):
-  `загрузчик(MBR/stage2) → /dsm(dsm.bin) → /init_boot(bootloader.bin) →
-  /vendor_boot(vendor.bin) → /boot(fastbootd.bin, recovery.bin) →
-  /kernel(kernel.tar.gz)`.
-  Каждый EROFS-раздел содержит реальные файлы (таблица файлов после
-  суперблока); ядро при старте читает и верифицирует их, а kernel.tar.gz —
-  НАСТОЯЩИЙ gzip (deflate): ядро распаковывает его своим inflate-декодером
-  (src/inflate.rs) и извлекает kernel.bin + библиотеки (libdeix_*.so).
-  Режимы fastbootd/recovery загружают свои образы из /boot; install копирует
-  разделы с загрузочного диска на целевой.
-- `boot_sector` читает kernel с `LBA = 1 + NUM_SECTORS(stage2)`, `KERNEL_SECTORS=1100`
-  (запас — ядро может расти); install пишет ровно туда же.
-- `install` на целевой диск пишет kernel.bin, прочитанный с загрузочного диска
-  (чистый `.data`), а не из памяти — «живой» .data с указателями на кучу
-  ломал бы установленную систему (Invalid opcode).
-- `install` сбрасывает служебные секторы целевого диска (BCB, маркер шифрования
-  DEIXCRYP): иначе остатки от прошлой настройки оставляли том «зашифрованным»
-  старым ключом, и вход с новым паролем давал Invalid password.
-- `linker_kernel.ld` включает .got/.got.plt в .data и выравнивает __image_end
-  до 512 байт — иначе install копировал kernel на сектор короче (хвост .data
-  терялся, установленная система падала Invalid opcode).
-- Paging: identity-map первых 4 ГиБ (1 ГиБ обычной памяти + GPU MMIO 0xFC000000
-  для framebuffer'а оболочек recovery/fastbootd/DSM).
-- GUI-оболочки (DSM/Fastbootd/Recovery): английский UI, подтверждения через
-  графические диалоги (Enter/Esc, таймаут) — без зависаний.
-
-## 💻 CLI Commands
-
-```
-help     about    echo      clear     uptime    color     cpuid
-mem      lang     ifconfig  arp       ping      wifi      gpu
-ls       cat      write     rm        pkg       run       install
-bigfile  useradd  passwd    whoami    users     encrypt   modules
-nv3d     ds       duil      dxinit    crash     reboot    halt
-bugreport dmesg   crashlog  dsm       adb       ota       dev
-```
-
-### Загрузочные режимы (BCB): DSM > Fastbootd > Recovery > ОС
-
-| Команда | Режим при следующей перезагрузке |
-|---------|----------------------------------|
-| `reboot dsm` | **DSM** — Download System Manager (аналог EDL): emergency-прошивка по COM1, READ/WRITE/FLASH/ERASE/VERIFY (SHA-256), работает даже при сломанной ОС |
-| `reboot fastbootd` | **Fastbootd** — полный прошивальщик: Flash/Erase/Format, Getvar, OEM unlock/lock, перезагрузка в любой режим |
-| `reboot recovery` | **Recovery** — TWRP/OrangeFox-style: Install OTA (с разблокировкой зашифрованного тома паролем), Nandroid Backup/Restore, Factory Reset, Wipe, Mount, Sideload, crash log |
-| `bcb <mode>` | прямая установка одноразового флажка (`normal`/`recovery`/`fastbootd`/`dsm`) |
-
-### Отладчик ошибок (как в Android)
-
-| Команда | Что делает |
-|---------|------------|
-| `bugreport` | полный диагностический отчёт (система, разделы, TPM, BCB, dmesg, crash) → экран + BUGREPORT.TXT на /system |
-| `dmesg` | кольцевой журнал ядра (последние строки) |
-| `crashlog` | дамп последней паники (tombstone): `crashlog clear` — очистить |
-| `crash panic` | принудительная паника (тест отладчика) |
-| `ota file [payload]` | сгенерировать OTA-пакет и записать TEST.OTA на /system (для recovery Install) |
-
-Паника ядра записывает tombstone сырыми секторами (LBA 2048, вне ext2/шифрования) —
-том не повреждается, дамп читается после перезагрузки.
-
-### New in v0.2:
-| Command | Description |
-|---------|-------------|
-| `nv3d info/demo` | NVIDIA 3D driver info & demo |
-| `ds <file>/-c/-i` | DeiX Script interpreter |
-| `duil <file>` | Render DUIL layout |
-| `dxinit boot/status` | Boot manager control |
-| `modules` | List loaded kernel modules |
-
----
-
-## 🚀 Quick Start
-
-```bash
-cd Deix/
-chmod +x build.sh run.sh
-./build.sh          # Build everything
-./run.sh            # Launch in QEMU
-```
-
-```bash
-# Or with network + large memory:
-qemu-system-x86_64 -drive file=build/deix_disk.img,format=raw \
-  -m 512M -net nic,model=rtl8139 -net user
-```
-
----
-
-## 🔧 Cross-Compilation (mexcc)
-
-```bash
-# Generate Rust project scaffold:
-python3 tools/mexcc.py cargo
-
-# Generate CMake project for C/C++:
-python3 tools/mexcc.py cmake
-
-# Compile C to .mex:
-python3 tools/mexcc.py build hello.c
-
-# Compile ASM to .mex:
-python3 tools/mexcc.py build program.asm
+├── boot/                # NASM: boot_sector, stage2, long_mode_init, ramboot, линкеры
+├── src/                 # ядро Rust (~25k строк, 92 файла)
+│   ├── crypto/          # AES, SHA-256/512, PBKDF2-HMAC, XTS
+│   ├── drivers/ + hal/  # драйвер-плоскость и NVIDIA (nouveau-based)
+│   ├── linux/           # ELF-загрузчик + Linux syscall ABI
+│   ├── mm/              # физическая память (buddy), куча 16 МиБ
+│   ├── net/             # ARP, IPv4, ICMP, TCP, HTTP
+│   ├── ui/              # оконная система и отрисовка
+│   ├── data/            # встроенные данные (Intel microcode blob)
+│   ├── sound.rs         # PC speaker: beep, ШИМ-плеер DPS, UiSound
+│   ├── loginui.rs / auth.rs      # графический и текстовый вход
+│   ├── bootchain.rs / partition_map.rs / erofs.rs / ext2.rs / crypto_storage.rs
+│   ├── ota.rs / ota_store.rs / bcb.rs / avb.rs / recovery_ui.rs / fastbootd_ui.rs / dsm.rs
+│   └── kexec.rs / sched.rs / usermode.rs / microcode.rs / ...
+├── tools/               # make_deix_fs.py, wav2dps.py, make_logo.py, mexcc/mexmake,
+│                        # deix_ota.py, qemu_*_test.py и др.
+├── assets/              # logo.png + UI-звуки (*.wav — исходники для DPS)
+├── docs/                # отчёты, бут-логи, MEX_FORMAT, скриншоты
+├── security/            # master_spec — спецификация подсистемы безопасности
+├── build.sh  run.sh  run_full.sh  run_iso.sh
+└── BUILD_AND_TEST.md    # сборка, тесты, карта памяти, звуки
 ```
 
 ---
 
 ## 🗺️ Roadmap
 
-- [x] Ring 3 user mode + syscall/sysret
-- [x] Module system (.kmod)
-- [x] MEX API v1.1 (network functions)
-- [x] NVIDIA open 3D driver (NV04–NV40)
-- [x] ELF static loader (glibc compat)
-- [x] Memory manager (buddy + page tables)
-- [x] DeiX Script language (DS)
-- [x] DUIL UI language
-- [x] dxinit boot manager
-- [x] xHCI USB 3.0 / HD Audio / DP-HDMI skeleton
-- [ ] TCP/IP stack (currently Ethernet+ARP+IPv4+ICMP only)
-- [ ] USB device enumeration + HID driver
-- [ ] NVIDIA firmware loader (Falcon) + NV50+ 3D
-- [ ] ext4 / FAT32 filesystem support
-- [ ] SMP (multi-core)
+- [x] Ring 3 + syscall/sysret, вытесняющая многозадачность, kexec
+- [x] Настоящий EROFS во всех системных разделах
+- [x] LUKS-слоты + PBKDF2-HMAC-SHA512
+- [x] Графический вход, экран блокировки, профили
+- [x] ext2 с подкаталогами
+- [x] TCP + HTTP/1.0 (OTA по воздуху)
+- [x] HAL + открытый драйвер NVIDIA
+- [x] USB-загрузка (ramboot / Ventoy)
+- [x] UI-звуки (PC speaker, ШИМ)
+- [ ] ACPI + мониторинг батареи → события для `lowbat`/`fullbat`
+- [ ] USB-стек устройств (HID) → событие `usbdisc`
+- [ ] HPET-таймер → точная скорость ШИМ-воспроизведения на железе
+- [ ] NVIDIA Falcon firmware / NV50+
+- [ ] ext4 / SMP (дальнее)
 
 ---
 
-Developed by **Atimenka** & AI. Released under the GPL-3.0 License.
-
-## 🔐 Security Subsystem (интеграция)
-
-В ядро интегрирована подсистема инициализации и безопасности (7 модулей в `src/`):
-`init_parser` (парсер `init.deix`, PID 1), `vault` (барьер системных разделов —
-erofs/ro, rw только в Fastbootd/EDL/Recovery, иначе `panic!`), `security_monitor`
-(эвристический демон Ring 3, порог 0.85, SIGKILL), `kernel_loader` (сэндвич
-ядра с EROFS-суперблоком), `arch_pkg_bridge` (Arch PKG → `.pkg.erofs` в `/userdata`),
-`recovery_flash_engine` (TWRP/OrangeFox + Fastbootd + EDL), `partition_map`
-(карта разделов). Хуки подключены в `kernel_main()` (`src/lib.rs`): стадия
-`init_boot` и самоконтроль демона после инициализации Ring 3. Подробности —
-в `docs/SECURITY_SUBSYSTEM.md`.
-
-
-## 🧪 Тестирование (QEMU)
-
-```bash
-# все режимы (DSM/Fastbootd/Recovery/Install/OS/Crash)
-python3 tools/qemu_mode_test.py dsm
-python3 tools/qemu_mode_test.py fastbootd
-python3 tools/qemu_mode_test.py recovery
-python3 tools/qemu_mode_test.py install
-python3 tools/qemu_mode_test.py os
-python3 tools/qemu_mode_test.py crash
-
-# пароль переживает 2 перезагрузки
-python3 tools/qemu_scenario_reboot.py
-
-# полная установка на второй диск + загрузка с него
-python3 tools/qemu_install_test.py
-```
-
-Подробный отчёт: `docs/REPORT_v1.0_FINAL.md`.
-
-## 🔄 A/B разметка и OTA по воздуху
-
-- **A/B слоты**: `/kernel_a`/`/kernel_b`, `/boot_a`/`/boot_b`. Активный слот
-  хранится в BCB (`bcb slot <a|b>`). Цепочка загрузки читает АКТИВНЫЙ слот.
-- **OTA wireless**: `ota check` (проверка), `ota download` (скачать по воздуху —
-  формирует новый kernel.tar.gz), `ota apply` (прошивает в НЕактивный слот и
-  переключает), `ota rollback` (откат). Recovery: пункт «OTA wireless update (A/B)».
-- **Защита цепочки**: если раздел загрузочной цепочки стёрт/повреждён
-  (например `dsm erase /kernel_a`), загрузка ОСТАНАВЛИВАЕТСЯ («ЗАГРУЗКА
-  ОСТАНОВЛЕНА») — система не стартует без ядра (как Android RED state).
-  Восстановление — прошивкой раздела через DSM/fastbootd или `bcb slot b`.
-- CLI установщика и оболочек — на английском.
-
-## 📦 Утилита рассылки OTA (Linux-бинарник)
-
-**`deix-ota`** — host-инструмент для генерации и рассылки OTA-обновлений
-на все устройства DeiX (бинарник в корне проекта / home).
-
-```bash
-deix-ota build --kernel build/kernel.bin --out TEST.OTA --version 7
-    # собрать подписанный OTA-пакет (kernel.tar.gz + контейнер DEIXOTA1)
-
-deix-ota push --img dev1.img --img dev2.img --ota TEST.OTA --slot b --set-slot b
-    # прошить ядро в /kernel_b ВСЕХ образов и переключить активный слот на b
-
-deix-ota info --img dev1.img
-    # показать BCB (mode/slot) и содержимое всех EROFS-разделов
-
-deix-ota serve --dir . --port 8080
-    # HTTP-сервер раздачи: http://host:8080/TEST.OTA (для ota fetch с устройств)
-```
-
-Прошитый пакет ядро распаковывает (gzip+tar) и грузится со слота b —
-подтверждено в QEMU. Подпись SHA-256(payload||secret) валидна для ядра.
-
-## 🛠 mexmake — сборщик DeiX .mex (C/ASM/Rust)
-
-Система сборки .mex-приложений (аналог make для DeiX). Расположение:
-- **в DeiX**: `tools/mexmake` (бинарник);
-- **отдельно**: `/home/user/mexmake/` (исходники) и `/home/user/mexmake-bin` (бинарник).
-
-Использование (в корне проекта с файлом `mex`):
-```bash
-mmake init [c|asm|rust]   # создать проект (файл 'mex' + src/)
-mmake build               # собрать в .mex
-mmake info [file.mex]     # показать заголовок
-mmake clean               # очистить build/
-```
-
-Файл `mex` (конфигурация, без расширения):
-```
-[project]
-name = demo
-base = 0x600000      # адрес загрузки
-entry = mex_main     # точка входа (ASM: _start)
-src  = src
-outdir = build
-
-[mex]
-version = 1.1        # формат .mex
-
-[cc]
-cmd = cc
-include = include    # каталог заголовков
-
-[rust]
-mode = file
-```
-
-Поддерживает многофайловые проекты (структура папок, include), C/ASM/Rust,
-автоподстановка entry_offset/bss из ELF. Формат .mex v1.1 — как у ядра
-(MEX_LOAD_ADDR 0x600000, MexApi в RDI, тело после 32-байтного заголовка).
+Developed by **Atimenka** & AI. Released under the **GPL-3.0** License.
