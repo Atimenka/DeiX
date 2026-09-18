@@ -95,6 +95,8 @@ def main():
     if len(data) > max_len:
         data = data[:max_len]
 
+    import os
+    os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
     with open(dst, "wb") as f:
         f.write(b"DPS1")
         f.write(struct.pack("<I", rate))

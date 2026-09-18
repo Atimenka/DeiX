@@ -179,6 +179,8 @@ def main():
         out += bytes((r, g, b))
     out += body
 
+    import os
+    os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
     with open(dst, "wb") as f:
         f.write(out)
 

@@ -34,6 +34,8 @@ def wav_to_dps(wav_path, dps_path, target_rate=8000):
             resampled.append(val)
         samples = resampled
 
+    import os
+    os.makedirs(os.path.dirname(os.path.abspath(dps_path)), exist_ok=True)
     with open(dps_path, 'wb') as f:
         f.write(b'DPS1')
         f.write(struct.pack('<I', target_rate))

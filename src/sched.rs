@@ -321,7 +321,7 @@ pub fn spawn(name: &str, func: extern "C" fn()) -> Option<usize> {
             }
             let stack: Box<[u8]> = vec![0u8; STACK_SIZE].into_boxed_slice();
             let top = stack.as_ptr() as u64 + STACK_SIZE as u64;
-            let rsp = build_initial_frame(top, task_entry as u64, func as u64);
+            let rsp = build_initial_frame(top, task_entry as *const () as u64, func as *const () as u64);
 
             t.rsp = rsp;
             t._stack = Some(stack);

@@ -24,7 +24,7 @@ mkdir -p "$BUILD"
 echo "==> [1/8] Ассемблируем stage2 (32-бит вход + long mode + ATA-ридер ядра)"
 # Временные значения KERNEL_LBA/KERNEL_SECTORS — нужны только для размера
 # stage2 (на адреса/размер не влияют), финальные подставим на шаге [6/8].
-nasm -f elf64 -D KERNEL_SIZE_DWORDS=179200 boot/stage2.asm -o "$BUILD/stage2.o"
+nasm -f elf64 -D KERNEL_SIZE_DWORDS=262144 boot/stage2.asm -o "$BUILD/stage2.o"
 nasm -f elf64 boot/long_mode_init.asm   -o "$BUILD/long_mode_init.o"
 
 echo "==> [1b/8] Линкуем stage2 (загрузчик, база 0x10000)"
@@ -42,7 +42,7 @@ KERNEL_LBA=$(( 1 + STAGE2_SECTORS + RAMBOOT_SECTORS ))
 echo "    kernel.bin LBA: $KERNEL_LBA"
 
 echo "==> [1c/8] Собираем ramboot (RAM-диск: дочитывает весь образ в 0x2000000)"
-nasm -f bin -D RAMDISK_SECTORS=20480 -D RAMDISK_DST=0x2000000 -D KERNEL_SECTORS=1400 \
+nasm -f bin -D RAMDISK_SECTORS=20480 -D RAMDISK_DST=0x2000000 -D KERNEL_SECTORS=2048 \
     boot/ramboot.asm -o "$BUILD/ramboot.bin"
 RAMBOOT_SIZE=$(stat -c%s "$BUILD/ramboot.bin")
 if [ "$RAMBOOT_SIZE" -ne 512 ]; then
@@ -51,11 +51,11 @@ if [ "$RAMBOOT_SIZE" -ne 512 ]; then
 fi
 echo "    ramboot.bin: $RAMBOOT_SIZE байт => $RAMBOOT_SECTORS секторов"
 
-echo "==> [2/8] Собираем MBR-загрузчик (NUM_SECTORS=stage2, KERNEL_SECTORS=1400)"
-# KERNEL_SECTORS фиксирован (1100 секторов = 550 КиБ): install включает
+echo "==> [2/8] Собираем MBR-загрузчик (NUM_SECTORS=stage2, KERNEL_SECTORS=2048)"
+# KERNEL_SECTORS фиксирован (2048 секторов = 1024 КиБ): install включает
 # boot_sector в себя через include_bytes, поэтому размер не может зависеть
 # от kernel.bin (собирается позже). Чтение лишних секторов даёт нули.
-nasm -f bin -D NUM_SECTORS=$STAGE2_SECTORS -D RAMBOOT_SECTORS=$RAMBOOT_SECTORS -D KERNEL_SECTORS=1400 boot/boot_sector.asm -o "$BUILD/boot_sector.bin"
+nasm -f bin -D NUM_SECTORS=$STAGE2_SECTORS -D RAMBOOT_SECTORS=$RAMBOOT_SECTORS -D KERNEL_SECTORS=2048 boot/boot_sector.asm -o "$BUILD/boot_sector.bin"
 
 echo "==> [2b/8] Собираем демонстрационные .mex-программы (tools/*.asm)"
 # Формат .mex (DeiX EXecutable) — см. docs/MEX_FORMAT.md. Собираются ДО
@@ -139,7 +139,7 @@ KERNEL_SIZE=$(stat -c%s "$BUILD/kernel.bin")
 KERNEL_SECTORS=$(( (KERNEL_SIZE + 511) / 512 ))
 echo "    kernel.bin: $KERNEL_SIZE байт => $KERNEL_SECTORS секторов (LBA $KERNEL_LBA)"
 
-KERNEL_MAX_SECTORS=1400
+KERNEL_MAX_SECTORS=2048
 if [ "$KERNEL_SECTORS" -gt "$KERNEL_MAX_SECTORS" ]; then
     echo "ОШИБКА: kernel.bin ($KERNEL_SECTORS сект) > лимита ($KERNEL_MAX_SECTORS)."
     echo "Увеличьте KERNEL_SECTORS в boot/boot_sector.asm и boot/ramboot.asm."
@@ -155,10 +155,10 @@ fi
 
 echo "==> [6/8] Пересобираем stage2 с реальным KERNEL_SIZE_DWORDS"
 KERNEL_SIZE=$(stat -c%s "$BUILD/kernel.bin")
-# stage2 копирует kernel из 0x11000 (буфер 1100 секторов): KERNEL_SIZE_DWORDS
+# stage2 копирует kernel из 0x11000 (буфер 2048 секторов): KERNEL_SIZE_DWORDS
 # фиксирован и НЕ зависит от размера kernel.bin — иначе stage2, включённый
 # в install (include_bytes!), отличался бы от финального и сравнение ломалось.
-nasm -f elf64 -D KERNEL_SIZE_DWORDS=179200 boot/stage2.asm -o "$BUILD/stage2.o"
+nasm -f elf64 -D KERNEL_SIZE_DWORDS=262144 boot/stage2.asm -o "$BUILD/stage2.o"
 ld -n --gc-sections -T boot/linker_stage2.ld -o "$BUILD/stage2.elf" "$BUILD/stage2.o"
 strip --strip-all "$BUILD/stage2.elf" -o "$BUILD/stage2.stripped.elf"
 objcopy -O binary "$BUILD/stage2.stripped.elf" "$BUILD/stage2.bin"
@@ -169,7 +169,7 @@ if [ "$STAGE2_SECTORS2" -ne "$STAGE2_SECTORS" ]; then
     echo "пересчитываем и пересобираем ещё раз"
     STAGE2_SECTORS=$STAGE2_SECTORS2
     KERNEL_LBA=$(( 1 + STAGE2_SECTORS + RAMBOOT_SECTORS ))
-    nasm -f elf64 -D KERNEL_SIZE_DWORDS=179200 boot/stage2.asm -o "$BUILD/stage2.o"
+    nasm -f elf64 -D KERNEL_SIZE_DWORDS=262144 boot/stage2.asm -o "$BUILD/stage2.o"
     ld -n --gc-sections -T boot/linker_stage2.ld -o "$BUILD/stage2.elf" "$BUILD/stage2.o"
     strip --strip-all "$BUILD/stage2.elf" -o "$BUILD/stage2.stripped.elf"
     objcopy -O binary "$BUILD/stage2.stripped.elf" "$BUILD/stage2.bin"

@@ -355,7 +355,7 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
                 USER_EXITED = true;
                 asm!("mov rsp, {rsp}", "jmp {rip}",
                     rsp = in(reg) RETURN_RSP,
-                    rip = in(reg) ring3_return as u64,
+                    rip = in(reg) (ring3_return as *const () as u64),
                     options(noreturn));
             }
         }
@@ -388,7 +388,7 @@ pub fn init() {
         // sysret берёт CS = base+16, SS = base+8, поэтому base = USER_DS-8.
         let star = ((KERNEL_CS as u64) << 32) | (((USER_DS - 8) as u64) << 48);
         wrmsr(0xC000_0081, star);
-        wrmsr(0xC000_0082, syscall_entry as u64); // LSTAR
+        wrmsr(0xC000_0082, syscall_entry as *const () as u64); // LSTAR
         wrmsr(0xC000_0084, 0x0000_0300); // SFMASK: гасим IF и TF
 
         // EFER.SCE — без него инструкция syscall вызывает #UD.

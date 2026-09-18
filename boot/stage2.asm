@@ -22,7 +22,7 @@ KERNEL_SRC equ 0x800000   ; буфер kernel.bin (8 МиБ, ВЫШЕ legacy-д�
 ; уже в 32-битном protected mode, поэтому адрес выше 1 МиБ доступен.
 %endif
 %ifndef KERNEL_SIZE_DWORDS
-KERNEL_SIZE_DWORDS equ 179200   ; 716800 байт = 1400 секторов
+KERNEL_SIZE_DWORDS equ 262144   ; 1048576 байт = 2048 секторов
 %endif
 
 KERNEL_DST equ 0x100000   ; куда копируем kernel.bin (база kernel.ld)

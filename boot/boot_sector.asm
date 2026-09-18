@@ -203,7 +203,7 @@ dap_lba_hi:
 NUM_SECTORS equ 64
 %endif
 %ifndef KERNEL_SECTORS
-KERNEL_SECTORS equ 1400
+KERNEL_SECTORS equ 2048
 %endif
 ; ramboot лежит сразу после stage2 (LBA = 1 + NUM_SECTORS).
 %ifndef RAMBOOT_LBA
