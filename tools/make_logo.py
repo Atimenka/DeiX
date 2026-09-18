@@ -15,33 +15,31 @@ kernel.bin физически ограничен 572 КиБ (буфер загр
     12  N*3 палитра RGB
     ..      RLE-поток: пары [count 1..255][индекс цвета]
 
-Плоская картинка из 5 цветов ужимается в ~4 КиБ на 256x256.
+Поддерживает Pillow (если установлен) или встроенный чистый декодер PNG (zlib).
 
 Использование:
     python3 tools/make_logo.py logo.png build/logo.dxlg [размер]
 """
 import struct
 import sys
-
-try:
-    from PIL import Image
-except ImportError:
-    sys.exit("нужен Pillow: pip install pillow")
+import zlib
 
 MAGIC = b"DXLG"
 
 # Палитра подобрана под исходное лого: фон, голубой, синий, белый, оранжевый.
 PALETTE = [
-    (0x00, 0x00, 0x00),
-    (0x00, 0xD0, 0xFF),
-    (0x00, 0x60, 0xC0),
-    (0xFF, 0xFF, 0xFF),
-    (0xFF, 0x7A, 0x1A),
+    (0x00, 0x00, 0x00), # 0: фон (прозрачный)
+    (0x00, 0xD0, 0xFF), # 1: циан
+    (0x00, 0x60, 0xC0), # 2: синий
+    (0xFF, 0xFF, 0xFF), # 3: белый
+    (0xFF, 0x7A, 0x1A), # 4: оранжевый
 ]
 
 
 def nearest(px):
-    r, g, b = px[:3]
+    r, g, b = px[0], px[1], px[2]
+    if r < 18 and g < 18 and b < 18:
+        return 0
     best, bi = 1 << 30, 0
     for i, (pr, pg, pb) in enumerate(PALETTE):
         d = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2
@@ -63,19 +61,113 @@ def rle(indices):
     return bytes(out)
 
 
+def decode_png_pure(src, target_size):
+    """Декодирует PNG без внешних библиотек (через стандартный zlib)."""
+    with open(src, "rb") as f:
+        sig = f.read(8)
+        if sig != b"\x89PNG\r\n\x1a\n":
+            raise ValueError("Файл не является PNG")
+        idat = bytearray()
+        w, h = 0, 0
+        bit_depth, color_type = 0, 0
+        while True:
+            hdr = f.read(8)
+            if not hdr or len(hdr) < 8:
+                break
+            length, chunk_type = struct.unpack(">I4s", hdr)
+            chunk_data = f.read(length)
+            f.read(4)  # crc
+            if chunk_type == b"IHDR":
+                w, h, bit_depth, color_type, comp, filt, interlace = struct.unpack(
+                    ">IIBBBBB", chunk_data
+                )
+                if bit_depth != 8 or comp != 0 or filt != 0 or interlace != 0:
+                    raise ValueError("Неподдерживаемые параметры PNG")
+            elif chunk_type == b"IDAT":
+                idat.extend(chunk_data)
+            elif chunk_type == b"IEND":
+                break
+
+    decompressed = zlib.decompress(bytes(idat))
+    channels = {0: 1, 2: 3, 4: 2, 6: 4}.get(color_type)
+    if not channels:
+        raise ValueError(f"Неподдерживаемый color_type: {color_type}")
+
+    stride = 1 + w * channels
+    prev_row = bytearray(w * channels)
+    curr_row = bytearray(w * channels)
+
+    def paeth(a, b, c):
+        p = a + b - c
+        pa = abs(p - a)
+        pb = abs(p - b)
+        pc = abs(p - c)
+        if pa <= pb and pa <= pc:
+            return a
+        if pb <= pc:
+            return b
+        return c
+
+    all_rows = []
+    for y in range(h):
+        f_type = decompressed[y * stride]
+        line = decompressed[y * stride + 1 : (y + 1) * stride]
+        for x in range(w * channels):
+            filt = line[x]
+            a = curr_row[x - channels] if x >= channels else 0
+            b = prev_row[x]
+            c = prev_row[x - channels] if x >= channels else 0
+            if f_type == 0:
+                v = filt
+            elif f_type == 1:
+                v = (filt + a) & 0xFF
+            elif f_type == 2:
+                v = (filt + b) & 0xFF
+            elif f_type == 3:
+                v = (filt + ((a + b) >> 1)) & 0xFF
+            elif f_type == 4:
+                v = (filt + paeth(a, b, c)) & 0xFF
+            curr_row[x] = v
+        prev_row[:] = curr_row
+        all_rows.append(bytes(curr_row))
+
+    # Сэмплируем до target_size x target_size
+    idx = []
+    for ty in range(target_size):
+        sy = int(ty * h / target_size)
+        row = all_rows[sy]
+        for tx in range(target_size):
+            sx = int(tx * w / target_size)
+            px_idx = sx * channels
+            if channels == 1:
+                r = g = b = row[px_idx]
+            else:
+                r, g, b = row[px_idx], row[px_idx + 1], row[px_idx + 2]
+            idx.append(nearest((r, g, b)))
+    return idx
+
+
 def main():
     if len(sys.argv) < 3:
         sys.exit(__doc__)
     src, dst = sys.argv[1], sys.argv[2]
-    size = int(sys.argv[3]) if len(sys.argv) > 3 else 256
+    size = int(sys.argv[3]) if len(sys.argv) > 3 else 128
 
-    im = Image.open(src).convert("RGB")
-    # LANCZOS сглаживает края, но следом мы всё равно сводим к палитре,
-    # поэтому полутонов не остаётся — зато форма получается ровнее,
-    # чем при NEAREST.
-    im = im.resize((size, size), Image.LANCZOS)
+    has_pil = False
+    try:
+        from PIL import Image
 
-    idx = [nearest(p) for p in list(im.getdata())]
+        has_pil = True
+    except ImportError:
+        pass
+
+    if has_pil:
+        im = Image.open(src).convert("RGB")
+        im = im.resize((size, size), Image.LANCZOS)
+        idx = [nearest(p) for p in list(im.getdata())]
+    else:
+        idx = decode_png_pure(src, size)
+
     body = rle(idx)
 
     out = bytearray()
@@ -91,10 +183,11 @@ def main():
         f.write(out)
 
     raw = size * size * 3
-    print("%s: %dx%d, %d цв., %d Б (%.1f КиБ)" %
-          (dst, size, size, len(PALETTE), len(out), len(out) / 1024))
-    print("  сырой RGB был бы %d КиБ — сжатие в %.0f раз" %
-          (raw // 1024, raw / len(out)))
+    print(
+        "%s: %dx%d, %d цв., %d Б (%.1f КиБ)"
+        % (dst, size, size, len(PALETTE), len(out), len(out) / 1024)
+    )
+    print("  сырой RGB был бы %d КиБ — сжатие в %.0f раз" % (raw // 1024, raw / len(out)))
 
 
 if __name__ == "__main__":

@@ -225,6 +225,7 @@ pub extern "C" fn kernel_main() -> ! {
     // Лого на экране, полный лог — в COM1.
     bootlogo::show("starting system...");
 
+    bootlogo::set_status("verifying boot partitions...");
     crate::bootchain::show_partition_files();
     match crate::bootchain::run_boot_chain() {
         Ok(summary) => crate::println!("{}", summary),
@@ -239,6 +240,7 @@ pub extern "C" fn kernel_main() -> ! {
     }
 
 
+    bootlogo::set_status("initializing memory...");
     // Инициализируем менеджер памяти (физический + виртуальный).
     mm::phys::init();
     println!("  [mm] Physical page allocator: OK");
@@ -248,6 +250,7 @@ pub extern "C" fn kernel_main() -> ! {
     fs::load_meta_db();
     println!("  [fs] File access control + TrustedInstaller: OK");
 
+    bootlogo::set_status("verifying system integrity (AVB)...");
     // Verified Boot (AVB/vbmeta-аналог): проверка целостности системы.
     // Green — обычная загрузка; Orange (dev) — предупреждение + 5 сек;
     // Red — красный экран "Your device is corrupt...", загрузка запрещена.
@@ -328,6 +331,10 @@ pub extern "C" fn kernel_main() -> ! {
     if crate::ota::ota_pending() {
         crate::ota::ota_pending_flow();
     }
+
+    bootlogo::set_status("system ready");
+    // Небольшая задержка, чтобы логотип и статус готовности были отчётливо видны перед входом:
+    crate::timer::pit_sleep_ms(800);
 
     // Экран входа — до первого запуска создаёт первый аккаунт, при
     // последующих запусках требует ввод логина/пароля (сверяется с

@@ -87,12 +87,14 @@ fi
 
 echo "==> [2d/8] Готовим загрузочное лого (assets/logo.png -> DXLG+RLE)"
 # Декодера PNG в ядре нет, а сырой RGB не влезает в 572 КиБ лимита
-# kernel.bin, поэтому лого конвертируется в палитру + RLE (~5 КиБ).
-if [ -f assets/logo.png ] && python3 -c "import PIL" 2>/dev/null; then
+# kernel.bin, поэтому лого конвертируется в палитру + RLE (~2.3 КиБ).
+if [ -f assets/logo.png ]; then
     python3 tools/make_logo.py assets/logo.png "$BUILD/logo.dxlg" 128
+elif [ -f assets/logo.dxlg ]; then
+    cp assets/logo.dxlg "$BUILD/logo.dxlg"
 else
-    echo "    assets/logo.png или Pillow нет — пустая заглушка"
-    printf 'DXLG\x01\x00\x01\x00\x01\x00\x00\x00\x00\x00\x00' > "$BUILD/logo.dxlg"
+    echo "    ОШИБКА: assets/logo.png и assets/logo.dxlg не найдены"
+    exit 1
 fi
 
 echo "==> [2e/8] Конвертируем UI-звуки (assets/*.wav -> DPS 8 кГц, u8 моно)"
