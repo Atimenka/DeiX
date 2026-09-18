@@ -71,9 +71,9 @@ const BYTES_PER_SAMPLE: usize = 4; // 16 бит * 2 канала = 4 байта
 // Размеры DMA-буферов
 const CORB_ENTRIES: usize = 256;
 const RIRB_ENTRIES: usize = 256;
-const BDL_ENTRIES: usize = 2;
+const BDL_ENTRIES: usize = 4;        // 4 периода для стабильного буферизованного вывода без заиканий
 const PERIOD_SIZE: usize = 16384;   // 16 КиБ = 4096 сэмплов (~85.3 мс)
-const BUFFER_SIZE: usize = PERIOD_SIZE * BDL_ENTRIES; // 32 КиБ (~170.6 мс)
+const BUFFER_SIZE: usize = PERIOD_SIZE * BDL_ENTRIES; // 64 КиБ (~341.3 мс)
 
 #[repr(C, align(128))]
 struct CorbRing([u32; CORB_ENTRIES]);
@@ -475,20 +475,17 @@ pub fn init() -> bool {
             }
         }
 
-        // Заполняем BDL (таблица из 2 записей по 16 КиБ)
+        // Заполняем BDL (таблица из 4 записей по 16 КиБ = 64 КиБ кольцевой буфер)
         let buf_phys = core::ptr::addr_of!(AUDIO_DMA_BUF) as u64;
-        BDL_TABLE[0] = BdlEntry {
-            addr_lo: buf_phys as u32,
-            addr_hi: (buf_phys >> 32) as u32,
-            len: PERIOD_SIZE as u32,
-            flags: 1, // bit 0 = IOC
-        };
-        BDL_TABLE[1] = BdlEntry {
-            addr_lo: (buf_phys + PERIOD_SIZE as u64) as u32,
-            addr_hi: ((buf_phys + PERIOD_SIZE as u64) >> 32) as u32,
-            len: PERIOD_SIZE as u32,
-            flags: 1, // bit 0 = IOC
-        };
+        for i in 0..BDL_ENTRIES {
+            let offset = (i * PERIOD_SIZE) as u64;
+            BDL_TABLE[i] = BdlEntry {
+                addr_lo: (buf_phys + offset) as u32,
+                addr_hi: ((buf_phys + offset) >> 32) as u32,
+                len: PERIOD_SIZE as u32,
+                flags: 1, // bit 0 = IOC
+            };
+        }
 
         // Пишем адрес BDL
         let bdl_phys = core::ptr::addr_of!(BDL_TABLE) as u64;
@@ -497,8 +494,8 @@ pub fn init() -> bool {
 
         // Общая длина кольцевого буфера
         write32(sd, SD_OFF_CBL, BUFFER_SIZE as u32);
-        // Индекс последней записи (2 записи - 1 = 1)
-        write16(sd, SD_OFF_LVI, 1);
+        // Индекс последней записи (4 записи - 1 = 3)
+        write16(sd, SD_OFF_LVI, (BDL_ENTRIES - 1) as u16);
         // Формат потока
         write16(sd, SD_OFF_FMT, HDA_FORMAT_48K_16B_STEREO);
         // Сброс флагов статуса
@@ -562,8 +559,8 @@ pub fn play_pcm_stereo_48k(samples: &[i16]) {
         let lpib = ctrl.stream_position() as usize;
         let current_period = (lpib / PERIOD_SIZE) % BDL_ENTRIES;
 
-        // Если контроллер перешёл в следующий период, освободившийся предыдущий можно перезаписать
-        if current_period != last_period {
+        // Пополняем все периоды, которые контроллер успел воспроизвести
+        while last_period != current_period && offset < total_bytes {
             let write_period = last_period;
             let write_dest = unsafe { dma_ptr.add(write_period * PERIOD_SIZE) };
             let remaining = total_bytes - offset;
@@ -576,7 +573,7 @@ pub fn play_pcm_stereo_48k(samples: &[i16]) {
                 }
             }
             offset += chunk_size;
-            last_period = current_period;
+            last_period = (last_period + 1) % BDL_ENTRIES;
         }
 
         // Защита от бесконечного зависания
@@ -584,12 +581,12 @@ pub fn play_pcm_stereo_48k(samples: &[i16]) {
             break;
         }
 
-        spin_delay(500);
+        spin_delay(200);
     }
 
-    // Дожидаемся завершения воспроизведения остатка
+    // Дожидаемся завершения воспроизведения остатка (2 периода буфера)
     let tail_wait_start = crate::timer::uptime_ms();
-    let remaining_tail_ms = (PERIOD_SIZE as u64 * 1000) / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64) + 60;
+    let remaining_tail_ms = ((PERIOD_SIZE * 2) as u64 * 1000) / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64) + 60;
     while crate::timer::uptime_ms().saturating_sub(tail_wait_start) < remaining_tail_ms {
         spin_delay(1000);
     }
@@ -627,7 +624,7 @@ pub fn play_tone(hz: u32, duration_ms: u64) {
     play_pcm_stereo_48k(&pcm);
 }
 
-/// Воспроизведение цифрового DPS1 звука (8 кГц, 8 бит моно) через ресэмплинг в HDA (48 кГц, 16 бит стерео).
+/// Воспроизведение цифрового DPS1 звука с плавной линейной интерполяцией в 48 кГц 16-бит стерео.
 pub fn play_dps(dps_data: &[u8]) -> Result<(), &'static str> {
     if !is_ready() {
         return Err("HDA controller not ready");
@@ -643,19 +640,34 @@ pub fn play_dps(dps_data: &[u8]) -> Result<(), &'static str> {
         return Err("Corrupted DPS1 data");
     }
 
-    let samples_8k = &dps_data[12..12 + num_samples];
-    // Коэффициент ресэмплинга (для 8000 Гц в 48000 Гц коэффициент ровно 6)
-    let ratio = (SAMPLE_RATE / rate.max(1)).clamp(1, 24) as usize;
+    let samples_u8 = &dps_data[12..12 + num_samples];
+    if samples_u8.is_empty() {
+        return Ok(());
+    }
 
-    let mut out_pcm: Vec<i16> = Vec::with_capacity(num_samples * ratio * 2);
+    // Линейная интерполяция (апсемплинг из rate Гц в 48000 Гц):
+    // Убирает резкий металлический дребезг и ступени дискретизации 8 кГц,
+    // восстанавливая гладкую форму оригинального FL Studio трека.
+    let target_len = ((num_samples as u64 * SAMPLE_RATE as u64) / rate as u64) as usize;
+    let mut out_pcm: Vec<i16> = Vec::with_capacity(target_len * 2);
 
-    for &s in samples_8k {
-        // Преобразуем unsigned 8-bit (128=тишина) в signed 16-bit
-        let sample_16 = ((s as i16) - 128).saturating_mul(180);
-        for _ in 0..ratio {
-            out_pcm.push(sample_16); // Левый
-            out_pcm.push(sample_16); // Правый
-        }
+    let step_fp = ((rate as u64) << 16) / (SAMPLE_RATE as u64); // fixed-point 16.16
+
+    for i in 0..target_len {
+        let pos_fp = i as u64 * step_fp;
+        let idx = (pos_fp >> 16) as usize;
+        let frac = (pos_fp & 0xFFFF) as i32; // 0..65535
+
+        let s0 = (samples_u8[idx.min(samples_u8.len() - 1)] as i32 - 128) << 8;
+        let next_idx = (idx + 1).min(samples_u8.len() - 1);
+        let s1 = (samples_u8[next_idx] as i32 - 128) << 8;
+
+        // Плавная интерполяция между сэмплами
+        let interp = s0 + (((s1 - s0) * frac) >> 16);
+        let sample_16 = interp.clamp(-32000, 32000) as i16;
+
+        out_pcm.push(sample_16); // Левый канал
+        out_pcm.push(sample_16); // Правый канал
     }
 
     play_pcm_stereo_48k(&out_pcm);
