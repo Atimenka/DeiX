@@ -444,6 +444,7 @@ pub fn run() -> Option<String> {
                         status_color = ERR;
                         pass.clear();
                         focus = Focus::Pass;
+                        let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
                         redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
                         continue;
                     }
@@ -461,6 +462,7 @@ pub fn run() -> Option<String> {
                             status_color = ERR;
                             pass.clear();
                             focus = Focus::Pass;
+                            let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
                         }
                     }
                 }

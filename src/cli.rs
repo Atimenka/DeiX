@@ -248,6 +248,7 @@ pub fn execute(line: &str) {
         "arp" => cmd_arp(),
         "ping" => cmd_ping(rest),
         "gpu" => cmd_gpu(rest),
+        "sound" => cmd_sound(rest),
         "ls" => cmd_ls(),
         "cat" => cmd_cat(rest),
         "write" => cmd_write(rest),
@@ -357,6 +358,49 @@ pub fn execute(line: &str) {
     }
 }
 
+/// sound [list|play <имя>|beep [hz ms]] — звуковые эффекты UI через
+/// PC speaker (DPS-файлы из EROFS-раздела /super, см. src/sound.rs).
+/// Без подкоманды — список эффектов с отметкой наличия в образе.
+fn cmd_sound(rest: &str) {
+    let mut it = rest.split_whitespace();
+    match it.next() {
+        None | Some("list") => {
+            println!("{}", t!(en: "UI sounds (PC speaker; files live in EROFS /super):", ru: "UI-звуки (PC speaker; файлы лежат в EROFS /super):"));
+            let media = crate::sound::media_files().unwrap_or_default();
+            for s in crate::sound::UI_SOUNDS {
+                let have = media.iter().any(|f| f == s.dps_name());
+                let mark = if have { "[ok]" } else { "[--]" };
+                let title = match crate::lang::current() {
+                    crate::lang::Lang::Ru => s.title(),
+                    crate::lang::Lang::En => s.title_en(),
+                };
+                println!("  {} {:<12}{}", mark, s.dps_name(), title);
+            }
+            if media.is_empty() {
+                println!("{}", t!(en: "  (image has no sounds: rebuild with build.sh step [2e/8])", ru: "  (в образе звуков нет: пересоберите — шаг build.sh [2e/8])"));
+            }
+            println!("{}", t!(en: "play: sound play <start|error|lowbat|fullbat|usbcon|usbdisc>", ru: "играть: sound play <start|error|lowbat|fullbat|usbcon|usbdisc>"));
+        }
+        Some("beep") => {
+            let hz: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(880);
+            let ms: u64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(150);
+            crate::sound::beep(hz, ms);
+        }
+        Some("play") => match it.next() {
+            Some(name) => match crate::sound::play_named(name) {
+                Ok(()) => println!("  [sound] {} ✔", name),
+                Err(e) => println!("  [sound] {}: {}", t!(en: "playback failed", ru: "не удалось проиграть"), e),
+            },
+            None => println!("{}", t!(en: "usage: sound play <name>", ru: "использование: sound play <имя>")),
+        },
+        // Сокращение: `sound start` == `sound play start`.
+        Some(name) => match crate::sound::play_named(name) {
+            Ok(()) => println!("  [sound] {} ✔", name),
+            Err(e) => println!("  [sound] {}: {}", t!(en: "playback failed", ru: "не удалось проиграть"), e),
+        },
+    }
+}
+
 fn cmd_help() {
     println!("{}", t!(en: "Available commands:", ru: "Доступные команды:"));
     println!("  help                    - {}", t!(en: "this help", ru: "эта справка"));
@@ -378,6 +422,7 @@ fn cmd_help() {
     println!("  hal                     - {}", t!(en: "driver layer selftest on RTL8139", ru: "самопроверка прослойки драйверов на RTL8139"));
     println!("  nvidia                  - {}", t!(en: "open NVIDIA driver: probe and identify GPU", ru: "открытый драйвер NVIDIA: поиск и опознание карты"));
     println!("  logo [show|info]        - {}", t!(en: "boot logo: show / info", ru: "загрузочное лого: показать / инфо"));
+    println!("  sound [list|play <имя>|beep [hz ms]] - {}", t!(en: "UI sound effects via PC speaker", ru: "звуковые эффекты UI через PC speaker"));
     println!("  linux <run|info> <файл> - {}", t!(en: "run a Linux ELF program", ru: "запустить ELF-программу Linux"));
     println!("  gpu info                - {}", t!(en: "show detected GPU info", ru: "показать инфо об обнаруженном GPU"));
     println!("  gpu nvinfo              - {}", t!(en: "NVIDIA-specific chipset info (open nouveau-based detection)", ru: "инфо о чипе NVIDIA (открытое определение на основе nouveau)"));

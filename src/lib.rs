@@ -352,5 +352,14 @@ pub extern "C" fn kernel_main() -> ! {
     // имени вошедшего пользователя, а не анонимно до аутентификации.
     autostart::run();
 
+    // UI-звуки (PC speaker, src/sound.rs; файлы *.dps в EROFS /super —
+    // если в образе их нет, просто играем в тишине, как раньше).
+    // Загрузка шла с USB-флешки (RAM-диск) — сигнал «носитель подключён»,
+    // затем общий стартовый сигнал «система готова».
+    if crate::ramdisk::is_active() {
+        let _ = sound::play_ui(sound::UiSound::UsbConnect);
+    }
+    let _ = sound::play_ui(sound::UiSound::Startup);
+
     cli::run();
 }

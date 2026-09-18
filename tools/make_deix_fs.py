@@ -590,7 +590,19 @@ def init_all_partitions(img, kernel_bin='build/kernel.bin'):
             write_erofs_image(img, start, secs, name,
                               {"fastbootd.bin": fastbootd_bin, "recovery.bin": recovery_bin})
         elif name == "/super":
-            write_erofs_image(img, start, secs, name, {"system.img": system_img})
+            # /super = контейнер system: системные read-only данные. Кроме
+            # заглушки system.img сюда же упаковываются UI-звуки (DPS из
+            # build/sounds — их готовит build.sh шагом [2e/8]): ядро играет
+            # их через PC speaker (src/sound.rs). Как /system/media/audio/ui
+            # в Android: неизменяемые системные ресурсы в EROFS.
+            super_files = {"system.img": system_img}
+            snd_dir = _os.path.join("build", "sounds")
+            if _os.path.isdir(snd_dir):
+                for _f in sorted(_os.listdir(snd_dir)):
+                    if _f.endswith(".dps"):
+                        with open(_os.path.join(snd_dir, _f), "rb") as _fh:
+                            super_files[_f] = _fh.read()
+            write_erofs_image(img, start, secs, name, super_files)
         elif name == "/recovery":
             write_erofs_image(img, start, secs, name, {"recovery.bin": recovery_bin})
         else:

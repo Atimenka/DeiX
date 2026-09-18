@@ -95,6 +95,27 @@ else
     printf 'DXLG\x01\x00\x01\x00\x01\x00\x00\x00\x00\x00\x00' > "$BUILD/logo.dxlg"
 fi
 
+echo "==> [2e/8] Конвертируем UI-звуки (assets/*.wav -> DPS 8 кГц, u8 моно)"
+# Звуки НЕ зашиваются в kernel.bin (лимит размера ядра): они кладутся
+# в EROFS-раздел /super образа (шаг 7b, make_deix_fs.py), а ядро читает
+# их с диска в рантайме и играет через PC speaker (ШИМ, src/sound.rs).
+SND="$BUILD/sounds"
+mkdir -p "$SND"
+conv_snd() {  # $1 = входной wav, $2 = имя dps
+    if [ -f "$1" ]; then
+        python3 tools/wav2dps.py "$1" "$SND/$2" \
+            || echo "    warn: не удалось сконвертировать $1 — звука не будет"
+    else
+        echo "    warn: $1 не найден — эффект '$2' будет недоступен"
+    fi
+}
+conv_snd "assets/start.wav"           start.dps
+conv_snd "assets/Error.wav"           error.dps
+conv_snd "assets/low battery.wav"     lowbat.dps
+conv_snd "assets/full battery.wav"    fullbat.dps
+conv_snd "assets/usb connect.wav"     usbcon.dps
+conv_snd "assets/usb unconnected.wav" usbdisc.dps
+
 echo "==> [3/8] Собираем ядро на Rust (nightly, build-std, target: x86_64-unknown-none)"
 cargo +nightly build --release
 

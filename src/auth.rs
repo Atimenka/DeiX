@@ -431,6 +431,7 @@ pub fn run_login_screen() -> String {
         if crate::crypto_storage::is_encryption_enabled() {
             if !crate::crypto_storage::try_unlock(&password) {
                 println!("Invalid username or password. Try again.");
+                let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
                 continue;
             }
         }
@@ -442,9 +443,11 @@ pub fn run_login_screen() -> String {
             }
             Err(AuthError::WrongPassword) | Err(AuthError::UserNotFound) => {
                 println!("Invalid username or password. Try again.");
+                let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
             }
             Err(_) => {
                 println!("Login failed (disk error). Try again.");
+                let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
             }
         }
     }

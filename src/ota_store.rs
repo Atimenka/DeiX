@@ -1,6 +1,6 @@
 // ❗ЗАВИСИМОТИ: инит скрипт pid 1 который будет ограничивать пользовательский
 // ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0). Интеграция в существующий код
-// ota_store — ХРАНИЛИЩЕ СКАЧАННЫХ OTA-ПАКЕТОВ в разделе /OTA (LBA 16128).
+// ota_store — ХРАНИЛИЩЕ СКАЧАННЫХ OTA-ПАКЕТОВ в разделе /OTA (LBA 17664).
 // Простой файловый формат поверх сырых секторов:
 //   сектор 0: маркер "DEIXOTA1" + u32 count + записи (name[16] + off + size);
 //   далее   : данные файлов.
@@ -16,8 +16,13 @@ use alloc::vec::Vec;
 use crate::ata;
 
 /// LBA начала раздела /OTA (см. partition_map::PARTITION_LAYOUT).
-pub const OTA_PART_LBA: u32 = 16128;
-pub const OTA_PART_SECTORS: u32 = 4352;
+/// ВАЖНО: раньше здесь стояло 16128+4352 — это устаревшие значения от
+/// старой разметки; запись OTA-пакета затирала EROFS-разделы /vendor_boot,
+/// /boot_a, /boot_b, /super, /dsm и /recovery (ломала цепочку загрузки).
+/// Правильное согласование (правило «карта разделов в трёх местах»):
+///   partition_map.rs = 17664+2816, tools/make_deix_fs.py PRIMARY = то же.
+pub const OTA_PART_LBA: u32 = 17664;
+pub const OTA_PART_SECTORS: u32 = 2816;
 pub const OTA_MARKER: [u8; 8] = *b"DEIXOTA1";
 
 /// Записывает файл в /OTA (перезаписывает раздел целиком).
