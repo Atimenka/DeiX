@@ -244,7 +244,7 @@ pub unsafe fn kexec(image: &[u8]) -> ! {
     bump_generation();
 
     // Прыгаем на трамплин. Дальше старое ядро можно затирать.
-    let tramp: extern "C" fn(u64, u64, u64, u64, u64) -> ! =
+    let _tramp: extern "C" fn(u64, u64, u64, u64, u64) -> ! =
         core::mem::transmute(TRAMPOLINE_ADDR);
     core::arch::asm!(
         "jmp {t}",

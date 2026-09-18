@@ -20,7 +20,6 @@ use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::vec;
-use crate::crypto::xts::XtsAes256;
 
 /// Количество PCR-регистров TPM 2.0 (штатный банк SHA-1: 24 регистра).
 pub const PCR_COUNT: usize = 24;

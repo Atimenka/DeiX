@@ -6,13 +6,10 @@
 // вывод — через crate::println!/crate::print! (стиль dxinit.rs).
 
 
-use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::format;
 use alloc::vec;
-
-use crate::vault::SYSTEM_PARTITIONS;
 
 /// Строго типизированное перечисление ошибок восстановления/прошивки.
 #[derive(Debug, Clone, PartialEq, Eq)]

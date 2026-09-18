@@ -25,7 +25,6 @@
 
 
 use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
 use alloc::format;
 
@@ -221,11 +220,11 @@ pub fn ota_status(avb: &crate::avb::VerifiedBoot) {
     }
 }
 
-/// CLI: `ota apply <data>` / `ota status` / `ota gen <payload>`.
-/// ==================== OTA ПО ВОЗДУХУ + A/B СЛОТЫ ====================
+// CLI: `ota apply <data>` / `ota status` / `ota gen <payload>`.
+// ==================== OTA ПО ВОЗДУХУ + A/B СЛОТЫ ====================
 
-/// Внешний символ конца образа ядра (linker_kernel.ld) — для сборки
-/// нового kernel.tar.gz из памяти.
+// Внешний символ конца образа ядра (linker_kernel.ld) — для сборки
+// нового kernel.tar.gz из памяти.
 extern "C" {
     static __image_end: u8;
 }

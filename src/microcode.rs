@@ -34,8 +34,8 @@ const MC_SIGNATURE: u32 = 0x0002_06A7;
 /// Текущий revision микрокода (MSR 0x8B после сброса 0).
 pub fn current_revision() -> u32 {
     unsafe {
-        let mut eax: u32 = 0;
-        let mut edx: u32 = 0;
+        let mut _eax: u32;
+        let mut edx: u32;
         asm!(
             "xor eax, eax",
             "xor edx, edx",
@@ -43,7 +43,7 @@ pub fn current_revision() -> u32 {
             "xor eax, eax",
             "rdmsr",
             in("ecx") MSR_BIOS_SIGN_ID,
-            out("eax") eax,
+            out("eax") _eax,
             out("edx") edx,
             options(nomem, nostack, preserves_flags),
         );

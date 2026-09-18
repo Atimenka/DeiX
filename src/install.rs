@@ -78,7 +78,7 @@ const STAGE2: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/build
 /// управление stage2. Лежит сразу после stage2 (LBA 1+stage2_sectors).
 const RAMBOOT: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/build/ramboot.bin"));
 
-/// Конец образа ядра (linker_kernel.ld: __image_end в конце .data, выровнен до 512).
+// Конец образа ядра (linker_kernel.ld: __image_end в конце .data, выровнен до 512).
 extern "C" {
     static __image_end: u8;
     static __data_start: u8;

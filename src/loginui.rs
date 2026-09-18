@@ -175,7 +175,7 @@ fn redraw(
         let fw = pw - 60;
         let mut fy = py + 78;
 
-        let mut draw_field =
+        let draw_field =
             |r: &mut crate::renderer::Renderer, label: &str, f: &Field, active: bool, y: i32| {
                 r.draw_text(fx, y, label, HINT, None);
                 let by = y + 14;

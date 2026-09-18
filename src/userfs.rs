@@ -24,7 +24,7 @@
 //! только с переносом программ в Ring 3.
 
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::ext2;

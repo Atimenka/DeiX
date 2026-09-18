@@ -32,3 +32,17 @@ pub fn ticks() -> u64 {
 pub fn uptime_ms() -> u64 {
     ticks() * (1000 / TARGET_HZ as u64)
 }
+
+/// Блокирующая пауза на заданное количество миллисекунд по тикам таймера ядра.
+pub fn pit_sleep_ms(ms: u64) {
+    let start = uptime_ms();
+    while uptime_ms().saturating_sub(start) < ms {
+        unsafe {
+            core::arch::asm!("pause");
+        }
+    }
+}
+
+pub fn sleep_ms(ms: u64) {
+    pit_sleep_ms(ms);
+}

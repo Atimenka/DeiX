@@ -98,9 +98,9 @@ print_string:
 
 serial_byte:
     push ax
-    mov dx, 0x3F8
 .wait_tx:
-    in al, 0x3FD
+    mov dx, 0x3FD
+    in al, dx
     test al, 0x20
     jz .wait_tx
     pop ax

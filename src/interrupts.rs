@@ -3,7 +3,7 @@
 //! прерываний (таймер, клавиатура) через контроллер PIC 8259.
 
 use crate::port::{inb, outb, io_wait};
-use crate::{keyboard, println, timer};
+use crate::{keyboard, println};
 use core::arch::asm;
 use core::sync::atomic::{AtomicU8, Ordering};
 
