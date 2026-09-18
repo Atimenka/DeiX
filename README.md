@@ -1,4 +1,4 @@
-# 🪐 DeiX OS (v0.3-dev · development)
+# 🪐 DeiX OS (v0.2.1-dev · development)
 
 A modern, highly-secure 64-bit Operating System written from scratch in **Rust** and **Assembly** for the `x86_64` architecture. Developed in a unique collaboration between a Human Architect and an AI Agent.
 
