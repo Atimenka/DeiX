@@ -11,8 +11,30 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use crate::port::{inb, outb};
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum SoundMode {
+    Auto = 0,
+    Hda = 1,
+    Speaker = 2,
+}
+
+static SOUND_MODE: AtomicU8 = AtomicU8::new(0);
+
+pub fn set_sound_mode(mode: SoundMode) {
+    SOUND_MODE.store(mode as u8, Ordering::Relaxed);
+}
+
+pub fn get_sound_mode() -> SoundMode {
+    match SOUND_MODE.load(Ordering::Relaxed) {
+        1 => SoundMode::Hda,
+        2 => SoundMode::Speaker,
+        _ => SoundMode::Auto,
+    }
+}
 
 const PIT_CMD: u16 = 0x43;
 const PIT_CH2: u16 = 0x42;
@@ -58,12 +80,18 @@ fn delay_ms(ms: u64) {
 
 /// Звуковой сигнал: частота `hz`, длительность `ms`.
 /// При наличии контроллера Intel HDA выводит чистый звук через DMA (48 кГц стерео);
-/// при отсутствии — откатывается на встроенный PC speaker (порт 0x61).
+/// при отсутствии или в режиме Speaker — использует встроенный PC speaker (порт 0x61).
 pub fn beep(hz: u32, ms: u64) {
-    if crate::hda::is_ready() {
+    let mode = get_sound_mode();
+    if mode != SoundMode::Speaker && crate::hda::is_ready() {
         crate::hda::play_tone(hz, ms);
         return;
     }
+    beep_speaker(hz, ms);
+}
+
+/// Принудительный звуковой сигнал через встроенный PC speaker (порт 0x61, ШИМ/PIT).
+pub fn beep_speaker(hz: u32, ms: u64) {
     pit_freq(hz);
     speaker_on();
     delay_ms(ms);
@@ -268,10 +296,11 @@ fn play_pcm8(samples: &[u8], rate: u32) {
 /// Играет системный эффект (читает DPS из /super при каждом вызове).
 /// Ошибки не фатальны: если звука нет в старом образе — тихо возвращаем Err,
 /// система продолжает работать беззвучно, как раньше.
-/// Приоритетно использует Intel HDA; при отсутствии — ШИМ на PC speaker.
+/// Приоритетно использует Intel HDA (если режим Auto/HDA); при отсутствии или режиме Speaker — ШИМ на PC speaker.
 pub fn play_ui(sound: UiSound) -> Result<(), &'static str> {
     let raw = load_dps(sound.dps_name())?;
-    if crate::hda::is_ready() {
+    let mode = get_sound_mode();
+    if mode != SoundMode::Speaker && crate::hda::is_ready() {
         if crate::hda::play_dps(&raw).is_ok() {
             return Ok(());
         }
@@ -284,11 +313,20 @@ pub fn play_ui(sound: UiSound) -> Result<(), &'static str> {
 /// Играет эффект по имени/псевдониму (для CLI `sound play <имя>`).
 pub fn play_named(name: &str) -> Result<(), &'static str> {
     let raw = load_dps(resolve_alias(name))?;
-    if crate::hda::is_ready() {
+    let mode = get_sound_mode();
+    if mode != SoundMode::Speaker && crate::hda::is_ready() {
         if crate::hda::play_dps(&raw).is_ok() {
             return Ok(());
         }
     }
+    let (rate, samples) = parse_dps(&raw)?;
+    play_pcm8(samples, rate);
+    Ok(())
+}
+
+/// Принудительно играет эффект через PC speaker (ШИМ порт 0x61).
+pub fn play_speaker_named(name: &str) -> Result<(), &'static str> {
+    let raw = load_dps(resolve_alias(name))?;
     let (rate, samples) = parse_dps(&raw)?;
     play_pcm8(samples, rate);
     Ok(())

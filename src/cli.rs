@@ -380,7 +380,54 @@ fn cmd_sound(rest: &str) {
                 println!("{}", t!(en: "  (image has no sounds: rebuild with build.sh step [2e/8])", ru: "  (в образе звуков нет: пересоберите — шаг build.sh [2e/8])"));
             }
             println!("{}", t!(en: "play: sound play <start|error|lowbat|fullbat|usbcon|usbdisc>", ru: "играть: sound play <start|error|lowbat|fullbat|usbcon|usbdisc>"));
+            println!("{}", t!(en: "mode: sound mode [auto|hda|speaker] - select sound output device", ru: "режим: sound mode [auto|hda|speaker] - выбор устройства вывода звука"));
             println!("{}", t!(en: "HDA:  sound hda [test|play <name>] - Intel High Definition Audio status & test", ru: "HDA:  sound hda [test|play <имя>] - статус и тест Intel High Definition Audio"));
+            println!("{}", t!(en: "PC:   sound speaker [beep|play <name>] - direct PC speaker (PWM port 0x61)", ru: "PC:   sound speaker [beep|play <имя>] - прямой вывод на PC speaker (ШИМ порт 0x61)"));
+        }
+        Some("mode") => {
+            match it.next() {
+                Some("auto") => {
+                    crate::sound::set_sound_mode(crate::sound::SoundMode::Auto);
+                    println!("{}", t!(en: "  Sound mode: Auto (HDA if available, else PC Speaker)", ru: "  Режим звука: Auto (HDA при наличии, иначе PC Speaker)"));
+                }
+                Some("hda") => {
+                    crate::sound::set_sound_mode(crate::sound::SoundMode::Hda);
+                    println!("{}", t!(en: "  Sound mode: Forced Intel HDA", ru: "  Режим звука: принудительно Intel HDA"));
+                }
+                Some("speaker") => {
+                    crate::sound::set_sound_mode(crate::sound::SoundMode::Speaker);
+                    println!("{}", t!(en: "  Sound mode: Forced PC Speaker (PWM)", ru: "  Режим звука: принудительно PC Speaker (ШИМ)"));
+                }
+                _ => {
+                    let cur = crate::sound::get_sound_mode();
+                    println!("  {} {:?}", t!(en: "Current sound mode:", ru: "Текущий режим звука:"), cur);
+                    println!("{}", t!(en: "  Usage: sound mode <auto|hda|speaker>", ru: "  Использование: sound mode <auto|hda|speaker>"));
+                }
+            }
+        }
+        Some("speaker") => {
+            match it.next() {
+                Some("play") => {
+                    let name = it.next().unwrap_or("start");
+                    match crate::sound::play_speaker_named(name) {
+                        Ok(()) => println!("  [speaker] '{}' ✔", name),
+                        Err(e) => println!("  [speaker] {}: {}", t!(en: "playback failed", ru: "ошибка воспроизведения"), e),
+                    }
+                }
+                Some("beep") | Some("test") | None => {
+                    let hz: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(880);
+                    let ms: u64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(200);
+                    println!("  [speaker] Beep {} Hz, {} ms (port 0x61)...", hz, ms);
+                    crate::sound::beep_speaker(hz, ms);
+                    println!("  [speaker] OK.");
+                }
+                Some(other) => {
+                    match crate::sound::play_speaker_named(other) {
+                        Ok(()) => println!("  [speaker] '{}' ✔", other),
+                        Err(e) => println!("  [speaker] {}: {}", t!(en: "playback failed", ru: "ошибка воспроизведения"), e),
+                    }
+                }
+            }
         }
         Some("hda") => {
             match it.next() {

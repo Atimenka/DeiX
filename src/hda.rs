@@ -12,7 +12,6 @@
 
 use crate::pci::{self, PciDevice};
 use crate::spinlock::SpinLock;
-use crate::sync::without_interrupts;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -44,6 +43,11 @@ const REG_RINTCNT: usize = 0x5A;    // Response Interrupt Count (u16)
 const REG_RIRBCTL: usize = 0x5C;    // RIRB Control (u8)
 const REG_RIRBSTS: usize = 0x5D;    // RIRB Status (u8)
 const REG_RIRBSIZE: usize = 0x5E;   // RIRB Size (u8)
+
+// Immediate Command Interface (ICW / IRR / ICS)
+const REG_ICW: usize = 0x60;         // Immediate Command (u32)
+const REG_IRR: usize = 0x64;         // Immediate Response (u32)
+const REG_ICS: usize = 0x68;         // Immediate Command Status (u16)
 
 // Смещения регистров внутри Stream Descriptor
 const SD_OFF_CTL0: usize = 0x00;    // Control 0 (u8: bit 0=SRST, bit 1=SRUN)
@@ -145,76 +149,101 @@ fn spin_delay(loops: u32) {
 }
 
 impl HdaController {
-    /// Посылает 32-битный HDA-глагол (verb) через CORB и дожидается ответа из RIRB.
-    fn send_command(&mut self, cad: u8, nid: u8, verb: u32, param: u32) -> Option<u32> {
+    /// Посылает 32-битный HDA-глагол в кодек.
+    /// Сначала пробует Immediate Command Interface (быстрый синхронный MMIO, 0 latency в QEMU).
+    /// Если не поддерживается или занят — использует кольцевой буфер CORB/RIRB.
+    fn send_verb_raw(&mut self, cmd: u32) -> Option<u32> {
         let base = self.mmio_base;
-        let cmd = ((cad as u32 & 0x0F) << 28)
-            | ((nid as u32 & 0xFF) << 20)
-            | ((verb & 0x0FFF) << 8)
-            | (param & 0xFF);
 
+        // 1. Immediate Command Interface (ICW / IRR / ICS)
+        unsafe {
+            // Ожидаем освобождения ICB (бит 0)
+            let mut ready = false;
+            for _ in 0..5_000 {
+                if (read16(base, REG_ICS) & 0x01) == 0 {
+                    ready = true;
+                    break;
+                }
+                spin_delay(10);
+            }
+
+            if ready {
+                // Сбрасываем флаг IRV (бит 1) записью единицы
+                write16(base, REG_ICS, 0x02);
+                // Записываем глагол в ICW
+                write32(base, REG_ICW, cmd);
+                // Запускаем исполнение команды (бит 0 = ICB)
+                write16(base, REG_ICS, 0x01);
+
+                // Ожидаем завершения (IRV установлен, ICB сброшен)
+                for _ in 0..10_000 {
+                    let ics = read16(base, REG_ICS);
+                    if (ics & 0x01) == 0 && (ics & 0x02) != 0 {
+                        let resp = read32(base, REG_IRR);
+                        return Some(resp);
+                    }
+                    spin_delay(10);
+                }
+            }
+        }
+
+        // 2. CORB / RIRB DMA Fallback
         self.corb_wp = self.corb_wp.wrapping_add(1);
         let wp = self.corb_wp;
 
         unsafe {
+            // Очищаем статус RIRB перед отправкой, чтобы обнулить счётчик rirb_count в QEMU
+            write8(base, REG_RIRBSTS, 0x05);
             CORB_BUF.0[wp as usize] = cmd;
             write16(base, REG_CORBWP, wp as u16);
         }
 
         // Ждём появления ответа в RIRB
-        for _ in 0..100_000 {
+        for _ in 0..50_000 {
             let rirb_wp = unsafe { (read16(base, REG_RIRBWP) & 0xFF) as u8 };
             if rirb_wp == wp {
                 let resp = unsafe { RIRB_BUF.0[rirb_wp as usize].0 };
+                // Сбрасываем статус RIRB, чтобы контроллер не блокировался
+                unsafe { write8(base, REG_RIRBSTS, 0x05); }
                 return Some(resp);
             }
             spin_delay(10);
         }
         None
+    }
+
+    /// Посылает 32-битный HDA-глагол (verb) с 8-битным payload (например, 0x7xx, 0xFxx).
+    fn send_command(&mut self, cad: u8, nid: u8, verb: u32, param: u32) -> Option<u32> {
+        let cmd = ((cad as u32 & 0x0F) << 28)
+            | ((nid as u32 & 0x7F) << 20)
+            | ((verb & 0x0FFF) << 8)
+            | (param & 0xFF);
+        self.send_verb_raw(cmd)
     }
 
     /// Посылает 16-битный payload-глагол (например, Format 0x2, Amp Gain 0x3).
     fn send_command_16(&mut self, cad: u8, nid: u8, verb_4b: u32, payload_16b: u32) -> Option<u32> {
-        let base = self.mmio_base;
         let cmd = ((cad as u32 & 0x0F) << 28)
-            | ((nid as u32 & 0xFF) << 20)
+            | ((nid as u32 & 0x7F) << 20)
             | ((verb_4b & 0x0F) << 16)
             | (payload_16b & 0xFFFF);
-
-        self.corb_wp = self.corb_wp.wrapping_add(1);
-        let wp = self.corb_wp;
-
-        unsafe {
-            CORB_BUF.0[wp as usize] = cmd;
-            write16(base, REG_CORBWP, wp as u16);
-        }
-
-        for _ in 0..100_000 {
-            let rirb_wp = unsafe { (read16(base, REG_RIRBWP) & 0xFF) as u8 };
-            if rirb_wp == wp {
-                let resp = unsafe { RIRB_BUF.0[rirb_wp as usize].0 };
-                return Some(resp);
-            }
-            spin_delay(10);
-        }
-        None
+        self.send_verb_raw(cmd)
     }
 
-    /// Запускает воспроизведение потока через DMA.
+    /// Запускает воспроизведение потока через DMA (Stream Tag = 1, SRUN = 1).
     fn start_stream(&self) {
         let sd = self.mmio_base + self.output_stream_offset;
         unsafe {
-            let ctl0 = read8(sd, SD_OFF_CTL0);
-            write8(sd, SD_OFF_CTL0, ctl0 | 0x02); // SRUN = 1
+            // Записываем 32-битное значение: Stream Tag 1 в битах 23..20, SRUN в бите 1
+            write32(sd, SD_OFF_CTL0, (1 << 20) | 0x02);
         }
     }
 
-    /// Останавливает воспроизведение потока через DMA.
+    /// Останавливает воспроизведение потока через DMA (Stream Tag = 1, SRUN = 0).
     fn stop_stream(&self) {
         let sd = self.mmio_base + self.output_stream_offset;
         unsafe {
-            let ctl0 = read8(sd, SD_OFF_CTL0);
-            write8(sd, SD_OFF_CTL0, ctl0 & !0x02); // SRUN = 0
+            write32(sd, SD_OFF_CTL0, 1 << 20);
         }
     }
 
@@ -340,7 +369,7 @@ pub fn init() -> bool {
         write32(mmio_base, REG_RIRBUBASE, (rirb_phys >> 32) as u32);
         // Сброс WP (бит 15)
         write16(mmio_base, REG_RIRBWP, 0x8000);
-        write16(mmio_base, REG_RINTCNT, 1);
+        write16(mmio_base, REG_RINTCNT, 0xFF);
         write8(mmio_base, REG_RIRBSTS, 0x05); // сброс прерываний
         // Запуск RIRB (бит 1)
         write8(mmio_base, REG_RIRBCTL, 0x02);
@@ -452,13 +481,13 @@ pub fn init() -> bool {
             addr_lo: buf_phys as u32,
             addr_hi: (buf_phys >> 32) as u32,
             len: PERIOD_SIZE as u32,
-            flags: 0,
+            flags: 1, // bit 0 = IOC
         };
         BDL_TABLE[1] = BdlEntry {
             addr_lo: (buf_phys + PERIOD_SIZE as u64) as u32,
             addr_hi: ((buf_phys + PERIOD_SIZE as u64) >> 32) as u32,
             len: PERIOD_SIZE as u32,
-            flags: 0,
+            flags: 1, // bit 0 = IOC
         };
 
         // Пишем адрес BDL
@@ -472,10 +501,10 @@ pub fn init() -> bool {
         write16(sd, SD_OFF_LVI, 1);
         // Формат потока
         write16(sd, SD_OFF_FMT, HDA_FORMAT_48K_16B_STEREO);
-        // Номер потока (Stream ID = 1) в байте CTL2
-        write8(sd, SD_OFF_CTL2, 0x10);
         // Сброс флагов статуса
         write8(sd, SD_OFF_STS, 0x1C);
+        // Stream Tag = 1, Run = 0
+        write32(sd, SD_OFF_CTL0, 1 << 20);
 
         // Буфер DMA инициализируем тишиной
         core::ptr::write_bytes(core::ptr::addr_of_mut!(AUDIO_DMA_BUF) as *mut u8, 0, BUFFER_SIZE);
@@ -489,87 +518,86 @@ pub fn init() -> bool {
 
 /// Проверка, доступен ли драйвер Intel HDA.
 pub fn is_ready() -> bool {
-    without_interrupts(|| CONTROLLER.lock().as_ref().map(|c| c.initialized).unwrap_or(false))
+    CONTROLLER.lock().as_ref().map(|c| c.initialized).unwrap_or(false)
 }
 
 /// Воспроизведение непрерывного массива 16-битных стерео-сэмплов (48 кГц).
 pub fn play_pcm_stereo_48k(samples: &[i16]) {
-    without_interrupts(|| {
-        let mut ctrl_lock = CONTROLLER.lock();
-        let ctrl = match ctrl_lock.as_mut() {
-            Some(c) if c.initialized => c,
-            _ => return,
-        };
+    let mut ctrl_lock = CONTROLLER.lock();
+    let ctrl = match ctrl_lock.as_mut() {
+        Some(c) if c.initialized => c,
+        _ => return,
+    };
 
-        let raw_bytes: &[u8] = unsafe {
-            core::slice::from_raw_parts(samples.as_ptr() as *const u8, samples.len() * 2)
-        };
+    let raw_bytes: &[u8] = unsafe {
+        core::slice::from_raw_parts(samples.as_ptr() as *const u8, samples.len() * 2)
+    };
 
-        let total_bytes = raw_bytes.len();
-        if total_bytes == 0 {
-            return;
+    let total_bytes = raw_bytes.len();
+    if total_bytes == 0 {
+        return;
+    }
+
+    let mut offset = 0usize;
+    let dma_ptr = unsafe { core::ptr::addr_of_mut!(AUDIO_DMA_BUF.0) as *mut u8 };
+
+    // Заполняем весь начальный буфер DMA первыми данными
+    let init_take = total_bytes.min(BUFFER_SIZE);
+    unsafe {
+        core::ptr::copy_nonoverlapping(raw_bytes.as_ptr(), dma_ptr, init_take);
+        if init_take < BUFFER_SIZE {
+            core::ptr::write_bytes(dma_ptr.add(init_take), 0, BUFFER_SIZE - init_take);
         }
+    }
+    offset += init_take;
 
-        let mut offset = 0usize;
-        let dma_ptr = unsafe { core::ptr::addr_of_mut!(AUDIO_DMA_BUF.0) as *mut u8 };
+    ctrl.start_stream();
 
-        // Заполняем весь начальный буфер DMA первыми данными
-        let init_take = total_bytes.min(BUFFER_SIZE);
-        unsafe {
-            core::ptr::copy_nonoverlapping(raw_bytes.as_ptr(), dma_ptr, init_take);
-            if init_take < BUFFER_SIZE {
-                core::ptr::write_bytes(dma_ptr.add(init_take), 0, BUFFER_SIZE - init_take);
-            }
-        }
-        offset += init_take;
+    // Потоковая подгрузка данных в циклическом буфере DMA
+    let mut last_period: usize = 0;
+    let start_ms = crate::timer::uptime_ms();
+    let expected_duration_ms = (total_bytes as u64 * 1000) / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64) + 200;
 
-        ctrl.start_stream();
+    while offset < total_bytes {
+        let lpib = ctrl.stream_position() as usize;
+        let current_period = (lpib / PERIOD_SIZE) % BDL_ENTRIES;
 
-        // Потоковая подгрузка данных в циклическом буфере DMA
-        let mut last_period: usize = 0;
-        let start_ms = crate::timer::uptime_ms();
-        let expected_duration_ms = (total_bytes as u64 * 1000) / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64) + 150;
+        // Если контроллер перешёл в следующий период, освободившийся предыдущий можно перезаписать
+        if current_period != last_period {
+            let write_period = last_period;
+            let write_dest = unsafe { dma_ptr.add(write_period * PERIOD_SIZE) };
+            let remaining = total_bytes - offset;
+            let chunk_size = remaining.min(PERIOD_SIZE);
 
-        while offset < total_bytes {
-            let lpib = ctrl.stream_position() as usize;
-            let current_period = (lpib / PERIOD_SIZE) % BDL_ENTRIES;
-
-            // Если контроллер перешёл в следующий период, освободившийся предыдущий можно перезаписать
-            if current_period != last_period {
-                let write_period = last_period;
-                let write_dest = unsafe { dma_ptr.add(write_period * PERIOD_SIZE) };
-                let remaining = total_bytes - offset;
-                let chunk_size = remaining.min(PERIOD_SIZE);
-
-                unsafe {
-                    core::ptr::copy_nonoverlapping(raw_bytes.as_ptr().add(offset), write_dest, chunk_size);
-                    if chunk_size < PERIOD_SIZE {
-                        core::ptr::write_bytes(write_dest.add(chunk_size), 0, PERIOD_SIZE - chunk_size);
-                    }
+            unsafe {
+                core::ptr::copy_nonoverlapping(raw_bytes.as_ptr().add(offset), write_dest, chunk_size);
+                if chunk_size < PERIOD_SIZE {
+                    core::ptr::write_bytes(write_dest.add(chunk_size), 0, PERIOD_SIZE - chunk_size);
                 }
-                offset += chunk_size;
-                last_period = current_period;
             }
-
-            // Защита от бесконечного зависания
-            if crate::timer::uptime_ms().saturating_sub(start_ms) > expected_duration_ms {
-                break;
-            }
-
-            spin_delay(500);
+            offset += chunk_size;
+            last_period = current_period;
         }
 
-        // Дожидаемся завершения воспроизведения остатка
-        let tail_wait_start = crate::timer::uptime_ms();
-        while crate::timer::uptime_ms().saturating_sub(tail_wait_start) < 180 {
-            spin_delay(1000);
+        // Защита от бесконечного зависания
+        if crate::timer::uptime_ms().saturating_sub(start_ms) > expected_duration_ms {
+            break;
         }
 
-        ctrl.stop_stream();
-        unsafe {
-            core::ptr::write_bytes(dma_ptr, 0, BUFFER_SIZE);
-        }
-    });
+        spin_delay(500);
+    }
+
+    // Дожидаемся завершения воспроизведения остатка
+    let tail_wait_start = crate::timer::uptime_ms();
+    let remaining_tail_ms = (PERIOD_SIZE as u64 * 1000) / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64) + 60;
+    while crate::timer::uptime_ms().saturating_sub(tail_wait_start) < remaining_tail_ms {
+        spin_delay(1000);
+    }
+
+    ctrl.stop_stream();
+    unsafe {
+        core::ptr::write_bytes(dma_ptr, 0, BUFFER_SIZE);
+    }
 }
 
 /// Воспроизведение звукового тона заданной частоты и длительности через Intel HDA.
