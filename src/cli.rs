@@ -37,7 +37,17 @@ pub fn run() -> ! {
     let mut history_cursor: Option<usize> = None;
 
     loop {
-        let c = keyboard::read_char();
+        // Ввод: неблокирующий опрос клавиатуры (PS/2) И последовательного
+        // порта COM1 (headless-режим QEMU: -serial stdio). Если оба пусты —
+        // повторяем опрос.
+        let c: u8 = if crate::serial::is_data_ready() {
+            crate::serial::read_byte()
+        } else {
+            match keyboard::try_read_char() {
+                Some(c) => c,
+                None => continue,
+            }
+        };
         match c {
             b'\n' => {
                 print!("\n");
@@ -135,7 +145,7 @@ fn prompt() {
 /// true, пока мы выполняем команду ИЗНУТРИ окна графического терминала
 /// (см. ui/mod.rs::run_mini_terminal_command). Нужно, чтобы заблокировать
 /// команды, которые не имеют смысла или опасны в этом контексте:
-///   - "gpu mode"/"gpu demo" — попытка рекурсивно открыть ещё один
+///   - "gpu mode" — попытка рекурсивно открыть ещё один
 ///     desktop поверх уже работающего (у нас всего один Renderer/
 ///     framebuffer, поддержки нескольких "экранов" нет);
 ///   - "reboot"/"halt"/"crash" — их результат (перезагрузка/остановка/
@@ -150,6 +160,17 @@ pub static IN_GRAPHICAL_TERMINAL: core::sync::atomic::AtomicBool =
 /// (ui/mod.rs) вместе с vgaglobal::begin_capture/end_capture, чтобы окно
 /// на рабочем столе исполняло РЕАЛЬНЫЙ полный набор команд, а не свою
 /// урезанную копию.
+/// Текущий рабочий каталог (глобальная модель; в DeiX ФС — ext2).
+static CWD: crate::spinlock::SpinLock<alloc::string::String> =
+    crate::spinlock::SpinLock::new(alloc::string::String::new());
+
+
+/// Устанавливает текущий рабочий каталог (для DS `cd`).
+pub fn set_cwd(dir: &str) {
+    *CWD.lock() = alloc::string::String::from(dir);
+}
+
+
 pub fn execute(line: &str) {
     let line = line.trim();
     if line.is_empty() {
@@ -170,11 +191,11 @@ pub fn execute(line: &str) {
                 println!(
                     "{}",
                     t!(
-                        en: "'gpu mode'/'gpu demo' can't be run from inside the graphical \
+                        en: "'gpu mode' can't be run from inside the graphical \
                              terminal (it's already running inside a desktop session). Use \
                              'gpu info' instead, or run 'gpu mode' from the text-mode CLI \
                              (press Esc first).",
-                        ru: "'gpu mode'/'gpu demo' нельзя запустить изнутри графического \
+                        ru: "'gpu mode' нельзя запустить изнутри графического \
                              терминала (мы уже внутри desktop-сессии). Используй 'gpu info', \
                              либо запусти 'gpu mode' из текстового CLI (сначала нажми Esc)."
                     )
@@ -226,7 +247,6 @@ pub fn execute(line: &str) {
         "ifconfig" => cmd_ifconfig(rest),
         "arp" => cmd_arp(),
         "ping" => cmd_ping(rest),
-        "wifi" => cmd_wifi(rest),
         "gpu" => cmd_gpu(rest),
         "ls" => cmd_ls(),
         "cat" => cmd_cat(rest),
@@ -234,18 +254,101 @@ pub fn execute(line: &str) {
         "rm" => cmd_rm(rest),
         "pkg" => cmd_pkg(rest),
         "run" => cmd_run(rest),
-        "install" => crate::install::cmd_install(),
+        "install" => crate::install::cmd_install(rest),
         "bigfile" => cmd_bigfile(rest),
         "useradd" => cmd_useradd(rest),
         "passwd" => cmd_passwd(rest),
         "whoami" => cmd_whoami(),
         "users" => cmd_users(),
         "encrypt" => cmd_encrypt(rest),
-        "browser" => cmd_gpu_mode(""),
-        "files" => cmd_gpu_mode(""),
         "crash" => cmd_crash(rest),
-        "reboot" => cmd_reboot(),
+        "bugreport" => crate::bugreport::cmd_bugreport(),
+        "dmesg" => crate::bugreport::cmd_dmesg(),
+        "crashlog" => {
+            if rest.trim() == "clear" {
+                crate::bugreport::cmd_crashlog_clear();
+            } else {
+                crate::bugreport::cmd_crashlog();
+            }
+        }
+        "reboot" => {
+            // reboot recovery / reboot fastbootd / reboot dsm — одноразовый флажок.
+            match rest.trim() {
+                "recovery" => {
+                    crate::bcb::write_boot_mode(crate::bcb::BootMode::Recovery);
+                    println!("Перезагрузка в RECOVERY при следующей загрузке (флажок одноразовый).");
+                }
+                "fastbootd" | "fastboot" => {
+                    crate::bcb::write_boot_mode(crate::bcb::BootMode::Fastbootd);
+                    println!("Перезагрузка в FASTBOOTD при следующей загрузке (выше recovery).");
+                }
+                "dsm" => {
+                    crate::bcb::write_boot_mode(crate::bcb::BootMode::Dsm);
+                    println!("Перезагрузка в DSM (Download System Manager) при следующей загрузке (выше fastbootd).");
+                }
+                _ => cmd_reboot(),
+            }
+        }
+        "bcb" => {
+            let p: Vec<&str> = rest.split_whitespace().collect();
+            match p.first().copied().unwrap_or("") {
+                "recovery" => crate::bcb::write_boot_mode(crate::bcb::BootMode::Recovery),
+                "fastbootd" => crate::bcb::write_boot_mode(crate::bcb::BootMode::Fastbootd),
+                "dsm" => crate::bcb::write_boot_mode(crate::bcb::BootMode::Dsm),
+                "normal" | "clear" => crate::bcb::clear_boot_mode(),
+                "slot" => {
+                    match p.get(1).copied().unwrap_or("") {
+                        "a" => crate::bcb::write_slot(0),
+                        "b" => crate::bcb::write_slot(1),
+                        _ => println!("bcb slot <a|b> - switch active A/B slot"),
+                    }
+                }
+                _ => println!("bcb <recovery|fastbootd|dsm|normal|slot <a|b>> - boot flag / A/B slot"),
+            }
+        }
         "halt" => cmd_halt(),
+        // Политика безопасности DeiX OS: эскалация привилегий ПОЛНОСТЬЮ
+        // запрещена. Пользователь Ring 3 не может выполнить su/sudo/root —
+        // система не имеет суперпользователя в пользовательском пространстве
+        // (все привилегированные операции выполняет PID 1 в Ring 0).
+        "ota" => crate::ota::cmd_ota(rest, &mut crate::avb::avb_mut()),
+        "adb" => crate::adb::cmd_adb(rest, &mut crate::avb::avb_mut()),
+        "adb-repl" => crate::adb::adb_repl(&mut crate::avb::avb_mut()),
+        "dev" => {
+            let mut a = crate::avb::avb_mut();
+            match rest.trim() {
+                "on" => crate::devmode::enable_dev_mode(&mut a),
+                "off" => crate::devmode::disable_dev_mode(&mut a),
+                _ => crate::devmode::dev_status(&a),
+            }
+        }
+        "recovery" => crate::recovery_ui::recovery_gui(),
+        "fastbootd" => crate::fastbootd_ui::fastbootd_gui(),
+        "dsm" => crate::dsm::dsm_gui(),
+        "nvidia" => crate::drivers::nvidia::cmd_nvidia(rest),
+        "microcode" => crate::microcode::cmd_microcode(rest),
+        "hal" => crate::drivers::hal_selftest(),
+        "crypt" => crate::luks::cmd_crypt(rest),
+        "logo" => crate::bootlogo::cmd_logo(rest),
+        "linux" => crate::linux::cmd_linux(rest),
+        "profile" => crate::userfs::cmd_profile(rest, &current_user().unwrap_or_default()),
+        "lock" => crate::loginui::cmd_lock(&current_user().unwrap_or_default()),
+        "kexec" => crate::kexec::cmd_kexec(rest),
+        "threads" => crate::sched::cmd_threads(rest),
+        "su" | "sudo" | "root" => {
+            if crate::devmode::sudo_allowed() {
+                // Dev-режим: sudo доступен (гарантия OTA снята).
+                println!("{}", t!(
+                    en: "SUDO: root shell in dev-mode. OTA guarantee is VOID.",
+                    ru: "SUDO: root-оболочка в dev-режиме. OTA-гарантия НЕ действует."
+                ));
+            } else {
+                println!("{}", t!(
+                    en: "ACCESS DENIED: privilege escalation (su/sudo) is forbidden by DeiX security policy. Enable dev-mode first.",
+                    ru: "ОТКАЗАНО: эскалация привилегий (su/sudo) запрещена политикой безопасности DeiX. Включите dev-режим."
+                ));
+            }
+        }
         _ => println_t!(
             en: "Unknown command: '{}'. Type 'help'.",
             ru: "Неизвестная команда: '{}'. Введи 'help'.";
@@ -269,13 +372,16 @@ fn cmd_help() {
     println!("  ifconfig [ip]           - {}", t!(en: "show/change network config", ru: "показать/сменить сетевую конфигурацию"));
     println!("  arp                     - {}", t!(en: "show ARP cache", ru: "показать ARP-кэш"));
     println!("  ping <ip>               - {}", t!(en: "send ICMP echo request", ru: "отправить ICMP echo request"));
-    println!("  wifi scan               - {}", t!(en: "scan for Wi-Fi networks", ru: "просканировать Wi-Fi сети"));
-    println!("  wifi connect <ssid> <pass> - {}", t!(en: "connect to a Wi-Fi network (WPA2)", ru: "подключиться к Wi-Fi сети (WPA2)"));
-    println!("  wifi status             - {}", t!(en: "show Wi-Fi connection status", ru: "показать статус Wi-Fi подключения"));
+    println!("  threads [list|test]     - {}", t!(en: "preemptive multitasking: task list / selftest", ru: "вытесняющая многозадачность: список задач / самопроверка"));
+    println!("  kexec [a|b|check]       - {}", t!(en: "boot the kernel from /kernel_a|b partition", ru: "запустить ядро из раздела /kernel_a|b"));
+    println!("  crypt <status|addpass|delpass|iter> - {}", t!(en: "volume password slots (LUKS-style)", ru: "пароли тома: слоты, как в LUKS"));
+    println!("  hal                     - {}", t!(en: "driver layer selftest on RTL8139", ru: "самопроверка прослойки драйверов на RTL8139"));
+    println!("  nvidia                  - {}", t!(en: "open NVIDIA driver: probe and identify GPU", ru: "открытый драйвер NVIDIA: поиск и опознание карты"));
+    println!("  logo [show|info]        - {}", t!(en: "boot logo: show / info", ru: "загрузочное лого: показать / инфо"));
+    println!("  linux <run|info> <файл> - {}", t!(en: "run a Linux ELF program", ru: "запустить ELF-программу Linux"));
     println!("  gpu info                - {}", t!(en: "show detected GPU info", ru: "показать инфо об обнаруженном GPU"));
     println!("  gpu nvinfo              - {}", t!(en: "NVIDIA-specific chipset info (open nouveau-based detection)", ru: "инфо о чипе NVIDIA (открытое определение на основе nouveau)"));
     println!("  gpu mode [WxH]          - {}", t!(en: "switch to graphics mode (opens resolution picker if no WxH given)", ru: "переключиться в графику (без WxH откроет выбор разрешения)"));
-    println!("  gpu demo                - {}", t!(en: "draw a demo desktop with windows", ru: "нарисовать демо рабочего стола с окнами"));
     println!("  ls                      - {}", t!(en: "list files on the ext2 disk", ru: "список файлов на диске ext2"));
     println!("  cat <file>              - {}", t!(en: "print a text file", ru: "вывести содержимое текстового файла"));
     println!("  write <file> <text>     - {}", t!(en: "create/overwrite a text file", ru: "создать/перезаписать текстовый файл"));
@@ -590,141 +696,9 @@ fn cmd_ping(arg: &str) {
     );
 }
 
-fn cmd_wifi(arg: &str) {
-    let (subcmd, rest) = match arg.find(char::is_whitespace) {
-        Some(idx) => (&arg[..idx], arg[idx..].trim_start()),
-        None => (arg, ""),
-    };
 
-    match subcmd {
-        "scan" => cmd_wifi_scan(),
-        "connect" => cmd_wifi_connect(rest),
-        "status" => cmd_wifi_status(),
-        "" => println!(
-            "{}",
-            t!(
-                en: "Usage: wifi <scan|connect|status>",
-                ru: "Использование: wifi <scan|connect|status>"
-            )
-        ),
-        _ => println_t!(
-            en: "Unknown wifi subcommand '{}'. Available: scan, connect, status",
-            ru: "Неизвестная подкоманда '{}'. Доступно: scan, connect, status";
-            subcmd
-        ),
-    }
-}
 
-fn cmd_wifi_scan() {
-    println!("{}", t!(en: "Scanning for Wi-Fi networks...", ru: "Сканируем Wi-Fi сети..."));
-    match crate::wifi::scan(2000) {
-        Ok(networks) => {
-            if networks.is_empty() {
-                println!("{}", t!(en: "No networks found.", ru: "Сети не найдены."));
-            }
-            for net in networks.iter() {
-                println!("  {} (RSN: {})", net.ssid_str(), net.rsn_present);
-            }
-        }
-        Err(crate::wifi::driver::WifiError::NoHardware) => {
-            println!(
-                "{}",
-                t!(
-                    en: "No Wi-Fi hardware detected. QEMU doesn't emulate any Wi-Fi chip \
-                         (only wired NICs: RTL8139/e1000/virtio-net) — the protocol stack \
-                         (IEEE 802.11 frames, WPA2-PSK 4-way handshake) is implemented and \
-                         covered by unit tests, but needs a real Wi-Fi driver to talk to \
-                         actual hardware.",
-                    ru: "Wi-Fi оборудование не найдено. QEMU не умеет эмулировать Wi-Fi \
-                         чипы (только проводные карты: RTL8139/e1000/virtio-net) — сам \
-                         протокольный стек (кадры IEEE 802.11, WPA2-PSK 4-way handshake) \
-                         реализован и покрыт unit-тестами, но для работы с реальным железом \
-                         нужен драйвер под конкретный Wi-Fi чип."
-                )
-            );
-        }
-        Err(_) => println!("{}", t!(en: "Scan failed.", ru: "Сканирование не удалось.")),
-    }
-}
 
-fn cmd_wifi_connect(arg: &str) {
-    let mut parts = arg.splitn(2, ' ');
-    let ssid = parts.next().unwrap_or("");
-    let password = parts.next().unwrap_or("");
-
-    if ssid.is_empty() || password.is_empty() {
-        println!(
-            "{}",
-            t!(
-                en: "Usage: wifi connect <ssid> <password>",
-                ru: "Использование: wifi connect <ssid> <пароль>"
-            )
-        );
-        return;
-    }
-
-    println_t!(
-        en: "Connecting to '{}'...",
-        ru: "Подключаемся к '{}'...";
-        ssid
-    );
-
-    match crate::wifi::connect(ssid, password) {
-        Ok(()) => println!("{}", t!(en: "Connected!", ru: "Подключено!")),
-        Err(crate::wifi::driver::WifiError::NoHardware) => {
-            println!(
-                "{}",
-                t!(
-                    en: "No Wi-Fi hardware detected — cannot connect. The WPA2 handshake \
-                         logic itself is implemented and unit-tested (SHA-1/HMAC/PBKDF2/PRF, \
-                         EAPOL-Key frames, 4-way handshake state machine), see 'wifi scan' \
-                         for details.",
-                    ru: "Wi-Fi оборудование не найдено — подключиться невозможно. Сама \
-                         логика WPA2 handshake реализована и покрыта тестами (SHA-1/HMAC/ \
-                         PBKDF2/PRF, EAPOL-Key кадры, машина состояний 4-way handshake), \
-                         подробнее см. 'wifi scan'."
-                )
-            );
-        }
-        Err(crate::wifi::driver::WifiError::NetworkNotFound) => {
-            println!("{}", t!(en: "Network not found.", ru: "Сеть не найдена."));
-        }
-        Err(_) => println!("{}", t!(en: "Connection failed.", ru: "Подключение не удалось.")),
-    }
-}
-
-fn cmd_wifi_status() {
-    use crate::wifi::ConnectionState;
-    match crate::wifi::connection_state() {
-        ConnectionState::Disconnected => {
-            println!("{}", t!(en: "Status: disconnected", ru: "Статус: не подключено"));
-        }
-        ConnectionState::Scanning => {
-            println!("{}", t!(en: "Status: scanning", ru: "Статус: сканирование"));
-        }
-        ConnectionState::Connecting => {
-            println!("{}", t!(en: "Status: connecting", ru: "Статус: подключение"));
-        }
-        ConnectionState::Connected => {
-            let ssid = crate::wifi::connected_ssid().unwrap_or_default();
-            println_t!(
-                en: "Status: connected to '{}'",
-                ru: "Статус: подключено к '{}'";
-                ssid
-            );
-        }
-        ConnectionState::Failed => {
-            println!("{}", t!(en: "Status: connection failed", ru: "Статус: ошибка подключения"));
-        }
-    }
-    println!(
-        "{}",
-        t!(
-            en: "Hardware present: no (protocol stack ready, needs a real Wi-Fi driver)",
-            ru: "Оборудование обнаружено: нет (протокольный стек готов, нужен драйвер под реальный чип)"
-        )
-    );
-}
 
 fn cmd_gpu(arg: &str) {
     let (subcmd, rest) = match arg.find(char::is_whitespace) {
@@ -736,14 +710,13 @@ fn cmd_gpu(arg: &str) {
         "info" => cmd_gpu_info(),
         "nvinfo" => cmd_gpu_nvinfo(),
         "mode" => cmd_gpu_mode(rest),
-        "demo" => cmd_gpu_demo(),
         "" => println!(
             "{}",
-            t!(en: "Usage: gpu <info|nvinfo|mode|demo>", ru: "Использование: gpu <info|nvinfo|mode|demo>")
+            t!(en: "Usage: gpu <info|nvinfo|mode>", ru: "Использование: gpu <info|nvinfo|mode>")
         ),
         _ => println_t!(
-            en: "Unknown gpu subcommand '{}'. Available: info, nvinfo, mode, demo",
-            ru: "Неизвестная подкоманда '{}'. Доступно: info, nvinfo, mode, demo";
+            en: "Unknown gpu subcommand '{}'. Available: info, nvinfo, mode",
+            ru: "Неизвестная подкоманда '{}'. Доступно: info, nvinfo, mode";
             subcmd
         ),
     }
@@ -792,30 +765,16 @@ fn cmd_gpu_nvinfo() {
         println!(
             "{}",
             t!(
-                en: "This is a classic (pre-G80) architecture. This kernel includes an \\
-                     EXPERIMENTAL open modesetting driver (src/nouveau.rs) that programs \\
-                     the same PCRTC0/PRAMDAC0/PRMVIO registers documented by the real \\
-                     nouveau project. IMPORTANT: it has NEVER been tested on real or \\
-                     emulated hardware (QEMU cannot emulate any NVIDIA GPU, so there is no \\
-                     way to test it in this development environment) — treat it as a \\
-                     best-effort implementation based on public documentation, not a \\
-                     verified working driver. It currently only repoints the CRTC \\
-                     framebuffer start address (NV_PCRTC_START) onto whatever video mode \\
-                     the card's own VBIOS already set up at POST — it does not compute \\
-                     PLL/timing values from scratch (that needs per-card VBIOS data this \\
-                     kernel doesn't have).",
-                ru: "Это классическая (до-G80) архитектура. В этом ядре есть \\
-                     ЭКСПЕРИМЕНТАЛЬНЫЙ открытый драйвер модесеттинга (src/nouveau.rs), \\
-                     который программирует те же регистры PCRTC0/PRAMDAC0/PRMVIO, что \\
-                     задокументированы настоящим проектом nouveau. ВАЖНО: он НИКОГДА не \\
-                     тестировался на реальном или эмулируемом железе (QEMU не умеет \\
-                     эмулировать никакой NVIDIA GPU, поэтому в этой среде разработки его \\
-                     физически невозможно проверить) — считай его добросовестной \\
-                     реализацией по открытой документации, а не проверенным рабочим \\
-                     драйвером. Сейчас он только переставляет адрес начала кадрового \\
-                     буфера CRTC (NV_PCRTC_START) поверх того видеорежима, который уже \\
-                     настроил VBIOS карты при POST — он не вычисляет PLL/timings с нуля \\
-                     (для этого нужны данные VBIOS конкретной карты, которых у ядра нет)."
+                en: "This is a classic (pre-G80) architecture, whose PCRTC0/PRAMDAC0 \\
+                     registers are publicly documented by the nouveau project. This \\
+                     kernel does NOT include a modesetting driver for it — only the \\
+                     chipset identification you see above. Use the Bochs VBE framebuffer \\
+                     driver (see 'gpu mode') under QEMU/Bochs/VirtualBox.",
+                ru: "Это классическая (до-G80) архитектура, регистры PCRTC0/PRAMDAC0 \\
+                     которой открыто задокументированы проектом nouveau. Драйвера \\
+                     модесеттинга для неё в этом ядре НЕТ — только определение чипа, \\
+                     показанное выше. Используй драйвер Bochs VBE framebuffer \\
+                     (см. 'gpu mode') под QEMU/Bochs/VirtualBox."
             )
         );
     } else {
@@ -971,15 +930,6 @@ fn enter_graphics_mode(gpu_device: &crate::pci::PciDevice, width: u32, height: u
     }
 }
 
-fn cmd_gpu_demo() {
-    println!(
-        "{}",
-        t!(
-            en: "Use 'gpu mode [WxH]' instead — it now launches the interactive desktop directly.",
-            ru: "Используй 'gpu mode [WxH]' вместо этого — теперь она сразу запускает интерактивный рабочий стол."
-        )
-    );
-}
 
 fn cmd_ls() {
     if !ext2::is_formatted() {
@@ -1175,7 +1125,12 @@ fn cmd_bigfile(arg: &str) {
 static CURRENT_USER: crate::spinlock::SpinLock<Option<String>> = crate::spinlock::SpinLock::new(None);
 
 pub fn set_current_user(username: &str) {
-    *CURRENT_USER.lock() = Some(username.to_string());
+    if username.is_empty() {
+        // Пустое имя = сброс в None (безопасное состояние для install).
+        *CURRENT_USER.lock() = None;
+    } else {
+        *CURRENT_USER.lock() = Some(username.to_string());
+    }
 }
 
 pub fn current_user() -> Option<String> {
@@ -1207,11 +1162,27 @@ fn cmd_useradd(arg: &str) {
     }
 
     match crate::auth::create_user(username, password) {
-        Ok(()) => println_t!(
-            en: "User '{}' created. Password is stored only as a salted SHA-256 hash.",
-            ru: "Пользователь '{}' создан. Пароль хранится только как хэш SHA-256 с солью.";
-            username
-        ),
+        Ok(()) => {
+            println_t!(
+                en: "User '{}' created. Password is stored only as a salted SHA-256 hash.",
+                ru: "Пользователь '{}' создан. Пароль хранится только как хэш SHA-256 с солью.";
+                username
+            );
+            // Новому пользователю нужен СВОЙ слот в заголовке тома,
+            // иначе он не сможет разблокировать зашифрованный диск при
+            // загрузке: аккаунт будет, а ключа к данным — нет.
+            if crate::luks::exists() {
+                // Пароль текущего пользователя мы не знаем, но мастер-ключ
+                // уже в памяти — том разблокирован. Пользуемся этим.
+                match crate::luks::add_password_with_master(password) {
+                    Ok(slot) => println!(
+                        "  Пароль добавлен в слот {} — этот пользователь сможет открыть диск.",
+                        slot
+                    ),
+                    Err(e) => println!("  ВНИМАНИЕ: слот не добавлен ({}). Пользователь не сможет разблокировать диск.", e),
+                }
+            }
+        }
         Err(crate::auth::AuthError::UserAlreadyExists) => println_t!(
             en: "User '{}' already exists.",
             ru: "Пользователь '{}' уже существует.";
@@ -1422,6 +1393,10 @@ fn cmd_crash(kind: &str) {
             println!("{}", t!(en: "Triggering invalid opcode (ud2)...", ru: "Вызываем неверный опкод (ud2)..."));
             unsafe { asm!("ud2") };
         }
+        "panic" => {
+            println!("{}", t!(en: "Triggering kernel panic!()...", ru: "Вызываем kernel panic!()..."));
+            panic!("user-triggered crash (debugger test)");
+        }
         "" => println!("{}", t!(en: "Usage: crash <divzero|bp|inv>", ru: "Укажи тип: crash <divzero|bp|inv>")),
         _ => println_t!(
             en: "Unknown type '{}'. Available: divzero, bp, inv",
@@ -1439,13 +1414,37 @@ pub fn cmd_reboot() {
     // это не то же самое, что просто "перестать использовать" ключ.
     crate::crypto_storage::lock();
     unsafe {
-        // Standartnyj sposob perezagruzki cherez kontroller klaviatury (8042).
-        let mut good: u8 = 0x02;
-        while good & 0x02 != 0 {
-            good = crate::port::inb(0x64);
+        // 1) Классический сброс через контроллер клавиатуры 8042 (0xFE),
+        //    но с ТАЙМАУТОМ: на некоторых машинах/QEMU бит 0x02 порта 0x64
+        //    (input buffer full) не сбрасывается, и прежний цикл без
+        //    таймаута вешал систему навсегда.
+        let mut tries: u32 = 0;
+        loop {
+            let status = crate::port::inb(0x64);
+            if status & 0x02 == 0 {
+                break;
+            }
+            tries += 1;
+            if tries > 1_000_000 {
+                break;
+            }
         }
         crate::port::outb(0x64, 0xFE);
-        asm!("hlt");
+
+        // Небольшая пауза, чтобы контроллер успел принять команду.
+        for _ in 0..200_000 {
+            core::hint::spin_loop();
+        }
+
+        // 2) Аппаратный reset через порт 0xCF9 (legacy/ACPI reset control):
+        //    0x06 = hard reset + CPU reset. Работает в QEMU и на подавляющем
+        //    большинстве PC — надёжнее 8042.
+        crate::port::outb(0xCF9, 0x06);
+
+        // 3) Если и это не помогло — бесконечный hlt (машина уже в пути).
+        loop {
+            asm!("hlt");
+        }
     }
 }
 

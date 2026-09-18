@@ -4,7 +4,7 @@ DISK="$(dirname "$0")/build/deix_disk.img"
 
 echo "=== DeiX OS v0.2 ==="
 echo "512 MB RAM | RTL8139 NIC | 10.0.2.15 IP"
-echo "Commands: browser, files, ping 10.0.2.2, gpu mode"
+echo "Commands: help, profile ls, threads test, kexec check, ping 10.0.2.2"
 echo ""
 
 exec qemu-system-x86_64 \

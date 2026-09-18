@@ -109,6 +109,44 @@ DeiX/
 
 ---
 
+## 🏗 Архитектура загрузки (двухчастная, лимит размера ядра снят)
+
+```
+Сектор 0          boot_sector.bin (512 Б, MBR — BIOS грузит сам)
+Секторы 1..K      stage2.bin (загрузчик: 32-бит вход -> long mode -> копирует kernel)
+Секторы K+1..M    kernel.bin (ядро, база 0x100000; грузится через BIOS int13 в 0x11000,
+                   затем stage2 копирует в 0x100000 и прыгает)
+```
+
+- Ядро больше НЕ ограничено 1 МиБ/real mode: stage2 (маленький, 1 сектор) читает
+  kernel.bin через BIOS int13 и копирует в high memory. Область загрузчика — до
+  ext2-тома (LBA 4096), т.е. ~4090 секторов (~2 МиБ) под ядро.
+- **ПОЛНАЯ ЦЕПОЧКА ЗАГРУЗКИ через ВСЕ разделы** (не пустышки!, порядок по ТЗ):
+  `загрузчик(MBR/stage2) → /dsm(dsm.bin) → /init_boot(bootloader.bin) →
+  /vendor_boot(vendor.bin) → /boot(fastbootd.bin, recovery.bin) →
+  /kernel(kernel.tar.gz)`.
+  Каждый EROFS-раздел содержит реальные файлы (таблица файлов после
+  суперблока); ядро при старте читает и верифицирует их, а kernel.tar.gz —
+  НАСТОЯЩИЙ gzip (deflate): ядро распаковывает его своим inflate-декодером
+  (src/inflate.rs) и извлекает kernel.bin + библиотеки (libdeix_*.so).
+  Режимы fastbootd/recovery загружают свои образы из /boot; install копирует
+  разделы с загрузочного диска на целевой.
+- `boot_sector` читает kernel с `LBA = 1 + NUM_SECTORS(stage2)`, `KERNEL_SECTORS=1100`
+  (запас — ядро может расти); install пишет ровно туда же.
+- `install` на целевой диск пишет kernel.bin, прочитанный с загрузочного диска
+  (чистый `.data`), а не из памяти — «живой» .data с указателями на кучу
+  ломал бы установленную систему (Invalid opcode).
+- `install` сбрасывает служебные секторы целевого диска (BCB, маркер шифрования
+  DEIXCRYP): иначе остатки от прошлой настройки оставляли том «зашифрованным»
+  старым ключом, и вход с новым паролем давал Invalid password.
+- `linker_kernel.ld` включает .got/.got.plt в .data и выравнивает __image_end
+  до 512 байт — иначе install копировал kernel на сектор короче (хвост .data
+  терялся, установленная система падала Invalid opcode).
+- Paging: identity-map первых 4 ГиБ (1 ГиБ обычной памяти + GPU MMIO 0xFC000000
+  для framebuffer'а оболочек recovery/fastbootd/DSM).
+- GUI-оболочки (DSM/Fastbootd/Recovery): английский UI, подтверждения через
+  графические диалоги (Enter/Esc, таймаут) — без зависаний.
+
 ## 💻 CLI Commands
 
 ```
@@ -117,7 +155,30 @@ mem      lang     ifconfig  arp       ping      wifi      gpu
 ls       cat      write     rm        pkg       run       install
 bigfile  useradd  passwd    whoami    users     encrypt   modules
 nv3d     ds       duil      dxinit    crash     reboot    halt
+bugreport dmesg   crashlog  dsm       adb       ota       dev
 ```
+
+### Загрузочные режимы (BCB): DSM > Fastbootd > Recovery > ОС
+
+| Команда | Режим при следующей перезагрузке |
+|---------|----------------------------------|
+| `reboot dsm` | **DSM** — Download System Manager (аналог EDL): emergency-прошивка по COM1, READ/WRITE/FLASH/ERASE/VERIFY (SHA-256), работает даже при сломанной ОС |
+| `reboot fastbootd` | **Fastbootd** — полный прошивальщик: Flash/Erase/Format, Getvar, OEM unlock/lock, перезагрузка в любой режим |
+| `reboot recovery` | **Recovery** — TWRP/OrangeFox-style: Install OTA (с разблокировкой зашифрованного тома паролем), Nandroid Backup/Restore, Factory Reset, Wipe, Mount, Sideload, crash log |
+| `bcb <mode>` | прямая установка одноразового флажка (`normal`/`recovery`/`fastbootd`/`dsm`) |
+
+### Отладчик ошибок (как в Android)
+
+| Команда | Что делает |
+|---------|------------|
+| `bugreport` | полный диагностический отчёт (система, разделы, TPM, BCB, dmesg, crash) → экран + BUGREPORT.TXT на /system |
+| `dmesg` | кольцевой журнал ядра (последние строки) |
+| `crashlog` | дамп последней паники (tombstone): `crashlog clear` — очистить |
+| `crash panic` | принудительная паника (тест отладчика) |
+| `ota file [payload]` | сгенерировать OTA-пакет и записать TEST.OTA на /system (для recovery Install) |
+
+Паника ядра записывает tombstone сырыми секторами (LBA 2048, вне ext2/шифрования) —
+том не повреждается, дамп читается после перезагрузки.
 
 ### New in v0.2:
 | Command | Description |
@@ -186,3 +247,109 @@ python3 tools/mexcc.py build program.asm
 ---
 
 Developed by **Atimenka** & AI. Released under the GPL-3.0 License.
+
+## 🔐 Security Subsystem (интеграция)
+
+В ядро интегрирована подсистема инициализации и безопасности (7 модулей в `src/`):
+`init_parser` (парсер `init.deix`, PID 1), `vault` (барьер системных разделов —
+erofs/ro, rw только в Fastbootd/EDL/Recovery, иначе `panic!`), `security_monitor`
+(эвристический демон Ring 3, порог 0.85, SIGKILL), `kernel_loader` (сэндвич
+ядра с EROFS-суперблоком), `arch_pkg_bridge` (Arch PKG → `.pkg.erofs` в `/userdata`),
+`recovery_flash_engine` (TWRP/OrangeFox + Fastbootd + EDL), `partition_map`
+(карта разделов). Хуки подключены в `kernel_main()` (`src/lib.rs`): стадия
+`init_boot` и самоконтроль демона после инициализации Ring 3. Подробности —
+в `docs/SECURITY_SUBSYSTEM.md`.
+
+
+## 🧪 Тестирование (QEMU)
+
+```bash
+# все режимы (DSM/Fastbootd/Recovery/Install/OS/Crash)
+python3 tools/qemu_mode_test.py dsm
+python3 tools/qemu_mode_test.py fastbootd
+python3 tools/qemu_mode_test.py recovery
+python3 tools/qemu_mode_test.py install
+python3 tools/qemu_mode_test.py os
+python3 tools/qemu_mode_test.py crash
+
+# пароль переживает 2 перезагрузки
+python3 tools/qemu_scenario_reboot.py
+
+# полная установка на второй диск + загрузка с него
+python3 tools/qemu_install_test.py
+```
+
+Подробный отчёт: `docs/REPORT_v1.0_FINAL.md`.
+
+## 🔄 A/B разметка и OTA по воздуху
+
+- **A/B слоты**: `/kernel_a`/`/kernel_b`, `/boot_a`/`/boot_b`. Активный слот
+  хранится в BCB (`bcb slot <a|b>`). Цепочка загрузки читает АКТИВНЫЙ слот.
+- **OTA wireless**: `ota check` (проверка), `ota download` (скачать по воздуху —
+  формирует новый kernel.tar.gz), `ota apply` (прошивает в НЕактивный слот и
+  переключает), `ota rollback` (откат). Recovery: пункт «OTA wireless update (A/B)».
+- **Защита цепочки**: если раздел загрузочной цепочки стёрт/повреждён
+  (например `dsm erase /kernel_a`), загрузка ОСТАНАВЛИВАЕТСЯ («ЗАГРУЗКА
+  ОСТАНОВЛЕНА») — система не стартует без ядра (как Android RED state).
+  Восстановление — прошивкой раздела через DSM/fastbootd или `bcb slot b`.
+- CLI установщика и оболочек — на английском.
+
+## 📦 Утилита рассылки OTA (Linux-бинарник)
+
+**`deix-ota`** — host-инструмент для генерации и рассылки OTA-обновлений
+на все устройства DeiX (бинарник в корне проекта / home).
+
+```bash
+deix-ota build --kernel build/kernel.bin --out TEST.OTA --version 7
+    # собрать подписанный OTA-пакет (kernel.tar.gz + контейнер DEIXOTA1)
+
+deix-ota push --img dev1.img --img dev2.img --ota TEST.OTA --slot b --set-slot b
+    # прошить ядро в /kernel_b ВСЕХ образов и переключить активный слот на b
+
+deix-ota info --img dev1.img
+    # показать BCB (mode/slot) и содержимое всех EROFS-разделов
+
+deix-ota serve --dir . --port 8080
+    # HTTP-сервер раздачи: http://host:8080/TEST.OTA (для ota fetch с устройств)
+```
+
+Прошитый пакет ядро распаковывает (gzip+tar) и грузится со слота b —
+подтверждено в QEMU. Подпись SHA-256(payload||secret) валидна для ядра.
+
+## 🛠 mexmake — сборщик DeiX .mex (C/ASM/Rust)
+
+Система сборки .mex-приложений (аналог make для DeiX). Расположение:
+- **в DeiX**: `tools/mexmake` (бинарник);
+- **отдельно**: `/home/user/mexmake/` (исходники) и `/home/user/mexmake-bin` (бинарник).
+
+Использование (в корне проекта с файлом `mex`):
+```bash
+mmake init [c|asm|rust]   # создать проект (файл 'mex' + src/)
+mmake build               # собрать в .mex
+mmake info [file.mex]     # показать заголовок
+mmake clean               # очистить build/
+```
+
+Файл `mex` (конфигурация, без расширения):
+```
+[project]
+name = demo
+base = 0x600000      # адрес загрузки
+entry = mex_main     # точка входа (ASM: _start)
+src  = src
+outdir = build
+
+[mex]
+version = 1.1        # формат .mex
+
+[cc]
+cmd = cc
+include = include    # каталог заголовков
+
+[rust]
+mode = file
+```
+
+Поддерживает многофайловые проекты (структура папок, include), C/ASM/Rust,
+автоподстановка entry_offset/bss из ELF. Формат .mex v1.1 — как у ядра
+(MEX_LOAD_ADDR 0x600000, MexApi в RDI, тело после 32-байтного заголовка).

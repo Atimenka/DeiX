@@ -3,7 +3,6 @@
 use crate::cp866::unicode_to_cp866;
 use core::fmt;
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Color {

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! XTS-AES (IEEE P1619 / NIST SP 800-38E) — режим шифрования блочных
 //! устройств поверх AES (см. aes.rs), реализован с нуля. Это ТОТ ЖЕ
 //! режим и та же схема, что использует `cryptsetup --cipher
@@ -23,7 +22,6 @@
 
 use super::aes::Aes256;
 
-pub const SECTOR_SIZE: usize = 512;
 
 pub struct XtsAes256 {
     cipher1: Aes256, // шифрует данные

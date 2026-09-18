@@ -9,7 +9,6 @@ pub const PROTO_ICMP: u8 = 1;
 const MIN_HEADER_LEN: usize = 20;
 
 pub struct Ipv4Header {
-    #[allow(dead_code)]
     pub version_ihl: u8,
     pub total_length: u16,
     pub protocol: u8,

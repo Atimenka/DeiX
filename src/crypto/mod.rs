@@ -12,10 +12,7 @@
 //! шифрованием диска.
 
 pub mod aes;
-pub mod hmac_sha1;
-pub mod pbkdf2;
-pub mod prf;
-pub mod sha1;
 pub mod sha256;
+pub mod pbkdf2;
 pub mod sha512;
 pub mod xts;

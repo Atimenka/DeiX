@@ -8,11 +8,6 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use crate::net::tcp;
 
-pub struct HttpResponse {
-    pub status: u16,           // 200, 301, 404...
-    pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
-}
 
 /// Парсит URL: возвращает (host, port, path).
 pub fn parse_url(url: &str) -> Option<(String, u16, String)> {
@@ -40,10 +35,13 @@ pub fn parse_url(url: &str) -> Option<(String, u16, String)> {
     Some((host, port, path.to_string()))
 }
 
-/// DNS-запрос (заглушка — всегда возвращает 10.0.2.2 для QEMU slirp).
-/// В реальности нужно: отправить DNS-запрос → распарсить ответ.
+/// Разбирает host как IPv4-литерал (`93.184.215.14`).
+///
+/// Резолвинга имён нет: DNS работает поверх UDP, а в стеке реализован
+/// только TCP (см. net/tcp.rs). Пока UDP не появится, адрес нужно
+/// указывать напрямую — молча подставлять захардкоженные IP было бы
+/// враньём о возможностях системы.
 pub fn resolve(host: &str) -> Option<[u8; 4]> {
-    // Если host уже IP-адрес — парсим.
     let parts: Vec<&str> = host.split('.').collect();
     if parts.len() == 4 {
         if let (Ok(a),Ok(b),Ok(c),Ok(d)) =
@@ -53,89 +51,75 @@ pub fn resolve(host: &str) -> Option<[u8; 4]> {
         }
     }
 
-    // Заглушка DNS: резолвим несколько известных сайтов.
-    match host {
-        "google.com" | "www.google.com" => Some([142, 250, 80, 4]),
-        "example.com" => Some([93, 184, 215, 14]),
-        "info.cern.ch" => Some([188, 184, 9, 234]),
-        _ => {
-            // Пытаемся сделать реальный DNS через шлюз QEMU (10.0.2.3).
-            // Но для этого нужен UDP, которого нет. Возвращаем заглушку.
-            crate::println!("  [dns] No resolver for '{}' — try IP directly.", host);
-            None
-        }
-    }
+    crate::println!("  [dns] Разрешение имён не поддерживается (нужен UDP); укажите IP-адрес.");
+    None
 }
 
-/// Выполняет HTTP GET и возвращает ответ.
-pub fn get(url: &str) -> Result<HttpResponse, String> {
+/// HTTP GET для БИНАРНЫХ данных (например, OTA-пакета): накапливает ВСЕ
+/// чанки TCP, находит границу заголовков "\r\n\r\n" и возвращает сырое тело.
+pub fn get_binary(url: &str, max_body: usize) -> Result<Vec<u8>, String> {
     let (host, port, path) = parse_url(url)
         .ok_or_else(|| "Invalid URL".to_string())?;
+    let ip = resolve(&host).ok_or_else(|| format!("Cannot resolve '{}'", host))?;
 
-    let ip = resolve(&host)
-        .ok_or_else(|| format!("Cannot resolve '{}'", host))?;
-
-    crate::print!("  [http] Connecting to {}:{}... ", host, port);
-
+    crate::print!("  [http] GET {}... ", url);
     if !tcp::connect(ip, port) {
         return Err("TCP connection failed".into());
     }
     crate::println!("connected.");
 
-    // Формируем HTTP-запрос.
     let req = format!(
-        "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: DeiX/0.2\r\nAccept: text/html\r\nConnection: close\r\n\r\n",
+        "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: DeiX-OTA/1.0\r\nConnection: close\r\n\r\n",
         path, host
     );
     tcp::send(req.as_bytes());
 
-    // Получаем ответ (до 5 секунд).
-    let mut raw = Vec::new();
+    let mut raw: Vec<u8> = Vec::new();
     let t0 = crate::timer::uptime_ms();
     loop {
-        let chunk = tcp::recv(1000);
-        if chunk.is_empty() { break; }
-        raw.extend_from_slice(&chunk);
-        if crate::timer::uptime_ms() - t0 > 5000 { break; }
+        let chunk = tcp::recv(2000);
+        if !chunk.is_empty() {
+            raw.extend_from_slice(&chunk);
+            if raw.len() > max_body + 8192 {
+                break;
+            }
+        }
+        // Завершаем, если накоплен полный ответ (заголовки + тело по Content-Length)
+        if let Some(he) = find_header_end(&raw) {
+            if let Some(cl) = content_length(&raw[..he]) {
+                if raw.len() >= he + cl {
+                    break;
+                }
+            } else if raw.len() > he {
+                break; // нет Content-Length — берём всё
+            }
+        }
+        if crate::timer::uptime_ms() - t0 > 15000 {
+            break;
+        }
     }
     tcp::close();
 
     if raw.is_empty() {
         return Err("No response".into());
     }
-
-    parse_response(&raw)
+    let he = find_header_end(&raw).ok_or("No header terminator")?;
+    Ok(raw[he..].to_vec())
 }
 
-fn parse_response(raw: &[u8]) -> Result<HttpResponse, String> {
-    let text = core::str::from_utf8(raw).map_err(|_| "Invalid UTF-8".to_string())?;
-    let mut lines = text.lines();
+fn find_header_end(raw: &[u8]) -> Option<usize> {
+    raw.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+}
 
-    // Статусная строка: "HTTP/1.0 200 OK"
-    let status_line = lines.next().ok_or("Empty response")?;
-    let parts: Vec<&str> = status_line.split_whitespace().collect();
-    if parts.len() < 2 { return Err("Bad status line".into()); }
-    let status: u16 = parts[1].parse().map_err(|_| "Bad status code")?;
-
-    // Заголовки
-    let mut headers = Vec::new();
-    for line in &mut lines {
-        let line = line.trim();
-        if line.is_empty() { break; }
-        if let Some(colon) = line.find(':') {
-            let key = line[..colon].trim().to_string();
-            let val = line[colon+1..].trim().to_string();
-            headers.push((key, val));
+fn content_length(header: &[u8]) -> Option<usize> {
+    let text = core::str::from_utf8(header).ok()?;
+    for line in text.lines() {
+        let l = line.to_ascii_lowercase();
+        if let Some(v) = l.strip_prefix("content-length:") {
+            return v.trim().parse().ok();
         }
     }
-
-    // Всё остальное — тело.
-    let header_end = text.find("\r\n\r\n").unwrap_or(0) + 4;
-    let body = if header_end < raw.len() {
-        Vec::from(&raw[header_end..])
-    } else {
-        Vec::new()
-    };
-
-    Ok(HttpResponse { status, headers, body })
+    None
 }
+
+

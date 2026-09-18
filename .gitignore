@@ -1,0 +1,17 @@
+# Rust build artifacts
+/target
+
+# DeiX build output (образы, ISO, собранное ядро)
+/build
+*.img
+*.iso
+kernel.tar.gz
+*.OTA
+
+# Python (утилиты deix-recovery/tools)
+__pycache__/
+*.pyc
+
+# OS junk
+.sudo_as_admin_successful
+Thumbs.db

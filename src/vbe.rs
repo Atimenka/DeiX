@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Драйвер Bochs VBE Display Interface (DISPI) — открытый, задокументированный
 //! интерфейс, который эмулирует QEMU (device "VGA"/"std vga", PCI ID
 //! 1234:1111) и Bochs. Даёт настоящий линейный framebuffer с произвольным
@@ -32,7 +31,6 @@ const VBE_DISPI_ID5: u16 = 0xB0C5;
 const VBE_DISPI_DISABLED: u16 = 0x00;
 const VBE_DISPI_ENABLED: u16 = 0x01;
 const VBE_DISPI_LFB_ENABLED: u16 = 0x40;
-const VBE_DISPI_NOCLEARMEM: u16 = 0x80;
 
 pub const BPP_32: u16 = 0x20;
 
@@ -197,10 +195,21 @@ pub fn restore_text_mode() {
 
         outb(VGA_MISC_WRITE, MISC_REG);
 
-        for (i, &value) in SEQ_REGS.iter().enumerate() {
+        // Sequencer ОБЯЗАН быть в состоянии сброса, пока мы меняем
+        // тайминги: иначе видеовыход работает с наполовину
+        // применёнными параметрами и экран уходит в вертикальные
+        // полосы. Порядок строго такой: reset -> настройка -> снятие
+        // сброса (см. IBM VGA Hardware Reference, регистр SR00).
+        outb(VGA_SEQ_INDEX, 0x00);
+        outb(VGA_SEQ_DATA, 0x01); // синхронный сброс
+
+        for (i, &value) in SEQ_REGS.iter().enumerate().skip(1) {
             outb(VGA_SEQ_INDEX, i as u8);
             outb(VGA_SEQ_DATA, value);
         }
+
+        outb(VGA_SEQ_INDEX, 0x00);
+        outb(VGA_SEQ_DATA, 0x03); // снять сброс, запустить генератор
 
         // Снимаем защиту регистров 0-7 CRTC (бит 7 регистра 0x11), иначе
         // запись в них будет проигнорирована.
@@ -231,20 +240,4 @@ pub fn restore_text_mode() {
     }
 }
 
-pub fn debug_dump_regs() {
-    let vw = read_reg(VBE_DISPI_INDEX_VIRT_WIDTH);
-    let vh = read_reg(VBE_DISPI_INDEX_VIRT_HEIGHT);
-    let xoff = read_reg(VBE_DISPI_INDEX_X_OFFSET);
-    let yoff = read_reg(VBE_DISPI_INDEX_Y_OFFSET);
-    crate::serial_println!("[vbe][debug] virt_width={} virt_height={} x_off={} y_off={}", vw, vh, xoff, yoff);
-}
 
-pub fn debug_hexdump(addr: usize, len: usize) {
-    crate::serial_println!("[vbe][hexdump] addr={:#x} len={}", addr, len);
-    let mut line = alloc::string::String::new();
-    for i in 0..len {
-        let byte = unsafe { core::ptr::read_volatile((addr + i) as *const u8) };
-        line.push_str(&alloc::format!("{:02x} ", byte));
-    }
-    crate::serial_println!("{}", line);
-}

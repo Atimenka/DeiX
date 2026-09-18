@@ -20,6 +20,7 @@ impl TcpHdr {
     const SZ: usize = 20;
 }
 
+#[derive(Clone, Copy)]
 pub struct TcpConn { pub state: u8, sport: u16, dip: [u8;4], dport: u16, seq: u32, ack: u32 }
 static CONN: SpinLock<Option<TcpConn>> = SpinLock::new(None);
 static NPORT: SpinLock<u16> = SpinLock::new(1024);
@@ -35,6 +36,10 @@ fn rx_dequeue() -> Option<Vec<u8>> {
     RX_QUEUE.lock().pop_front()
 }
 
+fn rx_dequeue_len() -> usize {
+    RX_QUEUE.lock().len()
+}
+
 fn tcp_csum(src: &[u8;4], dst: &[u8;4], seg: &[u8]) -> u16 {
     let mut s: u32 = 0;
     s += ((src[0] as u32)<<8)|(src[1] as u32); s += ((src[2] as u32)<<8)|(src[3] as u32);
@@ -48,15 +53,26 @@ fn tcp_csum(src: &[u8;4], dst: &[u8;4], seg: &[u8]) -> u16 {
 }
 
 fn send_seg(c: &TcpConn, flags: u8, data: &[u8]) {
-    let hsz = TcpHdr::SZ; let mut seg = Vec::with_capacity(hsz+data.len());
+    let mut hsz = TcpHdr::SZ;
+    // MSS-опция в SYN: без неё сервер шлёт сегменты по 536 байт и передача
+    // большого OTA-пакета идёт в разы дольше. MSS=1460 (kind 2, len 4).
+    let mut opts: [u8; 4] = [2, 4, 0x05, 0xB4];
+    if flags & SYN == 0 { opts = [0; 4]; }
+    if flags & SYN != 0 { hsz += 4; }
+    let mut seg = Vec::with_capacity(hsz+data.len());
     let h = TcpHdr {
         src: c.sport.to_be(), dst: c.dport.to_be(),
         seq: c.seq.to_be(), ack: c.ack.to_be(),
         off_flags: (((hsz/4) as u16)<<12|flags as u16).to_be(),
+        // Окно 8K < RX-буфера QEMU rtl8139 (~16K): сервер шлёт порциями,
+        // которые гарантированно влезают в буфер; QEMU заливает весь ответ
+        // сразу, и большее окно приводит к переполнению RX и потере пакетов.
         win: 8192u16.to_be(), csum: 0, urg: 0,
     };
-    let hb = unsafe { core::slice::from_raw_parts(&h as *const _ as *const u8, hsz) };
-    seg.extend_from_slice(hb); seg.extend_from_slice(data);
+    let hb = unsafe { core::slice::from_raw_parts(&h as *const _ as *const u8, TcpHdr::SZ) };
+    seg.extend_from_slice(hb);
+    if flags & SYN != 0 { seg.extend_from_slice(&opts); }
+    seg.extend_from_slice(data);
     let cs = tcp_csum(&crate::net::my_ip(), &c.dip, &seg);
     seg[16] = (cs>>8) as u8; seg[17] = (cs&0xFF) as u8;
     ipv4::send_packet_resolving(c.dip, TCP_PROTO, &seg, 0);
@@ -114,11 +130,30 @@ pub fn send(data: &[u8]) -> bool {
 pub fn recv(to: u64) -> Vec<u8> {
     let t0 = crate::timer::uptime_ms();
     loop {
+        if rx_dequeue_len() == 0 {
+            // Страховка: читаем RX-буфер RTL8139 напрямую, не полагаясь на
+            // прерывания (QEMU заливает большой ответ быстрее, чем приходят
+            // IRQ, и без поллинга буфер переполняется и пакеты теряются).
+            crate::rtl8139::poll_rx();
+        }
         while let Some(pkt) = rx_dequeue() {
             let cl = CONN.lock();
             if let Some(ref c) = *cl {
-                if let Some((f, _, _)) = parse_tcp(&pkt, c.sport, c.dport) {
-                    if f&(PSH|ACK) != 0 { let p = tcp_payload(&pkt); if !p.is_empty() { return p; } }
+                if let Some((f, _, s)) = parse_tcp(&pkt, c.sport, c.dport) {
+                    if f&(PSH|ACK) != 0 {
+                        let p = tcp_payload(&pkt);
+                        if !p.is_empty() {
+                            // Подтверждаем полученные данные (window update):
+                            // иначе сервер упирается в окно и передача встаёт.
+                            let new_ack = s.wrapping_add(p.len() as u32);
+                            let mut nc = *c;
+                            nc.ack = new_ack;
+                            drop(cl);
+                            *CONN.lock() = Some(nc);
+                            send_seg(&nc, ACK, &[]);
+                            return p;
+                        }
+                    }
                     if f&FIN != 0 { return Vec::new(); }
                 }
             }

@@ -9,7 +9,6 @@ const CONFIG_ADDRESS: u16 = 0xCF8;
 const CONFIG_DATA: u16 = 0xCFC;
 
 #[derive(Clone, Copy, Debug)]
-#[allow(dead_code)]
 pub struct PciDevice {
     pub bus: u8,
     pub slot: u8,

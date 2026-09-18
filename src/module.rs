@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Модульная система ядра DeiX — загружает и инициализирует `.kmod`
 //! (Kernel Module) файлы с ext2-диска при старте системы.
 //!
@@ -42,8 +41,7 @@
 //! Возвращает 0 при успехе, отрицательное значение при ошибке.
 
 use crate::ext2;
-use alloc::format;
-use crate::{print, println, t};
+use crate::{print, println};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -420,39 +418,9 @@ fn parse_kmod_header(data: &[u8]) -> Option<KmodHeader> {
     })
 }
 
-/// Возвращает список загруженных модулей (для CLI-команды `modules`).
-pub fn list_modules() -> Vec<LoadedModule> {
-    LOADED_MODULES.lock().clone()
-}
 
-/// Печатает статус загрузки модулей (вызывается CLI-командой `modules`).
-pub fn cmd_modules() {
-    let modules = list_modules();
-    if modules.is_empty() {
-        println!(
-            "{}",
-            t!(
-                en: "No kernel modules loaded. (Modules are .kmod files on the ext2 disk.)",
-                ru: "Модули ядра не загружены. (Модули — это .kmod файлы на ext2-диске.)"
-            )
-        );
-        return;
-    }
-
-    println!("{}", t!(en: "Loaded kernel modules:", ru: "Загруженные модули ядра:"));
-    for m in &modules {
-        let status_str = match m.status {
-            ModuleStatus::Initialized => t!(en: "OK", ru: "OK"),
-            ModuleStatus::Loaded => t!(en: "loaded", ru: "загружен"),
-            ModuleStatus::Failed => t!(en: "FAILED", ru: "ОШИБКА"),
-        };
-        println!(
-            "  {:<16} v{}.{}  {:<8}  {}",
-            m.name,
-            m.version.0,
-            m.version.1,
-            t!(en: format!("{}b", m.body_size), ru: format!("{}б", m.body_size)),
-            status_str
-        );
-    }
+/// Сброс списка загруженных модулей (для install: .data копируется как
+/// есть, живые heap-указатели нельзя переносить на устанавливаемый диск).
+pub fn reset_loaded_modules() {
+    *LOADED_MODULES.lock() = alloc::vec::Vec::new();
 }

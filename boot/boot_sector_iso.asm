@@ -32,7 +32,7 @@
 ;      protected mode (плоская адресация) и копирует уже загруженный
 ;      "хвост" образа (stage2.bin, физически лежащий сразу за стабом —
 ;      с адреса 0x7e00) на 0x10000, куда его ожидает увидеть Rust-код
-;      (см. boot/linker2.ld — тот же адрес, что и в обычном MBR-варианте).
+;      (см. boot/linker_stage2.ld — тот же адрес, что и в обычном MBR-варианте).
 ;      Регионы src=[0x7e00..] и dst=[0x10000..] у нас ПЕРЕСЕКАЮТСЯ
 ;      (dst < src+size при типичном размере ядра), поэтому копирование
 ;      идёт СТРОГО в обратном направлении (std + rep movsd от конца к
@@ -45,7 +45,13 @@ bits 16
 org 0x7c00
 
 STAGE2_SRC equ 0x7e00     ; где физически лежит stage2 после загрузки BIOS
-STAGE2_DST equ 0x10000    ; куда его нужно переместить (ожидание linker2.ld)
+STAGE2_DST equ 0x10000    ; куда его нужно переместить (linker_stage2.ld)
+KERNEL_DST equ 0x11000    ; куда переместить kernel.bin (stage2 копирует его в 0x100000)
+; RAM-ДИСК: полный 10-МиБ образ диска (MBR+stage2+kernel+все разделы) лежит
+; в конце boot-образа; стаб копирует его в 0x2000000 (32 МиБ), а ядро
+; читает ВСЕ разделы (BCB, /system, /OTA...) прямо из памяти — поэтому
+; OS работает с ЛЮБОГО носителя (Ventoy/USB/CD) без драйверов диска.
+RAMDISK_DST equ 0x2000000
 
 start:
     cli
@@ -99,8 +105,27 @@ protected_mode_start:
     mov ss, ax
     mov esp, 0x90000
 
-    ; ---- копируем STAGE2_SIZE_DWORDS двойных слов из STAGE2_SRC в
-    ;      STAGE2_DST в ОБРАТНОМ направлении (см. пояснение выше) ----
+    ; ---- 0) RAM-диск (10 МиБ) -> 0x2000000 (ОБРАТНО: src-область ПЕРЕСЕКАЕТСЯ
+    ;      с dst — копирование вперёд затирает источник!) ----
+    ; src = STAGE2_SRC + stage2 + kernel (в boot-образе после kernel.bin).
+    std
+    mov esi, STAGE2_SRC + (STAGE2_SIZE_DWORDS * 4) + (KERNEL_SIZE_DWORDS * 4) + (RAMDISK_SIZE_DWORDS * 4) - 4
+    mov edi, RAMDISK_DST + (RAMDISK_SIZE_DWORDS * 4) - 4
+    mov ecx, RAMDISK_SIZE_DWORDS
+    rep movsd
+    cld
+
+    ; ---- 1) kernel.bin -> 0x11000 (ОБРАТНО: dst=0x11000 ВНУТРИ src=0x8000..,
+    ;      пересечение — копирование вперёд затирает источник!) ----
+    ; kernel лежит сразу после stage2 в boot-образе (src ~0x8000).
+    std
+    mov esi, STAGE2_SRC + (STAGE2_SIZE_DWORDS * 4) + (KERNEL_SIZE_DWORDS * 4) - 4
+    mov edi, KERNEL_DST + (KERNEL_SIZE_DWORDS * 4) - 4
+    mov ecx, KERNEL_SIZE_DWORDS
+    rep movsd
+    cld
+
+    ; ---- 2) stage2.bin -> 0x10000 (ОБРАТНО: dst < src+size, пересекается) ----
     std
     mov esi, STAGE2_SRC + (STAGE2_SIZE_DWORDS * 4) - 4
     mov edi, STAGE2_DST + (STAGE2_SIZE_DWORDS * 4) - 4
@@ -142,6 +167,13 @@ DATA_SEG equ gdt_data - gdt_start
 ; округлённое вверх, чтобы скопировать весь stage2.bin.
 %ifndef STAGE2_SIZE_DWORDS
 STAGE2_SIZE_DWORDS equ 100
+%endif
+%ifndef KERNEL_SIZE_DWORDS
+KERNEL_SIZE_DWORDS equ 1000
+%endif
+; RAM-диск: 20480 секторов * 512 байт = 2621440 dword (образ 10 МиБ).
+%ifndef RAMDISK_SIZE_DWORDS
+RAMDISK_SIZE_DWORDS equ 2621440
 %endif
 
 times 512-($-$$) db 0
