@@ -9,7 +9,6 @@ const CONFIG_ADDRESS: u16 = 0xCF8;
 const CONFIG_DATA: u16 = 0xCFC;
 
 #[derive(Clone, Copy, Debug)]
-#[allow(dead_code)]
 pub struct PciDevice {
     pub bus: u8,
     pub slot: u8,
@@ -110,6 +109,47 @@ pub fn find_device_by_class(class_code: u8) -> Option<PciDevice> {
                 let class_reg = read_config_u32(bus, slot, function, 0x08);
                 let this_class = ((class_reg >> 24) & 0xFF) as u8;
                 if this_class == class_code {
+                    let d = read_config_u16(bus, slot, function, 0x02);
+                    return Some(PciDevice {
+                        bus,
+                        slot,
+                        function,
+                        vendor_id: v,
+                        device_id: d,
+                    });
+                }
+            }
+        }
+        if bus == 255 {
+            break;
+        }
+    }
+    None
+}
+
+/// Ищет устройство по паре Class + Subclass (например, Class 0x04 + Subclass 0x03
+/// для аудиоконтроллера Intel High Definition Audio).
+pub fn find_device_by_class_subclass(class_code: u8, subclass_code: u8) -> Option<PciDevice> {
+    for bus in 0..=255u16 {
+        let bus = bus as u8;
+        for slot in 0..32u8 {
+            let vendor = read_config_u16(bus, slot, 0, 0x00);
+            if vendor == 0xFFFF {
+                continue;
+            }
+
+            let header_type = (read_config_u32(bus, slot, 0, 0x0C) >> 16) & 0xFF;
+            let max_function = if header_type & 0x80 != 0 { 8 } else { 1 };
+
+            for function in 0..max_function {
+                let v = read_config_u16(bus, slot, function, 0x00);
+                if v == 0xFFFF {
+                    continue;
+                }
+                let class_reg = read_config_u32(bus, slot, function, 0x08);
+                let this_class = ((class_reg >> 24) & 0xFF) as u8;
+                let this_subclass = ((class_reg >> 16) & 0xFF) as u8;
+                if this_class == class_code && this_subclass == subclass_code {
                     let d = read_config_u16(bus, slot, function, 0x02);
                     return Some(PciDevice {
                         bus,

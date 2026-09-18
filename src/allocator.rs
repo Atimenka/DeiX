@@ -27,7 +27,7 @@
 //! (мусорные пиксели), не лечившийся никакими изменениями в самой логике
 //! рендеринга, потому что причина была не в рендеринге, а в том, что
 //! часть "кучи" физически не была настоящей оперативной памятью.
-//! Исправлено в boot/linker2.ld: линкер теперь явно "перепрыгивает"
+//! Исправлено в boot/linker_kernel.ld: линкер теперь явно "перепрыгивает"
 //! адрес счётчика на 0x200000 (2 МиБ) перед Rust-частью .bss, так что
 //! HEAP_STORAGE гарантированно оказывается выше всей опасной зоны.
 use crate::sync::without_interrupts;
@@ -38,7 +38,6 @@ use core::ptr;
 const HEAP_SIZE: usize = 16 * 1024 * 1024;
 
 #[repr(align(16))]
-#[allow(dead_code)]
 struct HeapStorage([u8; HEAP_SIZE]);
 
 static mut HEAP_STORAGE: HeapStorage = HeapStorage([0; HEAP_SIZE]);

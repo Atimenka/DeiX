@@ -8,8 +8,10 @@
 pub mod arp;
 pub mod checksum;
 pub mod eth;
+pub mod http;
 pub mod icmp;
 pub mod ipv4;
+pub mod tcp;
 
 use crate::spinlock::SpinLock;
 use crate::sync::without_interrupts;
@@ -59,7 +61,12 @@ pub fn on_ethernet_frame(frame: &[u8]) {
 
     match header.ethertype {
         eth::ETHERTYPE_ARP => arp::handle_packet(payload, &header),
-        eth::ETHERTYPE_IPV4 => ipv4::handle_packet(payload),
+        eth::ETHERTYPE_IPV4 => {
+            // Также передаём TCP-модулю для обработки.
+            // Сохраняем полный фрейм (с Ethernet-заголовком) для TCP.
+            tcp::rx_enqueue(frame.to_vec());
+            ipv4::handle_packet(payload);
+        }
         _ => {}
     }
 }

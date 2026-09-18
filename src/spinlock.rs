@@ -34,6 +34,18 @@ impl<T> SpinLock<T> {
         }
         SpinLockGuard { lock: self }
     }
+
+    pub fn try_lock(&self) -> Option<SpinLockGuard<'_, T>> {
+        if self
+            .locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            Some(SpinLockGuard { lock: self })
+        } else {
+            None
+        }
+    }
 }
 
 impl<'a, T> core::ops::Deref for SpinLockGuard<'a, T> {

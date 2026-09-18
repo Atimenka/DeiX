@@ -1,0 +1,273 @@
+=== DeiX boot: serial debug active ===
+[deix] A: font start
+[deix] B: font done
+[deix] C: clear done
+DeiX v0.1 - mini kernel booted successfully!
+[deix] D: println done
+Long mode: OK | Paging: OK | VGA text driver: OK
+[deix] E: long mode println
+Cyrillic VGA font: OK (loaded into plane 2)
+[deix] F: cyrillic println
+IDT + PIC 8259: OK
+[deix] G: idt ok
+PIT timer (~100 Hz): OK
+[deix] H: pit ok
+Heap allocator (16 MiB): OK
+[deix] I: heap ok
+PS/2 keyboard: OK (handled via IRQ1)
+[mouse] VMware/QEMU absolute pointer backdoor: enabled
+PS/2 mouse: OK (handled via IRQ12)
+ATA disk: OK (PIO mode)
+Network: no RTL8139 card found (run QEMU with '-net nic,model=rtl8139 -net user')
+Wi-Fi: protocol stack loaded (IEEE 802.11 + WPA2-PSK), no hardware detected
+GPU: QEMU (Bochs-compatible) detected (device ID 0x1111). Type 'gpu info' for details.
+Default language: English. Type 'lang ru' to switch to Russian.
+  [bcb] флажок установлен: normal
+  [mm/phys] Buddy allocator ready: 65280 frames (261120 KiB) total, 5120 reserved.
+  [mm] Physical page allocator: OK
+  Memory: 0 pages allocated, 0 freed, 0 in use (0 KiB)
+  [fs] File access control + TrustedInstaller: OK
+  [avb] Verified Boot: проверка целостности...
+  [avb] GREEN: заводской образ (vbmeta ещё не запечатана).
+[tpm] Заводские ��астройки: диск не зашифрован. Первая настройка включит шифрование.
+  [tpm] Заводские настройки: диск не зашифрован. Первая настройка включит шифрование ключом = пароль аккаунта.
+  [usermode] syscall MSRs ready (GDT/TSS from bootloader — ring3 jump needs bootloader cooperation)
+  [security_monitor] Ring 3: самоконтроль эвристики (порог 0.85)
+    Событие A (редактор): risk 0.049 -> SAFE
+    Событие Б (ransomware): risk 0.960 -> CRITICAL
+    [scheduler] >>> SIGKILL(9) -> PID 666 :: pid 666 sys_write: risk 0.960 > threshold 0.850; vectors: ransomware-encryption
+  [security_monitor] Событий проанализировано: 2, крити��еских тревог: 1
+[deix] security_monitor: само��онтроль Ring 3 выполнен
+  [initrd] No initrd embedded (use build_initrd.sh to create one).
+  [module] NET.KMOD not found on disk (skipped — system will work without it).
+  [module] CRYPTO.KMOD not found on disk (skipped — system will work without it).
+  [module] GFX.KMOD not found on disk (skipped — system will work without it).
+  [partition_map] Карта ��азделов DeiX OS:
+    /kernel      erofs ro  Ring 0   сэндвич ядра: kernel.tar.gz -> kernel.img (магия 0xE0F5E0F5)
+    /init_boot   erofs ro  Ring 0   микроядро, структуры PID 1, скрипт init.deix
+    /boot        erofs ro  Ring 0   таблицы параметро�� ядра и корневой ramdisk
+    /vendor_boot erofs ro  Ring 0   HAL и прошивка вендора
+    /super       erofs ro  Ring 0   контейнер динамических разделов system/vendor/product
+    /recovery    erofs ro  Ring 0   изолированная среда восстановления TWRP/OrangeFox
+    /userdata     ext4 rw  Ring 3   единственный пользов��тельский раздел данных
+    /system      erofs ro  Ring 0   логичес��ий системный раздел внутри /super
+  [partition_map] Пол��тика разделов подтверждена: 7x erofs/ro + userdata ext4/rw
+  [partition_map] Скр��тый раздел /TPM: недоступен Ring 3, пароли — только в TPM (NV)
+  [init_parser] Стадия init_boot: init.deix разобран
+    [stage: init_boot] — 3 команд(ы):
+      -> mount erofs /dev/block/by-name/kernel /kernel ro
+      -> mount erofs /dev/block/by-name/init_boot /init_boot ro
+      -> service pid1_core /bin/pid1_core ring=0
+    [stage: vendor_boot] — 1 команд(ы):
+      -> mount erofs /dev/block/by-name/vendor_boot /vendor_boot ro
+    [stage: boot] — 5 команд(ы):
+      -> mount erofs /dev/block/by-name/super /system ro
+      -> mount erofs /dev/block/by-name/boot /boot ro
+      -> mount ext4 /dev/block/by-name/userdata /userdata rw
+      -> service security_monitor /bin/security_monitor ring=3
+      -> service network_manager /bin/net_daemon ring=3
+    [stage: recovery] — 2 команд(ы):
+      -> mount ext4 /dev/block/by-name/userdata /userdata rw
+      -> service twrp_shell /bin/twrp ring=3
+    [stage: fastbootd] — 2 команд(ы):
+      -> mount erofs /dev/block/by-name/super /system rw
+      -> service fastbootd_daemon /bin/fastbootd ring=3
+    [stage: edl] — 2 команд(ы):
+      -> mount erofs /dev/block/by-name/kernel /kernel rw
+      -> service edl_bridge /bin/edl_bridge ring=0
+  [init_parser] Синт��ксических предупреждени�� нет
+  [init_parser] Итог: всег�� 27, принято 21, отклон��но 0, пропущено 6
+[deix] init_boot: карта разделов + init.deix разобраны
+  [sched] Инициализ��ция планировщика многопоточности (round-robin, PIT 100 Гц)
+  [sched] Порождены потоки: heuristic_core=1, net_daemon=2, pkg_worker=3, fs_sync=4
+  [sched] t= 10: исполняется поток 'heuristic_core' (prio=8, квант осталось 1)
+  [sched] t= 20: исполняется поток 'heuristic_core' (prio=8, квант осталось 1)
+  [sched] t= 30: исполняется поток 'heuristic_core' (prio=8, квант остало��ь 5)
+  [sched] t= 40: исполняется поток 'heuristic_core' (prio=8, квант осталось 5)
+  [sched] Таблица потоков плани��овщика:
+    ID   ИМЯ                    СОСТ��ЯНИЕ   PR  ТИКИ       КВАНТЫ    
+    1    heuristic_core         Running     8   34         6         
+    2    net_daemon             Ready       6   5          1         
+    3    pkg_worker             Ready       4   0          0         
+    4    fs_sync                Terminated  2   0          0         
+  [sched] тиков: 40, ��ереключений контекста: 1, живых ��отоков: 3
+  [sched] Многопот��чность работает: 1 переключений контекста за 400 мс
+  [pacman] Портиров��нный менеджер пакетов DeiX (зеркало: https://mirror.deix.os/core)
+  [pacman] -Sy: синхрон��зировано 3 пакетов и�� зеркала
+    deix-editor 3.2.0-1 [x86_64] текстовый редактор DeiX
+    deix-hello 1.0.0-1 [x86_64] приветственный пакет DeiX
+    deix-utils 2.1.0-1 [x86_64] базовые утилиты DeiX (sysinfo и др.)
+  [pacman] (диск не отформатирован) файл '/userdata/pkg/deix-hello/usr/bin/deix-hello.ds' за��егистрирован в памяти
+  [pacman] (диск не отформатирован) файл '/userdata/pkg/deix-utils/usr/bin/deix-sysinfo.ds' зарегистрирован в памяти
+  [pacman] (диск не отформатирован) файл '/userdata/pkg/deix-editor/usr/bin/deix-editor.ds' зарегистрирован в памяти
+  [pacman] -S deix-editor: установлен (зависимости ра��решены)
+  [pacman] -Q: установленные пакеты:
+    deix-editor 3.2.0-1
+    deix-hello 1.0.0-1
+    deix-utils 2.1.0-1
+  [pacman] -Qi deix-editor: версия 3.2.0-1, файлов: 1, зависит от: deix-utils
+  [pacman] -Su: обновлено пакетов: 0
+  [pacman] -R deix-hello: удалён
+  [pacman] Локальная база сохранена (deix-pkgs.db)
+  [arch_abi] Слой совместимости Linux x86_64 (glibc ABI)
+Hello, DeiX glibc layer!
+  [arch_abi] syscall write -> 25 байт
+  [arch_abi] syscall getpid -> 4242
+  [arch_abi] syscall uname -> DeiX 0.5.0-deix (x86_64), ко�� 0
+  [arch_abi] syscall clock_gettime -> 0s (код 0)
+[deix] sched: д��монстрация многопоточност�� выполнена
+  [autostart] No AUTOSTART.CFG found (normal — create one to auto-run commands at boot).
+
+=====================================
+           DeiX v0.1 - Login          
+=====================================
+
+No user accounts exist yet. Let's create the first one.
+Disk encryption ENABLED (XTS-AES-256). Key = account password.
+Account 'alice' created. Logging in...
+
+Welcome to DeiX CLI! Type 'help' for the command list.
+Use Up/Down arrows to browse command history.
+Triggering kernel panic!()...
+[PANIC] panicked at src/cli.rs:1538:13:
+user-triggered crash (debugger test)
+=== DeiX boot: serial debug active ===
+[deix] A: font start
+[deix] B: font done
+[deix] C: clear done
+DeiX v0.1 - mini kernel booted successfully!
+[deix] D: println done
+Long mode: OK | Paging: OK | VGA text driver: OK
+[deix] E: long mode println
+Cyrillic VGA font: OK (loaded into plane 2)
+[deix] F: cyrillic println
+IDT + PIC 8259: OK
+[deix] G: idt ok
+PIT timer (~100 Hz): OK
+[deix] H: pit ok
+Heap allocator (16 MiB): OK
+[deix] I: heap ok
+PS/2 keyboard: OK (handled via IRQ1)
+[mouse] VMware/QEMU absolute pointer backdoor: enabled
+PS/2 mouse: OK (handled via IRQ12)
+ATA disk: OK (PIO mode)
+Network: no RTL8139 card found (run QEMU with '-net nic,model=rtl8139 -net user')
+Wi-Fi: protocol stack loaded (IEEE 802.11 + WPA2-PSK), no hardware detected
+GPU: QEMU (Bochs-compatible) detected (device ID 0x1111). Type 'gpu info' for details.
+Default language: English. Type 'lang ru' to switch to Russian.
+  [bcb] флажок установлен: normal
+  [mm/phys] Buddy allocator ready: 65280 frames (261120 KiB) total, 5120 reserved.
+  [mm] Physical page allocator: OK
+  Memory: 0 pages allocated, 0 freed, 0 in use (0 KiB)
+  [fs] File access control + TrustedInstaller: OK
+  [avb] Verified Boot: ��роверка целостности...
+  [avb] GREEN: заводской образ (vbmeta ��щё не запечатана).
+[tpm] Диск зашифрован (XTS-AES-256) — разблокировка при входе.
+  [tpm] Диск зашиф��ован (XTS-AES-256). Разблоки��овка — паролем аккаунта.
+  [usermode] syscall MSRs ready (GDT/TSS from bootloader — ring3 jump needs bootloader cooperation)
+  [security_monitor] Ring 3: самоконтроль эвристики (п��рог 0.85)
+    Событие A (редактор): risk 0.049 -> SAFE
+    Событие Б (ransomware): risk 0.960 -> CRITICAL
+    [scheduler] >>> SIGKILL(9) -> PID 666 :: pid 666 sys_write: risk 0.960 > threshold 0.850; vectors: ransomware-encryption
+  [security_monitor] Событий проанализировано: 2, критических тревог: 1
+[deix] security_monitor: самок��нтроль Ring 3 выполнен
+  [initrd] No initrd embedded (use build_initrd.sh to create one).
+  [module] ext2 not formatted yet �� skipping module loading.
+  [partition_map] Карта раз��елов DeiX OS:
+    /kernel      erofs ro  Ring 0   сэндвич ядра: kernel.tar.gz -> kernel.img (магия 0xE0F5E0F5)
+    /init_boot   erofs ro  Ring 0   микроядро, структуры PID 1, скрипт init.deix
+    /boot        erofs ro  Ring 0   таблицы параметров ядр�� и корневой ramdisk
+    /vendor_boot erofs ro  Ring 0   HAL и прошивка вендора
+    /super       erofs ro  Ring 0   контейнер динам��ческих разделов system/vendor/product
+    /recovery    erofs ro  Ring 0   изолированная среда восстановления TWRP/OrangeFox
+    /userdata     ext4 rw  Ring 3   единственный польз��вательский раздел данных
+    /system      erofs ro  Ring 0   логический системны�� раздел внутри /super
+  [partition_map] Политика разделов подтверждена: 7x erofs/ro + userdata ext4/rw
+  [partition_map] �������������� ��������ел /TPM: недоступен Ring 3, парол�� ��� ��ол����о в TPM (NV)
+  [init_parser] Стадия init_boot: init.deix разобран
+    [stage: init_boot] — 3 команд(ы):
+      -> mount erofs /dev/block/by-name/kernel /kernel ro
+      -> mount erofs /dev/block/by-name/init_boot /init_boot ro
+      -> service pid1_core /bin/pid1_core ring=0
+    [stage: vendor_boot] — 1 команд(ы):
+      -> mount erofs /dev/block/by-name/vendor_boot /vendor_boot ro
+    [stage: boot] — 5 коман��(ы):
+      -> mount erofs /dev/block/by-name/super /system ro
+      -> mount erofs /dev/block/by-name/boot /boot ro
+      -> mount ext4 /dev/block/by-name/userdata /userdata rw
+      -> service security_monitor /bin/security_monitor ring=3
+      -> service network_manager /bin/net_daemon ring=3
+    [stage: recovery] — 2 команд(ы):
+      -> mount ext4 /dev/block/by-name/userdata /userdata rw
+      -> service twrp_shell /bin/twrp ring=3
+    [stage: fastbootd] — 2 команд(ы):
+      -> mount erofs /dev/block/by-name/super /system rw
+      -> service fastbootd_daemon /bin/fastbootd ring=3
+    [stage: edl] — 2 команд(ы):
+      -> mount erofs /dev/block/by-name/kernel /kernel rw
+      -> service edl_bridge /bin/edl_bridge ring=0
+  [init_parser] Синтаксических ��редупреждений нет
+  [init_parser] Итог: всего 27, принято 21, отклонено 0, пропущено 6
+[deix] init_boot: карта раз��елов + init.deix разобраны
+  [sched] Инициа��изация планировщика многопоточности (round-robin, PIT 100 Гц)
+  [sched] Порождены потоки: heuristic_core=1, net_daemon=2, pkg_worker=3, fs_sync=4
+  [sched] t= 10: исполняетс�� поток 'heuristic_core' (prio=8, квант осталось 1)
+  [sched] t= 20: исполняется поток 'heuristic_core' (prio=8, квант осталос�� 1)
+  [sched] t= 30: исполняется поток 'heuristic_core' (prio=8, квант осталось 5)
+  [sched] t= 40: исполняется поток 'heuristic_core' (prio=8, квант осталось 5)
+  [sched] Таблица потоков планировщика:
+    ID   ИМЯ                    СОСТОЯНИЕ   PR  ТИКИ       КВАНТЫ    
+    1    heuristic_core         Running     8   34         6         
+    2    net_daemon             Ready       6   5          1         
+    3    pkg_worker             Ready       4   0          0         
+    4    fs_sync                Terminated  2   0          0         
+  [sched] тиков: 40, переключений контек��та: 1, живых потоков: 3
+  [sched] Многопоточность работает: 1 переключений контекста за 400 мс
+  [pacman] Портированный менедже�� пакетов DeiX (зеркало: https://mirror.deix.os/core)
+  [pacman] -Sy: синхронизир��вано 3 пакетов из зеркала
+    deix-editor 3.2.0-1 [x86_64] текстовый редактор DeiX
+    deix-hello 1.0.0-1 [x86_64] приветственн��й пакет DeiX
+    deix-utils 2.1.0-1 [x86_64] базовые утилиты DeiX (sysinfo и др.)
+  [pacman] (диск не о��форматирован) файл '/userdata/pkg/deix-hello/usr/bin/deix-hello.ds' зарегистрирован в памя��и
+  [pacman] (диск не отформатирован) файл '/userdata/pkg/deix-utils/usr/bin/deix-sysinfo.ds' зарегист��ирован в памяти
+  [pacman] (диск не отформатирован) файл '/userdata/pkg/deix-editor/usr/bin/deix-editor.ds' зарегистрирован в памяти
+  [pacman] -S deix-editor: ус��ановлен (зависимости разрешены)
+  [pacman] -Q: установленн��е пакеты:
+    deix-editor 3.2.0-1
+    deix-hello 1.0.0-1
+    deix-utils 2.1.0-1
+  [pacman] -Qi deix-editor: версия 3.2.0-1, файлов: 1, зависит от: deix-utils
+  [pacman] -Su: обновлено пакетов: 0
+  [pacman] -R deix-hello: ��далён
+  [pacman] Локальная база сохранена (deix-pkgs.db)
+  [arch_abi] Слой совместимости Linux x86_64 (glibc ABI)
+Hello, DeiX glibc layer!
+  [arch_abi] syscall write -> 25 байт
+  [arch_abi] syscall getpid -> 4242
+  [arch_abi] syscall uname -> DeiX 0.5.0-deix (x86_64), код 0
+  [arch_abi] syscall clock_gettime -> 0s (код 0)
+[deix] sched: демонстрация многопоточности выполнена
+  [autostart] Disk not formatted — skipping.
+  [debugger] ⚠ В прош��ом сеансе произошла ошибка (crash-лог на диске).
+  [debugger] Посмотреть д��мп: 'crashlog' | стереть: 'crashlog clear'.
+[debugger] предыдущ��й сеанс завершился па��икой (crash-лог на диске)
+
+=====================================
+           DeiX v0.1 - Login          
+=====================================
+Disk is encrypted (XTS-AES-256). Your account password unlocks it.
+Login successful. Welcome, alice!
+
+Welcome to DeiX CLI! Type 'help' for the command list.
+Use Up/Down arrows to browse command history.
+[crashlog] пан��ки в текущ���� ����с������ ���� ����ло.
+[crashlog] (диск CRASHLOG.TXT):
+=== DeiX Crash Log (tombstone) ===
+level: kernel panic
+message: [PANIC] panicked at src/cli.rs:1538:13:
+user-triggered crash (debugger test)
+kernel: DeiX v0.1 (x86_64, no_std)
+cause hint: последние строки журнала — 'dmesg' / 'bugreport'
+
+[crashlog] для удаления: 'crashlog clear'
+[crashlog] очищен.

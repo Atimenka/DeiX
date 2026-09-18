@@ -99,9 +99,33 @@ fn derive_key(password: &str) -> [u8; 64] {
 /// — используется только внутри try_unlock (см. ниже), которая уже
 /// делает саму проверку. Не публичная, чтобы весь остальной код всегда
 /// проходил через проверенный путь.
-fn set_engine(password: &str) {
-    let key = derive_key(password);
+/// Активирует XTS-движок готовым мастер-ключом (32 байта из слота).
+///
+/// XTS-AES-256 требует 64 байта: два независимых ключа по 32. Второй
+/// (tweak-ключ) выводим хешем от мастер-ключа — так делает и LUKS,
+/// когда размер ключа меньше, чем нужно режиму.
+/// Копия мастер-ключа разблокированного тома.
+///
+/// Держим её, чтобы `useradd` мог добавить слот новому пользователю, не
+/// зная пароля администратора. Живёт только в памяти и стирается при
+/// блокировке тома.
+static MASTER_KEY: SpinLock<Option<[u8; 32]>> = SpinLock::new(None);
+
+/// Мастер-ключ открытого тома (None, если том заблокирован).
+pub fn current_master_key() -> Option<[u8; 32]> {
+    *MASTER_KEY.lock()
+}
+
+fn set_engine_mk(mk: &[u8; 32]) {
+    *MASTER_KEY.lock() = Some(*mk);
+    let mut key = [0u8; 64];
+    key[..32].copy_from_slice(mk);
+    let tweak = sha512::sha512(mk);
+    key[32..].copy_from_slice(&tweak[..32]);
     *ENGINE.lock() = Some(XtsAes256::new(&key));
+    for b in key.iter_mut() {
+        *b = 0;
+    }
 }
 
 /// Пытается разблокировать зашифрованный диск данным паролем.
@@ -120,24 +144,37 @@ fn set_engine(password: &str) {
 /// файловой системой либо пройдёт успешно, либо тут же провалится на
 /// следующей операции, если это всё-таки было ложное совпадение).
 pub fn try_unlock(password: &str) -> bool {
-    set_engine(password);
+    // Новая схема: мастер-ключ достаётся из слота заголовка (luks.rs).
+    // Пароль проверяется по контрольному хешу мастер-ключа — не нужно
+    // гадать по сигнатуре ext2, как это приходилось делать в
+    // plain-режиме без заголовка.
+    if crate::luks::exists() {
+        match crate::luks::unlock(password) {
+            Some((mk, _slot)) => {
+                set_engine_mk(&mk);
+                // Дополнительная проверка: том должен читаться. Защищает
+                // от ситуации, когда заголовок цел, а данные повреждены.
+                if crate::ext2::is_formatted() {
+                    return true;
+                }
+                clear_master_key();
+                *ENGINE.lock() = None;
+                return false;
+            }
+            None => return false,
+        }
+    }
 
+    // Совместимость со СТАРЫМИ томами (ключ = SHA-512(пароль), без
+    // заголовка). Проверяем по сигнатуре ext2, как раньше.
+    let key = derive_key(password);
+    *ENGINE.lock() = Some(XtsAes256::new(&key));
     let ok = crate::ext2::is_formatted();
     if !ok {
-        // Неверный пароль (или диск ещё не отформатирован под ext2
-        // вообще) — откатываем ENGINE обратно в None, чтобы не оставлять
-        // систему в обманчивом "вроде разблокировано, но на самом деле
-        // ключ неверный" состоянии.
         clear_master_key();
         *ENGINE.lock() = None;
     }
     ok
-}
-
-/// true, если шифрование сейчас активно (ключ установлен) для этой
-/// сессии.
-pub fn is_unlocked() -> bool {
-    ENGINE.lock().is_some()
 }
 
 /// Включает шифрование на этом диске В ПЕРВЫЙ РАЗ: пишет маркер (см.
@@ -149,9 +186,42 @@ pub fn is_unlocked() -> bool {
 /// вызывающая эту функцию (см. cli.rs::cmd_encrypt), явно предупреждает
 /// об этом и требует подтверждения перед вызовом.
 pub fn enable_encryption(password: &str) -> Result<(), ()> {
+    if is_encryption_enabled() {
+        return Ok(());
+    }
+    // 1) Собрать файлы корня тома (пока они записаны открыто).
+    let mut files: alloc::vec::Vec<(alloc::string::String, alloc::vec::Vec<u8>)> =
+        alloc::vec::Vec::new();
+    if let Ok(entries) = crate::ext2::list_root() {
+        for e in entries {
+            if e.is_directory {
+                continue;
+            }
+            if let Ok(data) = crate::ext2::read_file(&e.name) {
+                files.push((e.name, data));
+            }
+        }
+    }
+    // 2) Маркер "диск зашифрован" + СОЗДАНИЕ ЗАГОЛОВКА СО СЛОТАМИ.
+    //    Мастер-ключ случайный, пароль его только запечатывает — отсюда
+    //    возможность иметь несколько паролей и менять их, не
+    //    перешифровывая том (см. luks.rs).
     write_marker()?;
-    set_engine(password);
-    crate::ext2::format().map_err(|_| ())
+    let mk = crate::luks::create(password, crate::luks::DEFAULT_ITERATIONS)?;
+    set_engine_mk(&mk);
+    // 3) ПЕРЕФОРМАТИРОВАТЬ том ПОД КЛЮЧОМ: теперь ВСЕ метаданные ФС
+    //    (суперблок, GDT, битовые карты, inode-таблица, корневой каталог)
+    //    записываются через шифрование — как в настоящем dm-crypt, где
+    //    шифруется ВЕСЬ блочный слой, включая суперблок. Без этого
+    //    суперблок остался бы открытым, и try_unlock при следующей
+    //    загрузке не смог бы подтвердить пароль.
+    crate::ext2::format().map_err(|_| ())?;
+    // 4) Перезапись файлов (включая USERS.DB): теперь всё хранится
+    //    зашифрованным и доступно только с этим паролем.
+    for (name, data) in files {
+        let _ = crate::ext2::write_file(&name, &data);
+    }
+    Ok(())
 }
 
 /// Отключает шифрование (диск снова читается/пишется как есть) — не
@@ -209,6 +279,14 @@ fn clear_master_key() {
     if let Some(engine) = guard.as_mut() {
         engine.zeroize();
     }
+    // Затираем и нашу копию мастер-ключа: иначе после блокировки тома
+    // ключ остался бы лежать в памяти ядра открытым.
+    if let Some(mk) = MASTER_KEY.lock().as_mut() {
+        for b in mk.iter_mut() {
+            *b = 0;
+        }
+    }
+    *MASTER_KEY.lock() = None;
 }
 
 // ==================== Как проверить (честно) ====================

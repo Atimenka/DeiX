@@ -31,15 +31,96 @@ start:
 
     mov [boot_drive], dl   ; BIOS кладёт номер загрузочного диска в dl
 
+    ; COM1 38400 8N1
+    mov dx, 0x3FB
+    mov al, 0x80
+    out dx, al
+    mov dx, 0x3F8
+    mov al, 0x03
+    out dx, al
+    mov dx, 0x3F9
+    xor al, al
+    out dx, al
+    mov dx, 0x3FB
+    mov al, 0x03
+    out dx, al
+
     mov si, msg_loading
     call print_string
+    mov si, msg_loading
+    call serial_str
 
-    ; ---- читаем stage2 с диска частями по CHUNK_SECTORS секторов ----
+    ; ---- читаем stage2 (NUM_SECTORS секторов) в 0x10000 ----
     mov word [sectors_left], NUM_SECTORS
     mov word [cur_lba_lo], 1        ; стартовый LBA (сектор 1, сразу после MBR)
     mov word [cur_lba_hi], 0
     mov word [cur_segment], 0x1000  ; физ. адрес 0x10000 = 0x1000:0x0000
+    call read_sectors_loop
+    mov al, 'S'
+    call serial_byte
 
+    ; ---- читаем ramboot (RAM-диск загрузчик, RAMBOOT_SECTORS секторов)
+    ; в 0x9000 (низкая память: org=0x9000, DS=0, PM-сегменты плоские).
+    ; kernel.bin НЕ читаем здесь — ramboot сам скопирует его из RAM-диска
+    ; (читает весь образ через int13 в 0x2000000). ----
+    mov word [sectors_left], RAMBOOT_SECTORS
+    mov word [cur_lba_lo], RAMBOOT_LBA
+    mov word [cur_lba_hi], 0
+    mov word [cur_segment], 0x07E0  ; физ. адрес 0x7E00 = 0x07E0:0x0000
+    call read_sectors_loop
+
+    ; ---- передаём управление ramboot (real mode) ----
+    ; DL = номер загрузочного диска, который дал BIOS. Раньше ramboot
+    ; его игнорировал и жёстко пробовал 0x80/0x81 — на ноутбуке ASUS
+    ; флешка получает другой номер (0x82+), чтение проваливалось, и
+    ; RAM-диск оставался пустым: ядро грузилось, но все разделы были
+    ; "не читается", потому что искались на несуществующем IDE-диске.
+    mov dl, [boot_drive]
+    jmp 0x07E0:0x0000
+
+disk_error:
+    mov si, msg_disk_error
+    call print_string
+    jmp $
+
+print_string:
+    pusha
+.loop:
+    lodsb
+    cmp al, 0
+    je .done
+    mov ah, 0x0e
+    int 0x10
+    jmp .loop
+.done:
+    popa
+    ret
+
+serial_byte:
+    push ax
+.wait_tx:
+    mov dx, 0x3FD
+    in al, dx
+    test al, 0x20
+    jz .wait_tx
+    pop ax
+    mov dx, 0x3F8
+    out dx, al
+    ret
+
+serial_str:
+    lodsb
+    cmp al, 0
+    je .done
+    call serial_byte
+    jmp serial_str
+.done:
+    ret
+
+; ---------------- подпрограмма чтения с диска (int13/AH=42) ----------------
+; Параметры: sectors_left, cur_lba_lo/hi, cur_segment (задаются ДО вызова).
+bits 16
+read_sectors_loop:
 .read_loop:
     cmp word [sectors_left], 0
     je .read_done
@@ -55,11 +136,6 @@ start:
     mov ax, [cur_segment]
     mov [dap_segment], ax
 
-    ; dap_lba_lo — младшие 32 бита 64-битного LBA-поля (2 слова);
-    ; наше cur_lba_lo/cur_lba_hi — это как раз младшее и следующее слово
-    ; этих самых 32 бит (старшие 32 бита dap_lba_hi всегда остаются 0,
-    ; т.к. для загрузочного диска в несколько сотен секторов этого более
-    ; чем достаточно).
     mov ax, [cur_lba_lo]
     mov [dap_lba_lo], ax
     mov ax, [cur_lba_hi]
@@ -85,81 +161,8 @@ start:
     add [cur_segment], ax
 
     jmp .read_loop
-
 .read_done:
-
-    ; ---- включаем A20 (быстрый метод через порт 0x92) ----
-    in al, 0x92
-    or al, 2
-    out 0x92, al
-
-    cli
-    lgdt [gdt_descriptor]
-
-    mov eax, cr0
-    or eax, 1
-    mov cr0, eax
-
-    jmp CODE_SEG:protected_mode_start
-
-disk_error:
-    mov si, msg_disk_error
-    call print_string
-    jmp $
-
-print_string:
-    pusha
-.loop:
-    lodsb
-    cmp al, 0
-    je .done
-    mov ah, 0x0e
-    int 0x10
-    jmp .loop
-.done:
-    popa
     ret
-
-bits 32
-protected_mode_start:
-    mov ax, DATA_SEG
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    mov ss, ax
-    mov esp, 0x90000
-
-    jmp STAGE2_ADDR         ; передаём управление stage2 (см. build.sh / linker2.ld)
-
-; ---------------- GDT (плоская модель, 32-бит) ----------------
-gdt_start:
-gdt_null:
-    dq 0
-gdt_code:
-    dw 0xFFFF
-    dw 0
-    db 0
-    db 10011010b
-    db 11001111b
-    db 0
-gdt_data:
-    dw 0xFFFF
-    dw 0
-    db 0
-    db 10010010b
-    db 11001111b
-    db 0
-gdt_end:
-
-gdt_descriptor:
-    dw gdt_end - gdt_start - 1
-    dd gdt_start
-
-CODE_SEG equ gdt_code - gdt_start
-DATA_SEG equ gdt_data - gdt_start
-
-STAGE2_ADDR equ 0x10000  ; физический адрес, куда грузим stage2
 
 boot_drive: db 0
 
@@ -198,6 +201,20 @@ dap_lba_hi:
 ; сборки без параметра.
 %ifndef NUM_SECTORS
 NUM_SECTORS equ 64
+%endif
+%ifndef KERNEL_SECTORS
+KERNEL_SECTORS equ 2048
+%endif
+; ramboot лежит сразу после stage2 (LBA = 1 + NUM_SECTORS).
+%ifndef RAMBOOT_LBA
+RAMBOOT_LBA equ (1 + NUM_SECTORS)
+%endif
+%ifndef RAMBOOT_SECTORS
+RAMBOOT_SECTORS equ 1
+%endif
+; kernel.bin лежит сразу после ramboot (LBA = 1 + NUM_SECTORS + RAMBOOT_SECTORS).
+%ifndef KERNEL_LBA
+KERNEL_LBA equ (1 + NUM_SECTORS + RAMBOOT_SECTORS)
 %endif
 
 ; ---------------- MBR Partition Table (offset 446 = 0x1BE) ----------------

@@ -169,106 +169,13 @@ pub fn detect(device: pci::PciDevice) -> NouveauInfo {
 // константы). Это НЕ проприетарная информация NVIDIA — это результат
 // открытого реверс-инжиниринга, лицензированный MIT/X11.
 
-/// PCRTC0 — блок регистров CRT-контроллера, offset 0x00600000 (nvreg.h:
-/// `NV_PCRTC0_OFFSET`).
-const NV_PCRTC0_OFFSET: u32 = 0x00600000;
-/// PRAMDAC0 — блок регистров RAMDAC (генератор пиксельной частоты,
-/// синхронизация), offset 0x00680000 (nvreg.h: `NV_PRAMDAC0_OFFSET`).
-const NV_PRAMDAC0_OFFSET: u32 = 0x00680000;
-/// PRMVIO — классический VGA-совместимый диапазон портов ввода-вывода,
-/// отображённый в MMIO по offset 0x000C0000 (nvreg.h: `NV_PRMVIO0_OFFSET`).
-/// Это те же самые логические регистры VGA Sequencer/CRTC (0x3C4/0x3D4 в
-/// port I/O пространстве), но доступные через MMIO вместо портов —
-/// используется, когда VGA I/O ports задизейблены/недоступны.
-const NV_PRMVIO0_OFFSET: u32 = 0x000C0000;
 
-/// Смещение регистра "CRTC framebuffer start address" внутри PCRTC0 —
-/// nouveau называет его `NV_PCRTC_START` (dispnv04/nv04_crtc.c пишет в
-/// него значение `fb_start` при каждом mode_set_base). У этого регистра
-/// одинаковое смещение на всех архитектурах NV04..NV40.
-const NV_PCRTC_START: u32 = 0x00000800;
 
-#[inline]
-unsafe fn mmio_read32(bar0: u32, offset: u32) -> u32 {
-    core::ptr::read_volatile((bar0 as usize + offset as usize) as *const u32)
-}
 
-#[inline]
-unsafe fn mmio_write32(bar0: u32, offset: u32, value: u32) {
-    core::ptr::write_volatile((bar0 as usize + offset as usize) as *mut u32, value);
-}
 
-#[inline]
-unsafe fn mmio_read8(bar0: u32, offset: u32) -> u8 {
-    core::ptr::read_volatile((bar0 as usize + offset as usize) as *const u8)
-}
 
-#[inline]
-unsafe fn mmio_write8(bar0: u32, offset: u32, value: u8) {
-    core::ptr::write_volatile((bar0 as usize + offset as usize) as *mut u8, value);
-}
 
-/// VGA CRTC index/data пара, доступная через MMIO (PRMVIO), а не через
-/// классические порты 0x3D4/0x3D5 — нужна, потому что на PCI/AGP-картах
-/// (в отличие от встроенного в чипсет VGA) порты ввода-вывода могут быть
-/// не смаплены на область 0x3D4 у конкретной шины, а MMIO-alias — всегда
-/// доступен, если PCI Memory Space Enable включён (см. detect() выше).
-/// Адреса самих индекс/дата регистров внутри PRMVIO — стандартные VGA
-/// offsets 0x3D4/0x3D5, задокументированные в nvreg.h как
-/// `NV_CIO_CRX__COLOR`/`NV_CIO_CR__COLOR`.
-const NV_CIO_CRX_COLOR: u32 = 0x3D4;
-const NV_CIO_CR_COLOR: u32 = 0x3D5;
 
-unsafe fn write_vga_crtc(bar0: u32, index: u8, value: u8) {
-    mmio_write8(bar0, NV_PRMVIO0_OFFSET + NV_CIO_CRX_COLOR, index);
-    mmio_write8(bar0, NV_PRMVIO0_OFFSET + NV_CIO_CR_COLOR, value);
-}
 
-unsafe fn read_vga_crtc(bar0: u32, index: u8) -> u8 {
-    mmio_write8(bar0, NV_PRMVIO0_OFFSET + NV_CIO_CRX_COLOR, index);
-    mmio_read8(bar0, NV_PRMVIO0_OFFSET + NV_CIO_CR_COLOR)
-}
 
-/// Результат попытки установить видеорежим на классической архитектуре.
-pub enum LegacyModesetResult {
-    /// Режим "установлен" (регистры записаны без явных признаков сбоя),
-    /// но, как честно указано в module-level документации, БЕЗ
-    /// тестирования на реальном железе нельзя дать стопроцентную
-    /// гарантию визуального результата.
-    RegistersWritten,
-    /// Архитектура этой карты не поддерживает классический modesetting
-    /// (G80 и новее — нужен EVO/NVDisplay).
-    UnsupportedArchitecture,
-}
 
-/// Экспериментальный modesetting для NV04..NV40: программирует CRTC
-/// framebuffer base address на уже настроенный BIOS'ом видеорежим
-/// (меняем только адрес кадрового буфера, НЕ полную последовательность
-/// timings/PLL — это осознанное упрощение, т.к. настройка PLL/timings
-/// требует данных VBIOS конкретной карты, которых у нас нет). Это тот
-/// же принцип, которым в первые секунды после POST большинство
-/// firmware-independent framebuffer-драйверов (efifb, vesafb) в принципе
-/// работают: не переключать видеорежим самостоятельно с нуля, а
-/// переиспользовать то, что уже установил BIOS/VBIOS, только указав
-/// новый адрес буфера в системной памяти или другом месте VRAM.
-///
-/// # Safety
-/// Вызывающий должен убедиться, что `info.architecture.supports_legacy_modesetting()`
-/// и что `fb_offset` — валидный, выровненный адрес внутри VRAM карты.
-pub unsafe fn set_framebuffer_start(info: &NouveauInfo, fb_offset: u32) -> LegacyModesetResult {
-    if !info.architecture.supports_legacy_modesetting() {
-        return LegacyModesetResult::UnsupportedArchitecture;
-    }
-
-    let bar0 = info.bar0_mmio;
-    mmio_write32(bar0, NV_PCRTC0_OFFSET + NV_PCRTC_START, fb_offset);
-
-    // "Repaint" бит в CRE_RPC1 (индекс 0x1A) должен быть согласован с
-    // разрешением экрана (>=1280 по горизонтали требует другого
-    // значения) — здесь читаем текущее значение и не трогаем эти биты,
-    // т.к. без данных VBIOS о реальном текущем режиме безопаснее не
-    // менять то, что уже настроено POST-кодом карты.
-    let _ = read_vga_crtc(bar0, 0x1A);
-
-    LegacyModesetResult::RegistersWritten
-}

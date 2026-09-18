@@ -28,7 +28,6 @@ const CMD_ABSPOINTER_STATUS: u32 = 40;
 const CMD_ABSPOINTER_COMMAND: u32 = 41;
 
 const ABSPOINTER_ENABLE: u32 = 0x4541_4552; // "QEAE"
-const ABSPOINTER_RELATIVE: u32 = 0xF5;
 const ABSPOINTER_ABSOLUTE: u32 = 0x5342_4152; // "RABS"
 
 /// Выполняет один "вызов" бэкдора: кладём значения в eax/ebx/ecx/edx и
@@ -81,11 +80,6 @@ pub fn enable_absolute() {
     call(CMD_ABSPOINTER_COMMAND, ABSPOINTER_ABSOLUTE);
 }
 
-/// Возвращает мышь в обычный относительный режим (PS/2-совместимый).
-#[allow(dead_code)]
-pub fn disable_absolute() {
-    call(CMD_ABSPOINTER_COMMAND, ABSPOINTER_RELATIVE);
-}
 
 pub struct AbsPacket {
     pub buttons: u32,

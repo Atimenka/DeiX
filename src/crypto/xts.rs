@@ -22,7 +22,6 @@
 
 use super::aes::Aes256;
 
-pub const SECTOR_SIZE: usize = 512;
 
 pub struct XtsAes256 {
     cipher1: Aes256, // шифрует данные

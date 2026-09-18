@@ -54,6 +54,21 @@ pub enum WindowContent {
     /// Простой текстовый просмотрщик (TXT reader) — показывает
     /// содержимое одного файла с прокруткой (стрелки вверх/вниз).
     /// Открывается кликом на файл в окне Files.
+    Browser {
+        url: String,
+        html_lines: Vec<String>,
+        links: Vec<(String, String)>,
+        title: String,
+        scroll: usize,
+        loading: bool,
+        error: Option<String>,
+    },
+    FmGui {
+        entries: Vec<crate::fs::FileMeta>,
+        current_idx: usize,
+        scroll: usize,
+        sort_by: u8,
+    },
     TextViewer {
         filename: String,
         lines: Vec<String>,
@@ -159,6 +174,29 @@ impl Window {
         }
     }
 
+    fn new_browser(x: i32, y: i32, url: &str) -> Self {
+        Window {
+            x, y, width: 580, height: 400,
+            title: alloc::format!("Browser — {}", url), minimized: false, maximized: false,
+            restore_geometry: (x, y, 580, 400),
+            content: WindowContent::Browser {
+                url: url.into(), html_lines: alloc::vec!["Loading...".into()],
+                links: Vec::new(), title: "Loading...".into(),
+                scroll: 0, loading: true, error: None,
+            },
+        }
+    }
+
+    fn new_fmgui(x: i32, y: i32) -> Self {
+        let entries = crate::fs::list_dir();
+        Window {
+            x, y, width: 500, height: 380,
+            title: "DeiX Files".into(), minimized: false, maximized: false,
+            restore_geometry: (x, y, 500, 380),
+            content: WindowContent::FmGui { entries, current_idx: 0, scroll: 0, sort_by: 0 },
+        }
+    }
+
     fn new_display_settings(x: i32, y: i32) -> Self {
         let height = 40 + RESOLUTION_PRESETS.len() as u32 * 28;
         Window {
@@ -174,19 +212,21 @@ impl Window {
         }
     }
 
-    /// Открывает файл в TextViewer. Если это .MEX программа — вместо
-    /// показа "текста" (бинарного мусора) пытается её запустить и
-    /// показывает результат выполнения в самом окне (как маленький
-    /// лог), это гораздо полезнее для пользователя, кликающего на
-    /// программу в файловом менеджере, чем нечитаемые байты.
+    /// Открывает файл в TextViewer. Для обычных текстовых файлов читает
+    /// содержимое через ext2. Для .MEX программ не запускает их сразу
+    /// внутри клика мыши (что приводило бы к зависанию UI и дедлокам локов),
+    /// а открывает информационное окно с инструкцией: запуск по нажатию Enter.
     fn new_text_viewer(x: i32, y: i32, filename: &str) -> Self {
+        crate::serial_println!("[ui] new_text_viewer: enter, file={}", filename);
+
         if crate::mex::is_mex_filename(filename) {
-            crate::vgaglobal::begin_capture();
-            crate::cli::IN_GRAPHICAL_TERMINAL.store(true, core::sync::atomic::Ordering::Relaxed);
-            crate::mex::run(filename, "");
-            crate::cli::IN_GRAPHICAL_TERMINAL.store(false, core::sync::atomic::Ordering::Relaxed);
-            let output = crate::vgaglobal::end_capture();
-            let lines: Vec<String> = output.lines().map(String::from).collect();
+            crate::serial_println!("[ui] file is .MEX, showing launcher prompt");
+            let mut lines = Vec::new();
+            lines.push(format!("Program: {}", filename));
+            lines.push(String::from("Format: DeiX EXecutable (.MEX v1.x)"));
+            lines.push(String::new());
+            lines.push(String::from("Press [Enter] to run this program,"));
+            lines.push(format!("or run 'run {}' from Terminal.", filename));
             return Window {
                 title: format!("Run: {}", filename),
                 x,
@@ -205,6 +245,7 @@ impl Window {
             };
         }
 
+        crate::serial_println!("[ui] reading text file: {}", filename);
         let (lines, error) = match ext2::read_file(filename) {
             Ok(data) => match core::str::from_utf8(&data) {
                 Ok(text) => (text.lines().map(String::from).collect(), None),
@@ -215,6 +256,12 @@ impl Window {
             },
             Err(_) => (Vec::new(), Some(String::from("Failed to read file"))),
         };
+
+        crate::serial_println!(
+            "[ui] file read complete: {} lines, error={:?}",
+            lines.len(),
+            error.as_ref().map(|s| s.as_str())
+        );
 
         Window {
             title: format!("View: {}", filename),
@@ -396,10 +443,12 @@ impl Desktop {
     }
 
     fn open_text_viewer(&mut self, screen_w: i32, screen_h: i32, filename: &str) {
+        crate::serial_println!("[ui] open_text_viewer: enter, file={}", filename);
         let x = (60 + (self.windows.len() as i32 * 24)) % (screen_w - 440).max(1);
         let y = (60 + (self.windows.len() as i32 * 24)) % (screen_h - 320).max(1);
         self.windows.push(Window::new_text_viewer(x, y, filename));
         self.focused_window = Some(self.windows.len() - 1);
+        crate::serial_println!("[ui] open_text_viewer: done");
     }
 
     /// Обрабатывает мышь (перетаскивание, закрытие/минимизация, фокус,
@@ -480,7 +529,7 @@ impl Desktop {
                             lines.remove(0);
                         }
                     }
-                    WindowContent::TextViewer { lines, scroll, .. } => {
+                    WindowContent::TextViewer { filename, lines, scroll, .. } => {
                         while let Some(byte) = keyboard::try_read_char() {
                             match byte {
                                 keyboard::ARROW_UP => {
@@ -491,11 +540,19 @@ impl Desktop {
                                         *scroll += 1;
                                     }
                                 }
+                                b'\n' | b'\r' => {
+                                    if crate::mex::is_mex_filename(filename) {
+                                        let cmd = format!("run {}", filename);
+                                        lines.push(format!("> {}", cmd));
+                                        run_mini_terminal_command(&cmd, lines);
+                                        *scroll = lines.len().saturating_sub(10);
+                                    }
+                                }
                                 _ => {}
                             }
                         }
                     }
-                    WindowContent::Files { .. } | WindowContent::About | WindowContent::DisplaySettings => {
+                    WindowContent::Files { .. } | WindowContent::About | WindowContent::DisplaySettings | WindowContent::Browser { .. } | WindowContent::FmGui { .. } => {
                         // Не принимают клавиатурный ввод.
                         while keyboard::try_read_char().is_some() {}
                     }
@@ -1003,7 +1060,7 @@ fn draw_window(r: &mut Renderer, w: &Window, focused: bool) {
             r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(250, 250, 250));
             let uptime_s = timer::uptime_ms() / 1000;
             let lines = [
-                String::from("DeiX v0.1"),
+                String::from("DeiX v0.2-beta"),
                 String::from("A mini x86_64 OS written in Rust"),
                 String::from("Bootloader: BIOS MBR (no GRUB)"),
                 String::from("Filesystem: ext2 (real, e2fsck-clean)"),
@@ -1027,6 +1084,55 @@ fn draw_window(r: &mut Renderer, w: &Window, focused: bool) {
                 let label = format!("{}x{}{}", rw, rh, if is_current { "  (current)" } else { "" });
                 r.draw_text(w.x + 12, line_y, &label, Color::rgb(20, 20, 30), None);
                 line_y += 28;
+            }
+        }
+        WindowContent::Browser { html_lines, title, loading, error, scroll, .. } => {
+            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(30, 30, 36));
+            if *loading {
+                r.draw_text(w.x + 10, content_y + 8, "Loading page...", Color::rgb(100, 200, 255), None);
+            } else if let Some(e) = error {
+                r.draw_text(w.x + 10, content_y + 8, &format!("ERROR: {}", e), Color::rgb(255, 80, 80), None);
+            } else {
+                r.draw_text(w.x + 10, content_y + 6, truncate(title, (w.width as usize - 20) / 8), Color::rgb(255, 200, 60), None);
+                r.draw_hline(w.x + 4, content_y + 20, w.width - 8, Color::rgb(60, 60, 70));
+                let max_lines = ((w.height as i32 - 32) / 15).max(1) as usize;
+                let start = (*scroll).min(html_lines.len().saturating_sub(1));
+                let end = (start + max_lines).min(html_lines.len());
+                let mut ly = content_y + 24;
+                for i in start..end {
+                    let line = &html_lines[i];
+                    let clean: String = line.chars().filter(|&c| c.is_ascii_graphic() || c == ' ').collect();
+                    r.draw_text(w.x + 8, ly, truncate(&clean, (w.width as usize - 20) / 8), Color::rgb(220, 220, 230), None);
+                    ly += 15;
+                }
+                if html_lines.len() > max_lines {
+                    let indicator = format!("{}/{}", start + 1, html_lines.len());
+                    r.draw_text(w.x + w.width as i32 - 60, content_y + 6, &indicator, Color::rgb(140, 140, 150), None);
+                }
+            }
+        }
+        WindowContent::FmGui { entries, current_idx, scroll, .. } => {
+            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(248, 248, 252));
+            let max_lines = ((w.height as i32 - 16) / 18).max(1) as usize;
+            let start = (*scroll).min(entries.len().saturating_sub(1));
+            let end = (start + max_lines).min(entries.len());
+            let mut ly = content_y + 6;
+            for i in start..end {
+                let e = &entries[i];
+                // zebra striping
+                if i % 2 == 1 { r.fill_rect(w.x + 2, ly - 1, w.width - 4, 18, Color::rgb(238, 242, 248)); }
+                if i == *current_idx { r.fill_rect(w.x + 2, ly - 1, w.width - 4, 18, Color::rgb(180, 210, 245)); }
+                let icon = if e.is_dir { "📁" } else { "📄" };
+                let sys_mark = if e.system { " 🔒" } else { "" };
+                let size_str = if e.is_dir { String::from("<DIR>") } else if e.size < 1024 { format!("{}B", e.size) } else { format!("{}K", e.size/1024) };
+                let line = format!(" {} {:<28} {:>8}{}", icon, e.name, size_str, sys_mark);
+                let color = if e.system { Color::rgb(180, 60, 60) } else if e.is_dir { Color::rgb(20, 50, 160) } else { Color::rgb(30, 30, 40) };
+                r.draw_text(w.x + 6, ly, truncate(&line, (w.width as usize - 16) / 8), color, None);
+                ly += 18;
+            }
+            if entries.len() > max_lines {
+                let indicator = format!("{}/{}", *current_idx + 1, entries.len());
+                r.draw_text(w.x + w.width as i32 - 40, content_y + 4, &indicator, Color::GRAY, None);
             }
         }
     }
@@ -1059,10 +1165,9 @@ fn isqrt_local(n: i32) -> i32 {
 }
 
 fn truncate(s: &str, max_chars: usize) -> &str {
-    if s.len() <= max_chars {
-        s
-    } else {
-        &s[..max_chars]
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
     }
 }
 

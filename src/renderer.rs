@@ -39,6 +39,11 @@ impl Color {
         Color(((r as u32) << 16) | ((g as u32) << 8) | (b as u32))
     }
 
+    /// Конструктор из сырого 0x00RRGGBB (используется DUIL/композитором).
+    pub const fn from_u32(raw: u32) -> Color {
+        Color(raw & 0x00FF_FFFF)
+    }
+
     pub const BLACK: Color = Color::rgb(0, 0, 0);
     pub const WHITE: Color = Color::rgb(255, 255, 255);
     pub const RED: Color = Color::rgb(220, 50, 50);
@@ -352,8 +357,40 @@ pub fn set_active_framebuffer(fb: Framebuffer) {
     });
 }
 
+/// Гарантирует наличие активного framebuffer'а: если его ещё нет —
+/// определяет GPU и включает режим 800x600 32bpp через Bochs VBE.
+/// Используется графическими оболочками (recovery/fastbootd/DSM) при
+/// старте — они запускаются из boot_flow, где видеорежим ещё не включён.
+pub fn ensure_framebuffer() {
+    if has_active_framebuffer() {
+        return;
+    }
+    if let Some(info) = crate::gpu::detect() {
+        if info.supports_bochs_vbe {
+            if let Some(fb) = crate::vbe::set_mode(&info.device, 800, 600, crate::vbe::BPP_32) {
+                crate::mouse::set_screen_size(800, 600);
+                set_active_framebuffer(fb);
+                crate::serial_println!("[renderer] framebuffer 800x600 32bpp активен (Bochs VBE)");
+            }
+        }
+    }
+}
+
+/// Сброс активного рендерера в None (install: framebuffer-указатель из
+/// живой сессии недействителен на установленной системе).
+pub fn reset_renderer() {
+    *ACTIVE_RENDERER.lock() = None;
+}
+
 pub fn has_active_framebuffer() -> bool {
     without_interrupts(|| ACTIVE_RENDERER.lock().is_some())
+}
+
+/// То же, что `with_renderer`, но возвращает значение из замыкания.
+/// Нужно, когда по состоянию рендерера надо что-то вычислить —
+/// например, попал ли клик мыши в поле ввода.
+pub fn with_renderer_ret<F: FnOnce(&mut Renderer) -> R, R>(f: F) -> Option<R> {
+    without_interrupts(|| ACTIVE_RENDERER.lock().as_mut().map(f))
 }
 
 pub fn with_renderer<F: FnOnce(&mut Renderer)>(f: F) {
