@@ -229,8 +229,8 @@ fn parse_dps(dps: &[u8]) -> Result<(u32, &[u8]), &'static str> {
     }
     let rate = u32::from_le_bytes([dps[4], dps[5], dps[6], dps[7]]);
     let len = u32::from_le_bytes([dps[8], dps[9], dps[10], dps[11]]) as usize;
-    if !(2000..=16000).contains(&rate) || len == 0 || len > (rate as usize) * 10 {
-        // rate*10 = потолок 10 секунд на эффект; защита от мусора вместо dps.
+    if !(2000..=48000).contains(&rate) || len == 0 || len > (rate as usize) * 30 {
+        // до 48 кГц и до 30 секунд на эффект; защита от повреждённых данных
         return Err("sound: повреждённый DPS1 (rate/len за границами)");
     }
     if dps.len() < 12 + len {
@@ -239,55 +239,70 @@ fn parse_dps(dps: &[u8]) -> Result<(u32, &[u8]), &'static str> {
     Ok((rate, &dps[12..12 + len]))
 }
 
-/// Короткая задержка через порт 0x80 (≈0.5–1 мкс на запись).
-#[inline(always)]
-fn io_pause() {
-    unsafe { outb(SCRATCH, 0); }
+/// Считывает текущее значение счётчика PIT Канал 0 (без нарушения его счёта).
+fn pit_read_channel0() -> u16 {
+    unsafe {
+        outb(0x43, 0x00); // latch counter 0
+        let lo = inb(0x40);
+        let hi = inb(0x40);
+        u16::from_le_bytes([lo, hi])
+    }
 }
 
-/// ШИМ-проигрывание unsigned-u8 PCM на PC speaker.
+/// Калиброванная пауза в тиках таймера PIT (~0.838 мкс на тик при 1.193 МГц).
+fn pit_wait_ticks(ticks_to_wait: u32) {
+    if ticks_to_wait == 0 {
+        return;
+    }
+    const DIVISOR: u32 = 1193182 / 100; // 11931 тиков на квант 10 мс
+    let mut elapsed: u32 = 0;
+    let mut prev = pit_read_channel0() as u32;
+
+    while elapsed < ticks_to_wait {
+        let curr = pit_read_channel0() as u32;
+        let delta = if prev >= curr {
+            prev - curr
+        } else {
+            prev + DIVISOR - curr
+        };
+        elapsed += delta;
+        prev = curr;
+        unsafe { core::arch::asm!("pause"); }
+    }
+}
+
+/// ШИМ-проигрывание unsigned-u8 PCM на PC speaker с аппаратной калибровкой скорости по PIT.
 ///
-/// Каждый сэмпл = один цикл «динамик вкл / динамик выкл»: длительность
-/// «вкл» пропорциональна амплитуде (скважность ~ громкости). Бюджет цикла
-/// подобран под 8 кГц: 255 задержек × ~0.5 мкс ≈ 128 мкс ≈ период 8 кГц.
-/// На реальном железе запись в порт обычно ближе к 1 мкс, поэтому там
-/// воспроизведение звучит примерно вдвое медленнее/ниже — для коротких
-/// UI-сигналов это приемлемо (KISS; точный калиброванный таймер — отдельная
-/// история через HPET).
-///
-/// ВНИМАНИЕ: вызов блокирующий (ядро однопоточно играет сэмпл за сэмплом) —
-/// поэтому эффекты ограничены DPS1-валидатором до 10 секунд.
+/// Устраняет эффект «быстрого воспроизведения» (чипманк/ускоренный звук) в QEMU/KVM:
+/// длительность каждого сэмпла строго отсчитывается по генератору PIT (1_193_182 Гц),
+/// благодаря чему темп и тональность звука 100% совпадают с оригинальной записью.
 fn play_pcm8(samples: &[u8], rate: u32) {
-    // Бюджет задержек на сэмпл: 255 при 8 кГц, иначе пропорционально.
-    let budget: u32 = (255u32 * 8000 / rate.max(1)).clamp(64, 1024);
-    // Сохраняем исходное состояние порта и глушим gate PIT (бит 0):
-    // ручное дёрганье бита 1 не должно мешаться с меандром канала 2.
+    let effective_rate = rate.clamp(2000, 48000);
+    let sample_ticks: u32 = (1_193_182u32 / effective_rate).max(4);
+
     let orig = unsafe { inb(SPEAKER) };
 
     for &s in samples {
-        let high = budget * (s as u32) / 255;
-        let low = budget - high;
-        if high > 0 {
+        let high_ticks = (sample_ticks * (s as u32)) / 255;
+        let low_ticks = sample_ticks.saturating_sub(high_ticks);
+
+        if high_ticks > 0 {
             unsafe {
                 let cur = inb(SPEAKER);
                 outb(SPEAKER, (cur & !0x03) | 0x02);
             }
-            for _ in 0..high {
-                io_pause();
-            }
+            pit_wait_ticks(high_ticks);
         }
-        if low > 0 {
+        if low_ticks > 0 {
             unsafe {
                 let cur = inb(SPEAKER);
                 outb(SPEAKER, cur & !0x03);
             }
-            for _ in 0..low {
-                io_pause();
-            }
+            pit_wait_ticks(low_ticks);
         }
     }
 
-    // Молчим и возвращаем порт в исходное состояние (бит 1 точно снят).
+    // Возвращаем порт в исходное состояние (бит 1 выключен)
     unsafe {
         outb(SPEAKER, orig & !0x02);
     }

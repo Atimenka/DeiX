@@ -344,7 +344,7 @@ pub fn start() {
     unsafe {
         let tasks = &mut *(&raw mut TASKS);
         tasks[0].state = State::Ready;
-        tasks[0].name = String::from("kernel-main");
+        tasks[0].name = String::from("dinit");
     }
     SCHED_ACTIVE.store(true, Ordering::SeqCst);
 }

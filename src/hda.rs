@@ -554,7 +554,8 @@ pub fn play_pcm_stereo_48k(samples: &[i16]) {
     ctrl.start_stream();
 
     let start_ms = crate::timer::uptime_ms();
-    let expected_duration_ms = (total_bytes as u64 * 1000) / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64) + 500;
+    let true_duration_ms = (total_bytes as u64 * 1000) / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64);
+    let timeout_ms = true_duration_ms + 1000;
 
     // Непрерывный цикл кольцевого буфера
     while offset < total_bytes || buffered > 0 {
@@ -585,13 +586,16 @@ pub fn play_pcm_stereo_48k(samples: &[i16]) {
             buffered += to_write;
         }
 
-        // Если все данные записаны, а в кольцевом буфере осталось меньше 1024 байт — воспроизведение завершено
+        // Если все данные записаны и буфер опустел — ждём полного истечения хронометража трека
         if offset >= total_bytes && buffered <= 1024 {
-            break;
+            let elapsed = crate::timer::uptime_ms().saturating_sub(start_ms);
+            if elapsed >= true_duration_ms {
+                break;
+            }
         }
 
         // Таймаут для защиты от зависания контроллера
-        if crate::timer::uptime_ms().saturating_sub(start_ms) > expected_duration_ms {
+        if crate::timer::uptime_ms().saturating_sub(start_ms) > timeout_ms {
             break;
         }
 

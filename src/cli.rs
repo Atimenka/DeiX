@@ -330,6 +330,7 @@ pub fn execute(line: &str) {
         "microcode" => crate::microcode::cmd_microcode(rest),
         "hal" => crate::drivers::hal_selftest(),
         "crypt" => crate::luks::cmd_crypt(rest),
+        "dinit" => crate::dinit::cmd_dinit(rest),
         "logo" => crate::bootlogo::cmd_logo(rest),
         "linux" => crate::linux::cmd_linux(rest),
         "profile" => crate::userfs::cmd_profile(rest, &current_user().unwrap_or_default()),
@@ -504,6 +505,7 @@ fn cmd_help() {
     println!("  threads [list|test]     - {}", t!(en: "preemptive multitasking: task list / selftest", ru: "вытесняющая многозадачность: список задач / самопроверка"));
     println!("  kexec [a|b|check]       - {}", t!(en: "boot the kernel from /kernel_a|b partition", ru: "запустить ядро из раздела /kernel_a|b"));
     println!("  crypt <status|addpass|delpass|iter> - {}", t!(en: "volume password slots (LUKS-style)", ru: "пароли тома: слоты, как в LUKS"));
+    println!("  dinit [status|services|users|audit] - {}", t!(en: "PID 1 subsystem: services, users, audit", ru: "подсистема PID 1: сервисы, пользователи, аудит"));
     println!("  hal                     - {}", t!(en: "driver layer selftest on RTL8139", ru: "самопроверка прослойки драйверов на RTL8139"));
     println!("  nvidia                  - {}", t!(en: "open NVIDIA driver: probe and identify GPU", ru: "открытый драйвер NVIDIA: поиск и опознание карты"));
     println!("  logo [show|info]        - {}", t!(en: "boot logo: show / info", ru: "загрузочное лого: показать / инфо"));

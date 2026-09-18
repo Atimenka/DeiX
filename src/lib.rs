@@ -24,6 +24,7 @@ mod crypto;
 mod crypto_storage;
 mod devmode;
 mod dialog;
+mod dinit;
 mod dsm;
 mod erofs;
 mod ext2;
@@ -226,7 +227,6 @@ pub extern "C" fn kernel_main() -> ! {
     bootlogo::show("starting system...");
 
     bootlogo::set_status("verifying boot partitions...");
-    crate::bootchain::show_partition_files();
     match crate::bootchain::run_boot_chain() {
         Ok(summary) => crate::println!("{}", summary),
         Err(e) => {
@@ -307,7 +307,8 @@ pub extern "C" fn kernel_main() -> ! {
     // ядро немедленно останавливается (см. init_parser.rs / vault.rs).
     partition_map::validate_partition_map_report();
     init_parser::boot_report(init_parser::INIT_DEIX_SCRIPT);
-    crate::serial_println!("[deix] init_boot: карта разделов + init.deix разобраны");
+    crate::dinit::init();
+    crate::serial_println!("[deix] init_boot: Dinit (PID 1, Ring 0) запущен");
 
     // ВНИМАНИЕ: autostart::run() ПЕРЕНЕСЁН за экран входа (см. ниже).
     // Раньше он выполнялся здесь — до аутентификации, и любой, кто мог
@@ -333,8 +334,6 @@ pub extern "C" fn kernel_main() -> ! {
     }
 
     bootlogo::set_status("system ready");
-    // Небольшая задержка, чтобы логотип и статус готовности были отчётливо видны перед входом:
-    crate::timer::pit_sleep_ms(800);
 
     // Экран входа — до первого запуска создаёт первый аккаунт, при
     // последующих запусках требует ввод логина/пароля (сверяется с
@@ -353,6 +352,10 @@ pub extern "C" fn kernel_main() -> ! {
         None => auth::run_login_screen(),
     };
     cli::set_current_user(&username);
+    let uid = if username == "root" { 0 } else { 1000 };
+    if let Some(dinit) = crate::dinit::DINIT.lock().as_mut() {
+        dinit.register_user(uid, &username);
+    }
 
     // Профиль пользователя: /users/<имя>/files и /users/<имя>/configs.
     if let Err(e) = userfs::init_profile(&username) {
@@ -397,4 +400,5 @@ pub fn reset_all_globals() {
     crate::fastbootd_ui::reset_fastbootd_state();
     crate::crypto_storage::lock();
     crate::linux::syscall::reset_stats();
+    *crate::dinit::DINIT.lock() = None;
 }
