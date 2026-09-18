@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! IDT (Interrupt Descriptor Table): обработчики исключений процессора
 //! (division by zero, page fault, double fault, ...) и аппаратных
 //! прерываний (таймер, клавиатура) через контроллер PIC 8259.
@@ -99,6 +98,19 @@ macro_rules! set_handler {
 }
 
 pub fn init() {
+    // СНАЧАЛА закрываем ВСЕ 256 векторов заглушкой. Незаполненный
+    // вектор = запись из нулей = невалидный дескриптор: первое же
+    // прерывание по нему уводит машину в triple fault.
+    // Векторы с кодом ошибки (8, 10-14, 17, 21, 29, 30) требуют
+    // обработчика с другой сигнатурой — иначе стек разъезжается.
+    for i in 0..IDT_ENTRIES {
+        match i {
+            8 | 10..=14 | 17 | 21 | 29 | 30 => set_handler!(i, unhandled_with_code),
+            18 => set_handler!(i, machine_check_handler),
+            _ => set_handler!(i, unhandled_interrupt),
+        }
+    }
+
     set_handler!(0, divide_by_zero_handler);
     set_handler!(3, breakpoint_handler);
     set_handler!(6, invalid_opcode_handler);
@@ -106,7 +118,11 @@ pub fn init() {
     set_handler!(13, general_protection_fault_handler);
     set_handler!(14, page_fault_handler);
 
-    set_handler!(TIMER_INTERRUPT_ID as usize, timer_interrupt_handler);
+    // IRQ0 обслуживает naked-заглушка планировщика: она сохраняет
+    // регистры, при необходимости подменяет RSP (переключение задач) и
+    // сама шлёт EOI. extern "x86-interrupt" здесь не годится — компилятор
+    // генерирует свой пролог/эпилог и не даёт подменить стек.
+    set_handler!(TIMER_INTERRUPT_ID as usize, crate::sched::timer_switch_stub);
     set_handler!(KEYBOARD_INTERRUPT_ID as usize, keyboard_interrupt_handler);
 
     // IRQ12 всегда фиксирован за PS/2-мышью (в отличие от сетевой карты,
@@ -231,6 +247,36 @@ fn send_eoi(irq: u8) {
 
 // ---------------- обработчики исключений процессора ----------------
 
+/// Заглушка для ВСЕХ векторов, у которых нет своего обработчика.
+///
+/// Без неё 234 из 256 записей IDT указывали в ноль. Любое исключение
+/// или прерывание по такому вектору — это #GP, затем #DF, затем
+/// TRIPLE FAULT и мгновенная перезагрузка машины.
+///
+/// В QEMU это не проявлялось: там нет источников NMI, Machine Check и
+/// SMI от чипсета, которые есть на реальном ноутбуке. Поэтому ядро
+/// годами «работало» в эмуляторе и уходило в ребут на живом железе.
+extern "x86-interrupt" fn unhandled_interrupt(_frame: InterruptStackFrame) {
+    // Молча продолжаем: печатать отсюда опасно (вектор может прийти
+    // до инициализации вывода), а падать — тем более.
+}
+
+/// Заглушка для векторов, которые процессор сопровождает кодом ошибки.
+/// У них другая сигнатура: лишний аргумент на стеке. Если поставить
+/// сюда обычный обработчик, стек разъедется и получится тот же
+/// triple fault.
+extern "x86-interrupt" fn unhandled_with_code(_frame: InterruptStackFrame, _code: u64) {
+}
+
+/// Machine Check (вектор 18) — процессор сообщает об аппаратной
+/// ошибке. Прерывание abort-класса: возврата из него нет.
+extern "x86-interrupt" fn machine_check_handler(_frame: InterruptStackFrame) -> ! {
+    crate::serial_println!("[EXCEPTION] Machine Check");
+    loop {
+        unsafe { core::arch::asm!("hlt") };
+    }
+}
+
 extern "x86-interrupt" fn divide_by_zero_handler(frame: InterruptStackFrame) {
     println!("[EXCEPTION] Division by zero at {:#x}", frame.instruction_pointer);
 }
@@ -277,11 +323,6 @@ fn halt_loop() -> ! {
 }
 
 // ---------------- обработчики аппаратных прерываний ----------------
-
-extern "x86-interrupt" fn timer_interrupt_handler(_frame: InterruptStackFrame) {
-    timer::tick();
-    send_eoi(0);
-}
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_frame: InterruptStackFrame) {
     let scancode = unsafe { inb(0x60) };

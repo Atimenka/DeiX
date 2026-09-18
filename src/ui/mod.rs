@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! UI-драйвер: оконный менеджер поверх программного 2D-рендерера
 //! (renderer.rs) с настоящим интерактивным циклом отрисовки — рабочий
 //! стол, перетаскиваемые окна с заголовком/кнопками, курсор мыши в
@@ -1115,44 +1114,6 @@ fn draw_window(r: &mut Renderer, w: &Window, focused: bool) {
             if entries.len() > max_lines {
                 let indicator = format!("{}/{}", *current_idx + 1, entries.len());
                 r.draw_text(w.x + w.width as i32 - 40, content_y + 4, &indicator, Color::GRAY, None);
-            }
-        }
-        WindowContent::Browser { html_lines, title, loading, error, scroll, .. } => {
-            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(30, 30, 36));
-            if *loading {
-                r.draw_text(w.x + 10, content_y + 8, "Loading page...", Color::rgb(100, 200, 255), None);
-            } else if let Some(e) = error {
-                r.draw_text(w.x + 10, content_y + 8, &format!("ERROR: {}", e), Color::rgb(255, 80, 80), None);
-            } else {
-                r.draw_text(w.x + 10, content_y + 6, title, Color::rgb(255, 200, 60), None);
-                let max_l = ((w.height as i32 - 32) / 15).max(1) as usize;
-                let st = (*scroll).min(html_lines.len().saturating_sub(1));
-                let en = (st + max_l).min(html_lines.len());
-                let mut ly = content_y + 22;
-                for i in st..en {
-                    let cl: String = html_lines[i].chars().filter(|&c| c.is_ascii_graphic() || c == ' ').collect();
-                    r.draw_text(w.x + 8, ly, &cl, Color::rgb(220, 220, 230), None);
-                    ly += 15;
-                }
-            }
-        }
-        WindowContent::FmGui { entries, current_idx, scroll, .. } => {
-            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(248, 248, 252));
-            let max_l = ((w.height as i32 - 16) / 18).max(1) as usize;
-            let st = (*scroll).min(entries.len().saturating_sub(1));
-            let en = (st + max_l).min(entries.len());
-            let mut ly = content_y + 6;
-            for i in st..en {
-                let e = &entries[i];
-                if i % 2 == 1 { r.fill_rect(w.x + 2, ly - 1, w.width - 4, 18, Color::rgb(238, 242, 248)); }
-                if i == *current_idx { r.fill_rect(w.x + 2, ly - 1, w.width - 4, 18, Color::rgb(180, 210, 245)); }
-                let icon = if e.is_dir { "[D]" } else { "[F]" };
-                let sys = if e.system { "🔒" } else { "  " };
-                let sz = if e.is_dir { String::from("<DIR>") } else if e.size < 1024 { format!("{}B", e.size) } else { format!("{}K", e.size/1024) };
-                let line = format!("{} {:.<28} {:>6} {}", icon, e.name, sz, sys);
-                let color = if e.system { Color::rgb(180, 60, 60) } else if e.is_dir { Color::rgb(20, 50, 160) } else { Color::rgb(30, 30, 40) };
-                r.draw_text(w.x + 6, ly, &line, color, None);
-                ly += 18;
             }
         }
     }

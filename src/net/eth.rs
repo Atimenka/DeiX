@@ -7,7 +7,6 @@ pub const ETHERTYPE_ARP: u16 = 0x0806;
 pub const BROADCAST_MAC: [u8; 6] = [0xFF; 6];
 
 pub struct EthernetHeader {
-    #[allow(dead_code)]
     pub dst_mac: [u8; 6],
     pub src_mac: [u8; 6],
     pub ethertype: u16,

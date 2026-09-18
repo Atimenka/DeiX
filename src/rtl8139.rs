@@ -34,13 +34,12 @@ const CMD_TX_ENABLE: u8 = 0x04;
 const ISR_ROK: u16 = 0x01; // Receive OK
 const ISR_TOK: u16 = 0x04; // Transmit OK
 
-const RX_BUFFER_SIZE: usize = 8192 + 16 + 1500; // 8K + 16 + WRAP-запас
+const RX_BUFFER_SIZE: usize = 65536; // 64K — ровно кольцо QEMU rtl8139 (MOD2 по 65536); 65552 разъезжалось на 16 после 64КБ
 const TX_BUFFER_SIZE: usize = 1792; // максимум для одного дескриптора TSD
 
 const NUM_TX_DESCRIPTORS: usize = 4;
 
 #[repr(align(4))]
-#[allow(dead_code)]
 struct RxBuffer([u8; RX_BUFFER_SIZE]);
 
 #[repr(align(4))]
@@ -127,7 +126,11 @@ pub fn init() -> bool {
         const AM: u32 = 1 << 2;
         const APM: u32 = 1 << 1;
         const WRAP: u32 = 1 << 7;
-        outl(io_base + REG_RCR, AB | AM | APM | WRAP);
+        // RX-буфер 64K (QEMU читает размер из битов 12:11 RCR:
+        // (val>>11)&3 = 3 -> 64K; биты 11:10 НЕ работают — буфер оставался
+        // 16K и переполнялся при доставке OTA-пакета 250КБ).
+        const RXBUF64: u32 = 3 << 11;
+        outl(io_base + REG_RCR, AB | AM | APM | WRAP | RXBUF64);
 
         // Включаем приёмник и передатчик.
         outb(io_base + REG_CMD, CMD_RX_ENABLE | CMD_TX_ENABLE);
@@ -218,11 +221,28 @@ pub fn on_interrupt() {
         if status & ISR_ROK != 0 {
             drain_rx_buffer(io_base);
         }
+        // RX_OVERFLOW (бит 0x10): приёмный буфер переполнился — пакеты
+        // теряются. Нужен перезапуск приёмника, иначе передача встаёт.
+        if status & 0x10 != 0 {
+            // RX-буфер переполнился: перезапускаем приёмник, иначе пакеты
+            // теряются и передача большого ответа встаёт.
+            outb(io_base + REG_CMD, CMD_RX_ENABLE);
+            outb(io_base + REG_CMD, CMD_RX_ENABLE | CMD_TX_ENABLE);
+        }
     }
 }
 
 /// Вычитывает из кольцевого RX-буфера все накопившиеся пакеты и передаёт
 /// их обработчику Ethernet-уровня.
+pub fn poll_rx() {
+    let io_base = {
+        let st = STATE.lock();
+        if !st.initialized { return; }
+        st.io_base
+    };
+    unsafe { drain_rx_buffer(io_base); }
+}
+
 unsafe fn drain_rx_buffer(io_base: u16) {
     loop {
         // Если приёмный буфер помечен пустым (бит 0 регистра CMD) — выходим.

@@ -94,10 +94,17 @@ fn hex_value(c: u8) -> Option<u8> {
 /// ни одного аккаунта не создано) — возвращает пустой список, это не
 /// ошибка.
 fn load_users() -> Result<Vec<UserRecord>, AuthError> {
-    let data = match ext2::read_file(USERS_DB_FILE) {
-        Ok(d) => d,
-        Err(ext2::Ext2Error::FileNotFound) | Err(ext2::Ext2Error::NotFormatted) => return Ok(Vec::new()),
-        Err(_) => return Err(AuthError::DiskError),
+    // USERS.DB хранится в TPM (NV-слот + скрытый раздел /TPM) и дублируется
+    // в ext2-том. Приоритет: TPM (защищено PCR), затем ext2.
+    let data: alloc::vec::Vec<u8> = match crate::tpm::tpm_load_users_db() {
+        Ok(d) if !d.is_empty() => d,
+        _ => match ext2::read_file(USERS_DB_FILE) {
+            Ok(d) => d,
+            Err(ext2::Ext2Error::FileNotFound) | Err(ext2::Ext2Error::NotFormatted) => {
+                return Ok(Vec::new());
+            }
+            Err(_) => return Err(AuthError::DiskError),
+        },
     };
 
     let text = core::str::from_utf8(&data).map_err(|_| AuthError::CorruptDatabase)?;
@@ -149,7 +156,11 @@ fn save_users(users: &[UserRecord]) -> Result<(), AuthError> {
         text.push('\n');
     }
 
-    ext2::write_file(USERS_DB_FILE, text.as_bytes()).map_err(|_| AuthError::DiskError)
+    // 1) ext2-том (рабочая копия).
+    ext2::write_file(USERS_DB_FILE, text.as_bytes()).map_err(|_| AuthError::DiskError)?;
+    // 2) TPM: NV-слот + скрытый раздел /TPM (защищённая копия).
+    let _ = crate::tpm::tpm_save_users_db(text.as_bytes());
+    Ok(())
 }
 
 fn validate_username(username: &str) -> Result<(), AuthError> {
@@ -300,7 +311,23 @@ fn read_line(mask: bool) -> String {
     let mut len = 0usize;
 
     loop {
-        let c = keyboard::read_char();
+        // Ввод: неблокирующий опрос КЛАВИАТУРЫ (PS/2) и ПОСЛЕДОВАТЕЛЬНОГО
+        // ПОРТА COM1 (headless-режим QEMU: -serial stdio). Если оба канала
+        // пусты — ждём следующей итерации (не зависаем на блокирующем
+        // чтении клавиатуры).
+        let c: Option<u8> = if crate::serial::is_data_ready() {
+            Some(crate::serial::read_byte())
+        } else {
+            keyboard::try_read_char()
+        };
+        let c: u8 = match c {
+            Some(c) => c,
+            None => {
+                // Небольшая пауза (без прерываний) и повторный опрос.
+                unsafe { core::arch::asm!("nop"); }
+                continue;
+            }
+        };
         match c {
             b'\n' => {
                 print!("\n");
@@ -333,47 +360,21 @@ fn read_line(mask: bool) -> String {
     core::str::from_utf8(&buf[..len]).unwrap_or("").to_string()
 }
 
-/// Экран разблокировки диска — показывается ДО обычного экрана входа
-/// пользователя, ЕСЛИ на диске когда-либо было включено шифрование (см.
-/// crypto_storage.rs::is_encryption_enabled). Это то же самое
-/// разделение обязанностей, что и у настоящего Linux с LUKS: сначала
-/// вводится passphrase для расшифровки самого блочного устройства
-/// (происходит ДО того, как ОС вообще может прочитать с него что-либо,
-/// включая список пользовательских аккаунтов), и только потом — уже
-/// поверх расшифрованного тома — обычный логин конкретного
-/// пользователя (который эта функция не делает — им занимается
-/// run_login_screen(), вызываемая сразу после успешной разблокировки).
-fn run_disk_unlock_screen() {
-    println!();
-    println!("=====================================");
-    println!("     DeiX v0.1 - Disk is encrypted     ");
-    println!("=====================================");
-    println!("This disk was encrypted. Enter the disk password to continue.");
-
-    loop {
-        print!("Disk password: ");
-        let password = read_line(true);
-
-        if crate::crypto_storage::try_unlock(&password) {
-            println!("Disk unlocked successfully.");
-            return;
-        } else {
-            println!("Wrong disk password (or disk corrupted). Try again.");
-        }
-    }
-}
 
 /// Основной цикл экрана входа. Возвращает имя успешно вошедшего
 /// пользователя.
 pub fn run_login_screen() -> String {
-    if crate::crypto_storage::is_encryption_enabled() {
-        run_disk_unlock_screen();
-    }
-
+    // ЕДИНЫЙ ПАРОЛЬ: пароль учётной записи пользователя является также
+    // ключом шифрования диска. Отдельного экрана разблокировки диска нет:
+    // при вводе пароля на экране входа ОС сначала расшифровывает том
+    // (crypto_storage::try_unlock), затем проверяет пользователя.
     println!();
     println!("=====================================");
     println!("           DeiX v0.1 - Login          ");
     println!("=====================================");
+    if crate::crypto_storage::is_encryption_enabled() {
+        println!("Disk is encrypted (XTS-AES-256). Your account password unlocks it.");
+    }
 
     if !has_any_users() {
         println!();
@@ -395,6 +396,17 @@ pub fn run_login_screen() -> String {
 
             match create_user(username.trim(), &password) {
                 Ok(()) => {
+                    // Первая настройка: диск зашифровывается паролем аккаунта
+                    // (XTS-AES-256). Все последующие загрузки требуют этот
+                    // же пароль для входа и разблокировки диска.
+                    match crate::crypto_storage::enable_encryption(&password) {
+                        Ok(()) => {
+                            println!("Disk encryption ENABLED (XTS-AES-256). Key = account password.");
+                        }
+                        Err(_) => {
+                            println!("WARNING: could not enable disk encryption (disk error).");
+                        }
+                    }
                     println!("Account '{}' created. Logging in...", username.trim());
                     return username.trim().to_string();
                 }
@@ -415,6 +427,15 @@ pub fn run_login_screen() -> String {
         print!("Password: ");
         let password = read_line(true);
 
+        // Если диск зашифрован — пароль должен сначала разблокировать том.
+        if crate::crypto_storage::is_encryption_enabled() {
+            if !crate::crypto_storage::try_unlock(&password) {
+                println!("Invalid username or password. Try again.");
+                let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
+                continue;
+            }
+        }
+
         match verify_login(username.trim(), &password) {
             Ok(()) => {
                 println!("Login successful. Welcome, {}!", username.trim());
@@ -422,9 +443,11 @@ pub fn run_login_screen() -> String {
             }
             Err(AuthError::WrongPassword) | Err(AuthError::UserNotFound) => {
                 println!("Invalid username or password. Try again.");
+                let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
             }
             Err(_) => {
                 println!("Login failed (disk error). Try again.");
+                let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
             }
         }
     }

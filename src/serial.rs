@@ -25,9 +25,32 @@ fn is_transmit_empty() -> bool {
 }
 
 fn write_byte(byte: u8) {
-    while !is_transmit_empty() {}
+    // Ждём готовности передатчика (THR empty), но с таймаутом: если по
+    // какой-то причине UART не поднимает LSR bit5 (например, экзотическая
+    // эмуляция или сбой инициализации), ядро НЕ должно висеть на выводе.
+    let mut tries: u32 = 0;
+    while !is_transmit_empty() {
+        tries += 1;
+        if tries > 1_000_000 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
     unsafe { outb(COM1, byte) };
 }
+
+
+/// Есть ли принятый байт в приёмном буфере COM1 (LSR bit 0 — Data Ready).
+pub fn is_data_ready() -> bool {
+    unsafe { inb(COM1 + 5) & 0x01 != 0 }
+}
+
+/// Блокирующее чтение одного байта из COM1.
+pub fn read_byte() -> u8 {
+    while !is_data_ready() {}
+    unsafe { inb(COM1) }
+}
+
 
 pub struct SerialWriter;
 
@@ -38,6 +61,17 @@ impl fmt::Write for SerialWriter {
         }
         Ok(())
     }
+}
+
+/// Вывод в COM1 БЕЗ перевода строки (парный к `serial_println!`).
+/// Нужен, когда текст уже содержит свои переводы строк — например,
+/// вывод syscall `write` из Ring 3.
+#[macro_export]
+macro_rules! serial_print {
+    ($($arg:tt)*) => {{
+        use core::fmt::Write;
+        let _ = write!($crate::serial::SerialWriter, $($arg)*);
+    }};
 }
 
 #[macro_export]

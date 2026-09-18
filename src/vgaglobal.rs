@@ -54,6 +54,17 @@ pub fn _print(args: core::fmt::Arguments) {
     });
 }
 
+/// ПЕРЕИНИЦИАЛИЗАЦИЯ WRITER (вызывается в самом начале kernel_main).
+/// Нужна для установленного диска: install не копирует .data (там живое
+/// состояние), поэтому WRITER на старте — нули. Здесь создаём Writer
+/// заново (как в статической инициализации).
+pub fn early_init_writer() {
+    *WRITER.lock() = Writer::new(Color::LightGreen, Color::Black);
+    // CAPTURE_BUFFER тоже в .data: на установленном диске он может быть
+    // нулевым (что = None) — но для надёжности явно сбрасываем.
+    *CAPTURE_BUFFER.lock() = None;
+}
+
 /// Безопасно выполнить операцию с WRITER, временно отключив прерывания.
 /// Используй эту функцию вместо прямого `WRITER.lock()` в обычном коде
 /// ядра (не в обработчиках прерываний) — иначе есть риск дедлока.
@@ -68,7 +79,16 @@ macro_rules! print {
 
 #[macro_export]
 macro_rules! println {
-    () => ($crate::print!("\n"));
-    ($($arg:tt)*) => ($crate::print!("{}\n", core::format_args!($($arg)*)));
+    () => {{
+        $crate::print!("\n");
+        $crate::serial_println!();
+    }};
+    ($($arg:tt)*) => {{
+        $crate::print!("{}\n", core::format_args!($($arg)*));
+        // Зеркалирование консоли в COM1 (serial mirror): весь вывод ядра
+        // дублируется в последовательный порт — удобно для отладки и для
+        // headless-тестирования в QEMU (-serial stdio).
+        $crate::serial_println!("{}", core::format_args!($($arg)*));
+    }};
 }
 

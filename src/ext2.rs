@@ -692,6 +692,23 @@ pub fn list_root() -> Result<Vec<FileEntry>, Ext2Error> {
     Ok(entries)
 }
 
+/// Читает содержимое файла по номеру инода.
+pub fn read_inode_data(ino: u32) -> Result<Vec<u8>, Ext2Error> {
+    let inode = read_inode(ino)?;
+    let mut data = Vec::with_capacity(inode.size as usize);
+    let mut left = inode.size as usize;
+    for block_num in dir_block_ptrs(&inode) {
+        if left == 0 {
+            break;
+        }
+        let buf = read_block(block_num)?;
+        let take = left.min(BLOCK_SIZE);
+        data.extend_from_slice(&buf[..take]);
+        left -= take;
+    }
+    Ok(data)
+}
+
 pub fn read_file(name: &str) -> Result<Vec<u8>, Ext2Error> {
     if !is_formatted() {
         return Err(Ext2Error::NotFormatted);
@@ -745,14 +762,21 @@ fn free_file_blocks(ino: u32) -> Result<(), Ext2Error> {
 }
 
 pub fn write_file(name: &str, data: &[u8]) -> Result<(), Ext2Error> {
+    write_file_in(ROOT_INO, name, data)
+}
+
+/// Запись файла в ПРОИЗВОЛЬНЫЙ каталог (по иноду). Вся логика прямых и
+/// indirect-блоков общая с корневой записью — дублировать её нельзя,
+/// иначе две реализации разъедутся.
+pub fn write_file_in(dir_ino: u32, name: &str, data: &[u8]) -> Result<(), Ext2Error> {
     if !is_formatted() {
         return Err(Ext2Error::NotFormatted);
     }
     validate_name(name)?;
 
-    if let Some((_, _, existing_ino)) = find_in_dir(ROOT_INO, name)? {
+    if let Some((_, _, existing_ino)) = find_in_dir(dir_ino, name)? {
         free_file_blocks(existing_ino)?;
-        remove_dirent(ROOT_INO, name)?;
+        remove_dirent(dir_ino, name)?;
     }
 
     let blocks_needed = data.len().div_ceil(BLOCK_SIZE).max(if data.is_empty() { 0 } else { 1 });
@@ -809,7 +833,7 @@ pub fn write_file(name: &str, data: &[u8]) -> Result<(), Ext2Error> {
 
     let ino = alloc_inode()?;
     write_inode(ino, 0o100644, data.len() as u32, 1, &block_ptrs, used_blocks)?;
-    add_dirent(ROOT_INO, name, ino)?;
+    add_dirent(dir_ino, name, ino)?;
 
     Ok(())
 }
@@ -826,5 +850,212 @@ pub fn delete_file(name: &str) -> Result<(), Ext2Error> {
     free_file_blocks(ino)?;
     remove_dirent(ROOT_INO, name)?;
 
+    Ok(())
+}
+
+// ==================== КАТАЛОГИ И ПУТИ ====================
+//
+// Менять файловую систему на ext4/NTFS ради подкаталогов не нужно:
+// ext2 поддерживает иерархию с самого начала. В томе уже лежит
+// настоящий каталог `lost+found` (inode 11, режим 0o040700) — его
+// создаёт format(). Не хватало только публичного API: создания
+// каталогов в рантайме и разбора путей вида "/users/ivan/files".
+//
+// ext4 отличается от ext2 экстентами, журналом и 64-битными полями —
+// для наших задач это не даёт ничего, кроме объёма кода. NTFS вообще
+// закрытый формат, его свободные реализации (ntfs-3g) — это десятки
+// тысяч строк под FUSE.
+
+/// Максимальная глубина вложенности — защита от циклов и переполнения
+/// стека при разборе пути.
+const MAX_PATH_DEPTH: usize = 16;
+
+/// Создаёт подкаталог `name` внутри каталога с инодом `parent_ino`.
+///
+/// Делает ровно то же, что format() делает для `lost+found`:
+/// выделяет инод и блок, кладёт в блок записи "." и "..", отмечает
+/// тип каталога в режиме инода и увеличивает счётчик ссылок родителя.
+pub fn mkdir_in(parent_ino: u32, name: &str) -> Result<u32, Ext2Error> {
+    if !is_formatted() {
+        return Err(Ext2Error::NotFormatted);
+    }
+    validate_name(name)?;
+
+    // Уже существует — возвращаем его инод (идемпотентность).
+    if let Some((_, _, ino)) = find_in_dir(parent_ino, name)? {
+        let existing = read_inode(ino)?;
+        if (existing.mode & 0xF000) == 0x4000 {
+            return Ok(ino);
+        }
+        return Err(Ext2Error::InvalidName); // имя занято обычным файлом
+    }
+
+    let new_ino = alloc_inode()?;
+    let block = alloc_block()?;
+
+    // Тело каталога: "." на себя, ".." на родителя.
+    let mut buf = [0u8; BLOCK_SIZE];
+    make_dirent(&mut buf, 0, new_ino, ".", 12);
+    make_dirent(&mut buf, 12, parent_ino, "..", (BLOCK_SIZE - 12) as u16);
+    write_block(block, &buf)?;
+
+    let mut ptrs = [0u32; 15];
+    ptrs[0] = block;
+    // 0o040755 — бит 0x4000 помечает инод как каталог.
+    write_inode(new_ino, 0o040755, BLOCK_SIZE as u32, 2, &ptrs, 1)?;
+
+    // Ссылка из родителя + его nlink растёт из-за ".." в потомке.
+    add_dirent(parent_ino, name, new_ino)?;
+    let parent = read_inode(parent_ino)?;
+    let pptrs: Vec<u32> = parent.block_ptrs.to_vec();
+    let pused = pptrs.iter().filter(|p| **p != 0).count() as u32;
+    write_inode(
+        parent_ino,
+        parent.mode,
+        parent.size,
+        parent.links_count.saturating_add(1),
+        &pptrs,
+        pused,
+    )?;
+
+    // В группе стало на один каталог больше.
+    if let Ok(mut gdt) = read_block(GDT_BLOCK) {
+        let dirs = u16::from_le_bytes([gdt[16], gdt[17]]).saturating_add(1);
+        gdt[16..18].copy_from_slice(&dirs.to_le_bytes());
+        let _ = write_block(GDT_BLOCK, &gdt);
+    }
+
+    Ok(new_ino)
+}
+
+/// Разбирает путь и возвращает инод каталога и имя последнего элемента.
+///
+/// `"/users/ivan/notes.txt"` -> `(инод каталога /users/ivan, "notes.txt")`.
+/// Если `create` = true, отсутствующие промежуточные каталоги создаются
+/// (поведение `mkdir -p`).
+pub fn resolve_parent(path: &str, create: bool) -> Result<(u32, alloc::string::String), Ext2Error> {
+    let trimmed = path.trim_start_matches('/');
+    let parts: Vec<&str> = trimmed.split('/').filter(|p| !p.is_empty()).collect();
+
+    if parts.is_empty() {
+        return Err(Ext2Error::InvalidName);
+    }
+    if parts.len() > MAX_PATH_DEPTH {
+        return Err(Ext2Error::InvalidName);
+    }
+
+    let mut dir = ROOT_INO;
+    for component in &parts[..parts.len() - 1] {
+        match find_in_dir(dir, component)? {
+            Some((_, _, ino)) => {
+                let node = read_inode(ino)?;
+                if (node.mode & 0xF000) != 0x4000 {
+                    // На пути оказался обычный файл — дальше идти некуда.
+                    return Err(Ext2Error::InvalidName);
+                }
+                dir = ino;
+            }
+            None => {
+                if !create {
+                    return Err(Ext2Error::FileNotFound);
+                }
+                dir = mkdir_in(dir, component)?;
+            }
+        }
+    }
+    Ok((dir, alloc::string::String::from(parts[parts.len() - 1])))
+}
+
+/// `mkdir -p`: создаёт всю цепочку каталогов пути.
+pub fn mkdir_p(path: &str) -> Result<u32, Ext2Error> {
+    let (parent, last) = resolve_parent(path, true)?;
+    mkdir_in(parent, &last)
+}
+
+/// Список содержимого каталога по пути (`"/"` — корень).
+pub fn list_dir_path(path: &str) -> Result<Vec<FileEntry>, Ext2Error> {
+    if !is_formatted() {
+        return Err(Ext2Error::NotFormatted);
+    }
+    let dir_ino = if path.trim_matches('/').is_empty() {
+        ROOT_INO
+    } else {
+        let (parent, last) = resolve_parent(path, false)?;
+        match find_in_dir(parent, &last)? {
+            Some((_, _, ino)) => ino,
+            None => return Err(Ext2Error::FileNotFound),
+        }
+    };
+
+    let dir_inode = read_inode(dir_ino)?;
+    let mut entries = Vec::new();
+    for block_num in dir_block_ptrs(&dir_inode) {
+        let buf = read_block(block_num)?;
+        let mut offset = 0usize;
+        while let Some(entry) = dirent_at(&buf, offset) {
+            if entry.ino != 0 {
+                let name = dirent_name(&buf, &entry);
+                if name != "." && name != ".." {
+                    let node = read_inode(entry.ino)?;
+                    entries.push(FileEntry {
+                        name,
+                        size: node.size,
+                        is_directory: (node.mode & 0xF000) == 0x4000,
+                    });
+                }
+            }
+            if entry.rec_len == 0 {
+                break;
+            }
+            offset += entry.rec_len as usize;
+            if offset >= BLOCK_SIZE {
+                break;
+            }
+        }
+    }
+    Ok(entries)
+}
+
+// ---------------- файловые операции по ПУТИ ----------------
+//
+// Старые read_file/write_file/delete_file работают только с корнем.
+// Эти версии принимают путь вида "/users/ivan/files/notes.txt" и
+// выполняют операцию в нужном подкаталоге.
+
+/// Записывает файл по пути, создавая недостающие каталоги (mkdir -p).
+pub fn write_file_path(path: &str, data: &[u8]) -> Result<(), Ext2Error> {
+    let (dir_ino, name) = resolve_parent(path, true)?;
+    if dir_ino == ROOT_INO {
+        return write_file(&name, data);
+    }
+    write_file_in(dir_ino, &name, data)
+}
+
+/// Читает файл по пути.
+pub fn read_file_path(path: &str) -> Result<Vec<u8>, Ext2Error> {
+    let (dir_ino, name) = resolve_parent(path, false)?;
+    if dir_ino == ROOT_INO {
+        return read_file(&name);
+    }
+    let found = find_in_dir(dir_ino, &name)?;
+    let (_, _, ino) = found.ok_or(Ext2Error::FileNotFound)?;
+    read_inode_data(ino)
+}
+
+/// Удаляет файл по пути.
+pub fn delete_file_path(path: &str) -> Result<(), Ext2Error> {
+    let (dir_ino, name) = resolve_parent(path, false)?;
+    if dir_ino == ROOT_INO {
+        return delete_file(&name);
+    }
+    let found = find_in_dir(dir_ino, &name)?;
+    let (_, _, ino) = found.ok_or(Ext2Error::FileNotFound)?;
+
+    let inode = read_inode(ino)?;
+    for b in dir_block_ptrs(&inode) {
+        let _ = free_block(b);
+    }
+    free_inode(ino)?;
+    remove_dirent(dir_ino, &name)?;
     Ok(())
 }

@@ -94,6 +94,11 @@ fn wait_drq_or_err() -> Result<(), ()> {
 /// (buffer.len() должен быть >= count * SECTOR_SIZE). Читает с диска
 /// Master (см. read_sectors_from для чтения с произвольного диска).
 pub fn read_sectors(lba: u32, count: u8, buffer: &mut [u8]) -> Result<(), ()> {
+    // RAM-диск (загрузка с USB/Ventoy): разделы лежат в памяти, аппаратный
+    // ATA-контроллер к флешке отношения не имеет.
+    if crate::ramdisk::is_active() {
+        return crate::ramdisk::read_sectors(lba, count, buffer);
+    }
     read_sectors_from(Drive::Master, lba, count, buffer)
 }
 
@@ -133,6 +138,11 @@ pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -
 
 /// Пишет `count` секторов из `data` начиная с `lba` на диск Master.
 pub fn write_sectors(lba: u32, count: u8, data: &[u8]) -> Result<(), ()> {
+    // RAM-диск: пишем в память (live-сессия; перезагрузка вернёт образ
+    // как был, т.к. загрузчик каждый раз заново читает .img с флешки).
+    if crate::ramdisk::is_active() {
+        return crate::ramdisk::write_sectors(lba, count, data);
+    }
     write_sectors_to(Drive::Master, lba, count, data)
 }
 

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Физический аллокатор страниц памяти (buddy allocator).
 //!
 //! Использует битовую карту для отслеживания занятых/свободных 4 КиБ фреймов
@@ -38,6 +37,29 @@ pub fn init() {
         mark_used_inner(&mut bitmap, i);
     }
 
+    // Резервируем RAM-диск (0x2000000, 10 МиБ), если он активен (загрузка
+    // с USB/Ventoy): загрузчик положил туда образ, аллокатор не должен
+    // раздавать эти страницы (иначе ядро перезапишет собственный диск).
+    if crate::ramdisk::is_active() {
+        let start = crate::ramdisk::RAMDISK_BASE;
+        let end = start + crate::ramdisk::RAMDISK_SIZE;
+        let mut n = 0usize;
+        let mut idx = start;
+        while idx < end {
+            if let Some(fi) = frame_index(idx) {
+                if fi < TOTAL_FRAMES {
+                    mark_used_inner(&mut bitmap, fi);
+                    n += 1;
+                }
+            }
+            idx += PAGE_SIZE;
+        }
+        crate::serial_println!(
+            "[mm/phys] RAM-диск зарезервирован: {n} фреймов (0x{:X}..0x{:X})",
+            start, end
+        );
+    }
+
     crate::println!(
         "  [mm/phys] Buddy allocator ready: {} frames ({} KiB) total, {} reserved.",
         TOTAL_FRAMES,
@@ -53,80 +75,13 @@ fn frame_index(phys_addr: usize) -> Option<usize> {
     Some((phys_addr - FREE_MEMORY_START) / PAGE_SIZE)
 }
 
-fn frame_address(index: usize) -> usize {
-    FREE_MEMORY_START + index * PAGE_SIZE
-}
 
-fn is_used(bitmap: &[u64; BITMAP_WORDS], idx: usize) -> bool {
-    let word = idx / 64;
-    let bit = idx % 64;
-    (bitmap[word] >> bit) & 1 == 1
-}
 
 fn mark_used_inner(bitmap: &mut [u64; BITMAP_WORDS], idx: usize) {
     bitmap[idx / 64] |= 1 << (idx % 64);
 }
 
-fn mark_free_inner(bitmap: &mut [u64; BITMAP_WORDS], idx: usize) {
-    bitmap[idx / 64] &= !(1 << (idx % 64));
-}
 
-/// Выделяет одну физическую страницу (4 КиБ). Возвращает физический адрес.
-pub fn alloc_page() -> Option<usize> {
-    let mut bitmap = BITMAP.lock();
-    for i in 0..TOTAL_FRAMES {
-        if !is_used(&bitmap, i) {
-            mark_used_inner(&mut bitmap, i);
-            { let _ = super::ALLOCATED_PAGES.lock().wrapping_add(1); }
-            return Some(frame_address(i));
-        }
-    }
-    None
-}
 
-/// Выделяет `count` последовательных физических страниц.
-pub fn alloc_pages(count: usize) -> Option<usize> {
-    if count == 0 {
-        return None;
-    }
-    let mut bitmap = BITMAP.lock();
-    let mut run = 0usize;
-    let mut start = 0usize;
 
-    for i in 0..TOTAL_FRAMES {
-        if !is_used(&bitmap, i) {
-            if run == 0 {
-                start = i;
-            }
-            run += 1;
-            if run >= count {
-                for j in start..start + count {
-                    mark_used_inner(&mut bitmap, j);
-                }
-                *super::ALLOCATED_PAGES.lock() += count;
-                return Some(frame_address(start));
-            }
-        } else {
-            run = 0;
-        }
-    }
-    None
-}
 
-/// Освобождает физическую страницу.
-pub fn free_page(phys_addr: usize) {
-    if let Some(idx) = frame_index(phys_addr) {
-        let mut bitmap = BITMAP.lock();
-        if is_used(&bitmap, idx) {
-            mark_free_inner(&mut bitmap, idx);
-            *super::FREED_PAGES.lock() += 1;
-        }
-    }
-}
-
-/// Освобождает `count` последовательных страниц начиная с phys_addr.
-pub fn free_pages(phys_addr: usize, count: usize) {
-    for i in 0..count {
-        free_page(phys_addr + i * PAGE_SIZE);
-    }
-}
