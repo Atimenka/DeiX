@@ -402,11 +402,47 @@ def write_erofs_image(img, start_lba, secs, label, files=None):
     img[base:base + len(blob)] = blob
 
 
+def build_deix_lib_py(lib_name, exports):
+    import struct
+    out = bytearray(b"DEIXLIB1")
+    out.extend(struct.pack("<II", 1, len(exports)))
+    name_buf = lib_name.encode('utf-8')[:31].ljust(32, b'\x00')
+    out.extend(name_buf)
+
+    code_offset = 8 + 8 + 32 + (len(exports) * 48)
+    code_bytes = bytearray()
+
+    for sym_name, code in exports:
+        sym_buf = sym_name.encode('utf-8')[:31].ljust(32, b'\x00')
+        out.extend(sym_buf)
+        out.extend(struct.pack("<IIQ", code_offset, len(code), 0))
+        code_offset += len(code)
+        code_bytes.extend(code)
+
+    out.extend(code_bytes)
+    return bytes(out)
+
+
 def make_kernel_targz(kernel_bin_path):
     """Собирает НАСТОЯЩИЙ kernel.tar.gz (gzip deflate + tar ustar):
     содержит kernel.bin и важные библиотеки ядра. Возвращает байты."""
     import io, tarfile
     kernel = open(kernel_bin_path, 'rb').read()
+    lib_core = build_deix_lib_py("libdeix_core.so", [
+        ("deix_core_init", b"\xb8\x01\x00\x00\x00\xc3"),
+        ("deix_core_version", b"\xb8\x01\x02\x00\x00\xc3"),
+        ("deix_core_yield", b"\xcd\x20\xc3"),
+    ])
+    lib_net = build_deix_lib_py("libdeix_net.so", [
+        ("deix_net_init", b"\xb8\x01\x00\x00\x00\xc3"),
+        ("deix_net_socket", b"\xb8\x03\x00\x00\x00\xc3"),
+        ("deix_net_send", b"\xb8\x00\x00\x00\x00\xc3"),
+    ])
+    lib_gfx = build_deix_lib_py("libdeix_gfx.so", [
+        ("deix_gfx_init", b"\xb8\x01\x00\x00\x00\xc3"),
+        ("deix_gfx_draw_rect", b"\xb8\x00\x00\x00\x00\xc3"),
+        ("deix_gfx_swap_buffers", b"\xb8\x00\x00\x00\x00\xc3"),
+    ])
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode='w') as tar:
         def add(name, data):
@@ -415,10 +451,9 @@ def make_kernel_targz(kernel_bin_path):
             ti.mode = 0o100644
             tar.addfile(ti, io.BytesIO(data))
         add('kernel.bin', kernel)
-        # Важные библиотеки ядра (модель: встроенные компоненты ядра).
-        add('libdeix_core.so', b'DEIXLIB1\x00core\x00' + b'\x00' * 64)
-        add('libdeix_net.so',  b'DEIXLIB1\x00net\x00' + b'\x00' * 64)
-        add('libdeix_gfx.so',  b'DEIXLIB1\x00gfx\x00' + b'\x00' * 64)
+        add('libdeix_core.so', lib_core)
+        add('libdeix_net.so',  lib_net)
+        add('libdeix_gfx.so',  lib_gfx)
     raw_tar = buf.getvalue()
     # Сжимаем настоящим gzip (deflate).
     import gzip

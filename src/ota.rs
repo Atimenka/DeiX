@@ -241,15 +241,77 @@ fn current_kernel_bytes() -> Vec<u8> {
     out
 }
 
+/// Строит полноценный бинарный файл динамической библиотеки DeiX OS (DEIXLIB1)
+/// с заголовком, таблицей экспортируемых символов и исполняемым x86_64 машинным кодом.
+pub fn build_deix_lib(lib_name: &str, exports: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"DEIXLIB1");
+    out.extend_from_slice(&1u32.to_le_bytes());
+    out.extend_from_slice(&(exports.len() as u32).to_le_bytes());
+
+    let mut name_buf = [0u8; 32];
+    let nb = lib_name.as_bytes();
+    let nlen = nb.len().min(31);
+    name_buf[..nlen].copy_from_slice(&nb[..nlen]);
+    out.extend_from_slice(&name_buf);
+
+    let mut code_offset = 8 + 4 + 4 + 32 + (exports.len() * 48);
+    let mut code_bytes = Vec::new();
+
+    for (sym_name, code) in exports {
+        let mut sym_buf = [0u8; 32];
+        let sb = sym_name.as_bytes();
+        let slen = sb.len().min(31);
+        sym_buf[..slen].copy_from_slice(&sb[..slen]);
+        out.extend_from_slice(&sym_buf);
+        out.extend_from_slice(&(code_offset as u32).to_le_bytes());
+        out.extend_from_slice(&(code.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0u64.to_le_bytes());
+
+        code_offset += code.len();
+        code_bytes.extend_from_slice(code);
+    }
+
+    out.extend_from_slice(&code_bytes);
+    out
+}
+
+pub fn build_lib_core() -> Vec<u8> {
+    build_deix_lib("libdeix_core.so", &[
+        ("deix_core_init", &[0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3]),
+        ("deix_core_version", &[0xb8, 0x01, 0x02, 0x00, 0x00, 0xc3]),
+        ("deix_core_yield", &[0xcd, 0x20, 0xc3]),
+    ])
+}
+
+pub fn build_lib_net() -> Vec<u8> {
+    build_deix_lib("libdeix_net.so", &[
+        ("deix_net_init", &[0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3]),
+        ("deix_net_socket", &[0xb8, 0x03, 0x00, 0x00, 0x00, 0xc3]),
+        ("deix_net_send", &[0xb8, 0x00, 0x00, 0x00, 0x00, 0xc3]),
+    ])
+}
+
+pub fn build_lib_gfx() -> Vec<u8> {
+    build_deix_lib("libdeix_gfx.so", &[
+        ("deix_gfx_init", &[0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3]),
+        ("deix_gfx_draw_rect", &[0xb8, 0x00, 0x00, 0x00, 0x00, 0xc3]),
+        ("deix_gfx_swap_buffers", &[0xb8, 0x00, 0x00, 0x00, 0x00, 0xc3]),
+    ])
+}
+
 /// Собирает НОВЫЙ kernel.tar.gz (stored-gzip + tar ustar) из текущего ядра
 /// и библиотек — «скачанный по воздуху» образ обновления.
 pub fn build_fresh_kernel_targz() -> Vec<u8> {
     let kernel = current_kernel_bytes();
+    let lib_core = build_lib_core();
+    let lib_net = build_lib_net();
+    let lib_gfx = build_lib_gfx();
     let tar = crate::kernel_loader::build_tar_archive(&[
         ("kernel.bin", &kernel),
-        ("libdeix_core.so", b"DEIXLIB1\x00core\x00"),
-        ("libdeix_net.so", b"DEIXLIB1\x00net\x00"),
-        ("libdeix_gfx.so", b"DEIXLIB1\x00gfx\x00"),
+        ("libdeix_core.so", &lib_core),
+        ("libdeix_net.so", &lib_net),
+        ("libdeix_gfx.so", &lib_gfx),
     ]);
     build_gzip_stored(&tar)
 }

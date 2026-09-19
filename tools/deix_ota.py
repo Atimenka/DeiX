@@ -167,6 +167,44 @@ def write_bcb(img, mode=None, slot=None):
 
 MODE_NAMES = {0: "normal", 1: "recovery", 2: "fastbootd", 3: "dsm"}
 
+def build_deix_lib_py(lib_name, exports):
+    out = bytearray(b"DEIXLIB1")
+    out.extend(struct.pack("<II", 1, len(exports)))
+    name_buf = lib_name.encode('utf-8')[:31].ljust(32, b'\x00')
+    out.extend(name_buf)
+
+    code_offset = 8 + 8 + 32 + (len(exports) * 48)
+    code_bytes = bytearray()
+
+    for sym_name, code in exports:
+        sym_buf = sym_name.encode('utf-8')[:31].ljust(32, b'\x00')
+        out.extend(sym_buf)
+        out.extend(struct.pack("<IIQ", code_offset, len(code), 0))
+        code_offset += len(code)
+        code_bytes.extend(code)
+
+    out.extend(code_bytes)
+    return bytes(out)
+
+def get_default_libs():
+    return {
+        "libdeix_core.so": build_deix_lib_py("libdeix_core.so", [
+            ("deix_core_init", b"\xb8\x01\x00\x00\x00\xc3"),
+            ("deix_core_version", b"\xb8\x01\x02\x00\x00\xc3"),
+            ("deix_core_yield", b"\xcd\x20\xc3"),
+        ]),
+        "libdeix_net.so": build_deix_lib_py("libdeix_net.so", [
+            ("deix_net_init", b"\xb8\x01\x00\x00\x00\xc3"),
+            ("deix_net_socket", b"\xb8\x03\x00\x00\x00\xc3"),
+            ("deix_net_send", b"\xb8\x00\x00\x00\x00\xc3"),
+        ]),
+        "libdeix_gfx.so": build_deix_lib_py("libdeix_gfx.so", [
+            ("deix_gfx_init", b"\xb8\x01\x00\x00\x00\xc3"),
+            ("deix_gfx_draw_rect", b"\xb8\x00\x00\x00\x00\xc3"),
+            ("deix_gfx_swap_buffers", b"\xb8\x00\x00\x00\x00\xc3"),
+        ]),
+    }
+
 # ---------- команды ----------
 def cmd_build(args):
     kernel_path = args.kernel or getattr(args, 'img', None)
@@ -183,11 +221,7 @@ def cmd_build(args):
             libs[os.path.basename(spec)] = open(spec, "rb").read()
     # библиотеки по умолчанию (модель встроенных компонентов ядра)
     if not libs:
-        libs = {
-            "libdeix_core.so": b"DEIXLIB1\x00core\x00" + b"\x00" * 64,
-            "libdeix_net.so": b"DEIXLIB1\x00net\x00" + b"\x00" * 64,
-            "libdeix_gfx.so": b"DEIXLIB1\x00gfx\x00" + b"\x00" * 64,
-        }
+        libs = get_default_libs()
     tgz = make_kernel_targz(kernel, libs)
     pkg = build_ota(tgz, args.version)
     out = args.out
@@ -217,11 +251,7 @@ def cmd_push(args):
             print("[deix-ota] ОШИБКА: укажите --kernel или --img-kernel", file=sys.stderr)
             return 2
         kernel = open(kernel_path, "rb").read()
-        libs = {
-            "libdeix_core.so": b"DEIXLIB1\x00core\x00" + b"\x00" * 64,
-            "libdeix_net.so": b"DEIXLIB1\x00net\x00" + b"\x00" * 64,
-            "libdeix_gfx.so": b"DEIXLIB1\x00gfx\x00" + b"\x00" * 64,
-        }
+        libs = get_default_libs()
         tgz = make_kernel_targz(kernel, libs)
     # слоты для прошивки
     targets = []
