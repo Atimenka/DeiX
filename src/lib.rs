@@ -307,7 +307,7 @@ pub extern "C" fn kernel_main() -> ! {
     // вне прошивочных контекстов (Fastbootd/EDL/Recovery) вызывает panic! —
     // ядро немедленно останавливается (см. init_parser.rs / vault.rs).
     partition_map::validate_partition_map_report();
-    let init_deix_text = crate::bootchain::get_init_deix().unwrap_or_else(|| crate::init_parser::FALLBACK_INIT.to_string());
+    let init_deix_text = crate::bootchain::get_init_deix().unwrap_or_else(|| alloc::string::String::from(crate::init_parser::FALLBACK_INIT));
     init_parser::boot_report(&init_deix_text);
     security_monitor::boot_selfcheck();
     crate::dinit::init_with(&init_deix_text);

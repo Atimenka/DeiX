@@ -437,7 +437,7 @@ pub fn init_with(init_text: &str) {
 
 /// Инициализация подсистемы Dinit по умолчанию (fallback)
 pub fn init() {
-    let text = crate::bootchain::get_init_deix().unwrap_or_else(|| crate::init_parser::FALLBACK_INIT.to_string());
+    let text = crate::bootchain::get_init_deix().unwrap_or_else(|| String::from(crate::init_parser::FALLBACK_INIT));
     init_with(&text);
 }
 
@@ -600,7 +600,7 @@ pub fn cmd_dinit(line: &str) {
 
         "reload" => {
             crate::println!("  [dinit] Перезагрузка сценария init.deix...");
-            let script = crate::bootchain::get_init_deix().unwrap_or_else(|| crate::init_parser::FALLBACK_INIT.to_string());
+            let script = crate::bootchain::get_init_deix().unwrap_or_else(|| String::from(crate::init_parser::FALLBACK_INIT));
             dinit.apply_init_script(&script);
             dinit.autostart_services();
             crate::println!("  [dinit] Сценарий перезагружен успешно");
