@@ -307,6 +307,8 @@ const MAX_INPUT: usize = 64;
 pub fn read_line_masked() -> String {
     read_line(true)
 }
+
+pub fn read_line(mask: bool) -> String {
     let mut buf = [0u8; MAX_INPUT];
     let mut len = 0usize;
 
