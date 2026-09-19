@@ -164,10 +164,19 @@ pub static IN_GRAPHICAL_TERMINAL: core::sync::atomic::AtomicBool =
 static CWD: crate::spinlock::SpinLock<alloc::string::String> =
     crate::spinlock::SpinLock::new(alloc::string::String::new());
 
-
 /// Устанавливает текущий рабочий каталог (для DS `cd`).
 pub fn set_cwd(dir: &str) {
     *CWD.lock() = alloc::string::String::from(dir);
+}
+
+/// Возвращает текущий рабочий каталог.
+pub fn get_cwd() -> alloc::string::String {
+    let cwd = CWD.lock().clone();
+    if cwd.is_empty() {
+        alloc::string::String::from("/")
+    } else {
+        cwd
+    }
 }
 
 

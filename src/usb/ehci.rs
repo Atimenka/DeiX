@@ -14,7 +14,7 @@ pub struct EhciController {
     ready: bool,
 }
 
-static CONTROLLER: SpinLock<Option EhciController> = SpinLock::new(None);
+static CONTROLLER: SpinLock<Option<EhciController>> = SpinLock::new(None);
 
 pub fn init() -> bool {
     let pci_dev = match pci::find_device_by_class_subclass(EHCI_PCI_CLASS, EHCI_PCI_SUBCLASS) {

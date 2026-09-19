@@ -1,6 +1,5 @@
 //! DUIL — Declarative UI Language & UI Framework DeiX OS.
 
-use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 

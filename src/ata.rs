@@ -1,6 +1,6 @@
 //! Драйвер ATA (IDE) с поддержкой PIO и Bus Master IDE (DMA).
 
-use crate::port::{inb, insw, outb, outsw, inl, outl};
+use crate::port::{inb, insw, outb, outsw, outl};
 
 const DATA_PORT: u16 = 0x1F0;
 const ERROR_PORT: u16 = 0x1F1;

@@ -6,9 +6,6 @@ pub mod hub;
 pub mod hid;
 pub mod storage;
 
-use alloc::format;
-use alloc::string::String;
-
 pub fn init() {
     ehci::init();
 }

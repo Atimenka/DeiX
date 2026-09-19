@@ -1,7 +1,5 @@
 //! Диспетчер задач (Task Manager) DeiX OS.
 
-use alloc::format;
-use alloc::string::String;
 use crate::sched::{self, Priority, State};
 
 pub fn cmd_taskmgr(arg: &str) {

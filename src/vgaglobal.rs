@@ -74,7 +74,7 @@ pub fn with_writer<F: FnOnce(&mut Writer) -> R, R>(f: F) -> R {
 
 #[macro_export]
 macro_rules! print {
-    ($($arg:tt)*) => ($crate::vgaglobal::_print(core::format_args!($($arg)*)));
+    ($($arg:tt)*) => ($crate::vgaglobal::_print(::core::format_args!($($arg)*)));
 }
 
 #[macro_export]
@@ -84,11 +84,8 @@ macro_rules! println {
         $crate::serial_println!();
     }};
     ($($arg:tt)*) => {{
-        $crate::print!("{}\n", core::format_args!($($arg)*));
-        // Зеркалирование консоли в COM1 (serial mirror): весь вывод ядра
-        // дублируется в последовательный порт — удобно для отладки и для
-        // headless-тестирования в QEMU (-serial stdio).
-        $crate::serial_println!("{}", core::format_args!($($arg)*));
+        $crate::print!("{}\n", ::core::format_args!($($arg)*));
+        $crate::serial_println!("{}", ::core::format_args!($($arg)*));
     }};
 }
 

@@ -222,7 +222,7 @@ extern "C" fn schedule_from_irq(rsp: u64) -> u64 {
             if tasks[cur].ticks_since_yield > 1000
                 && tasks[cur].pid != 1
                 && tasks[cur].pid != 0
-                && tasks[cur].state != State::Sleeping
+                && !matches!(tasks[cur].state, State::Sleeping(_))
             {
                 tasks[cur].hung = true;
                 tasks[cur].state = State::Finished;

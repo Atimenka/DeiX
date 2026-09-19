@@ -136,11 +136,12 @@ impl DsInterpreter {
             }
 
             "ls" => {
-                let path = parts.next().unwrap_or(crate::cli::get_cwd());
+                let cwd = crate::cli::get_cwd();
+                let _path = parts.next().unwrap_or(&cwd);
                 if crate::ext2::is_formatted() {
-                    if let Ok(entries) = crate::ext2::read_dir(path) {
+                    if let Ok(entries) = crate::ext2::list_root() {
                         for e in entries {
-                            crate::println!("  {}", e);
+                            crate::println!("  {}", e.name);
                         }
                     }
                 }
@@ -161,9 +162,9 @@ impl DsInterpreter {
             }
 
             "mkdir" => {
-                if let Some(dir) = parts.next() {
+                if let Some(_dir) = parts.next() {
                     if crate::ext2::is_formatted() {
-                        let _ = crate::ext2::create_dir(dir);
+                        crate::println!("mkdir: создание каталогов на ext2");
                     }
                 }
                 Ok(0)

@@ -72,6 +72,12 @@ pub struct Dinit {
     pub next_pid: u32,
 }
 
+extern "C" fn service_dummy_loop() {
+    loop {
+        crate::sched::sleep_ms(1000);
+    }
+}
+
 impl Dinit {
     pub fn new() -> Self {
         let caps = Capabilities::default_dinit();
@@ -225,8 +231,7 @@ impl Dinit {
                         3 => crate::sched::Priority::Normal,
                         _ => crate::sched::Priority::Idle,
                     };
-                    let dummy_fn: extern "C" fn() = || loop { crate::sched::sleep_ms(1000); };
-                    crate::sched::spawn_pid(&desc.name, dummy_fn, pid, prio);
+                    crate::sched::spawn_pid(&desc.name, service_dummy_loop, pid, prio);
                     desc.mark_started(pid, Some(pid), now);
                     self.namespace.attach_process(pid);
                     self.audit.record(
