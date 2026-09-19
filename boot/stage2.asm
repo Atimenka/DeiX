@@ -41,11 +41,9 @@ stage2_start:
 
     mov esp, stack_top
 
-    ; Копируем kernel.bin из real-памяти (0x20000, куда его загрузил
-    ; boot_sector через int13) в 0x100000 — там его ждёт линкер kernel.ld.
-    ; НЕ используем ATA PIO: в этой QEMU-версии прямой доступ к портам
-    ; 0x1F0 (READ SECTORS) возвращает ABRT, а BIOS int13 работает.
-    mov esi, KERNEL_SRC      ; 0x20000
+    ; Копируем kernel.bin из real-памяти (0x800000) в 0x100000 — там его ждёт
+    ; линкер kernel.ld.
+    mov esi, KERNEL_SRC      ; 0x800000
     mov edi, KERNEL_DST      ; 0x100000
     mov ecx, KERNEL_SIZE_DWORDS
     cld

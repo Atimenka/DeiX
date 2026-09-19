@@ -96,6 +96,7 @@ fn panic(info: &PanicInfo) -> ! {
     crate::serial_println!("{}", msg);
     crate::syslog::log_line(&msg);
     crate::crashlog::record_crash(&msg);
+    crate::crypto_storage::lock();
     loop {
         unsafe { core::arch::asm!("hlt") };
     }
@@ -309,7 +310,6 @@ pub extern "C" fn kernel_main() -> ! {
     partition_map::validate_partition_map_report();
     let init_deix_text = crate::bootchain::get_init_deix().unwrap_or_else(|| alloc::string::String::from(crate::init_parser::FALLBACK_INIT));
     init_parser::boot_report(&init_deix_text);
-    security_monitor::boot_selfcheck();
     crate::dinit::init_with(&init_deix_text);
     crate::serial_println!("[deix] init_boot: Dinit (PID 1, Ring 0) запущен");
 

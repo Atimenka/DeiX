@@ -16,7 +16,7 @@
 ;            в буфер 0x11000, переключается в 32-битный PM, rep movsd в
 ;            RAMDISK_DST (0x2000000), возвращается в RM, повторяет;
 ;            затем в PM копирует kernel.bin (KERNEL_SECTORS сект) из
-;            RAMDISK_DST+LBA3*512 в 0x11000 (KERNEL_SRC для stage2);
+;            RAMDISK_DST+LBA3*512 в 0x800000 (KERNEL_SRC для stage2);
 ;            jmp STAGE2_ADDR (0x10000) — stage2 (32-бит PM, плоский).
 ;
 ; Константы (nasm -D, см. build.sh):

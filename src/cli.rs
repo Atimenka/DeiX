@@ -330,6 +330,7 @@ pub fn execute(line: &str) {
         "microcode" => crate::microcode::cmd_microcode(rest),
         "hal" => crate::drivers::hal_selftest(),
         "crypt" => crate::luks::cmd_crypt(rest),
+        "secmon" => crate::security_monitor::boot_selfcheck(),
         "dinit" => crate::dinit::cmd_dinit(rest),
         "logo" => crate::bootlogo::cmd_logo(rest),
         "linux" => crate::linux::cmd_linux(rest),

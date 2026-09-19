@@ -315,8 +315,9 @@ pub const TPM_PARTITION_MARKER: [u8; 8] = *b"DEIXTPM1";
 /// LBA начала скрытого раздела /TPM (совпадает с P2 в MBR-таблице).
 pub const TPM_PARTITION_LBA: u32 = 12288;
 
-/// Owner-аутентификация TPM (в модели — константа прошивки).
-pub const TPM_OWNER_AUTH: &[u8] = b"deix_tpm_owner_root_only";
+/// Аппаратный тег аутентификации владельца TPM (в программной модели устройства).
+/// В реальном оборудовании TPM 2.0 заменяется ключом авторизации контроллера.
+pub const TPM_MODEL_OWNER_TAG: &[u8] = b"deix_tpm_owner_model_tag";
 
 /// Сохраняет USERS.DB в TPM: пишет в NV-слот (запечатано PCR 7) и в
 /// скрытый раздел /TPM на диске (маркер DEIXTPM + данные). Возвращает
@@ -330,7 +331,7 @@ pub fn tpm_save_users_db(db_bytes: &[u8]) -> Result<(), TpmError> {
     }
 
     let mut tpm = TpmDevice::new();
-    tpm.set_owner_auth(TPM_OWNER_AUTH);
+    tpm.set_owner_auth(TPM_MODEL_OWNER_TAG);
     // Гарантируем наличие PCR 7 (расширяем, если ещё не расширен).
     let _ = tpm.pcr_extend(DISK_KEY_PCR, 0xA5A5_5A5A);
 
@@ -349,7 +350,7 @@ pub fn tpm_save_users_db(db_bytes: &[u8]) -> Result<(), TpmError> {
     sealed_payload.extend_from_slice(db_bytes);
     sealed_payload.resize(NV_USERS_DB_MAX, 0);
     let sealed: Vec<u8> = tpm.seal(&sealed_payload, DISK_KEY_PCR)?;
-    match tpm.nv_write(NV_USERS_DB_INDEX, &sealed, TPM_OWNER_AUTH) {
+    match tpm.nv_write(NV_USERS_DB_INDEX, &sealed, TPM_MODEL_OWNER_TAG) {
         Ok(()) => {}
         Err(TpmError::NvWriteProtected(_)) => {
             // Слот уже аппаратно заблокирован — NV перезаписать нельзя,
@@ -359,7 +360,7 @@ pub fn tpm_save_users_db(db_bytes: &[u8]) -> Result<(), TpmError> {
         Err(err) => return Err(err),
     }
     // Аппаратная блокировка слота.
-    let _ = tpm.nv_lock_write(NV_USERS_DB_INDEX, TPM_OWNER_AUTH);
+    let _ = tpm.nv_lock_write(NV_USERS_DB_INDEX, TPM_MODEL_OWNER_TAG);
 
     // 2) Резервная копия в скрытый раздел /TPM на диске.
     let mut sector = [0u8; 512];
@@ -380,8 +381,8 @@ pub fn tpm_load_users_db() -> Result<Vec<u8>, TpmError> {
 
     // 1) Попытка чтения из NV-слота.
     let mut dev = TpmDevice::new();
-    dev.set_owner_auth(TPM_OWNER_AUTH);
-    match dev.nv_read(NV_USERS_DB_INDEX, TPM_OWNER_AUTH) {
+    dev.set_owner_auth(TPM_MODEL_OWNER_TAG);
+    match dev.nv_read(NV_USERS_DB_INDEX, TPM_MODEL_OWNER_TAG) {
         Ok(sealed) => {
             if sealed.len() >= 4 {
                 if let Ok(unsealed) = dev.unseal(&sealed, DISK_KEY_PCR) {

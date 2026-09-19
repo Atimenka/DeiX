@@ -167,6 +167,20 @@ pub fn boot_flow() -> bool {
     // Одноразовость: сбрасываем флажок сразу после чтения.
     clear_boot_mode();
 
+    if mode != BootMode::Normal && crate::crypto_storage::is_encryption_enabled() {
+        crate::println!("  [bcb] Диск зашифрован (XTS-AES-256). Требуется пароль разблокировки...");
+        loop {
+            crate::print!("  Пароль расшифровки: ");
+            let p = crate::auth::read_line_masked();
+            if crate::crypto_storage::try_unlock(&p) {
+                crate::println!("  [bcb] Диск успешно разблокирован!");
+                break;
+            } else {
+                crate::println!("  [bcb] Неверный пароль. Повторите попытку.");
+            }
+        }
+    }
+
     match mode {
         BootMode::Dsm => {
             crate::serial_println!("[bcb] DSM: загрузка Download System Manager (выше fastbootd)");

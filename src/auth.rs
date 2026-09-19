@@ -303,10 +303,10 @@ use crate::{print, println};
 
 const MAX_INPUT: usize = 64;
 
-/// Считывает одну строку с клавиатуры. Если `mask` — экранирует введённые
-/// символы звёздочками вместо настоящих символов (для пароля); иначе
-/// показывает как есть (для имени пользователя).
-fn read_line(mask: bool) -> String {
+/// Считывает одну строку с клавиатуры/COM1 с маскировкой звёздочками (для ввода пароля).
+pub fn read_line_masked() -> String {
+    read_line(true)
+}
     let mut buf = [0u8; MAX_INPUT];
     let mut len = 0usize;
 

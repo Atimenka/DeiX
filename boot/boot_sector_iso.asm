@@ -46,7 +46,7 @@ org 0x7c00
 
 STAGE2_SRC equ 0x7e00     ; где физически лежит stage2 после загрузки BIOS
 STAGE2_DST equ 0x10000    ; куда его нужно переместить (linker_stage2.ld)
-KERNEL_DST equ 0x11000    ; куда переместить kernel.bin (stage2 копирует его в 0x100000)
+KERNEL_DST equ 0x800000   ; куда переместить kernel.bin (stage2 копирует его в 0x100000 с KERNEL_SRC=0x800000)
 ; RAM-ДИСК: полный 10-МиБ образ диска (MBR+stage2+kernel+все разделы) лежит
 ; в конце boot-образа; стаб копирует его в 0x2000000 (32 МиБ), а ядро
 ; читает ВСЕ разделы (BCB, /system, /OTA...) прямо из памяти — поэтому
@@ -115,9 +115,9 @@ protected_mode_start:
     rep movsd
     cld
 
-    ; ---- 1) kernel.bin -> 0x11000 (ОБРАТНО: dst=0x11000 ВНУТРИ src=0x8000..,
+    ; ---- 1) kernel.bin -> 0x800000 (ОБРАТНО: dst=0x800000,
     ;      пересечение — копирование вперёд затирает источник!) ----
-    ; kernel лежит сразу после stage2 в boot-образе (src ~0x8000).
+    ; kernel лежит сразу после stage2 в boot-образе (src ~0x7e00 + stage2_size).
     std
     mov esi, STAGE2_SRC + (STAGE2_SIZE_DWORDS * 4) + (KERNEL_SIZE_DWORDS * 4) - 4
     mov edi, KERNEL_DST + (KERNEL_SIZE_DWORDS * 4) - 4

@@ -28,6 +28,7 @@ nasm -f elf64 -D KERNEL_SIZE_DWORDS=262144 boot/stage2.asm -o "$BUILD/stage2.o"
 nasm -f elf64 boot/long_mode_init.asm   -o "$BUILD/long_mode_init.o"
 
 echo "==> [1b/8] Линкуем stage2 (загрузчик, база 0x10000)"
+# KERNEL_SIZE_DWORDS=262144 фиксирован (1024 КиБ), stage2 копирует из 0x800000 в 0x100000.
 ld -n --gc-sections -T boot/linker_stage2.ld -o "$BUILD/stage2.elf" "$BUILD/stage2.o"
 strip --strip-all "$BUILD/stage2.elf" -o "$BUILD/stage2.stripped.elf"
 objcopy -O binary "$BUILD/stage2.stripped.elf" "$BUILD/stage2.bin"
@@ -153,28 +154,10 @@ if [ "$BOOT_SIZE" -ne 512 ]; then
     exit 1
 fi
 
-echo "==> [6/8] Пересобираем stage2 с реальным KERNEL_SIZE_DWORDS"
-KERNEL_SIZE=$(stat -c%s "$BUILD/kernel.bin")
-# stage2 копирует kernel из 0x11000 (буфер 2048 секторов): KERNEL_SIZE_DWORDS
-# фиксирован и НЕ зависит от размера kernel.bin — иначе stage2, включённый
-# в install (include_bytes!), отличался бы от финального и сравнение ломалось.
-nasm -f elf64 -D KERNEL_SIZE_DWORDS=262144 boot/stage2.asm -o "$BUILD/stage2.o"
-ld -n --gc-sections -T boot/linker_stage2.ld -o "$BUILD/stage2.elf" "$BUILD/stage2.o"
-strip --strip-all "$BUILD/stage2.elf" -o "$BUILD/stage2.stripped.elf"
-objcopy -O binary "$BUILD/stage2.stripped.elf" "$BUILD/stage2.bin"
+echo "==> [6/8] Проверяем финальный stage2"
 STAGE2_SIZE2=$(stat -c%s "$BUILD/stage2.bin")
 STAGE2_SECTORS2=$(( (STAGE2_SIZE2 + 511) / 512 ))
-if [ "$STAGE2_SECTORS2" -ne "$STAGE2_SECTORS" ]; then
-    echo "ПРЕДУПРЕЖДЕНИЕ: размер stage2 изменился ($STAGE2_SECTORS -> $STAGE2_SECTORS2);"
-    echo "пересчитываем и пересобираем ещё раз"
-    STAGE2_SECTORS=$STAGE2_SECTORS2
-    KERNEL_LBA=$(( 1 + STAGE2_SECTORS + RAMBOOT_SECTORS ))
-    nasm -f elf64 -D KERNEL_SIZE_DWORDS=262144 boot/stage2.asm -o "$BUILD/stage2.o"
-    ld -n --gc-sections -T boot/linker_stage2.ld -o "$BUILD/stage2.elf" "$BUILD/stage2.o"
-    strip --strip-all "$BUILD/stage2.elf" -o "$BUILD/stage2.stripped.elf"
-    objcopy -O binary "$BUILD/stage2.stripped.elf" "$BUILD/stage2.bin"
-fi
-echo "    stage2.bin (финальный): $(stat -c%s "$BUILD/stage2.bin") байт, kernel LBA=$KERNEL_LBA"
+echo "    stage2.bin (финальный): $STAGE2_SIZE2 байт => $STAGE2_SECTORS2 секторов, kernel LBA=$KERNEL_LBA"
 
 echo "==> [6b/8] Сверяем карту разделов (partition_map, make_deix_fs, deix_ota)"
 python3 tools/check_partition_map.py

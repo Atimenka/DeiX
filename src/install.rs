@@ -499,11 +499,6 @@ fn write_image_to(drive: Drive) -> Result<(), ()> {
     bcb[8..12].copy_from_slice(&0u32.to_le_bytes());
     ata::write_sectors_to(drive, 3000, 1, &bcb)?;
 
-    // Перед копированием СБРАСЫВАЕМ критичные .data-глобалы в безопасное
-    // состояние: .data копируется как есть (живые указатели на кучу live
-    // нельзя переносить), поэтому приводим их к начальному виду.
-    crate::reset_all_globals();
-
     // stage2.bin (загрузчик) — секторы 1..STAGE2_SECTORS.
     let stage2_sectors = (STAGE2.len() + 511) / 512;
     for i in 0..stage2_sectors {

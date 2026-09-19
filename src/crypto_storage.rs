@@ -145,15 +145,10 @@ fn set_engine_mk(mk: &[u8; 32]) {
 /// следующей операции, если это всё-таки было ложное совпадение).
 pub fn try_unlock(password: &str) -> bool {
     // Новая схема: мастер-ключ достаётся из слота заголовка (luks.rs).
-    // Пароль проверяется по контрольному хешу мастер-ключа — не нужно
-    // гадать по сигнатуре ext2, как это приходилось делать в
-    // plain-режиме без заголовка.
     if crate::luks::exists() {
         match crate::luks::unlock(password) {
             Some((mk, _slot)) => {
                 set_engine_mk(&mk);
-                // Дополнительная проверка: том должен читаться. Защищает
-                // от ситуации, когда заголовок цел, а данные повреждены.
                 if crate::ext2::is_formatted() {
                     return true;
                 }
@@ -165,8 +160,14 @@ pub fn try_unlock(password: &str) -> bool {
         }
     }
 
-    // Совместимость со СТАРЫМИ томами (ключ = SHA-512(пароль), без
-    // заголовка). Проверяем по сигнатуре ext2, как раньше.
+    // Если маркер шифрования присутствует, но LUKS-заголовок отсутствует —
+    // это отказ заблокированного тома (защита от downgrade атаки).
+    if is_encryption_enabled() {
+        crate::serial_println!("[crypto] ОШИБКА: маркер шифрования есть, но LUKS-заголовок отсутствует");
+        return false;
+    }
+
+    // Совместимость со СТАРЫМИ томами без заголовка и маркера
     let key = derive_key(password);
     *ENGINE.lock() = Some(XtsAes256::new(&key));
     let ok = crate::ext2::is_formatted();
@@ -177,14 +178,9 @@ pub fn try_unlock(password: &str) -> bool {
     ok
 }
 
-/// Включает шифрование на этом диске В ПЕРВЫЙ РАЗ: пишет маркер (см.
-/// MARKER_LBA выше), устанавливает ключ из пароля и заново форматирует
-/// ext2-том под этим ключом. ЧЕСТНОЕ ПРЕДУПРЕЖДЕНИЕ: это уничтожает все
-/// файлы, что были на диске ДО включения шифрования — старые данные
-/// были записаны в открытом виде, и их не получится "переупаковать" в
-/// зашифрованный вид без полной перезаписи, поэтому CLI-команда,
-/// вызывающая эту функцию (см. cli.rs::cmd_encrypt), явно предупреждает
-/// об этом и требует подтверждения перед вызовом.
+/// Включает шифрование на этом диске В ПЕРВЫЙ РАЗ: сначала считывает открытые файлы,
+/// создаёт заголовок LUKS, форматирует том, записывает файлы обратно, верифицирует
+/// и ТОЛЬКО после этого записывает маркер шифрования.
 pub fn enable_encryption(password: &str) -> Result<(), ()> {
     if is_encryption_enabled() {
         return Ok(());
@@ -197,30 +193,61 @@ pub fn enable_encryption(password: &str) -> Result<(), ()> {
             if e.is_directory {
                 continue;
             }
-            if let Ok(data) = crate::ext2::read_file(&e.name) {
-                files.push((e.name, data));
+            match crate::ext2::read_file(&e.name) {
+                Ok(data) => files.push((e.name, data)),
+                Err(_) => {
+                    crate::serial_println!("[crypto] ОШИБКА: не удалось прочитать файл '{}' при подготовке к шифрованию", e.name);
+                    return Err(());
+                }
             }
         }
     }
-    // 2) Маркер "диск зашифрован" + СОЗДАНИЕ ЗАГОЛОВКА СО СЛОТАМИ.
-    //    Мастер-ключ случайный, пароль его только запечатывает — отсюда
-    //    возможность иметь несколько паролей и менять их, не
-    //    перешифровывая том (см. luks.rs).
-    write_marker()?;
+
+    // 2) СОЗДАНИЕ ЗАГОЛОВКА СО СЛОТАМИ (LUKS).
     let mk = crate::luks::create(password, crate::luks::DEFAULT_ITERATIONS)?;
+
+    // 3) Активация движка под ключом.
     set_engine_mk(&mk);
-    // 3) ПЕРЕФОРМАТИРОВАТЬ том ПОД КЛЮЧОМ: теперь ВСЕ метаданные ФС
-    //    (суперблок, GDT, битовые карты, inode-таблица, корневой каталог)
-    //    записываются через шифрование — как в настоящем dm-crypt, где
-    //    шифруется ВЕСЬ блочный слой, включая суперблок. Без этого
-    //    суперблок остался бы открытым, и try_unlock при следующей
-    //    загрузке не смог бы подтвердить пароль.
-    crate::ext2::format().map_err(|_| ())?;
-    // 4) Перезапись файлов (включая USERS.DB): теперь всё хранится
-    //    зашифрованным и доступно только с этим паролем.
-    for (name, data) in files {
-        let _ = crate::ext2::write_file(&name, &data);
+
+    // 4) ПЕРЕФОРМАТИРОВАТЬ том ПОД КЛЮЧОМ.
+    if crate::ext2::format().is_err() {
+        clear_master_key();
+        *ENGINE.lock() = None;
+        crate::serial_println!("[crypto] ОШИБКА: форматирование ext2 под ключом завершилось сбоем");
+        return Err(());
     }
+
+    // 5) Перезапись файлов (включая USERS.DB).
+    for (name, data) in &files {
+        if crate::ext2::write_file(name, data).is_err() {
+            clear_master_key();
+            *ENGINE.lock() = None;
+            crate::serial_println!("[crypto] ОШИБКА: запись зашифрованного файла '{}' провалена", name);
+            return Err(());
+        }
+    }
+
+    // 6) Проверка верификации: считываем обратно и сравниваем с исходными байтами.
+    for (name, orig_data) in &files {
+        match crate::ext2::read_file(name) {
+            Ok(read_data) if read_data == *orig_data => {}
+            _ => {
+                clear_master_key();
+                *ENGINE.lock() = None;
+                crate::serial_println!("[crypto] ОШИБКА: верификация файла '{}' провалена", name);
+                return Err(());
+            }
+        }
+    }
+
+    // 7) ТОЛЬКО ТЕПЕРЬ записываем маркер "шифрование включено".
+    if write_marker().is_err() {
+        clear_master_key();
+        *ENGINE.lock() = None;
+        crate::serial_println!("[crypto] ОШИБКА: не удалось записать маркер шифрования");
+        return Err(());
+    }
+
     Ok(())
 }
 
