@@ -31,7 +31,7 @@ use service::{ServiceDescriptor, ServiceStatus, RestartPolicy};
 use mount::{MountPoint, MountCmd};
 use authorize::{FileOp, AccessError, check_permission};
 use audit::{AuditLog, AuditOp, AuditResult};
-use crate::init_parser::{BootStage, Command, InitParser, INIT_DEIX_SCRIPT};
+use crate::init_parser::{BootStage, Command, InitParser};
 use crate::security_monitor::{HeuristicAnalysisEngine, SecurityEvent};
 
 /// Состояние супервизора Dinit
@@ -94,12 +94,12 @@ impl Dinit {
         }
     }
 
-    /// Полная инициализация и запуск всех подсистем PID 1
+    /// Инициализация подсистем PID 1 (создание корневого пользователя root)
     pub fn bootstrap(&mut self) {
         let now = crate::timer::uptime_ms();
         crate::serial_println!("[dinit] Инициализация супервизора PID 1 (Ring 0)...");
 
-        // 1. Регистрация административного пользователя root (UID 0)
+        // Регистрация административного пользователя root (UID 0)
         let root_user = UserState::new(0, "root", now);
         self.users.insert(0, root_user);
         self.audit.record(
@@ -111,67 +111,18 @@ impl Dinit {
             AuditResult::Allowed,
             "Корневой супервизор активирован",
         );
+    }
 
-        // 2. Регистрация точек монтирования по умолчанию
-        self.mount_internal("/dev/block/by-name/kernel", "/kernel", "erofs", true, now);
-        self.mount_internal("/dev/block/by-name/init_boot", "/init_boot", "erofs", true, now);
-        self.mount_internal("/dev/block/by-name/super", "/system", "erofs", true, now);
-        self.mount_internal("/dev/block/by-name/userdata", "/userdata", "ext4", false, now);
-        self.mount_internal("devfs", "/dev", "devfs", false, now);
-        self.mount_internal("procfs", "/proc", "procfs", true, now);
+    /// Инициализация монтирований и служб из прочитанного init.deix
+    pub fn init_with(&mut self, init_text: &str) {
+        crate::serial_println!("[dinit] init.deix прочитан из /init_boot ({} байт)", init_text.len());
+        self.apply_init_script(init_text);
 
-        // 3. Регистрация стандартных системных служб DeiX OS
-        self.register_core_service(
-            "pid1_core",
-            "/bin/pid1_core",
-            0,
-            RestartPolicy::Always,
-            true,
-        );
-        self.register_core_service(
-            "security_monitor",
-            "/bin/security_monitor",
-            3,
-            RestartPolicy::Always,
-            true,
-        );
-        self.register_core_service(
-            "net_daemon",
-            "/bin/net_daemon",
-            3,
-            RestartPolicy::UnlessStopped,
-            false,
-        );
-        self.register_core_service(
-            "vfs_flusher",
-            "/bin/vfs_flusher",
-            0,
-            RestartPolicy::Always,
-            false,
-        );
-        self.register_core_service(
-            "auth_broker",
-            "/bin/auth_broker",
-            0,
-            RestartPolicy::Always,
-            true,
-        );
-        self.register_core_service(
-            "syslogd",
-            "/bin/syslogd",
-            0,
-            RestartPolicy::Always,
-            false,
-        );
-
-        // 4. Разбор и применение декларативного init.deix сценария
-        self.apply_init_script(INIT_DEIX_SCRIPT);
-
-        // 5. Переход по стадиям загрузки: InitBoot -> VendorBoot -> Boot
+        // Переход по стадиям загрузки: InitBoot -> VendorBoot -> Boot
         self.advance_stage(BootStage::VendorBoot);
         self.advance_stage(BootStage::Boot);
 
-        // 6. Запуск служб стадии Boot
+        // Запуск служб стадии Boot
         self.autostart_services();
 
         self.state = DinitState::Running;
@@ -473,14 +424,21 @@ impl Dinit {
 /// Глобальный экземпляр супервизора ядра
 pub static DINIT: SpinLock<Option<Dinit>> = SpinLock::new(None);
 
-/// Инициализация подсистемы Dinit ядром
-pub fn init() {
+/// Инициализация подсистемы Dinit ядром с текстом init.deix
+pub fn init_with(init_text: &str) {
     let mut lock = DINIT.lock();
     if lock.is_none() {
         let mut dinit = Dinit::new();
         dinit.bootstrap();
+        dinit.init_with(init_text);
         *lock = Some(dinit);
     }
+}
+
+/// Инициализация подсистемы Dinit по умолчанию (fallback)
+pub fn init() {
+    let text = crate::bootchain::get_init_deix().unwrap_or_else(|| crate::init_parser::FALLBACK_INIT.to_string());
+    init_with(&text);
 }
 
 /// Периодический тик супервизора
@@ -642,7 +600,8 @@ pub fn cmd_dinit(line: &str) {
 
         "reload" => {
             crate::println!("  [dinit] Перезагрузка сценария init.deix...");
-            dinit.apply_init_script(INIT_DEIX_SCRIPT);
+            let script = crate::bootchain::get_init_deix().unwrap_or_else(|| crate::init_parser::FALLBACK_INIT.to_string());
+            dinit.apply_init_script(&script);
             dinit.autostart_services();
             crate::println!("  [dinit] Сценарий перезагружен успешно");
         }

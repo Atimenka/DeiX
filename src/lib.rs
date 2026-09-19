@@ -307,9 +307,10 @@ pub extern "C" fn kernel_main() -> ! {
     // вне прошивочных контекстов (Fastbootd/EDL/Recovery) вызывает panic! —
     // ядро немедленно останавливается (см. init_parser.rs / vault.rs).
     partition_map::validate_partition_map_report();
-    init_parser::boot_report(init_parser::INIT_DEIX_SCRIPT);
+    let init_deix_text = crate::bootchain::get_init_deix().unwrap_or_else(|| crate::init_parser::FALLBACK_INIT.to_string());
+    init_parser::boot_report(&init_deix_text);
     security_monitor::boot_selfcheck();
-    crate::dinit::init();
+    crate::dinit::init_with(&init_deix_text);
     crate::serial_println!("[deix] init_boot: Dinit (PID 1, Ring 0) запущен");
 
     // ВНИМАНИЕ: autostart::run() ПЕРЕНЕСЁН за экран входа (см. ниже).

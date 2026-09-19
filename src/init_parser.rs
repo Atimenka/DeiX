@@ -826,38 +826,8 @@ impl InitParser {
     }
 }
 
-/// Эталонный скрипт init.deix (встроен в ядро для стадии init_boot).
-/// В реальной сборке файл читается из защищённого раздела /init_boot
-/// (EROFS, ReadOnly); здесь — константа для раннего самоконтроля ядра.
-pub const INIT_DEIX_SCRIPT: &str = concat!(
-    "# Скрипт инициализации и развертывания DeiX OS — мастер-карта разделов\n",
-    "on init_boot\n",
-    "    mount erofs /dev/block/by-name/kernel /kernel ro\n",
-    "    mount erofs /dev/block/by-name/init_boot /init_boot ro\n",
-    "    service pid1_core /bin/pid1_core 0\n",
-    "\n",
-    "on vendor_boot\n",
-    "    mount erofs /dev/block/by-name/vendor_boot /vendor_boot ro\n",
-    "\n",
-    "on boot\n",
-    "    mount erofs /dev/block/by-name/super /system ro\n",
-    "    mount erofs /dev/block/by-name/boot /boot ro\n",
-    "    mount ext4 /dev/block/by-name/userdata /userdata rw\n",
-    "    service security_monitor /bin/security_monitor 3\n",
-    "    service network_manager /bin/net_daemon 3\n",
-    "\n",
-    "on recovery\n",
-    "    mount ext4 /dev/block/by-name/userdata /userdata rw\n",
-    "    service twrp_shell /bin/twrp 3\n",
-    "\n",
-    "on fastbootd\n",
-    "    mount erofs /dev/block/by-name/super /system rw\n",
-    "    service fastbootd_daemon /bin/fastbootd 3\n",
-    "\n",
-    "on edl\n",
-    "    mount erofs /dev/block/by-name/kernel /kernel rw\n",
-    "    service edl_bridge /bin/edl_bridge 0\n",
-);
+/// Fallback-скрипт инициализации на случай отсутствия init.deix на диске.
+pub const FALLBACK_INIT: &str = "on init_boot\n    service pid1_core /bin/pid1_core 0\n";
 
 /// СТАДИЯ INIT_BOOT (PID 1, Ring 0): разбор карты разделов init.deix и вывод
 /// диагностики в консоль ядра (стиль dxinit::status / autostart::run).

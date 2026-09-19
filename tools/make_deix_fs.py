@@ -577,7 +577,15 @@ def init_all_partitions(img, kernel_bin='build/kernel.bin'):
         elif name in ("/userdata", "/OTA"):
             format_ext2_at(img, start, secs)
         elif name == "/init_boot":
-            write_erofs_image(img, start, secs, name, {"bootloader.bin": bootloader_bin})
+            init_deix_path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "boot", "init.deix")
+            if not _os.path.exists(init_deix_path):
+                init_deix_path = _os.path.join("boot", "init.deix")
+            with open(init_deix_path, "rb") as f:
+                init_deix_content = f.read()
+            write_erofs_image(img, start, secs, name, {
+                "bootloader.bin": bootloader_bin,
+                "init.deix": init_deix_content,
+            })
         elif name == "/dsm":
             dsm_bin = b'DEIXDSM01\x00emergency\x00' + b'\x00' * 64
             write_erofs_image(img, start, secs, name, {"dsm.bin": dsm_bin})

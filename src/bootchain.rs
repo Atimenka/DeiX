@@ -23,6 +23,14 @@ use alloc::vec::Vec;
 
 use crate::ata;
 use crate::partition_map::{lookup_layout, PartitionLayout};
+use crate::spinlock::SpinLock;
+
+static INIT_DEIX_TEXT: SpinLock<Option<String>> = SpinLock::new(None);
+
+/// Возвращает содержимое init.deix, прочитанное из /init_boot на этапе bootchain.
+pub fn get_init_deix() -> Option<String> {
+    INIT_DEIX_TEXT.lock().clone()
+}
 
 /// Читает весь EROFS-раздел с диска.
 pub fn read_partition_image(layout: &PartitionLayout) -> Result<Vec<u8>, String> {
@@ -98,8 +106,8 @@ pub fn run_boot_chain() -> Result<String, String> {
         Err(e) => return Err(format!("dsm: {}", e)),
     }
 
-    // 2) /init_boot -> bootloader.bin (загрузчик второго уровня)
-    match load_link("/init_boot", &["bootloader.bin"]) {
+    // 2) /init_boot -> bootloader.bin, init.deix (загрузчик второго уровня + инит-скрипт)
+    match load_link("/init_boot", &["bootloader.bin", "init.deix"]) {
         Ok(link) => {
             out.push_str(&format!(
                 "    /init_boot -> {} ({} байт: {})\n",
@@ -158,6 +166,11 @@ fn load_link(partition: &str, wanted: &[&str]) -> Result<ChainLink, String> {
     for (name, _size) in files.iter() {
         if wanted.contains(&name.as_str()) {
             let data = erofs_extract(&image, name)?;
+            if name == "init.deix" {
+                if let Ok(text) = core::str::from_utf8(&data) {
+                    *INIT_DEIX_TEXT.lock() = Some(text.to_string());
+                }
+            }
             loaded += data.len();
             found.push(format!("{} ({})", name, describe(&data)));
         }
