@@ -25,6 +25,14 @@ mod crypto_storage;
 mod devmode;
 mod dialog;
 mod dinit;
+mod ds;
+mod duil;
+mod compositor;
+mod taskmgr;
+mod vbe_bios;
+mod proc;
+mod sync_primitives;
+mod usb;
 mod dsm;
 mod erofs;
 mod ext2;
@@ -203,6 +211,9 @@ pub extern "C" fn kernel_main() -> ! {
     } else {
         println!("Audio: PC Speaker (run QEMU with '-device intel-hda -device hda-duplex' for HDA)");
     }
+
+    compositor::init();
+    usb::init();
 
     println!("Default language: English. Type 'lang ru' to switch to Russian.");
 

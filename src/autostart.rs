@@ -129,8 +129,14 @@ pub fn run() {
         crate::print!("  [autostart] > ");
         crate::println!("{}", line);
 
-        // Выполняем команду через CLI.
-        cli::execute(line);
+        if line.starts_with("#!") || line.ends_with(".dxs") {
+            if let Err(e) = crate::ds::run_file(line.trim_start_matches("#!").trim()) {
+                crate::println!("  [autostart] Ошибка DS скрипта: {:?}", e);
+            }
+        } else {
+            // Выполняем команду через CLI.
+            cli::execute(line);
+        }
 
         line_count += 1;
     }

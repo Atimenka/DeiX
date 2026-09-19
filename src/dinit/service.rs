@@ -103,8 +103,8 @@ pub struct ServiceDescriptor {
     pub status: ServiceStatus,
     /// PID процесса (если запущен)
     pub pid: Option<u32>,
-    /// Идентификатор задачи в планировщике ядра
-    pub task_id: Option<usize>,
+    /// Идентификатор задачи (PID) в планировщике ядра
+    pub task_id: Option<u32>,
     /// Имена служб, от которых зависит данный сервис
     pub dependencies: Vec<String>,
     /// Флаг автозапуска при инициализации соответствующей стадии
@@ -183,7 +183,7 @@ impl ServiceDescriptor {
     }
 
     /// Отметка успешного старта
-    pub fn mark_started(&mut self, pid: u32, task_id: Option<usize>, now: u64) {
+    pub fn mark_started(&mut self, pid: u32, task_id: Option<u32>, now: u64) {
         self.status = ServiceStatus::Running;
         self.pid = Some(pid);
         self.task_id = task_id;

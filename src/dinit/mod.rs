@@ -220,7 +220,14 @@ impl Dinit {
                 if desc.auto_start && desc.status == ServiceStatus::Stopped {
                     let pid = self.next_pid;
                     self.next_pid += 1;
-                    desc.mark_started(pid, None, now);
+                    let prio = match desc.execution_ring {
+                        0 => crate::sched::Priority::High,
+                        3 => crate::sched::Priority::Normal,
+                        _ => crate::sched::Priority::Idle,
+                    };
+                    let dummy_fn: extern "C" fn() = || loop { crate::sched::sleep_ms(1000); };
+                    crate::sched::spawn_pid(&desc.name, dummy_fn, pid, prio);
+                    desc.mark_started(pid, Some(pid), now);
                     self.namespace.attach_process(pid);
                     self.audit.record(
                         now,
@@ -231,7 +238,7 @@ impl Dinit {
                         AuditResult::Allowed,
                         "Автозапуск системной службы",
                     );
-                    crate::serial_println!("[dinit] Служба '{}' запущена с PID {}", desc.name, pid);
+                    crate::serial_println!("[dinit] Служба '{}' запущена с PID {} (Priority: {:?})", desc.name, pid, prio);
                 }
             }
         }
@@ -282,7 +289,7 @@ impl Dinit {
                 "Ликвидация вредоносного процесса",
             );
             // Ликвидация в планировщике ядра
-            crate::sched::terminate(kill.pid as usize);
+            crate::sched::terminate_by_pid(kill.pid);
 
             // Обновление состояния службы, если этот PID принадлежал ей
             for (_, desc) in self.services.iter_mut() {
@@ -382,7 +389,7 @@ impl Dinit {
         desc.mark_stopped();
         if let Some(p) = old_pid {
             self.namespace.detach_process(p);
-            crate::sched::terminate(p as usize);
+            crate::sched::terminate_by_pid(p);
         }
         self.audit.record(
             now,

@@ -177,6 +177,10 @@ pub fn on_data_byte(byte: u8) {
             dy -= 256;
         }
 
+        // Масштабирование относительных смещений для плавного движения
+        dx *= 2;
+        dy *= 2;
+
         state.left_button = flags & 0x01 != 0;
         state.right_button = flags & 0x02 != 0;
         state.middle_button = flags & 0x04 != 0;

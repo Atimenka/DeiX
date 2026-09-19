@@ -1,26 +1,6 @@
-//! Драйвер ATA (IDE) в режиме PIO (Programmed I/O) — простейший, но
-//! настоящий рабочий способ читать/писать сектора диска без DMA/прерываний.
-//! Работает через классические порты primary ATA-контроллера (0x1F0-0x1F7,
-//! 0x3F6), которые эмулирует QEMU для любого `-drive` по умолчанию (если не
-//! указан `if=virtio`/`if=scsi` явно — наш собственный deix_disk.img как
-//! раз подключается через `format=raw,file=...`, что даёт классический
-//! IDE/ATA интерфейс).
-//!
-//! Наша ОС физически загружается с этого же диска (см. boot/boot_sector.asm
-//! — тот самый диск, что определяется тут как "Primary Master"), поэтому
-//! читаем сектора уже ПОСЛЕ данных загрузчика/ядра, отступив достаточно
-//! места — см. fat16.rs, где FAT16 том создаётся начиная с фиксированного
-//! LBA с большим запасом.
-//!
-//! Второй физический диск (Primary Slave) поддерживается отдельно (см.
-//! Drive::Slave и install.rs) — это тот же ATA-контроллер (те же порты
-//! 0x1F0-0x1F7), выбор master/slave делается битом 4 регистра
-//! DRIVE_HEAD (0xE0=master, 0xF0=slave), как того требует спецификация
-//! ATA. Нужен для команды `install` — установки DeiX на "второй HDD"
-//! компьютера (в QEMU это второй флаг `-drive`), не трогая загрузочный
-//! Live-диск.
+//! Драйвер ATA (IDE) с поддержкой PIO и Bus Master IDE (DMA).
 
-use crate::port::{inb, insw, outb, outsw};
+use crate::port::{inb, insw, outb, outsw, inl, outl};
 
 const DATA_PORT: u16 = 0x1F0;
 const ERROR_PORT: u16 = 0x1F1;
@@ -39,20 +19,19 @@ const STATUS_BSY: u8 = 0x80;
 
 const CMD_READ_SECTORS: u8 = 0x20;
 const CMD_WRITE_SECTORS: u8 = 0x30;
+const CMD_READ_DMA: u8 = 0xC8;
 const CMD_CACHE_FLUSH: u8 = 0xE7;
 const CMD_IDENTIFY: u8 = 0xEC;
 
 pub const SECTOR_SIZE: usize = 512;
 
-/// Какой из двух дисков на первичном ATA-контроллере адресуем.
-/// См. модульную документацию выше — оба используют одни и те же порты
-/// ввода-вывода, различается только бит в DRIVE_HEAD.
+// Bus Master IDE BAR4 базовый порт (по умолчанию 0xC000 в QEMU)
+static mut BMIDE_BASE: u16 = 0xC000;
+static mut PRDT_BUFFER: [u32; 1024] = [0; 1024]; // 4 KiB PRDT буфер
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Drive {
-    /// "Primary Master" — тот самый диск, с которого DeiX загрузилась.
     Master,
-    /// "Primary Slave" — второй физический диск (в QEMU: второй `-drive`).
-    /// Используется командой `install` как место назначения установки.
     Slave,
 }
 
@@ -89,21 +68,86 @@ fn wait_drq_or_err() -> Result<(), ()> {
     Err(())
 }
 
-/// Читает `count` секторов начиная с `lba` (LBA28, максимум 256 секторов
-/// за один вызов — ограничение регистра sector count) в `buffer`
-/// (buffer.len() должен быть >= count * SECTOR_SIZE). Читает с диска
-/// Master (см. read_sectors_from для чтения с произвольного диска).
+pub fn init_dma(bar4: u16) {
+    if bar4 != 0 {
+        unsafe {
+            BMIDE_BASE = bar4;
+        }
+    }
+}
+
+/// Чтение секторов через Bus Master IDE DMA (fallback на PIO при недоступности)
+pub fn read_sectors_dma(lba: u32, count: u8, buffer: &mut [u8]) -> Result<(), ()> {
+    if crate::ramdisk::is_active() {
+        return crate::ramdisk::read_sectors(lba, count, buffer);
+    }
+
+    let bmi_base = unsafe { BMIDE_BASE };
+    let sector_cnt = if count == 0 { 256 } else { count as usize };
+    let total_bytes = sector_cnt * SECTOR_SIZE;
+
+    if buffer.len() < total_bytes {
+        return Err(());
+    }
+
+    if !wait_bsy_clear() {
+        return Err(());
+    }
+
+    unsafe {
+        // Подготовка PRDT (Physical Region Descriptor)
+        let phys_addr = buffer.as_ptr() as u32;
+        PRDT_BUFFER[0] = phys_addr;
+        PRDT_BUFFER[1] = (total_bytes as u32) | 0x80000000; // Bit 31: EOT (End of Table)
+
+        // Адрес PRDT в регистр BMIDTPR
+        let prdt_phys = PRDT_BUFFER.as_ptr() as u32;
+        outl(bmi_base + 0x04, prdt_phys);
+
+        // Установка направления передачи в BMICmd: Read (Bit 3 = 1)
+        outb(bmi_base + 0x00, 0x08);
+
+        // Очистка статуса в BMIStatus
+        let stat = inb(bmi_base + 0x02);
+        outb(bmi_base + 0x02, stat | 0x06);
+
+        // Команда ATA контроллеру
+        outb(CONTROL_PORT, 0x00);
+        outb(DRIVE_HEAD_PORT, Drive::Master.select_byte(lba));
+        outb(ERROR_PORT, 0x00);
+        outb(SECTOR_COUNT_PORT, count);
+        outb(LBA_LOW_PORT, (lba & 0xFF) as u8);
+        outb(LBA_MID_PORT, ((lba >> 8) & 0xFF) as u8);
+        outb(LBA_HIGH_PORT, ((lba >> 16) & 0xFF) as u8);
+        outb(COMMAND_PORT, CMD_READ_DMA);
+
+        // Запуск DMA (BMICmd Bit 0 = 1)
+        outb(bmi_base + 0x00, 0x09);
+
+        // Ожидание завершения передачи
+        for _ in 0..1_000_000 {
+            let bmicmd_stat = inb(bmi_base + 0x02);
+            if bmicmd_stat & 0x01 == 0 { // Bus Master Active = 0
+                // Остановка DMA
+                outb(bmi_base + 0x00, 0x00);
+                return Ok(());
+            }
+        }
+
+        // Остановка DMA при таймауте и fallback на PIO
+        outb(bmi_base + 0x00, 0x00);
+    }
+
+    read_sectors(lba, count, buffer)
+}
+
 pub fn read_sectors(lba: u32, count: u8, buffer: &mut [u8]) -> Result<(), ()> {
-    // RAM-диск (загрузка с USB/Ventoy): разделы лежат в памяти, аппаратный
-    // ATA-контроллер к флешке отношения не имеет.
     if crate::ramdisk::is_active() {
         return crate::ramdisk::read_sectors(lba, count, buffer);
     }
     read_sectors_from(Drive::Master, lba, count, buffer)
 }
 
-/// То же самое, но с явным выбором диска (Master/Slave) — нужно команде
-/// `install` для чтения с загрузочного диска и записи на целевой.
 pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -> Result<(), ()> {
     if buffer.len() < count as usize * SECTOR_SIZE {
         return Err(());
@@ -114,7 +158,7 @@ pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -
     }
 
     unsafe {
-        outb(CONTROL_PORT, 0x00); // включаем прерывания контроллера (nIEN=0), нам они не нужны, но не мешают
+        outb(CONTROL_PORT, 0x00);
         outb(DRIVE_HEAD_PORT, drive.select_byte(lba));
         outb(ERROR_PORT, 0x00);
         outb(SECTOR_COUNT_PORT, count);
@@ -136,17 +180,13 @@ pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -
     Ok(())
 }
 
-/// Пишет `count` секторов из `data` начиная с `lba` на диск Master.
 pub fn write_sectors(lba: u32, count: u8, data: &[u8]) -> Result<(), ()> {
-    // RAM-диск: пишем в память (live-сессия; перезагрузка вернёт образ
-    // как был, т.к. загрузчик каждый раз заново читает .img с флешки).
     if crate::ramdisk::is_active() {
         return crate::ramdisk::write_sectors(lba, count, data);
     }
     write_sectors_to(Drive::Master, lba, count, data)
 }
 
-/// То же самое, но с явным выбором диска — см. read_sectors_from.
 pub fn write_sectors_to(drive: Drive, lba: u32, count: u8, data: &[u8]) -> Result<(), ()> {
     if data.len() < count as usize * SECTOR_SIZE {
         return Err(());
@@ -183,21 +223,14 @@ pub fn write_sectors_to(drive: Drive, lba: u32, count: u8, data: &[u8]) -> Resul
     Ok(())
 }
 
-/// Простая проверка "диск отвечает вообще хоть как-то" — читаем сектор 0
-/// (наш собственный boot-сектор) и убеждаемся, что операция не упала.
 pub fn is_present() -> bool {
     let mut buf = [0u8; SECTOR_SIZE];
     read_sectors(0, 1, &mut buf).is_ok()
 }
 
-/// Проверяет присутствие диска Slave через команду IDENTIFY DEVICE (0xEC)
-/// — в отличие от read_sectors (который может "зависнуть" в ожидании
-/// DRQ, если диска физически нет), IDENTIFY на несуществующем диске
-/// сразу возвращает статус 0x00 (все биты статуса нулевые), что легко
-/// проверить без риска зависнуть в цикле ожидания.
 pub fn is_slave_present() -> bool {
     unsafe {
-        outb(DRIVE_HEAD_PORT, 0xF0); // slave, LBA mode, lba=0
+        outb(DRIVE_HEAD_PORT, 0xF0);
         outb(SECTOR_COUNT_PORT, 0);
         outb(LBA_LOW_PORT, 0);
         outb(LBA_MID_PORT, 0);
@@ -207,7 +240,6 @@ pub fn is_slave_present() -> bool {
 
     let status = unsafe { inb(STATUS_PORT) };
     if status == 0x00 {
-        // Диска нет вообще — контроллер не отвечает.
         return false;
     }
 
@@ -215,9 +247,6 @@ pub fn is_slave_present() -> bool {
         return false;
     }
 
-    // Если LBA_MID/LBA_HIGH не нулевые после IDENTIFY — это не ATA-диск
-    // (скорее всего ATAPI, например CD-ROM), для наших целей установки
-    // такое не подходит.
     let lba_mid = unsafe { inb(LBA_MID_PORT) };
     let lba_high = unsafe { inb(LBA_HIGH_PORT) };
     if lba_mid != 0 || lba_high != 0 {
@@ -227,17 +256,10 @@ pub fn is_slave_present() -> bool {
     wait_drq_or_err().is_ok()
 }
 
-/// Возвращает общее число адресуемых секторов диска Slave, читая слова
-/// 60-61 структуры IDENTIFY DEVICE (стандартное поле "Total number of
-/// user addressable sectors" для LBA28-дисков). Нужно команде `install`,
-/// чтобы не записать больше данных, чем реально помещается на целевой
-/// диск.
 pub fn slave_sector_count() -> Option<u32> {
     if !is_slave_present() {
         return None;
     }
-    // is_slave_present() уже отправил IDENTIFY и дождался DRQ — данные
-    // готовы к чтению, остаётся вычитать все 256 слов (512 байт) буфера.
     let mut buf = [0u8; SECTOR_SIZE];
     unsafe {
         insw(DATA_PORT, &mut buf);
@@ -249,4 +271,3 @@ pub fn slave_sector_count() -> Option<u32> {
         Some(sectors)
     }
 }
-

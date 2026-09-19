@@ -337,7 +337,11 @@ pub fn execute(line: &str) {
         "profile" => crate::userfs::cmd_profile(rest, &current_user().unwrap_or_default()),
         "lock" => crate::loginui::cmd_lock(&current_user().unwrap_or_default()),
         "kexec" => crate::kexec::cmd_kexec(rest),
-        "threads" => crate::sched::cmd_threads(rest),
+        "threads" => crate::taskmgr::cmd_taskmgr(rest),
+        "taskmgr" => crate::taskmgr::cmd_taskmgr(rest),
+        "ds" | "dxs" => crate::ds::cmd_ds(rest),
+        "duil" => crate::duil::cmd_duil(rest),
+        "usb" => crate::usb::cmd_usb(rest),
         "su" | "sudo" | "root" => {
             if crate::devmode::sudo_allowed() {
                 // Dev-режим: sudo доступен (гарантия OTA снята).

@@ -48,6 +48,10 @@ fn read_reg(index: u16) -> u16 {
     }
 }
 
+pub fn detect_bios_framebuffer() -> Option<Framebuffer> {
+    crate::vbe_bios::detect_bios_framebuffer()
+}
+
 pub fn is_available() -> bool {
     read_reg(VBE_DISPI_INDEX_ID) == VBE_DISPI_ID5
 }
