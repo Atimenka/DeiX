@@ -71,6 +71,15 @@ def build_ota(payload, version):
 
 # ---------- EROFS с файлом (как tools/make_deix_fs.py) ----------
 def build_erofs_with_file(label, name, data, sectors):
+    try:
+        from make_deix_fs import build_real_erofs
+        blob = build_real_erofs({name: data}, label)
+        img = bytearray(sectors * SECTOR)
+        dlen = min(len(blob), len(img))
+        img[:dlen] = blob[:dlen]
+        return bytes(img)
+    except Exception:
+        pass
     img = bytearray(sectors * SECTOR)
     sb = 1024
     img[sb:sb+4] = struct.pack("<I", EROFS_MAGIC)
@@ -92,24 +101,47 @@ def build_erofs_with_file(label, name, data, sectors):
     return bytes(img)
 
 def erofs_list(img):
-    """Читает файлы EROFS-раздела: [(name, size)]."""
-    if len(img) < 1024 + 4:
+    """Читает файлы EROFS-раздела v1: [(name, size, off)]."""
+    if len(img) < 1024 + 128:
         return []
     magic = struct.unpack("<I", img[1024:1028])[0]
     if magic != EROFS_MAGIC:
         return []
-    tbl = 1024 + 128
-    if len(img) < tbl + 4:
+    root_nid = struct.unpack("<H", img[1024+14:1024+16])[0]
+    meta_blkaddr = struct.unpack("<I", img[1024+40:1024+44])[0]
+    root_inode_off = meta_blkaddr * 4096 + root_nid * 32
+    if len(img) < root_inode_off + 32:
         return []
-    count = struct.unpack("<I", img[tbl:tbl+4])[0]
+    dir_size = struct.unpack("<I", img[root_inode_off+8:root_inode_off+12])[0]
+    dir_blkaddr = struct.unpack("<I", img[root_inode_off+16:root_inode_off+20])[0]
+    dir_data_off = dir_blkaddr * 4096
+    if len(img) < dir_data_off + 12:
+        return []
+    first_nameoff = struct.unpack("<H", img[dir_data_off+8:dir_data_off+10])[0]
+    if first_nameoff < 12 or first_nameoff > 4096:
+        return []
+    count = first_nameoff // 12
     out = []
     for i in range(count):
-        e = tbl + 4 + i * 40
-        if e + 40 > len(img):
+        e = dir_data_off + i * 12
+        if e + 12 > len(img):
             break
-        name = img[e:e+32].split(b"\x00")[0].decode(errors="replace")
-        off, size = struct.unpack("<II", img[e+32:e+40])
-        out.append((name, size, off))
+        nid, nameoff, ftype = struct.unpack("<QHB", img[e:e+11])
+        if ftype == 2:  # EROFS_FT_DIR (. or ..)
+            continue
+        name_start = dir_data_off + nameoff
+        if i + 1 < count:
+            next_nameoff = struct.unpack("<H", img[dir_data_off + (i + 1) * 12 + 8:dir_data_off + (i + 1) * 12 + 10])[0]
+            name_end = dir_data_off + next_nameoff
+        else:
+            name_end = dir_data_off + 4096
+        raw_name = img[name_start:name_end].rstrip(b"\x00")
+        name = raw_name.decode("utf-8", errors="replace")
+        ino_off = meta_blkaddr * 4096 + nid * 32
+        fsize = 0
+        if ino_off + 12 <= len(img):
+            fsize = struct.unpack("<I", img[ino_off+8:ino_off+12])[0]
+        out.append((name, fsize, ino_off))
     return out
 
 # ---------- BCB (LBA 3000) ----------
