@@ -502,6 +502,13 @@ pub fn selftest() {
         crate::println!("  [ring3] переход в CPL=3 (entry {:#x})...", USER_CODE);
         USER_EXITED = false;
         enter_ring3(USER_CODE, USER_STACK_TOP);
+
+        let rflags: u64;
+        core::arch::asm!("pushfq; pop {}", out(reg) rflags);
+        if rflags & (1 << 9) == 0 {
+            crate::serial_println!("[ring3] КРИТИЧНО: IF=0 после selftest");
+            core::arch::asm!("sti");
+        }
     }
 }
 
