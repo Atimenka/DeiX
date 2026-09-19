@@ -173,17 +173,16 @@ fn validate_username(username: &str) -> Result<(), AuthError> {
     Ok(())
 }
 
-/// Вычисляет SHA-256(salt || password) — именно в этом порядке (соль
-/// ПЕРЕД паролем), как это делают большинство salted-hash схем, чтобы
-/// два пользователя с одинаковым паролем получили совершенно разные
-/// хэши (защита от rainbow-таблиц и от простого сравнения хэшей между
-/// аккаунтами, которое иначе выдало бы "у этих двух юзеров одинаковый
-/// пароль", даже не зная сам пароль).
+/// Вычисляет PBKDF2-HMAC-SHA512(password, salt, 1000) — замедленный KDF
+/// с солью для защиты от перебора и rainbow-таблиц (совпадает по подходу с LUKS).
 fn hash_password(salt: &[u8; SALT_LEN], password: &str) -> [u8; HASH_LEN] {
-    let mut hasher = sha256::Sha256::new();
-    hasher.update(salt);
-    hasher.update(password.as_bytes());
-    hasher.finalize()
+    let mut key = crate::crypto::pbkdf2::pbkdf2_sha512(password.as_bytes(), salt, 1000);
+    let mut out = [0u8; HASH_LEN];
+    out.copy_from_slice(&key[..HASH_LEN]);
+    for b in key.iter_mut() {
+        *b = 0;
+    }
+    out
 }
 
 /// Постоянное по времени сравнение двух хэшей — обычное `==` для срезов
