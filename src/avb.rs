@@ -200,9 +200,13 @@ impl VerifiedBoot {
 
     /// Выполняет задержку Orange (5 сек) с предупреждением.
     pub fn orange_warning(&self) {
-        crate::println!("  [avb] !!! Bootloader UNLOCKED (dev-режим) !!!");
-        crate::println!("  [avb] Система может быть изменена. OTA-гарантия НЕ действует.");
-        crate::println!("  [avb] Задержка запуска: {} мс", self.orange_delay_ms);
+        crate::println!("  ==========================================================");
+        crate::println!("  [AVB STATE: ORANGE] WARNING: BOOTLOADER UNLOCKED");
+        crate::println!("  Device state: UNLOCKED (Dev-mode active)");
+        crate::println!("  System software integrity cannot be guaranteed.");
+        crate::println!("  Delaying boot for {} ms...", self.orange_delay_ms);
+        crate::println!("  ==========================================================");
+        crate::bootlogo::set_status("AVB: UNLOCKED (ORANGE STATE)");
         let t = crate::timer::uptime_ms() + self.orange_delay_ms;
         while crate::timer::uptime_ms() < t {
             unsafe { core::arch::asm!("hlt"); }
@@ -212,22 +216,23 @@ impl VerifiedBoot {
     /// Красный экран RED STATE: знак опасности сверху + красная надпись.
     /// Загрузка запрещена — система не запускается (зависание с экраном).
     pub fn red_screen() -> ! {
-        // Знак опасности (⚠) и надпись — в консоль и serial.
+        crate::bootlogo::set_status("AVB RED STATE: CORRUPT DEVICE");
         crate::println!();
-        crate::println!("  #############################################");
+        crate::println!("  ==========================================================");
+        crate::println!("  [AVB STATE: RED] CRITICAL SECURITY WARNING");
+        crate::println!("  ##########################################################");
         crate::println!("  #  ⚠  ⚠  ⚠  ⚠  ⚠  ⚠  ⚠  ⚠  ⚠  ⚠  ⚠  ⚠  ⚠  #");
-        crate::println!("  #############################################");
-        crate::println!("  #                                           #");
-        crate::println!("  #  Your device is corrupt.                  #");
-        crate::println!("  #  It can't be trusted and will not boot.   #");
-        crate::println!("  #                                           #");
-        crate::println!("  #  (verified boot error / RED STATE)        #");
-        crate::println!("  #                                           #");
-        crate::println!("  #############################################");
-        crate::println!("  [avb] Система не загружена: vbmeta не отключена,");
-        crate::println!("  [avb] загрузчик заблокирован, но системные файлы изменены.");
+        crate::println!("  ##########################################################");
+        crate::println!("  #                                                        #");
+        crate::println!("  #  Your device is corrupt.                               #");
+        crate::println!("  #  It can't be trusted and will not boot.                #");
+        crate::println!("  #                                                        #");
+        crate::println!("  ##########################################################");
+        crate::println!("  RECOVERY INSTRUCTIONS:");
+        crate::println!("  1. Reboot to Fastbootd or DSM to flash factory images.");
+        crate::println!("  2. Or enable dev-mode ('dev on') to allow modified images.");
+        crate::println!("  ==========================================================");
         crate::serial_println!("[avb] RED STATE: Your device is corrupt. It can't be trusted and will not boot.");
-        // Бесконечное зависание с экраном (система не запускается).
         loop {
             unsafe { core::arch::asm!("hlt"); }
         }
@@ -275,10 +280,10 @@ pub fn avb_mut() -> crate::spinlock::SpinLockGuard<'static, VerifiedBoot> {
 ///  - Orange: предупреждение + задержка 5 сек;
 ///  - Red: красный экран, система не загружается.
 pub fn boot_verify() {
-    crate::println!("  [avb] Verified Boot: проверка целостности...");
+    crate::println!("  [avb] Verified Boot: проверка целостности компонентов...");
     let mut vb = VERIFIED_BOOT.lock();
 
-    // Системные файлы для проверки (в модели — ключевые файлы ОС).
+    // Системные и загрузочные файлы для проверки.
     let sys: Vec<(&str, Vec<u8>)> = {
         let mut v = Vec::new();
         if let Ok(d) = crate::ext2::read_file("USERS.DB") {
@@ -287,6 +292,9 @@ pub fn boot_verify() {
         if let Ok(d) = crate::ext2::read_file("DXINIT.CFG") {
             v.push(("DXINIT.CFG", d));
         }
+        if let Some(text) = crate::bootchain::get_init_deix() {
+            v.push(("init.deix", text.into_bytes()));
+        }
         v
     };
     let sys_refs: Vec<(&str, &[u8])> = sys.iter().map(|(n, d)| (*n, d.as_slice())).collect();
@@ -294,36 +302,71 @@ pub fn boot_verify() {
     // Если vbmeta ещё не установлена (первый запуск/заводской образ).
     if vb.vbmeta.is_none() {
         if sys_refs.is_empty() {
-            // Заводской образ: системных файлов ещё нет — это НЕ нарушение.
-            // Загрузка разрешена (GREEN), vbmeta появится при первой настройке.
             vb.boot_state = BootState::Green;
-            crate::println!("  [avb] GREEN: заводской образ (vbmeta ещё не запечатана).");
+            crate::println!("  [AVB STATE: GREEN] Заводской образ (vbmeta сформируется при настройке).");
             return;
         } else {
-            // Первый запуск с файлами — формируем vbmeta и запечатываем.
             let vm = VbMeta::build(&sys_refs);
             vb.vbmeta = Some(vm);
-            crate::println!("  [avb] vbmeta сформирована ({} файлов).", sys_refs.len());
+            crate::println!("  [AVB STATE: GREEN] VBMETA запечатана (задействовано компонентов: {}).", sys_refs.len());
         }
     }
 
     let state = vb.check(&sys_refs);
     match state {
         BootState::Green => {
-            crate::println!("  [avb] GREEN: загрузка подтверждена (bootloader locked, файлы целы).");
+            crate::println!("  [AVB STATE: GREEN] Загрузка подтверждена (bootloader locked, файлы целы).");
         }
         BootState::Orange => {
-            crate::println!("  [avb] ORANGE: загрузчик разблокирован (dev-режим).");
+            crate::println!("  [AVB STATE: ORANGE] Загрузчик разблокирован (dev-режим).");
             drop(vb);
-            // Предупреждение + задержка 5 сек (не держим lock во время паузы).
             let vb2 = VERIFIED_BOOT.lock();
             vb2.orange_warning();
             drop(vb2);
         }
         BootState::Red => {
-            crate::println!("  [avb] RED: системные файлы изменены при заблокированном загрузчике.");
+            crate::println!("  [AVB STATE: RED] Системные файлы изменены при заблокированном загрузчике!");
             drop(vb);
-            VerifiedBoot::red_screen(); // не возвращается
+            VerifiedBoot::red_screen();
+        }
+    }
+}
+
+/// Обработчик команды `avb [status|verify|lock|unlock]`
+pub fn cmd_avb(arg: &str) {
+    let mut parts = arg.trim().split_whitespace();
+    let sub = parts.next().unwrap_or("status");
+
+    let mut vb = VERIFIED_BOOT.lock();
+
+    match sub {
+        "status" | "info" => {
+            crate::println!("=== ANDROID VERIFIED BOOT (AVB / VBMETA) ===");
+            crate::println!("  Состояние AVB:    [AVB STATE: {}]", vb.boot_state.as_str());
+            crate::println!("  Загрузчик (Lock): {}", vb.lock.as_str());
+            crate::println!("  OTA-гарантия:    {}", if vb.ota_guarantee { "АКТИВНА" } else { "АННУЛИРОВАНА (dev-mode)" });
+            if let Some(ref vm) = vb.vbmeta {
+                crate::println!("  vbmeta:          Запечатана (компонентов: {})", vm.entries.len());
+                crate::println!("  Дайджест vbmeta: {}", vm.digest);
+            } else {
+                crate::println!("  vbmeta:          не запечатана (заводской образ)");
+            }
+        }
+        "verify" | "check" => {
+            crate::println!("  [avb] Запуск полной верификации VBMETA...");
+            drop(vb);
+            boot_verify();
+        }
+        "unlock" => {
+            vb.unlock_bootloader();
+            crate::println!("  [avb] Загрузчик РАЗБЛОКИРОВАН (переход в [AVB STATE: ORANGE]). OTA-гарантия аннулирована.");
+        }
+        "lock" => {
+            vb.lock_bootloader();
+            crate::println!("  [avb] Загрузчик ЗАБЛОКИРОВАН (возврат к заводскому состоянию [AVB STATE: GREEN]).");
+        }
+        _ => {
+            crate::println!("Использование: avb [status|verify|lock|unlock]");
         }
     }
 }

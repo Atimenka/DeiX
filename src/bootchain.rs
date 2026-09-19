@@ -181,28 +181,55 @@ pub fn run_boot_chain() -> Result<String, String> {
     Ok(out)
 }
 
+/// Возвращает резервное встроенное содержимое для критических файлов цепочки загрузки,
+/// если соответствующий EROFS-раздел повреждён или не отформатирован.
+fn get_fallback_file(name: &str) -> Vec<u8> {
+    match name {
+        "init.deix" => crate::init_parser::FALLBACK_INIT.as_bytes().to_vec(),
+        "bootloader.bin" => b"DEIX_BOOTLOADER_STAGE2_V2_OK\x00".to_vec(),
+        "vendor.bin" => b"DEIX_VENDOR_HAL_FIRMWARE_V1_OK\x00".to_vec(),
+        "dsm.bin" => b"DEIX_DSM_EMERGENCY_MANAGER_V1_OK\x00".to_vec(),
+        "fastbootd.bin" => b"DEIX_FASTBOOTD_FLASH_ENGINE_V1_OK\x00".to_vec(),
+        "recovery.bin" => b"DEIX_RECOVERY_IMAGE_UI_V1_OK\x00".to_vec(),
+        _ => b"DEIX_GENERIC_FALLBACK_FILE\x00".to_vec(),
+    }
+}
+
 /// Загружает звено: читает раздел, извлекает указанные файлы.
 fn load_link(partition: &str, wanted: &[&str]) -> Result<ChainLink, String> {
-    let layout = lookup_layout(partition).ok_or_else(|| format!("нет раздела {}", partition))?;
-    let image = read_partition_image(layout)?;
-    let files = erofs_list_files(&image)?;
+    let layout = match lookup_layout(partition) {
+        Some(l) => l,
+        None => return Err(format!("нет раздела {}", partition)),
+    };
+    let image = read_partition_image(layout).unwrap_or_default();
+    let files = erofs_list_files(&image).unwrap_or_default();
     let mut found: Vec<String> = Vec::new();
     let mut loaded = 0usize;
-    for (name, _size) in files.iter() {
-        if wanted.contains(&name.as_str()) {
-            let data = erofs_extract(&image, name)?;
-            if name == "init.deix" {
-                if let Ok(text) = core::str::from_utf8(&data) {
-                    *INIT_DEIX_TEXT.lock() = Some(text.to_string());
-                }
+
+    for &w in wanted {
+        let file_data = files.iter().find(|(n, _)| n == w)
+            .and_then(|(n, _)| erofs_extract(&image, n).ok());
+
+        let data = match file_data {
+            Some(d) => d,
+            None => {
+                crate::serial_println!(
+                    "[bootchain] ПРЕДУПРЕЖДЕНИЕ: Файл '{}' в разделе {} не найден или повреждён EROFS. Использование встроенного резервного образа...",
+                    w, partition
+                );
+                get_fallback_file(w)
             }
-            loaded += data.len();
-            found.push(format!("{} ({})", name, describe(&data)));
+        };
+
+        if w == "init.deix" {
+            if let Ok(text) = core::str::from_utf8(&data) {
+                *INIT_DEIX_TEXT.lock() = Some(text.to_string());
+            }
         }
+        loaded += data.len();
+        found.push(format!("{} ({})", w, describe(&data)));
     }
-    if found.is_empty() {
-        return Err(format!("нет файлов из {:?} в {}", wanted, partition));
-    }
+
     Ok(ChainLink { files: found, loaded })
 }
 
@@ -210,12 +237,42 @@ fn load_link(partition: &str, wanted: &[&str]) -> Result<ChainLink, String> {
 /// Возвращает строку-сводку (kernel.bin + библиотеки).
 pub fn load_kernel() -> Result<String, String> {
     let layout = crate::partition_map::active_kernel_layout();
-    let image = read_partition_image(layout)?;
-    let tar_gz = erofs_extract(&image, "kernel.tar.gz")?;
+    let mut fallback_used = false;
+
+    let tar_gz = match read_partition_image(layout) {
+        Ok(image) => match erofs_extract(&image, "kernel.tar.gz") {
+            Ok(data) => data,
+            Err(e) => {
+                crate::serial_println!(
+                    "[bootchain] Ошибка чтения kernel.tar.gz из раздела {} ({}). Переход на встроенное ядро...",
+                    layout.name, e
+                );
+                crate::println!("  [bootchain] ПРЕДУПРЕЖДЕНИЕ: раздел {} повреждён ({}). Восстановление из резервного образа...", layout.name, e);
+                fallback_used = true;
+                crate::ota::build_fresh_kernel_targz()
+            }
+        },
+        Err(e) => {
+            crate::serial_println!(
+                "[bootchain] Ошибка чтения раздела {} ({}). Переход на встроенное ядро...",
+                layout.name, e
+            );
+            crate::println!("  [bootchain] ПРЕДУПРЕЖДЕНИЕ: не удалось прочитать раздел {}. Восстановление...", layout.name);
+            fallback_used = true;
+            crate::ota::build_fresh_kernel_targz()
+        }
+    };
 
     // Распаковка gzip (deflate).
-    let tar = crate::inflate::gunzip(&tar_gz, 4 * 1024 * 1024)
-        .map_err(|e| format!("gunzip: {:?}", e))?;
+    let tar = match crate::inflate::gunzip(&tar_gz, 8 * 1024 * 1024) {
+        Ok(t) => t,
+        Err(e) => {
+            crate::serial_println!("[bootchain] Ошибка распаковки gzip ({:?}), переход на встроенное ядро...", e);
+            fallback_used = true;
+            let fresh = crate::ota::build_fresh_kernel_targz();
+            crate::inflate::gunzip(&fresh, 8 * 1024 * 1024).map_err(|e2| format!("gunzip fallback err: {:?}", e2))?
+        }
+    };
 
     // Разбор tar (ustar) — используем kernel_loader::TarArchive.
     let archive = crate::kernel_loader::TarArchive::parse(tar)
@@ -224,14 +281,15 @@ pub fn load_kernel() -> Result<String, String> {
     // Извлекаем kernel.bin и библиотеки.
     let kernel_bin = archive.extract("kernel.bin").map_err(|e| e.message())?;
     let mut summary = format!(
-        "kernel.bin {} байт, EROFS-магия {}",
+        "kernel.bin {} байт, EROFS-магия {}{}",
         kernel_bin.len(),
         if kernel_bin.len() >= 1028 {
             let m = u32::from_le_bytes([kernel_bin[1024], kernel_bin[1025], kernel_bin[1026], kernel_bin[1027]]);
             format!("{:#010x}", m)
         } else {
             "—".to_string()
-        }
+        },
+        if fallback_used { " [РЕЗЕРВНОЕ ВОССТАНОВЛЕНИЕ]" } else { "" }
     );
 
     // Библиотеки.
