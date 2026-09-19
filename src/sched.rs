@@ -90,6 +90,7 @@ pub struct Task {
     pub exit_code: i64,
     pub hung: bool,
     pub quantum_used: u64,
+    pub ticks_since_yield: u64,
     pub owner_pid: u32,
     pub tls_base: u64,
 }
@@ -113,6 +114,7 @@ impl Task {
             exit_code: 0,
             hung: false,
             quantum_used: 0,
+            ticks_since_yield: 0,
             owner_pid: 0,
             tls_base: 0,
         }
@@ -124,7 +126,6 @@ static CURRENT: AtomicUsize = AtomicUsize::new(0);
 static SCHED_ACTIVE: AtomicBool = AtomicBool::new(false);
 static SWITCHES: AtomicUsize = AtomicUsize::new(0);
 static NEXT_PID: AtomicUsize = AtomicUsize::new(10);
-static SAME_TASK_STREAK: AtomicUsize = AtomicUsize::new(0);
 static TABLE_LOCK: SpinLock<()> = SpinLock::new(());
 
 pub fn switch_count() -> usize {
@@ -206,8 +207,31 @@ extern "C" fn schedule_from_irq(rsp: u64) -> u64 {
         if tasks[cur].state != State::Empty {
             tasks[cur].rsp = rsp;
             tasks[cur].cpu_ticks += 1;
-            tasks[cur].kernel_ticks += 1;
             tasks[cur].quantum_used += 1;
+            tasks[cur].ticks_since_yield += 1;
+
+            // Определяем Ring 3 vs Ring 0 по селектору CS в кадре
+            let cs = *((rsp + 128) as *const u64);
+            if cs & 3 == 3 {
+                tasks[cur].user_ticks += 1;
+            } else {
+                tasks[cur].kernel_ticks += 1;
+            }
+
+            // Watchdog: отслеживание непрерывного исполнения задачи без yield/sleep > 10 секунд
+            if tasks[cur].ticks_since_yield > 1000
+                && tasks[cur].pid != 1
+                && tasks[cur].pid != 0
+                && tasks[cur].state != State::Sleeping
+            {
+                tasks[cur].hung = true;
+                tasks[cur].state = State::Finished;
+                tasks[cur].exit_code = -11;
+                crate::syslog::log_line(&alloc::format!(
+                    "[watchdog] Задача '{}' (PID {}) зависла — снята супервизором",
+                    tasks[cur].name, tasks[cur].pid
+                ));
+            }
         }
 
         // Пробуждение спящих задач
@@ -231,7 +255,6 @@ extern "C" fn schedule_from_irq(rsp: u64) -> u64 {
             let mut cand = (cur + 1) % MAX_TASKS;
             for _ in 0..MAX_TASKS {
                 if tasks[cand].state == State::Ready && tasks[cand].priority == prio && !tasks[cand].hung {
-                    // Если текущая ещё не исчерпала квант и имеет тот же высший приоритет, продолжаем её
                     if cand == cur && !force_resched {
                         best_idx = cur;
                         found = true;
@@ -250,22 +273,12 @@ extern "C" fn schedule_from_irq(rsp: u64) -> u64 {
             }
         }
 
-        if !found || (best_idx == cur && !force_resched) {
-            let streak = SAME_TASK_STREAK.fetch_add(1, Ordering::Relaxed);
-            if streak > 100 && tasks[cur].pid != 1 && tasks[cur].pid != 0 {
-                // Watchdog: снятие зависшей задачи Ring 0
-                tasks[cur].hung = true;
-                tasks[cur].state = State::Finished;
-                tasks[cur].exit_code = -11;
-                crate::syslog::log_line(&alloc::format!("[watchdog] Задача '{}' (PID {}) зависла — снята супервизором", tasks[cur].name, tasks[cur].pid));
-            }
+        if !found || best_idx == cur {
             return rsp;
         }
 
-        SAME_TASK_STREAK.store(0, Ordering::Relaxed);
         tasks[cur].switches_invol += 1;
         tasks[best_idx].quantum_used = 0;
-        tasks[best_idx].switches_vol += 1;
 
         if tasks[best_idx].tls_base != 0 {
             // Установка MSR_FS_BASE для Thread Local Storage
@@ -294,6 +307,21 @@ pub fn exit_current() -> ! {
     }
     loop {
         unsafe { core::arch::asm!("hlt") };
+    }
+}
+
+pub fn wake(pid: u32) {
+    let _guard = TABLE_LOCK.lock();
+    unsafe {
+        let tasks = &mut *(&raw mut TASKS);
+        for t in tasks.iter_mut() {
+            if t.pid == pid {
+                if let State::Sleeping(_) = t.state {
+                    t.state = State::Ready;
+                }
+                break;
+            }
+        }
     }
 }
 
@@ -446,6 +474,7 @@ pub fn spawn_pid(name: &str, func: extern "C" fn(), pid: u32, priority: Priority
             t.exit_code = 0;
             t.hung = false;
             t.quantum_used = 0;
+            t.ticks_since_yield = 0;
             t.owner_pid = pid;
             t.tls_base = 0;
 
@@ -466,7 +495,12 @@ pub fn sleep_ms(ms: u64) {
     let until = crate::timer::uptime_ms() + ms;
     unsafe {
         let cur = CURRENT.load(Ordering::Relaxed);
-        (*(&raw mut TASKS))[cur].state = State::Sleeping(until);
+        let tasks = &mut *(&raw mut TASKS);
+        if tasks[cur].state != State::Empty {
+            tasks[cur].ticks_since_yield = 0;
+            tasks[cur].switches_vol += 1;
+            tasks[cur].state = State::Sleeping(until);
+        }
     }
     while crate::timer::uptime_ms() < until {
         unsafe { core::arch::asm!("hlt") };
@@ -474,6 +508,14 @@ pub fn sleep_ms(ms: u64) {
 }
 
 pub fn yield_now() {
+    unsafe {
+        let cur = CURRENT.load(Ordering::Relaxed);
+        let tasks = &mut *(&raw mut TASKS);
+        if tasks[cur].state != State::Empty {
+            tasks[cur].ticks_since_yield = 0;
+            tasks[cur].switches_vol += 1;
+        }
+    }
     unsafe { core::arch::asm!("int 32", options(nostack)) };
 }
 

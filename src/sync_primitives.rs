@@ -40,7 +40,7 @@ impl Mutex {
         if self.owner.compare_exchange(cur_pid, 0, Ordering::Release, Ordering::Relaxed).is_ok() {
             let mut w = self.waiters.lock();
             if let Some(next_pid) = w.pop() {
-                crate::sched::set_state(next_pid, crate::sched::State::Ready);
+                crate::sched::wake(next_pid);
             }
         }
     }
@@ -136,7 +136,7 @@ impl Condvar {
     pub fn notify_one(&self) {
         let mut w = self.waiters.lock();
         if let Some((pid, _)) = w.pop() {
-            crate::sched::set_state(pid, crate::sched::State::Ready);
+            crate::sched::wake(pid);
         }
     }
 }
