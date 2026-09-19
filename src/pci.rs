@@ -90,13 +90,15 @@ pub fn find_device(vendor_id: u16, device_id: u16) -> Option<PciDevice> {
 /// пространства, см. таблицу PCI Class Codes) — например 0x03 для
 /// "Display controller" (видеокарта любого производителя).
 pub fn find_device_by_class(class_code: u8) -> Option<PciDevice> {
-    for bus in 0..=255u16 {
+    for bus in 0..=7u16 {
         let bus = bus as u8;
+        let mut bus_empty = true;
         for slot in 0..32u8 {
             let vendor = read_config_u16(bus, slot, 0, 0x00);
             if vendor == 0xFFFF {
                 continue;
             }
+            bus_empty = false;
 
             let header_type = (read_config_u32(bus, slot, 0, 0x0C) >> 16) & 0xFF;
             let max_function = if header_type & 0x80 != 0 { 8 } else { 1 };
@@ -120,7 +122,7 @@ pub fn find_device_by_class(class_code: u8) -> Option<PciDevice> {
                 }
             }
         }
-        if bus == 255 {
+        if bus_empty && bus > 0 {
             break;
         }
     }
@@ -130,13 +132,15 @@ pub fn find_device_by_class(class_code: u8) -> Option<PciDevice> {
 /// Ищет устройство по паре Class + Subclass (например, Class 0x04 + Subclass 0x03
 /// для аудиоконтроллера Intel High Definition Audio).
 pub fn find_device_by_class_subclass(class_code: u8, subclass_code: u8) -> Option<PciDevice> {
-    for bus in 0..=255u16 {
+    for bus in 0..=7u16 {
         let bus = bus as u8;
+        let mut bus_empty = true;
         for slot in 0..32u8 {
             let vendor = read_config_u16(bus, slot, 0, 0x00);
             if vendor == 0xFFFF {
                 continue;
             }
+            bus_empty = false;
 
             let header_type = (read_config_u32(bus, slot, 0, 0x0C) >> 16) & 0xFF;
             let max_function = if header_type & 0x80 != 0 { 8 } else { 1 };
@@ -161,7 +165,7 @@ pub fn find_device_by_class_subclass(class_code: u8, subclass_code: u8) -> Optio
                 }
             }
         }
-        if bus == 255 {
+        if bus_empty && bus > 0 {
             break;
         }
     }
@@ -169,13 +173,15 @@ pub fn find_device_by_class_subclass(class_code: u8, subclass_code: u8) -> Optio
 }
 
 fn find_device_where(predicate: impl Fn(u16, u16) -> bool) -> Option<PciDevice> {
-    for bus in 0..=255u16 {
+    for bus in 0..=7u16 {
         let bus = bus as u8;
+        let mut bus_empty = true;
         for slot in 0..32u8 {
             let vendor = read_config_u16(bus, slot, 0, 0x00);
             if vendor == 0xFFFF {
                 continue; // устройства нет
             }
+            bus_empty = false;
 
             let header_type = (read_config_u32(bus, slot, 0, 0x0C) >> 16) & 0xFF;
             let max_function = if header_type & 0x80 != 0 { 8 } else { 1 };
@@ -197,7 +203,7 @@ fn find_device_where(predicate: impl Fn(u16, u16) -> bool) -> Option<PciDevice> 
                 }
             }
         }
-        if bus == 255 {
+        if bus_empty && bus > 0 {
             break;
         }
     }

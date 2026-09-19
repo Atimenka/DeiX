@@ -276,13 +276,17 @@ fn pit_wait_ticks(ticks_to_wait: u32) {
 /// Устраняет эффект «быстрого воспроизведения» (чипманк/ускоренный звук) в QEMU/KVM:
 /// длительность каждого сэмпла строго отсчитывается по генератору PIT (1_193_182 Гц),
 /// благодаря чему темп и тональность звука 100% совпадают с оригинальной записью.
-fn play_pcm8(samples: &[u8], rate: u32) {
+fn play_pcm8_max(samples: &[u8], rate: u32, max_samples: Option<usize>) {
     let effective_rate = rate.clamp(2000, 48000);
     let sample_ticks: u32 = (1_193_182u32 / effective_rate).max(4);
 
     let orig = unsafe { inb(SPEAKER) };
+    let slice = match max_samples {
+        Some(max_s) => &samples[..samples.len().min(max_s)],
+        None => samples,
+    };
 
-    for &s in samples {
+    for &s in slice {
         let high_ticks = (sample_ticks * (s as u32)) / 255;
         let low_ticks = sample_ticks.saturating_sub(high_ticks);
 
@@ -308,6 +312,10 @@ fn play_pcm8(samples: &[u8], rate: u32) {
     }
 }
 
+fn play_pcm8(samples: &[u8], rate: u32) {
+    play_pcm8_max(samples, rate, None);
+}
+
 /// Играет системный эффект (читает DPS из /super при каждом вызове).
 /// Ошибки не фатальны: если звука нет в старом образе — тихо возвращаем Err,
 /// система продолжает работать беззвучно, как раньше.
@@ -321,7 +329,10 @@ pub fn play_ui(sound: UiSound) -> Result<(), &'static str> {
         }
     }
     let (rate, samples) = parse_dps(&raw)?;
-    play_pcm8(samples, rate);
+    // Для UI-звуков на PC speaker ограничиваем время звука 250 мс,
+    // чтобы не блокировать загрузку ОС на 3.7–5.5 секунд.
+    let max_boot_samples = (rate as usize) / 4;
+    play_pcm8_max(samples, rate, Some(max_boot_samples));
     Ok(())
 }
 

@@ -32,11 +32,36 @@ pub fn get_init_deix() -> Option<String> {
     INIT_DEIX_TEXT.lock().clone()
 }
 
-/// Читает весь EROFS-раздел с диска.
+/// Читает EROFS-раздел с диска, считывая только фактически занятые блоки.
 pub fn read_partition_image(layout: &PartitionLayout) -> Result<Vec<u8>, String> {
-    let mut out: Vec<u8> = Vec::with_capacity((layout.sectors as usize) * 512);
-    let mut cur = 0u32;
-    let mut left = layout.sectors;
+    if layout.sectors == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Раннее чтение первого блока (4096 байт = 8 секторов) для определения размера EROFS
+    let first_batch = layout.sectors.min(8);
+    let mut header_buf = vec![0u8; (first_batch * 512) as usize];
+    ata::read_sectors(layout.start_lba, first_batch as u8, &mut header_buf)
+        .map_err(|_| format!("read {} err", layout.name))?;
+
+    let total_sectors = if layout.fs == "erofs" {
+        if let Ok(sb) = crate::erofs::parse_superblock(&header_buf) {
+            let needed_bytes = (sb.blocks as usize) * sb.block_size();
+            let needed_sectors = ((needed_bytes + 511) / 512) as u32;
+            needed_sectors.max(first_batch).min(layout.sectors)
+        } else {
+            layout.sectors
+        }
+    } else {
+        layout.sectors
+    };
+
+    let mut out: Vec<u8> = Vec::with_capacity((total_sectors as usize) * 512);
+    out.extend_from_slice(&header_buf);
+
+    let mut cur = first_batch;
+    let mut left = total_sectors.saturating_sub(first_batch);
+
     while left > 0 {
         let batch = left.min(256);
         let mut buf = vec![0u8; (batch * 512) as usize];
