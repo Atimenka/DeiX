@@ -577,11 +577,20 @@ def init_all_partitions(img, kernel_bin='build/kernel.bin'):
         elif name in ("/userdata", "/OTA"):
             format_ext2_at(img, start, secs)
         elif name == "/init_boot":
-            init_deix_path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "boot", "init.deix")
-            if not _os.path.exists(init_deix_path):
-                init_deix_path = _os.path.join("boot", "init.deix")
-            with open(init_deix_path, "rb") as f:
-                init_deix_content = f.read()
+            root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+            init_deix_path = _os.path.join(root, "boot", "init.deix")
+            if _os.path.exists(init_deix_path):
+                with open(init_deix_path, "rb") as f:
+                    init_deix_content = f.read()
+            else:
+                print("  WARN: boot/init.deix не найден — в /init_boot пойдёт FALLBACK")
+                init_deix_content = (
+                    b"# fallback init.deix\n"
+                    b"on init_boot\n"
+                    b"    service pid1_core /bin/pid1_core 0\n"
+                )
+            if len(init_deix_content) == 0:
+                raise SystemExit("ОШИБКА: boot/init.deix пуст — Dinit останется без команд")
             write_erofs_image(img, start, secs, name, {
                 "bootloader.bin": bootloader_bin,
                 "init.deix": init_deix_content,

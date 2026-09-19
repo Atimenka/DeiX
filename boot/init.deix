@@ -10,6 +10,10 @@ on init_boot
     service auth_broker /bin/auth_broker 0
     service vfs_flusher /bin/vfs_flusher 0
 
+on vendor_boot
+    mount erofs /dev/block/by-name/vendor_boot /vendor_boot ro
+    service vendor_hal /bin/vendor_hal 0
+
 on boot
     mount erofs /dev/block/by-name/super /system ro
     mount ext4 /dev/block/by-name/userdata /userdata rw
