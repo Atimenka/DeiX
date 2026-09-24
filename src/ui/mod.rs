@@ -17,6 +17,7 @@ const TITLEBAR_HEIGHT: i32 = 28;
 const BUTTON_DIAMETER: i32 = 14;
 const TASKBAR_HEIGHT: u32 = 40;
 const START_BUTTON_WIDTH: i32 = 88;
+const TASKBAR_ITEM_WIDTH: i32 = 150;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThemePreset {
@@ -179,7 +180,6 @@ pub enum WindowContent {
         error: Option<String>,
         status_msg: Option<String>,
     },
-    /// Полнофункциональный браузер с вкладками и движком HTML
     WebBrowser {
         tabs: Vec<BrowserTab>,
         active_tab: usize,
@@ -190,7 +190,6 @@ pub enum WindowContent {
     TaskManager {
         refresh_counter: u64,
     },
-    /// Кастомизация и персонализация UI (Theme Customizer)
     ThemeSettings {
         volume_level: u8,
         brightness_level: u8,
@@ -689,7 +688,6 @@ impl Desktop {
             } else if in_taskbar {
                 self.handle_taskbar_click(mx, taskbar_y, screen_w);
             } else {
-                // Проверяем клик по иконкам на рабочем столе
                 let mut hit_icon = false;
                 let shortcuts = desktop_shortcuts();
                 for (idx, _) in shortcuts.iter().enumerate() {
@@ -1097,7 +1095,6 @@ impl Desktop {
                     status_msg,
                     ..
                 } => {
-                    // Клик по быстрым закладам или навигации
                     if rel_y >= 26 && rel_y < 50 {
                         if rel_x >= 8 && rel_x < 36 { // Home
                             let home_url = "deix://home";
@@ -1120,7 +1117,6 @@ impl Desktop {
                     None
                 }
                 WindowContent::ThemeSettings { .. } => {
-                    // Клик по переключению тем
                     if rel_y >= 30 && rel_y < 60 {
                         if rel_x >= 12 && rel_x < 110 {
                             set_theme(UiTheme::catppuccin());
@@ -1423,7 +1419,6 @@ fn draw_window(r: &mut Renderer, theme: &UiTheme, w: &Window, is_focused: bool) 
         } => {
             r.fill_rect_alpha(w.x, content_y, w.width, w.height, theme.window_bg, theme.opacity);
 
-            // 1. Панель вкладок (Tabs Bar: 0..24)
             r.fill_rect(w.x, content_y, w.width, 24, theme.titlebar_inactive);
             let mut tab_x = w.x + 8;
             for (idx, tab) in tabs.iter().enumerate() {
@@ -1434,20 +1429,17 @@ fn draw_window(r: &mut Renderer, theme: &UiTheme, w: &Window, is_focused: bool) 
                 tab_x += 116;
             }
 
-            // 2. Навигационная панель (Nav Bar: 26..50)
             r.fill_rect(w.x, content_y + 24, w.width, 26, theme.titlebar_active);
             r.draw_icon(w.x + 8, content_y + 29, IconType::Home, theme.accent);
             r.draw_text(w.x + 28, content_y + 29, "Home", theme.text_primary, None);
             r.draw_text(w.x + 68, content_y + 29, "Docs", theme.text_primary, None);
 
-            // Поле URL адреса
             r.fill_rounded_rect(w.x + 110, content_y + 26, w.width - 120, 22, 4, Color::rgb(15, 23, 42));
             r.draw_icon(w.x + 114, content_y + 29, IconType::Search, Color::GRAY);
             r.draw_text(w.x + 132, content_y + 29, truncate(address_input, (w.width as usize - 150) / 8), Color::WHITE, None);
 
             r.draw_hline(w.x, content_y + 50, w.width, theme.titlebar_inactive);
 
-            // 3. Область HTML контента
             if let Some(tab) = tabs.get(*active_tab) {
                 let mut cy = content_y + 56;
                 for line in tab.content.iter() {
@@ -1705,7 +1697,7 @@ fn draw_control_center(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_
     r.draw_rect_outline_alpha(cc_x, cc_y, cc_w as u32, cc_h as u32, theme.accent, 150);
 
     r.draw_text(cc_x + 12, cc_y + 12, "Quick Control Center", theme.accent, None);
-    r.draw_hline(cc_x + 12, cc_y + 32, cc_w as u32 - 24, theme.titlebar_active);
+    r.draw_hline(cc_x + 12, cc_y + 32, (cc_w - 24) as u32, theme.titlebar_active);
 
     r.draw_icon(cc_x + 12, cc_y + 44, IconType::Wifi, Color::GREEN);
     r.draw_text(cc_x + 36, cc_y + 44, "eth0: 192.168.1.10", theme.text_primary, None);
@@ -1716,7 +1708,7 @@ fn draw_control_center(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_
     r.draw_icon(cc_x + 12, cc_y + 96, IconType::Theme, Color::YELLOW);
     r.draw_text(cc_x + 36, cc_y + 96, "Theme: Active", theme.text_primary, None);
 
-    r.fill_rounded_rect(cc_x + 12, cc_y + 124, cc_w - 24, 24, 4, theme.titlebar_active);
+    r.fill_rounded_rect(cc_x + 12, cc_y + 124, (cc_w - 24) as u32, 24, 4, theme.titlebar_active);
     r.draw_text(cc_x + 32, cc_y + 128, "System Running", Color::GREEN, None);
 }
 
