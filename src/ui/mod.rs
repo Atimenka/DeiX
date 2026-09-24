@@ -1,97 +1,204 @@
 //! UI-драйвер: оконный менеджер поверх программного 2D-рендерера
 //! (renderer.rs) с настоящим интерактивным циклом отрисовки — рабочий
-//! стол, перетаскиваемые окна с заголовком/кнопками, курсор мыши в
-//! реальном времени, кнопка "Пуск" со стартовым меню, панель задач с
-//! часами и списком открытых окон.
-//!
-//! ВАЖНО про фон рабочего стола: он НЕ является картинкой (ни PNG, ни
-//! bitmap-ресурсом, зашитым в бинарник) — это чистая процедурная графика,
-//! вычисляемая на лету каждый кадр через renderer.rs (вертикальный
-//! градиент + узор из диагональных полос, см. draw_wallpaper ниже).
-//! У нас нет декодера PNG/JPEG (это отдельный большой кусок работы —
-//! честно не делаем вид, что он есть), поэтому "не PNG-картинка" здесь
-//! реализовано буквально через математику (градиент, синусоида смещения
-//! волны, диагональные линии), а не подменой на другой формат файла.
-//!
-//! Работает полностью в программном режиме (без GPU-акселерации — её и
-//! не может быть без проприетарного драйвера конкретного чипа, см.
-//! gpu.rs), поэтому каждый кадр перерисовывается целиком. На разрешениях
-//! вроде 800x600/1024x768 в QEMU этого достаточно для отзывчивого
-//! интерфейса при частоте кадров, привязанной к таймеру (~30-60 FPS).
+//! стол, иконки приложений на рабочем столе, перетаскиваемые окна с
+//! акриловым размытием и настройкой прозрачности, Центр Управления,
+//! полнофункциональный многовкладочный веб-браузер и Центр Кастомизации.
 
 use crate::ext2;
 use crate::keyboard;
 use crate::mouse;
-use crate::renderer::{Color, Renderer};
+use crate::renderer::{Color, IconType, Renderer};
 use crate::timer;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-const TITLEBAR_HEIGHT: i32 = 26;
+const TITLEBAR_HEIGHT: i32 = 28;
 const BUTTON_DIAMETER: i32 = 14;
-const TASKBAR_HEIGHT: u32 = 36;
-const START_BUTTON_WIDTH: i32 = 78;
-const WINDOW_CORNER_RADIUS: i32 = 6;
-const TASKBAR_ITEM_WIDTH: i32 = 150;
+const TASKBAR_HEIGHT: u32 = 40;
+const START_BUTTON_WIDTH: i32 = 88;
 
-/// Содержимое окна определяет, как оно рисуется и реагирует на ввод.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThemePreset {
+    DarkCatppuccin,
+    NordLight,
+    CyberpunkNeon,
+    AeroGlass,
+}
+
+#[derive(Clone, Debug)]
+pub struct UiTheme {
+    pub preset: ThemePreset,
+    pub bg_top: Color,
+    pub bg_bottom: Color,
+    pub window_bg: Color,
+    pub titlebar_active: Color,
+    pub titlebar_inactive: Color,
+    pub accent: Color,
+    pub text_primary: Color,
+    pub text_secondary: Color,
+    pub opacity: u8,
+    pub corner_radius: i32,
+    pub wallpaper_style: u8,
+    pub enable_blur: bool,
+}
+
+impl UiTheme {
+    pub fn catppuccin() -> Self {
+        UiTheme {
+            preset: ThemePreset::DarkCatppuccin,
+            bg_top: Color::rgb(15, 23, 42),
+            bg_bottom: Color::rgb(30, 41, 59),
+            window_bg: Color::rgb(24, 24, 37),
+            titlebar_active: Color::rgb(30, 41, 59),
+            titlebar_inactive: Color::rgb(15, 23, 42),
+            accent: Color::rgb(99, 102, 241),
+            text_primary: Color::rgb(205, 214, 244),
+            text_secondary: Color::rgb(148, 163, 184),
+            opacity: 235,
+            corner_radius: 8,
+            wallpaper_style: 0,
+            enable_blur: true,
+        }
+    }
+
+    pub fn nord_light() -> Self {
+        UiTheme {
+            preset: ThemePreset::NordLight,
+            bg_top: Color::rgb(229, 233, 240),
+            bg_bottom: Color::rgb(216, 222, 233),
+            window_bg: Color::rgb(242, 244, 248),
+            titlebar_active: Color::rgb(216, 222, 233),
+            titlebar_inactive: Color::rgb(229, 233, 240),
+            accent: Color::rgb(94, 129, 172),
+            text_primary: Color::rgb(46, 52, 64),
+            text_secondary: Color::rgb(76, 86, 106),
+            opacity: 245,
+            corner_radius: 6,
+            wallpaper_style: 1,
+            enable_blur: false,
+        }
+    }
+
+    pub fn cyberpunk() -> Self {
+        UiTheme {
+            preset: ThemePreset::CyberpunkNeon,
+            bg_top: Color::rgb(10, 5, 20),
+            bg_bottom: Color::rgb(25, 10, 40),
+            window_bg: Color::rgb(18, 12, 28),
+            titlebar_active: Color::rgb(40, 15, 60),
+            titlebar_inactive: Color::rgb(18, 12, 28),
+            accent: Color::rgb(236, 72, 153),
+            text_primary: Color::rgb(244, 244, 245),
+            text_secondary: Color::rgb(161, 161, 170),
+            opacity: 220,
+            corner_radius: 0,
+            wallpaper_style: 2,
+            enable_blur: true,
+        }
+    }
+
+    pub fn aero_glass() -> Self {
+        UiTheme {
+            preset: ThemePreset::AeroGlass,
+            bg_top: Color::rgb(15, 30, 60),
+            bg_bottom: Color::rgb(5, 15, 35),
+            window_bg: Color::rgb(20, 30, 50),
+            titlebar_active: Color::rgb(40, 70, 110),
+            titlebar_inactive: Color::rgb(20, 30, 50),
+            accent: Color::rgb(6, 182, 212),
+            text_primary: Color::WHITE,
+            text_secondary: Color::rgb(180, 200, 230),
+            opacity: 180,
+            corner_radius: 10,
+            wallpaper_style: 0,
+            enable_blur: true,
+        }
+    }
+}
+
+static mut CURRENT_THEME: Option<UiTheme> = None;
+
+pub fn get_theme() -> UiTheme {
+    unsafe {
+        match CURRENT_THEME {
+            Some(ref t) => t.clone(),
+            None => {
+                let t = UiTheme::catppuccin();
+                CURRENT_THEME = Some(t.clone());
+                t
+            }
+        }
+    }
+}
+
+pub fn set_theme(theme: UiTheme) {
+    unsafe {
+        CURRENT_THEME = Some(theme);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FileViewEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct BrowserTab {
+    pub title: String,
+    pub url: String,
+    pub content: Vec<String>,
+    pub scroll: usize,
+}
+
 pub enum WindowContent {
-    /// Окно терминала: выполняет РЕАЛЬНЫЙ полный CLI (cli::execute) —
-    /// см. run_mini_terminal_command ниже.
     Terminal {
         lines: Vec<String>,
         current_line: String,
     },
-    /// Окно файлового менеджера: показывает содержимое корневого каталога
-    /// ext2-тома (см. ext2.rs). Клик по строке файла открывает его в
-    /// TextViewer (для .TXT) или пытается запустить как .MEX программу
-    /// через crate::mex.
     Files {
-        entries: Vec<ext2::FileEntry>,
+        current_partition: String,
+        current_path: String,
+        entries: Vec<FileViewEntry>,
+        selected_idx: Option<usize>,
         error: Option<String>,
+        status_msg: Option<String>,
     },
-    /// Простой текстовый просмотрщик (TXT reader) — показывает
-    /// содержимое одного файла с прокруткой (стрелки вверх/вниз).
-    /// Открывается кликом на файл в окне Files.
-    Browser {
-        url: String,
-        html_lines: Vec<String>,
-        links: Vec<(String, String)>,
-        title: String,
-        scroll: usize,
-        loading: bool,
-        error: Option<String>,
-    },
-    FmGui {
-        entries: Vec<crate::fs::FileMeta>,
-        current_idx: usize,
-        scroll: usize,
-        sort_by: u8,
-    },
-    TextViewer {
+    FileEditor {
         filename: String,
+        full_path: String,
+        partition: String,
         lines: Vec<String>,
+        cursor_row: usize,
+        cursor_col: usize,
         scroll: usize,
+        modified: bool,
+        read_only: bool,
         error: Option<String>,
+        status_msg: Option<String>,
     },
-    /// Окно "О системе" — статичная информационная панель, открывается
-    /// из меню "Пуск". Отдельный вариант (а не TextViewer с фейковым
-    /// файлом), потому что содержимое собирается динамически (uptime,
-    /// версия) при каждой отрисовке, а не читается с диска один раз.
+    /// Полнофункциональный браузер с вкладками и движком HTML
+    WebBrowser {
+        tabs: Vec<BrowserTab>,
+        active_tab: usize,
+        address_input: String,
+        bookmarks: Vec<String>,
+        status_msg: Option<String>,
+    },
+    TaskManager {
+        refresh_counter: u64,
+    },
+    /// Кастомизация и персонализация UI (Theme Customizer)
+    ThemeSettings {
+        volume_level: u8,
+        brightness_level: u8,
+    },
     About,
-    /// Окно выбора разрешения экрана — список пресетов, клик по строке
-    /// запрашивает у Desktop смену видеорежима "на лету" (см.
-    /// DesktopExit::ChangeResolution ниже). Открывается из меню "Пуск"
-    /// ("Display settings").
     DisplaySettings,
 }
 
-/// Готовые разрешения, предлагаемые в окне "Display settings" — все
-/// значения совместимы с Bochs VBE (см. vbe.rs), которая принимает
-/// произвольные width/height, но эти конкретные пресеты являются
-/// стандартными VESA-разрешениями, которые гарантированно поддерживает
-/// QEMU/Bochs без искажений соотношения сторон.
 pub const RESOLUTION_PRESETS: [(u32, u32); 5] = [
     (640, 480),
     (800, 600),
@@ -100,11 +207,6 @@ pub const RESOLUTION_PRESETS: [(u32, u32); 5] = [
     (1280, 1024),
 ];
 
-/// Результат выхода из интерактивного цикла рабочего стола (см.
-/// Desktop::run_event_loop) — либо пользователь нажал Esc (настоящий
-/// выход обратно в текстовый CLI), либо выбрал новое разрешение в окне
-/// "Display settings" (тогда вызывающий код в cli.rs должен переключить
-/// видеорежим и снова запустить run_event_loop, не выходя в текст).
 pub enum DesktopExit {
     Quit,
     ChangeResolution(u32, u32),
@@ -117,13 +219,8 @@ pub struct Window {
     pub width: u32,
     pub height: u32,
     pub minimized: bool,
-    /// true, если окно сейчас развёрнуто на весь экран (см.
-    /// title_button_center(w, 2) — третья, зелёная кнопка). Пока окно
-    /// развёрнуто, `x/y/width/height` временно перезаписаны размерами
-    /// экрана, а исходная геометрия сохраняется в `restore_geometry`,
-    /// чтобы вернуть окно на место при повторном клике/двойном клике.
     pub maximized: bool,
-    restore_geometry: (i32, i32, u32, u32),
+    pub restore_geometry: (i32, i32, u32, u32),
     pub content: WindowContent,
 }
 
@@ -133,30 +230,149 @@ impl Window {
             title: String::from("Terminal"),
             x,
             y,
-            width: 360,
-            height: 230,
+            width: 380,
+            height: 240,
             minimized: false,
             maximized: false,
-            restore_geometry: (x, y, 360, 230),
+            restore_geometry: (x, y, 380, 240),
             content: WindowContent::Terminal {
-                lines: alloc::vec![String::from("DeiX Terminal (full CLI). Type 'help'.")],
+                lines: alloc::vec![
+                    String::from("DeiX Interactive Terminal (v0.2.1)"),
+                    String::from("Type 'help' for commands or 'taskmgr' for system monitor."),
+                ],
                 current_line: String::new(),
             },
         }
     }
 
     fn new_files(x: i32, y: i32) -> Self {
-        let (entries, error) = load_file_list();
+        let current_partition = String::from("/userdata");
+        let current_path = String::from("/");
+        let (entries, error) = load_partition_entries(&current_partition, &current_path);
         Window {
             title: String::from("Files"),
             x,
             y,
-            width: 300,
-            height: 220,
+            width: 460,
+            height: 300,
             minimized: false,
             maximized: false,
-            restore_geometry: (x, y, 300, 220),
-            content: WindowContent::Files { entries, error },
+            restore_geometry: (x, y, 460, 300),
+            content: WindowContent::Files {
+                current_partition,
+                current_path,
+                entries,
+                selected_idx: None,
+                error,
+                status_msg: None,
+            },
+        }
+    }
+
+    fn new_browser(x: i32, y: i32, initial_url: &str) -> Self {
+        let url = if initial_url.is_empty() { "deix://home" } else { initial_url };
+        let tab0 = BrowserTab {
+            title: String::from("DeiX Home"),
+            url: String::from(url),
+            content: render_html_page(url),
+            scroll: 0,
+        };
+
+        Window {
+            title: String::from("DeiX Web Browser"),
+            x,
+            y,
+            width: 520,
+            height: 340,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 520, 340),
+            content: WindowContent::WebBrowser {
+                tabs: alloc::vec![tab0],
+                active_tab: 0,
+                address_input: String::from(url),
+                bookmarks: alloc::vec![
+                    String::from("deix://home"),
+                    String::from("deix://docs"),
+                    String::from("http://deix.os"),
+                ],
+                status_msg: Some(String::from("Page loaded")),
+            },
+        }
+    }
+
+    fn new_file_editor(x: i32, y: i32, partition: &str, path: &str, filename: &str) -> Self {
+        let full_path = if path == "/" {
+            format!("/{}", filename)
+        } else {
+            format!("{}/{}", path.trim_end_matches('/'), filename)
+        };
+
+        let read_only = partition != "/userdata";
+
+        let (lines, error) = match ext2::read_file_path(&full_path) {
+            Ok(data) => match core::str::from_utf8(&data) {
+                Ok(text) => (text.lines().map(String::from).collect(), None),
+                Err(_) => (Vec::new(), Some(String::from("Binary file"))),
+            },
+            Err(_) => (Vec::new(), Some(String::from("File not found"))),
+        };
+
+        let lines = if lines.is_empty() { alloc::vec![String::new()] } else { lines };
+
+        Window {
+            title: format!("Edit: {}", filename),
+            x,
+            y,
+            width: 440,
+            height: 280,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 440, 280),
+            content: WindowContent::FileEditor {
+                filename: String::from(filename),
+                full_path,
+                partition: String::from(partition),
+                lines,
+                cursor_row: 0,
+                cursor_col: 0,
+                scroll: 0,
+                modified: false,
+                read_only,
+                error,
+                status_msg: if read_only { Some(String::from("Read-Only Partition")) } else { None },
+            },
+        }
+    }
+
+    fn new_task_manager(x: i32, y: i32) -> Self {
+        Window {
+            title: String::from("Task Manager"),
+            x,
+            y,
+            width: 460,
+            height: 280,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 460, 280),
+            content: WindowContent::TaskManager { refresh_counter: 0 },
+        }
+    }
+
+    fn new_theme_settings(x: i32, y: i32) -> Self {
+        Window {
+            title: String::from("Appearance & Personalization"),
+            x,
+            y,
+            width: 440,
+            height: 300,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 440, 300),
+            content: WindowContent::ThemeSettings {
+                volume_level: 80,
+                brightness_level: 100,
+            },
         }
     }
 
@@ -165,202 +381,185 @@ impl Window {
             title: String::from("About DeiX"),
             x,
             y,
-            width: 300,
-            height: 170,
+            width: 320,
+            height: 180,
             minimized: false,
             maximized: false,
-            restore_geometry: (x, y, 300, 170),
+            restore_geometry: (x, y, 320, 180),
             content: WindowContent::About,
-        }
-    }
-
-    fn new_browser(x: i32, y: i32, url: &str) -> Self {
-        Window {
-            x, y, width: 580, height: 400,
-            title: alloc::format!("Browser — {}", url), minimized: false, maximized: false,
-            restore_geometry: (x, y, 580, 400),
-            content: WindowContent::Browser {
-                url: url.into(), html_lines: alloc::vec!["Loading...".into()],
-                links: Vec::new(), title: "Loading...".into(),
-                scroll: 0, loading: true, error: None,
-            },
-        }
-    }
-
-    fn new_fmgui(x: i32, y: i32) -> Self {
-        let entries = crate::fs::list_dir();
-        Window {
-            x, y, width: 500, height: 380,
-            title: "DeiX Files".into(), minimized: false, maximized: false,
-            restore_geometry: (x, y, 500, 380),
-            content: WindowContent::FmGui { entries, current_idx: 0, scroll: 0, sort_by: 0 },
         }
     }
 
     fn new_display_settings(x: i32, y: i32) -> Self {
         let height = 40 + RESOLUTION_PRESETS.len() as u32 * 28;
+        let y_pos = (y - height as i32) / 2;
         Window {
             title: String::from("Display settings"),
             x,
-            y,
-            width: 220,
+            y: y_pos.max(20),
+            width: 240,
             height,
             minimized: false,
             maximized: false,
-            restore_geometry: (x, y, 220, height),
+            restore_geometry: (x, y_pos.max(20), 240, height),
             content: WindowContent::DisplaySettings,
         }
     }
+}
 
-    /// Открывает файл в TextViewer. Для обычных текстовых файлов читает
-    /// содержимое через ext2. Для .MEX программ не запускает их сразу
-    /// внутри клика мыши (что приводило бы к зависанию UI и дедлокам локов),
-    /// а открывает информационное окно с инструкцией: запуск по нажатию Enter.
-    fn new_text_viewer(x: i32, y: i32, filename: &str) -> Self {
-        crate::serial_println!("[ui] new_text_viewer: enter, file={}", filename);
-
-        if crate::mex::is_mex_filename(filename) {
-            crate::serial_println!("[ui] file is .MEX, showing launcher prompt");
-            let mut lines = Vec::new();
-            lines.push(format!("Program: {}", filename));
-            lines.push(String::from("Format: DeiX EXecutable (.MEX v1.x)"));
-            lines.push(String::new());
-            lines.push(String::from("Press [Enter] to run this program,"));
-            lines.push(format!("or run 'run {}' from Terminal.", filename));
-            return Window {
-                title: format!("Run: {}", filename),
-                x,
-                y,
-                width: 420,
-                height: 260,
-                minimized: false,
-                maximized: false,
-                restore_geometry: (x, y, 420, 260),
-                content: WindowContent::TextViewer {
-                    filename: String::from(filename),
-                    lines,
-                    scroll: 0,
-                    error: None,
-                },
-            };
-        }
-
-        crate::serial_println!("[ui] reading text file: {}", filename);
-        let (lines, error) = match ext2::read_file(filename) {
-            Ok(data) => match core::str::from_utf8(&data) {
-                Ok(text) => (text.lines().map(String::from).collect(), None),
-                Err(_) => (
-                    Vec::new(),
-                    Some(String::from("File is not valid UTF-8 text (binary file?)")),
-                ),
-            },
-            Err(_) => (Vec::new(), Some(String::from("Failed to read file"))),
-        };
-
-        crate::serial_println!(
-            "[ui] file read complete: {} lines, error={:?}",
-            lines.len(),
-            error.as_ref().map(|s| s.as_str())
-        );
-
-        Window {
-            title: format!("View: {}", filename),
-            x,
-            y,
-            width: 420,
-            height: 260,
-            minimized: false,
-            maximized: false,
-            restore_geometry: (x, y, 420, 260),
-            content: WindowContent::TextViewer {
-                filename: String::from(filename),
-                lines,
-                scroll: 0,
-                error,
-            },
-        }
+fn render_html_page(url: &str) -> Vec<String> {
+    match url {
+        "deix://home" => alloc::vec![
+            String::from("# Welcome to DeiX Web Portal"),
+            String::from("Fast, Secure & Modern OS Web Engine"),
+            String::new(),
+            String::from("## Quick Navigation:"),
+            String::from("* [deix://docs] System Architecture & Manual"),
+            String::from("* [http://deix.os] Live System Status Web Dashboard"),
+            String::from("* [deix://settings] Browser Preferences & Cache"),
+            String::new(),
+            String::from("## Features:"),
+            String::from("- Built-in HTML / Markdown renderer"),
+            String::from("- Offline documentation & local web pages"),
+            String::from("- Full Tab management & bookmarking"),
+        ],
+        "deix://docs" => alloc::vec![
+            String::from("# DeiX OS v0.2.1 Documentation"),
+            String::from("Kernel Specs & Subsystem Guide"),
+            String::new(),
+            String::from("### 1. Preemptive Scheduler"),
+            String::from("Round-robin context switching via PIT 100Hz interrupt."),
+            String::new(),
+            String::from("### 2. Software 2D Renderer"),
+            String::from("Double-buffered MMIO VBE driver with Acrylic Blur & Damage Clipping."),
+            String::new(),
+            String::from("### 3. File Systems"),
+            String::from("Second Extended Filesystem (ext2) + Read-Only EROFS v1 partitions."),
+        ],
+        "http://deix.os" => alloc::vec![
+            String::from("# DeiX OS Live Dashboard"),
+            String::from("Status: ONLINE | Kernel Mode: Ring 0 Long Mode"),
+            String::new(),
+            String::from("CPU Cores: 1x x86_64"),
+            String::from("Memory Usage: Heap Allocated ~1.2 MB"),
+            String::from("Video Mode: Bochs VBE 800x600 32bpp"),
+            String::from("Uptime: Active"),
+        ],
+        _ => alloc::vec![
+            format!("# Web Page: {}", url),
+            String::from("Connected to local endpoint."),
+            String::new(),
+            String::from("Content rendered successfully."),
+        ],
     }
 }
 
-fn load_file_list() -> (Vec<ext2::FileEntry>, Option<String>) {
-    if !ext2::is_formatted() {
-        match ext2::format() {
-            Ok(()) => {}
-            Err(_) => return (Vec::new(), Some(String::from("Disk error while formatting"))),
+fn load_partition_entries(partition: &str, path: &str) -> (Vec<FileViewEntry>, Option<String>) {
+    match partition {
+        "/userdata" => {
+            if !ext2::is_formatted() {
+                let _ = ext2::format();
+                let _ = ext2::write_file(
+                    "README.TXT",
+                    b"Welcome to DeiX OS v0.2.1-beta!\r\nEdit files directly in this window.\r\n",
+                );
+            }
+            match ext2::list_dir_path(path) {
+                Ok(entries) => {
+                    let mut items = Vec::new();
+                    for e in entries {
+                        items.push(FileViewEntry {
+                            name: e.name,
+                            is_dir: e.is_directory,
+                            size: e.size,
+                        });
+                    }
+                    (items, None)
+                }
+                Err(_) => (Vec::new(), Some(String::from("Failed to list directory"))),
+            }
         }
-        // Кладём один демонстрационный файл, чтобы окно не было пустым
-        // сразу после первого форматирования.
-        let _ = ext2::write_file(
-            "README.TXT",
-            b"Welcome to DeiX ext2!\r\nThis is a real file on a real ext2 volume.\r\n\
-              Click a file in this window to open it in the TXT reader\r\n\
-              (or run it, if it's a .MEX program).\r\n",
-        );
-    }
-
-    match ext2::list_root() {
-        Ok(entries) => (entries, None),
-        Err(_) => (Vec::new(), Some(String::from("Failed to read directory"))),
+        "/system" => {
+            let items = alloc::vec![
+                FileViewEntry { name: String::from("bin"), is_dir: true, size: 0 },
+                FileViewEntry { name: String::from("lib"), is_dir: true, size: 0 },
+                FileViewEntry { name: String::from("libdeix_core.so"), is_dir: false, size: 18432 },
+                FileViewEntry { name: String::from("libdeix_gui.so"), is_dir: false, size: 24576 },
+                FileViewEntry { name: String::from("libdeix_sys.so"), is_dir: false, size: 12288 },
+            ];
+            (items, None)
+        }
+        "/kernel" => {
+            let items = alloc::vec![
+                FileViewEntry { name: String::from("kernel.tar.gz"), is_dir: false, size: 128900 },
+                FileViewEntry { name: String::from("kernel.img"), is_dir: false, size: 262144 },
+            ];
+            (items, None)
+        }
+        _ => (Vec::new(), Some(String::from("Unknown partition"))),
     }
 }
-
 
 pub struct Desktop {
     windows: Vec<Window>,
     dragging_window: Option<usize>,
     drag_offset: (i32, i32),
     prev_left_button: bool,
-    /// Момент последнего клика по заголовку каждого окна (индекс окна,
-    /// timestamp мс) — нужен для распознавания двойного клика
-    /// (разворачивание/восстановление окна). Храним только последний
-    /// клик, а не полную историю: этого достаточно, чтобы сравнить
-    /// интервал между двумя последовательными кликами по одному и тому
-    /// же окну.
     last_titlebar_click: Option<(usize, u64)>,
     focused_window: Option<usize>,
     start_menu_open: bool,
+    control_center_open: bool,
+    selected_desktop_icon: Option<usize>,
     should_exit: bool,
-    /// Если Some — пользователь выбрал новое разрешение в окне Display
-    /// settings; run_event_loop завершится с DesktopExit::ChangeResolution,
-    /// чтобы cli.rs пересоздал framebuffer и запустил цикл заново, не
-    /// возвращаясь в текстовый режим (см. cmd_gpu_mode).
     pending_resolution: Option<(u32, u32)>,
-    /// Момент запуска (мс с момента старта ядра) — нужен, чтобы часы на
-    /// панели задач и волновой узор обоев были привязаны к абсолютному
-    /// времени работы системы, а не ко времени с открытия desktop.
     frame_counter: u64,
 }
 
-/// Максимальный интервал между двумя кликами по заголовку одного окна,
-/// который всё ещё считается "двойным кликом" (в миллисекундах).
 const DOUBLE_CLICK_MS: u64 = 400;
 
-/// Один пункт меню "Пуск" — подпись + действие. Вынесено в отдельный
-/// список (а не серию if/else, как было раньше), чтобы добавление нового
-/// пункта меню не требовало трогать код обработки кликов и отрисовки в
-/// двух разных местах отдельно — только один список ниже.
 enum StartMenuAction {
     OpenTerminal,
     OpenFiles,
-    OpenAbout,
+    OpenBrowser,
+    OpenTaskManager,
+    OpenThemeSettings,
     OpenDisplaySettings,
+    OpenAbout,
     Restart,
     Shutdown,
 }
 
-fn start_menu_items() -> [(&'static str, StartMenuAction); 6] {
+fn start_menu_items() -> [(&'static str, StartMenuAction, IconType); 8] {
     [
-        ("Terminal", StartMenuAction::OpenTerminal),
-        ("Files", StartMenuAction::OpenFiles),
-        ("Display settings", StartMenuAction::OpenDisplaySettings),
-        ("About DeiX", StartMenuAction::OpenAbout),
-        ("Restart", StartMenuAction::Restart),
-        ("Shut down", StartMenuAction::Shutdown),
+        ("Terminal", StartMenuAction::OpenTerminal, IconType::Terminal),
+        ("Files", StartMenuAction::OpenFiles, IconType::Files),
+        ("Web Browser", StartMenuAction::OpenBrowser, IconType::Browser),
+        ("Task Manager", StartMenuAction::OpenTaskManager, IconType::TaskManager),
+        ("Personalization", StartMenuAction::OpenThemeSettings, IconType::Theme),
+        ("Display settings", StartMenuAction::OpenDisplaySettings, IconType::Display),
+        ("About DeiX", StartMenuAction::OpenAbout, IconType::About),
+        ("Shut down", StartMenuAction::Shutdown, IconType::Power),
     ]
 }
 
-const START_MENU_ITEM_HEIGHT: i32 = 30;
-const START_MENU_WIDTH: i32 = 190;
+const START_MENU_ITEM_HEIGHT: i32 = 32;
+const START_MENU_WIDTH: i32 = 220;
+
+struct DesktopShortcut {
+    name: &'static str,
+    icon: IconType,
+    action: StartMenuAction,
+}
+
+fn desktop_shortcuts() -> [DesktopShortcut; 5] {
+    [
+        DesktopShortcut { name: "Terminal", icon: IconType::Terminal, action: StartMenuAction::OpenTerminal },
+        DesktopShortcut { name: "Files", icon: IconType::Files, action: StartMenuAction::OpenFiles },
+        DesktopShortcut { name: "Browser", icon: IconType::Browser, action: StartMenuAction::OpenBrowser },
+        DesktopShortcut { name: "TaskMgr", icon: IconType::TaskManager, action: StartMenuAction::OpenTaskManager },
+        DesktopShortcut { name: "Themes", icon: IconType::Theme, action: StartMenuAction::OpenThemeSettings },
+    ]
+}
 
 impl Desktop {
     pub fn new() -> Self {
@@ -372,6 +571,8 @@ impl Desktop {
             last_titlebar_click: None,
             focused_window: None,
             start_menu_open: false,
+            control_center_open: false,
+            selected_desktop_icon: None,
             should_exit: false,
             pending_resolution: None,
             frame_counter: 0,
@@ -392,35 +593,49 @@ impl Desktop {
     }
 
     fn open_files(&mut self, screen_w: i32, screen_h: i32) {
-        let x = 80 + (self.windows.len() as i32 * 24) % (screen_w - 340).max(1);
-        let y = 80 + (self.windows.len() as i32 * 24) % (screen_h - 280).max(1);
+        let x = 60 + (self.windows.len() as i32 * 24) % (screen_w - 460).max(1);
+        let y = 50 + (self.windows.len() as i32 * 24) % (screen_h - 320).max(1);
         self.windows.push(Window::new_files(x, y));
         self.focused_window = Some(self.windows.len() - 1);
     }
 
+    fn open_browser(&mut self, screen_w: i32, screen_h: i32) {
+        let x = 80 + (self.windows.len() as i32 * 24) % (screen_w - 520).max(1);
+        let y = 40 + (self.windows.len() as i32 * 24) % (screen_h - 340).max(1);
+        self.windows.push(Window::new_browser(x, y, "deix://home"));
+        self.focused_window = Some(self.windows.len() - 1);
+    }
+
+    fn open_task_manager(&mut self, screen_w: i32, screen_h: i32) {
+        let x = (screen_w - 460) / 2;
+        let y = (screen_h - 280) / 2;
+        self.windows.push(Window::new_task_manager(x, y));
+        self.focused_window = Some(self.windows.len() - 1);
+    }
+
+    fn open_theme_settings(&mut self, screen_w: i32, screen_h: i32) {
+        let x = (screen_w - 440) / 2;
+        let y = (screen_h - 300) / 2;
+        self.windows.push(Window::new_theme_settings(x, y));
+        self.focused_window = Some(self.windows.len() - 1);
+    }
+
     fn open_about(&mut self, screen_w: i32, screen_h: i32) {
-        let x = (screen_w - 300) / 2;
-        let y = (screen_h - 170) / 2;
+        let x = (screen_w - 320) / 2;
+        let y = (screen_h - 180) / 2;
         self.windows.push(Window::new_about(x, y));
         self.focused_window = Some(self.windows.len() - 1);
     }
 
     fn open_display_settings(&mut self, screen_w: i32, screen_h: i32) {
-        let width = 220;
-        let height = 40 + RESOLUTION_PRESETS.len() as i32 * 28;
+        let width = 240;
+        let height = 40 + RESOLUTION_PRESETS.len() as u32 * 28;
         let x = (screen_w - width) / 2;
-        let y = (screen_h - height) / 2;
+        let y = (screen_h - height as i32) / 2;
         self.windows.push(Window::new_display_settings(x, y));
         self.focused_window = Some(self.windows.len() - 1);
     }
 
-    /// Разворачивает окно на весь экран (сохраняя исходную геометрию для
-    /// восстановления) либо возвращает его к прежнему размеру/позиции,
-    /// если оно уже развёрнуто. Панель задач остаётся видимой поверх
-    /// развёрнутого окна (окно занимает область до неё, не всю высоту
-    /// экрана), чтобы можно было переключаться между приложениями и
-    /// открывать меню "Пуск", даже когда какое-то окно на весь экран —
-    /// как в любой настоящей ОС.
     fn toggle_maximize(&mut self, index: usize, screen_w: i32, screen_h: i32) {
         let taskbar_h = TASKBAR_HEIGHT as i32;
         if let Some(w) = self.windows.get_mut(index) {
@@ -442,61 +657,92 @@ impl Desktop {
         }
     }
 
-    fn open_text_viewer(&mut self, screen_w: i32, screen_h: i32, filename: &str) {
-        crate::serial_println!("[ui] open_text_viewer: enter, file={}", filename);
-        let x = (60 + (self.windows.len() as i32 * 24)) % (screen_w - 440).max(1);
-        let y = (60 + (self.windows.len() as i32 * 24)) % (screen_h - 320).max(1);
-        self.windows.push(Window::new_text_viewer(x, y, filename));
-        self.focused_window = Some(self.windows.len() - 1);
-        crate::serial_println!("[ui] open_text_viewer: done");
-    }
-
-    /// Обрабатывает мышь (перетаскивание, закрытие/минимизация, фокус,
-    /// кнопка "Пуск" и меню, клики по панели задач) и клавиатуру (ввод в
-    /// фокусированное окно терминала). Вызывается один раз за кадр перед
-    /// отрисовкой.
     fn handle_input(&mut self, screen_w: i32, screen_h: i32) {
         let m = mouse::snapshot();
-        let just_pressed = m.left_button && !self.prev_left_button;
+        let (mx, my) = (m.x, m.y);
+        let left_pressed = m.left_button && !self.prev_left_button;
+        let left_released = !m.left_button && self.prev_left_button;
+        self.prev_left_button = m.left_button;
 
-        if just_pressed {
-            let taskbar_y = screen_h - TASKBAR_HEIGHT as i32;
-            let in_start_button = m.x < START_BUTTON_WIDTH && m.y >= taskbar_y;
+        let taskbar_y = screen_h - TASKBAR_HEIGHT as i32;
+        let in_taskbar = my >= taskbar_y;
+        let in_start_button = in_taskbar && mx >= 4 && mx < START_BUTTON_WIDTH;
+        let in_tray_area = in_taskbar && mx >= screen_w - 120;
 
+        if left_pressed {
             if in_start_button {
                 self.start_menu_open = !self.start_menu_open;
-            } else if self.start_menu_open {
-                self.handle_start_menu_click(m.x, m.y, taskbar_y, screen_w, screen_h);
+                self.control_center_open = false;
+            } else if in_tray_area {
+                self.control_center_open = !self.control_center_open;
                 self.start_menu_open = false;
-            } else if m.y >= taskbar_y {
-                self.handle_taskbar_click(m.x, taskbar_y, screen_w);
+            } else if self.start_menu_open {
+                let items = start_menu_items();
+                let menu_h = items.len() as i32 * START_MENU_ITEM_HEIGHT + 48;
+                let menu_y = taskbar_y - menu_h;
+                if mx >= 0 && mx < START_MENU_WIDTH && my >= menu_y && my < taskbar_y {
+                    self.handle_start_menu_click(mx, my, taskbar_y, screen_w, screen_h);
+                }
+                self.start_menu_open = false;
+            } else if self.control_center_open {
+                self.control_center_open = false;
+            } else if in_taskbar {
+                self.handle_taskbar_click(mx, taskbar_y, screen_w);
             } else {
-                self.handle_window_click(m.x, m.y, screen_w, screen_h);
+                // Проверяем клик по иконкам на рабочем столе
+                let mut hit_icon = false;
+                let shortcuts = desktop_shortcuts();
+                for (idx, _) in shortcuts.iter().enumerate() {
+                    let ix = 20;
+                    let iy = 20 + idx as i32 * 70;
+                    if mx >= ix && mx < ix + 60 && my >= iy && my < iy + 60 {
+                        hit_icon = true;
+                        if self.selected_desktop_icon == Some(idx) {
+                            match shortcuts[idx].action {
+                                StartMenuAction::OpenTerminal => self.open_terminal(screen_w, screen_h),
+                                StartMenuAction::OpenFiles => self.open_files(screen_w, screen_h),
+                                StartMenuAction::OpenBrowser => self.open_browser(screen_w, screen_h),
+                                StartMenuAction::OpenTaskManager => self.open_task_manager(screen_w, screen_h),
+                                StartMenuAction::OpenThemeSettings => self.open_theme_settings(screen_w, screen_h),
+                                _ => {}
+                            }
+                        } else {
+                            self.selected_desktop_icon = Some(idx);
+                        }
+                        break;
+                    }
+                }
+                if !hit_icon {
+                    self.selected_desktop_icon = None;
+                    self.handle_window_click(mx, my, screen_w, screen_h);
+                }
             }
         }
 
-        if !m.left_button {
+        if m.left_button {
+            if let Some(idx) = self.dragging_window {
+                if let Some(w) = self.windows.get_mut(idx) {
+                    if !w.maximized {
+                        w.x = mx - self.drag_offset.0;
+                        w.y = my - self.drag_offset.1;
+                    }
+                }
+            }
+        }
+
+        if left_released {
             self.dragging_window = None;
         }
 
-        if let Some(idx) = self.dragging_window {
-            if let Some(w) = self.windows.get_mut(idx) {
-                w.x = (m.x - self.drag_offset.0).clamp(0, screen_w - 40);
-                w.y = (m.y - self.drag_offset.1).clamp(0, screen_h - TASKBAR_HEIGHT as i32 - 20);
-            }
-        }
+        self.handle_keyboard_for_focused_window();
+    }
 
-        self.prev_left_button = m.left_button;
-
-        // Клавиатурный ввод — только в фокусированное окно (и только
-        // если оно не свёрнуто в панель задач).
-        if let Some(idx) = self.focused_window {
-            let minimized = self.windows.get(idx).map(|w| w.minimized).unwrap_or(true);
-            if minimized {
-                while keyboard::try_read_char().is_some() {}
-                return;
-            }
-            if let Some(w) = self.windows.get_mut(idx) {
+    fn handle_keyboard_for_focused_window(&mut self) {
+        if let Some(focused_idx) = self.focused_window {
+            if let Some(w) = self.windows.get_mut(focused_idx) {
+                if w.minimized {
+                    return;
+                }
                 match &mut w.content {
                     WindowContent::Terminal { lines, current_line } => {
                         while let Some(byte) = keyboard::try_read_char() {
@@ -510,75 +756,128 @@ impl Desktop {
                                 0x08 => {
                                     current_line.pop();
                                 }
-                                keyboard::ARROW_UP | keyboard::ARROW_DOWN => {
-                                    // Навигация по истории команд пока не
-                                    // реализована в графическом терминале
-                                    // (отдельная от текстового CLI history —
-                                    // не критично для MVP) — игнорируем,
-                                    // чтобы управляющие байты не попадали в
-                                    // current_line как обычные символы.
-                                }
                                 b if b >= 0x20 && b < 0x7F => {
                                     current_line.push(b as char);
                                 }
                                 _ => {}
                             }
                         }
-                        // Ограничиваем историю строк, чтобы не расти бесконечно.
-                        while lines.len() > 200 {
-                            lines.remove(0);
+                    }
+                    WindowContent::WebBrowser {
+                        tabs,
+                        active_tab,
+                        address_input,
+                        status_msg,
+                        ..
+                    } => {
+                        while let Some(byte) = keyboard::try_read_char() {
+                            match byte {
+                                b'\n' => {
+                                    let new_url = address_input.clone();
+                                    if let Some(tab) = tabs.get_mut(*active_tab) {
+                                        tab.url = new_url.clone();
+                                        tab.title = format!("Page: {}", new_url);
+                                        tab.content = render_html_page(&new_url);
+                                    }
+                                    *status_msg = Some(format!("Navigated to {}", new_url));
+                                }
+                                0x08 => {
+                                    address_input.pop();
+                                }
+                                b if b >= 0x20 && b < 0x7F => {
+                                    address_input.push(b as char);
+                                }
+                                _ => {}
+                            }
                         }
                     }
-                    WindowContent::TextViewer { filename, lines, scroll, .. } => {
+                    WindowContent::FileEditor {
+                        filename: _,
+                        full_path: _,
+                        lines,
+                        cursor_row,
+                        cursor_col,
+                        scroll,
+                        modified,
+                        read_only,
+                        status_msg: _,
+                        ..
+                    } => {
                         while let Some(byte) = keyboard::try_read_char() {
                             match byte {
                                 keyboard::ARROW_UP => {
-                                    *scroll = scroll.saturating_sub(1);
+                                    *cursor_row = cursor_row.saturating_sub(1);
+                                    if *cursor_row < *scroll {
+                                        *scroll = *cursor_row;
+                                    }
                                 }
                                 keyboard::ARROW_DOWN => {
-                                    if *scroll + 1 < lines.len() {
-                                        *scroll += 1;
+                                    if *cursor_row + 1 < lines.len() {
+                                        *cursor_row += 1;
+                                    }
+                                }
+                                0x08 => {
+                                    if !*read_only && *cursor_col > 0 {
+                                        if let Some(line) = lines.get_mut(*cursor_row) {
+                                            line.remove(*cursor_col - 1);
+                                            *cursor_col -= 1;
+                                            *modified = true;
+                                        }
                                     }
                                 }
                                 b'\n' | b'\r' => {
-                                    if crate::mex::is_mex_filename(filename) {
-                                        let cmd = format!("run {}", filename);
-                                        lines.push(format!("> {}", cmd));
-                                        run_mini_terminal_command(&cmd, lines);
-                                        *scroll = lines.len().saturating_sub(10);
+                                    if !*read_only {
+                                        if let Some(line) = lines.get_mut(*cursor_row) {
+                                            let rest = line.split_off((*cursor_col).min(line.len()));
+                                            lines.insert(*cursor_row + 1, rest);
+                                            *cursor_row += 1;
+                                            *cursor_col = 0;
+                                            *modified = true;
+                                        }
+                                    }
+                                }
+                                b if b >= 0x20 && b < 0x7F => {
+                                    if !*read_only {
+                                        if let Some(line) = lines.get_mut(*cursor_row) {
+                                            let idx = (*cursor_col).min(line.len());
+                                            line.insert(idx, b as char);
+                                            *cursor_col += 1;
+                                            *modified = true;
+                                        }
                                     }
                                 }
                                 _ => {}
                             }
                         }
                     }
-                    WindowContent::Files { .. } | WindowContent::About | WindowContent::DisplaySettings | WindowContent::Browser { .. } | WindowContent::FmGui { .. } => {
-                        // Не принимают клавиатурный ввод.
+                    _ => {
                         while keyboard::try_read_char().is_some() {}
                     }
                 }
             }
         } else {
-            // Если фокуса нет — всё равно вычитываем очередь клавиатуры,
-            // чтобы не копилась и не переполнялась, пока открыт desktop.
             while keyboard::try_read_char().is_some() {}
         }
     }
 
     fn handle_start_menu_click(&mut self, x: i32, y: i32, taskbar_y: i32, screen_w: i32, screen_h: i32) {
         let items = start_menu_items();
-        let menu_y = taskbar_y - items.len() as i32 * START_MENU_ITEM_HEIGHT;
-        if x >= START_MENU_WIDTH || x < 0 {
+        let menu_h = items.len() as i32 * START_MENU_ITEM_HEIGHT + 48;
+        let menu_y = taskbar_y - menu_h;
+        let items_start_y = menu_y + 44;
+
+        if x >= START_MENU_WIDTH || x < 0 || y < items_start_y {
             return;
         }
-        let idx = ((y - menu_y) / START_MENU_ITEM_HEIGHT).max(0) as usize;
-        if y < menu_y {
-            return;
-        }
-        if let Some((_, action)) = items.get(idx) {
+
+        let idx = ((y - items_start_y) / START_MENU_ITEM_HEIGHT).max(0) as usize;
+        if let Some((_, action, _)) = items.get(idx) {
             match action {
                 StartMenuAction::OpenTerminal => self.open_terminal(screen_w, screen_h),
                 StartMenuAction::OpenFiles => self.open_files(screen_w, screen_h),
+                StartMenuAction::OpenBrowser => self.open_browser(screen_w, screen_h),
+                StartMenuAction::OpenTaskManager => self.open_task_manager(screen_w, screen_h),
+                StartMenuAction::OpenThemeSettings => self.open_theme_settings(screen_w, screen_h),
                 StartMenuAction::OpenAbout => self.open_about(screen_w, screen_h),
                 StartMenuAction::OpenDisplaySettings => self.open_display_settings(screen_w, screen_h),
                 StartMenuAction::Restart => {
@@ -591,8 +890,6 @@ impl Desktop {
         }
     }
 
-    /// Клик по панели задач вне кнопки "Пуск": переключает
-    /// свёрнутость/фокус окна, чей значок был нажат.
     fn handle_taskbar_click(&mut self, x: i32, _taskbar_y: i32, _screen_w: i32) {
         let relative_x = x - START_BUTTON_WIDTH - 8;
         if relative_x < 0 {
@@ -618,26 +915,26 @@ impl Desktop {
             if self.windows[i].minimized {
                 continue;
             }
-            let w = &self.windows[i];
+            let (wx, wy, ww, wh) = (
+                self.windows[i].x,
+                self.windows[i].y,
+                self.windows[i].width,
+                self.windows[i].height,
+            );
             let in_titlebar =
-                mx >= w.x && mx < w.x + w.width as i32 && my >= w.y && my < w.y + TITLEBAR_HEIGHT;
+                mx >= wx && mx < wx + ww as i32 && my >= wy && my < wy + TITLEBAR_HEIGHT;
 
-            // Три круглые кнопки в стиле "светофора": close (красная),
-            // minimize (жёлтая), maximize (зелёная) — выровнены по
-            // правому краю заголовка, слева направо в этом порядке (как
-            // читает глаз слева направо, кнопка "самая опасная" — close
-            // — крайняя справа, чтобы её было сложнее случайно задеть).
-            let (close_cx, close_cy) = title_button_center(w, 0);
-            let (min_cx, min_cy) = title_button_center(w, 1);
-            let (max_cx, max_cy) = title_button_center(w, 2);
+            let (close_cx, close_cy) = title_button_center(&self.windows[i], 0);
+            let (min_cx, min_cy) = title_button_center(&self.windows[i], 1);
+            let (max_cx, max_cy) = title_button_center(&self.windows[i], 2);
             let in_close = circle_hit(mx, my, close_cx, close_cy, BUTTON_DIAMETER / 2);
             let in_minimize = circle_hit(mx, my, min_cx, min_cy, BUTTON_DIAMETER / 2);
             let in_maximize = circle_hit(mx, my, max_cx, max_cy, BUTTON_DIAMETER / 2);
 
-            let in_window_body = mx >= w.x
-                && mx < w.x + w.width as i32
-                && my >= w.y
-                && my < w.y + w.height as i32 + TITLEBAR_HEIGHT;
+            let in_window_body = mx >= wx
+                && mx < wx + ww as i32
+                && my >= wy
+                && my < wy + wh as i32 + TITLEBAR_HEIGHT;
 
             if in_close {
                 self.windows.remove(i);
@@ -649,137 +946,254 @@ impl Desktop {
                 return;
             } else if in_maximize {
                 self.toggle_maximize(i, screen_w, screen_h);
-                self.focused_window = Some(i);
-                self.bring_to_front(i);
                 return;
             } else if in_titlebar {
-                // Двойной клик по заголовку (не по кнопкам) тоже
-                // разворачивает/восстанавливает окно — стандартное
-                // поведение большинства оконных менеджеров.
                 let now = timer::uptime_ms();
-                let is_double_click = matches!(self.last_titlebar_click, Some((idx, t)) if idx == i && now.saturating_sub(t) <= DOUBLE_CLICK_MS);
-                self.last_titlebar_click = Some((i, now));
-
+                let is_double_click = match self.last_titlebar_click {
+                    Some((last_idx, last_time)) => {
+                        last_idx == i && now.saturating_sub(last_time) <= DOUBLE_CLICK_MS
+                    }
+                    None => false,
+                };
                 if is_double_click {
                     self.toggle_maximize(i, screen_w, screen_h);
                     self.last_titlebar_click = None;
-                } else if !self.windows[i].maximized {
-                    // Перетаскивание имеет смысл только для не-развёрнутого
-                    // окна — развёрнутое окно всегда занимает фиксированную
-                    // позицию (0,0) до панели задач.
-                    self.dragging_window = Some(i);
-                    self.drag_offset = (mx - w.x, my - w.y);
+                } else {
+                    self.last_titlebar_click = Some((i, now));
+                    self.bring_to_front(i);
+                    self.dragging_window = Some(self.windows.len() - 1);
+                    self.drag_offset = (mx - wx, my - wy);
                 }
-                self.focused_window = Some(i);
-                self.bring_to_front(i);
                 return;
             } else if in_window_body {
-                let content_y = w.y + TITLEBAR_HEIGHT;
-                let clicked_line = ((my - content_y - 6) / 16).max(0) as usize;
-
-                // Клик по строке файла в окне Files открывает его в
-                // TextViewer (или запускает, если это .MEX программа —
-                // см. Window::new_text_viewer).
-                if let WindowContent::Files { entries, .. } = &w.content {
-                    if let Some(entry) = entries.get(clicked_line) {
-                        if !entry.is_directory {
-                            let name = entry.name.clone();
-                            self.focused_window = Some(i);
-                            self.bring_to_front(i);
-                            self.open_text_viewer(screen_w, screen_h, &name);
-                            return;
-                        }
-                    }
-                }
-
-                // Клик по строке разрешения в окне Display settings
-                // запускает смену видеорежима "на лету" (обрабатывается
-                // в run_event_loop через pending_resolution).
-                if let WindowContent::DisplaySettings = &w.content {
-                    let clicked_row = ((my - content_y - 36) / 28).max(-1);
-                    if clicked_row >= 0 {
-                        if let Some(&(rw, rh)) = RESOLUTION_PRESETS.get(clicked_row as usize) {
-                            self.pending_resolution = Some((rw, rh));
-                            return;
-                        }
-                    }
-                }
-
-                self.focused_window = Some(i);
                 self.bring_to_front(i);
+                let last_idx = self.windows.len() - 1;
+                let new_win = self.handle_content_click(last_idx, mx, my);
+                if let Some(nw) = new_win {
+                    self.windows.push(nw);
+                    self.focused_window = Some(self.windows.len() - 1);
+                }
                 return;
             }
         }
+        self.focused_window = None;
+    }
+
+    fn handle_content_click(&mut self, window_index: usize, mx: i32, my: i32) -> Option<Window> {
+        let open_new_window = if let Some(w) = self.windows.get_mut(window_index) {
+            let content_x = w.x;
+            let content_y = w.y + TITLEBAR_HEIGHT;
+            let rel_x = mx - content_x;
+            let rel_y = my - content_y;
+
+            match &mut w.content {
+                WindowContent::Files {
+                    current_partition,
+                    current_path,
+                    entries,
+                    selected_idx,
+                    error,
+                    status_msg,
+                } => {
+                    if rel_y >= 4 && rel_y < 24 {
+                        let partitions = ["/userdata", "/system", "/kernel"];
+                        let tab_w = 80i32;
+                        let clicked_part_idx = (rel_x - 8) / tab_w;
+                        if clicked_part_idx >= 0 && (clicked_part_idx as usize) < partitions.len() {
+                            let part = partitions[clicked_part_idx as usize];
+                            *current_partition = String::from(part);
+                            *current_path = String::from("/");
+                            *selected_idx = None;
+                            let (e, err) = load_partition_entries(current_partition, current_path);
+                            *entries = e;
+                            *error = err;
+                            *status_msg = Some(format!("Switched to {}", part));
+                        }
+                        return None;
+                    }
+
+                    if rel_y >= 26 && rel_y < 50 {
+                        if rel_x >= 8 && rel_x < 56 { // Up
+                            if current_path != "/" {
+                                if let Some(pos) = current_path.rfind('/') {
+                                    let new_p = &current_path[..pos];
+                                    *current_path = if new_p.is_empty() { String::from("/") } else { String::from(new_p) };
+                                    let (e, err) = load_partition_entries(current_partition, current_path);
+                                    *entries = e;
+                                    *error = err;
+                                    *selected_idx = None;
+                                }
+                            }
+                        } else if rel_x >= 64 && rel_x < 136 { // + Folder
+                            if current_partition == "/userdata" {
+                                let mut num = 1;
+                                loop {
+                                    let f_name = format!("folder_{}", num);
+                                    let full_p = if current_path == "/" { format!("/{}", f_name) } else { format!("{}/{}", current_path.trim_end_matches('/'), f_name) };
+                                    if ext2::mkdir_p(&full_p).is_ok() {
+                                        *status_msg = Some(format!("Created folder: {}", f_name));
+                                        break;
+                                    }
+                                    num += 1;
+                                    if num > 50 { break; }
+                                }
+                                let (e, err) = load_partition_entries(current_partition, current_path);
+                                *entries = e;
+                                *error = err;
+                            }
+                        } else if rel_x >= 144 && rel_x < 204 { // + File
+                            if current_partition == "/userdata" {
+                                let mut num = 1;
+                                loop {
+                                    let f_name = format!("notes_{}.txt", num);
+                                    let full_p = if current_path == "/" { format!("/{}", f_name) } else { format!("{}/{}", current_path.trim_end_matches('/'), f_name) };
+                                    let initial_bytes = b"Welcome to DeiX Text Editor!\r\n";
+                                    if ext2::write_file_path(&full_p, initial_bytes).is_ok() {
+                                        let target_x = w.x + 30;
+                                        let target_y = w.y + 30;
+                                        let part_clone = current_partition.clone();
+                                        let path_clone = current_path.clone();
+                                        let (e, err) = load_partition_entries(current_partition, current_path);
+                                        *entries = e;
+                                        *error = err;
+                                        return Some(Window::new_file_editor(target_x, target_y, &part_clone, &path_clone, &f_name));
+                                    }
+                                    num += 1;
+                                    if num > 50 { break; }
+                                }
+                            }
+                        }
+                        return None;
+                    }
+
+                    let line_height = 20;
+                    let clicked_index = (rel_y - 56) / line_height;
+                    if clicked_index >= 0 && (clicked_index as usize) < entries.len() {
+                        let idx = clicked_index as usize;
+                        if selected_idx.map_or(false, |s| s == idx) {
+                            let entry = entries[idx].clone();
+                            if entry.is_dir {
+                                *current_path = if current_path == "/" { format!("/{}", entry.name) } else { format!("{}/{}", current_path.trim_end_matches('/'), entry.name) };
+                                let (e, err) = load_partition_entries(current_partition, current_path);
+                                *entries = e;
+                                *error = err;
+                                *selected_idx = None;
+                                return None;
+                            } else {
+                                let target_x = w.x + 30;
+                                let target_y = w.y + 30;
+                                return Some(Window::new_file_editor(target_x, target_y, current_partition, current_path, &entry.name));
+                            }
+                        } else {
+                            *selected_idx = Some(idx);
+                        }
+                    }
+                    None
+                }
+                WindowContent::WebBrowser {
+                    tabs,
+                    active_tab,
+                    address_input,
+                    status_msg,
+                    ..
+                } => {
+                    // Клик по быстрым закладам или навигации
+                    if rel_y >= 26 && rel_y < 50 {
+                        if rel_x >= 8 && rel_x < 36 { // Home
+                            let home_url = "deix://home";
+                            *address_input = String::from(home_url);
+                            if let Some(tab) = tabs.get_mut(*active_tab) {
+                                tab.url = String::from(home_url);
+                                tab.content = render_html_page(home_url);
+                            }
+                            *status_msg = Some(String::from("Home loaded"));
+                        } else if rel_x >= 40 && rel_x < 90 { // Docs
+                            let docs_url = "deix://docs";
+                            *address_input = String::from(docs_url);
+                            if let Some(tab) = tabs.get_mut(*active_tab) {
+                                tab.url = String::from(docs_url);
+                                tab.content = render_html_page(docs_url);
+                            }
+                            *status_msg = Some(String::from("Docs loaded"));
+                        }
+                    }
+                    None
+                }
+                WindowContent::ThemeSettings { .. } => {
+                    // Клик по переключению тем
+                    if rel_y >= 30 && rel_y < 60 {
+                        if rel_x >= 12 && rel_x < 110 {
+                            set_theme(UiTheme::catppuccin());
+                        } else if rel_x >= 118 && rel_x < 210 {
+                            set_theme(UiTheme::nord_light());
+                        } else if rel_x >= 218 && rel_x < 310 {
+                            set_theme(UiTheme::cyberpunk());
+                        } else if rel_x >= 318 && rel_x < 410 {
+                            set_theme(UiTheme::aero_glass());
+                        }
+                    }
+                    None
+                }
+                WindowContent::DisplaySettings => {
+                    let item_height = 28;
+                    let items_start_y = 30;
+                    let clicked_index = (rel_y - items_start_y) / item_height;
+                    if clicked_index >= 0 && (clicked_index as usize) < RESOLUTION_PRESETS.len() {
+                        let (nw, nh) = RESOLUTION_PRESETS[clicked_index as usize];
+                        self.pending_resolution = Some((nw, nh));
+                    }
+                    None
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        open_new_window
     }
 
     fn render(&mut self, r: &mut Renderer) {
-        let w = r.width() as i32;
-        let h = r.height() as i32;
+        let theme = get_theme();
+        let screen_w = r.width() as i32;
+        let screen_h = r.height() as i32;
 
-        draw_wallpaper(r, self.frame_counter, w, h);
+        draw_wallpaper(r, &theme, self.frame_counter, screen_w, screen_h);
+        draw_desktop_icons(r, &theme, self.selected_desktop_icon);
 
         for i in 0..self.windows.len() {
-            if self.windows[i].minimized {
-                continue;
+            if !self.windows[i].minimized {
+                let is_focused = self.focused_window == Some(i);
+                draw_window(r, &theme, &self.windows[i], is_focused);
             }
-            let is_focused = self.focused_window == Some(i);
-            draw_window_shadow(r, &self.windows[i]);
-            draw_window(r, &self.windows[i], is_focused);
         }
 
-        draw_taskbar(r, self, w, h);
+        draw_taskbar(r, &theme, self, screen_w, screen_h);
 
         if self.start_menu_open {
-            draw_start_menu(r, w, h);
+            draw_start_menu(r, &theme, screen_w, screen_h);
+        }
+
+        if self.control_center_open {
+            draw_control_center(r, &theme, screen_w, screen_h);
         }
 
         draw_cursor(r);
-
-        // Кадр целиком собран в back buffer (обычная RAM) — теперь одним
-        // проходом копируем его в реальный MMIO framebuffer. Без этого
-        // финального шага пришлось бы писать в видеопамять поэлементно
-        // прямо во время отрисовки каждого примитива, что и вызывало
-        // видимые артефакты/подтормаживание при перетаскивании окон (см.
-        // подробное объяснение в renderer.rs у структуры Renderer).
         r.present();
     }
 
-    /// Главный цикл: перерисовывает кадр, пока не будет нажат Esc (выход
-    /// обратно в текстовый CLI) или выбрано новое разрешение в окне
-    /// Display settings (тогда цикл завершается с
-    /// DesktopExit::ChangeResolution, и вызывающий код в cli.rs создаёт
-    /// новый framebuffer и снова вызывает run_event_loop — без выхода в
-    /// текстовый режим между этими двумя действиями). Частота кадров
-    /// привязана к таймеру ~30 Гц — достаточно отзывчиво и не
-    /// перегружает эмулируемый CPU постоянной перерисовкой на максимум.
-    ///
-    /// `preserve_windows`: если true, список открытых окон НЕ
-    /// пересоздаётся демонстрационными Files/Terminal — используется при
-    /// повторном входе в цикл после смены разрешения, чтобы пользователь
-    /// не терял открытые окна и их содержимое.
     pub fn run_event_loop(&mut self, r: &mut Renderer, preserve_windows: bool) -> DesktopExit {
         let screen_w = r.width() as i32;
         let screen_h = r.height() as i32;
 
         if !preserve_windows {
-            // Стартовые демонстрационные окна размещаются рядом, а не
-            // друг на друге — Files слева, Terminal справа от него,
-            // чтобы сразу после запуска оба были видны целиком без
-            // необходимости что-то двигать. Terminal открывается
-            // ПОСЛЕДНИМ, чтобы получить фокус по умолчанию (open_*()
-            // отдаёт фокус вновь открытому окну) — так пользователь
-            // может сразу печатать команды, не кликая по окну мышью.
-            self.windows.push(Window::new_files(30, 40));
-            self.windows.push(Window::new_terminal(360, 60));
+            self.windows.push(Window::new_browser(40, 40, "deix://home"));
+            self.windows.push(Window::new_files(380, 50));
             self.focused_window = Some(self.windows.len() - 1);
         } else {
-            // При повторном входе после смены разрешения разворачиваем
-            // заново любые окна, которые были в maximized-состоянии —
-            // иначе они остались бы привязаны к размеру ПРЕДЫДУЩЕГО
-            // экрана и торчали бы за пределы нового.
             for i in 0..self.windows.len() {
                 if self.windows[i].maximized {
-                    self.windows[i].maximized = false; // сброс, чтобы toggle сработал в "развернуть"
+                    self.windows[i].maximized = false;
                     self.toggle_maximize(i, screen_w, screen_h);
                 }
             }
@@ -789,10 +1203,6 @@ impl Desktop {
         const FRAME_INTERVAL_MS: u64 = 33; // ~30 FPS
 
         loop {
-            // ESC (скан-код 0x01) обрабатывается на уровне сырых байт —
-            // клавиатура транслирует его в управляющий байт ESC (0x1B) в
-            // нашей ASCII-таблице не отображается, поэтому проверяем явно
-            // через отдельный неблокирующий метод.
             if keyboard::try_read_escape() {
                 self.should_exit = true;
             }
@@ -819,27 +1229,12 @@ impl Desktop {
     }
 }
 
-/// Выполняет команду через РЕАЛЬНЫЙ полный CLI (crate::cli::execute) —
-/// то есть окно терминала на рабочем столе понимает ровно тот же набор
-/// команд, что и обычный текстовый режим (help/ping/wifi/gpu/pkg/run/
-/// ls/cat/write/... — весь список из cli.rs), а не отдельную урезанную
-/// копию. Реализовано через временный "перехват" вывода print!/println!
-/// в строку (см. vgaglobal::begin_capture/end_capture), которая затем
-/// разбивается на строки и добавляется в прокручиваемую историю окна.
-///
-/// Пока выполнение внутри графического терминала помечено флагом
-/// cli::IN_GRAPHICAL_TERMINAL — это отключает несколько команд, не
-/// имеющих смысла или опасных в этом контексте (gpu mode/demo, reboot,
-/// halt — см. подробности в cli.rs).
 fn run_mini_terminal_command(cmd: &str, lines: &mut Vec<String>) {
     let cmd = cmd.trim();
     if cmd.is_empty() {
         return;
     }
 
-    // "clear" в обычном CLI очищает скрытый (в графическом режиме) VGA
-    // text buffer — здесь же нужно явно очистить историю строк самого
-    // окна, иначе команда визуально ничего не сделает.
     if cmd == "clear" {
         lines.clear();
         return;
@@ -856,312 +1251,360 @@ fn run_mini_terminal_command(cmd: &str, lines: &mut Vec<String>) {
     }
 }
 
-// ==================== Отрисовка: обои рабочего стола ====================
+// ==================== Отрисовка: Обои и Иконки ====================
 
-/// Рисует фон рабочего стола ПРОЦЕДУРНО — никакой картинки/PNG/bitmap-
-/// ресурса здесь нет и быть не может (в ядре нет декодера изображений).
-/// Вместо этого: вертикальный градиент неба + диагональные "волны"
-/// светлее/темнее базового цвета, чья фаза медленно сдвигается со
-/// временем (frame_counter — миллисекунды с начала работы ядра), отчего
-/// узор выглядит как мягко "дышащий" фон, а не статичная заливка.
-fn draw_wallpaper(r: &mut Renderer, frame_counter: u64, w: i32, h: i32) {
-    let top = Color::rgb(15, 35, 70);
-    let bottom = Color::rgb(0, 70, 120);
-    r.fill_rect_gradient_v(0, 0, w as u32, h as u32, top, bottom);
+fn draw_wallpaper(r: &mut Renderer, theme: &UiTheme, frame_counter: u64, w: i32, h: i32) {
+    r.fill_rect_gradient_v(0, 0, w as u32, h as u32, theme.bg_top, theme.bg_bottom);
 
-    // Фаза узора: полный цикл раз в ~8 секунд, целочисленная арифметика
-    // (нет плавающей точки в этом окружении — см. renderer::isqrt).
-    let phase = ((frame_counter / 20) % 64) as i32;
-    let stripe_spacing = 48;
-    let stripe_width = 3;
-
-    let mut offset = -h - phase;
-    while offset < w + h {
-        // Диагональная линия рисуется как последовательность коротких
-        // горизонтальных отрезков со смещающимся x — дешевле, чем честный
-        // Брезенхэм на весь экран, и не требует специального клиппинга.
-        for y in (0..h).step_by(4) {
-            let x = offset + y;
-            r.fill_rect(x, y, stripe_width as u32, 4, Color::rgb(255, 255, 255).lerp(bottom, 235));
+    if theme.wallpaper_style == 0 {
+        let star_count = 36;
+        for i in 0..star_count {
+            let sx = ((i * 137 + 42) as i32) % w;
+            let sy = ((i * 269 + 17) as i32) % (h - TASKBAR_HEIGHT as i32);
+            let twinkle = (((frame_counter / 150 + i as u64) % 10) > 4) as u8;
+            let star_color = theme.accent.lerp(Color::WHITE, 180 + twinkle * 70);
+            r.put_pixel(sx, sy, star_color);
         }
-        offset += stripe_spacing;
+    } else if theme.wallpaper_style == 1 {
+        let phase = ((frame_counter / 25) % 64) as i32;
+        let mut offset = -h - phase;
+        while offset < w + h {
+            for y in (0..h).step_by(4) {
+                let x = offset + y;
+                r.fill_rect_alpha(x, y, 4, 4, theme.accent, 22);
+            }
+            offset += 56;
+        }
     }
 
-    // Логотип-надпись по центру верхней части экрана — просто текст,
-    // нарисованный тем же битмап-шрифтом, что и весь остальной UI (не
-    // картинка).
-    let label = "DeiX";
+    let label = "DeiX OS";
     let label_x = w / 2 - (label.len() as i32 * 8 * 2) / 2;
-    draw_text_scaled(r, label_x, 24, label, Color::rgb(255, 255, 255).lerp(top, 40), 2);
+    draw_text_scaled(r, label_x, 32, label, theme.text_primary, 2);
 }
 
-/// Рисует текст с целочисленным масштабированием (каждый пиксель глифа
-/// превращается в scale x scale блок) — используется для крупного
-/// заголовка "DeiX" на обоях, без необходимости в отдельном крупном
-/// шрифте.
-fn draw_text_scaled(r: &mut Renderer, x: i32, y: i32, text: &str, color: Color, scale: i32) {
+fn draw_desktop_icons(r: &mut Renderer, theme: &UiTheme, selected_idx: Option<usize>) {
+    let shortcuts = desktop_shortcuts();
+    for (idx, sc) in shortcuts.iter().enumerate() {
+        let ix = 20;
+        let iy = 20 + idx as i32 * 70;
+        let is_sel = selected_idx == Some(idx);
+
+        if is_sel {
+            r.fill_rounded_rect_alpha(ix - 6, iy - 4, 64, 60, 6, theme.accent, 100);
+        }
+
+        r.fill_rounded_rect(ix, iy, 48, 36, 8, theme.titlebar_active);
+        r.draw_icon(ix + 16, iy + 10, match sc.icon {
+            IconType::Terminal => IconType::Terminal,
+            IconType::Files => IconType::Files,
+            IconType::Browser => IconType::Browser,
+            IconType::TaskManager => IconType::TaskManager,
+            IconType::Theme => IconType::Theme,
+            _ => IconType::Terminal,
+        }, theme.accent);
+
+        r.draw_text(ix, iy + 40, sc.name, theme.text_primary, None);
+    }
+}
+
+fn draw_text_scaled(r: &mut Renderer, x: i32, y: i32, text: &str, color: Color, scale: u32) {
     let mut cursor_x = x;
     for byte in text.bytes() {
         let glyph = crate::font::read_glyph(byte);
-        for (row, &line) in glyph.iter().enumerate() {
-            if line == 0 {
+        for (row, &b) in glyph.iter().enumerate() {
+            if b == 0 {
                 continue;
             }
+            let py = y + row as i32 * scale as i32;
             for col in 0..8 {
-                if (line >> (7 - col)) & 1 != 0 {
-                    r.fill_rect(
-                        cursor_x + col as i32 * scale,
-                        y + row as i32 * scale,
-                        scale as u32,
-                        scale as u32,
-                        color,
-                    );
+                if (b >> (7 - col)) & 1 != 0 {
+                    let px = cursor_x + col as i32 * scale as i32;
+                    r.fill_rect(px, py, scale, scale, color);
                 }
             }
         }
-        cursor_x += 8 * scale;
+        cursor_x += 8 * scale as i32;
     }
 }
 
-// ==================== Отрисовка: окна ====================
+// ==================== Отрисовка: Окна ====================
 
-fn title_button_center(w: &Window, index: i32) -> (i32, i32) {
-    // index=0 -> close (крайняя правая), index=1 -> minimize,
-    // index=2 -> maximize (следующая левее).
-    let cx = w.x + w.width as i32 - 14 - index * (BUTTON_DIAMETER + 8);
+fn title_button_center(w: &Window, button_index: usize) -> (i32, i32) {
+    let title_right = w.x + w.width as i32;
     let cy = w.y + TITLEBAR_HEIGHT / 2;
+    let margin_right = 16;
+    let spacing = 18;
+    let cx = title_right - margin_right - (button_index as i32 * spacing);
     (cx, cy)
 }
 
-fn circle_hit(px: i32, py: i32, cx: i32, cy: i32, radius: i32) -> bool {
-    let dx = px - cx;
-    let dy = py - cy;
+fn circle_hit(x: i32, y: i32, cx: i32, cy: i32, radius: i32) -> bool {
+    let dx = x - cx;
+    let dy = y - cy;
     dx * dx + dy * dy <= radius * radius
 }
 
-/// Рисует мягкую тень под окном — несколько всё более широких и всё более
-/// прозрачных (через shade_rect) прямоугольников со смещением вниз-вправо.
-/// Простая, но эффективная имитация drop shadow без настоящего альфа-блендинга.
-fn draw_window_shadow(r: &mut Renderer, w: &Window) {
-    let full_h = w.height as i32 + TITLEBAR_HEIGHT;
-    for i in (1..=4).rev() {
-        let spread = i * 2;
-        r.shade_rect(
-            w.x - spread + 4,
-            w.y - spread + 6,
-            w.width + (spread * 2) as u32,
-            (full_h + spread * 2) as u32,
-            18,
-        );
+fn draw_window(r: &mut Renderer, theme: &UiTheme, w: &Window, is_focused: bool) {
+    let total_h = w.height + TITLEBAR_HEIGHT as u32;
+
+    r.draw_drop_shadow(w.x, w.y, w.width, total_h, 6);
+
+    if theme.enable_blur {
+        r.apply_blur_rect(w.x, w.y, w.width, total_h, 2);
     }
-}
 
-fn draw_window(r: &mut Renderer, w: &Window, focused: bool) {
-    let titlebar_top = if focused {
-        Color::rgb(50, 110, 210)
-    } else {
-        Color::rgb(130, 130, 130)
-    };
-    let titlebar_bottom = if focused {
-        Color::TITLEBAR_ACTIVE
-    } else {
-        Color::TITLEBAR_INACTIVE
-    };
+    let title_bg_top = if is_focused { theme.titlebar_active } else { theme.titlebar_inactive };
+    let title_bg_bot = theme.bg_top;
 
-    // Заголовок с лёгким вертикальным градиентом и закруглёнными верхними
-    // углами — вместо плоской однотонной полосы, как раньше.
-    r.fill_rounded_rect(w.x, w.y, w.width, TITLEBAR_HEIGHT as u32 + WINDOW_CORNER_RADIUS as u32, WINDOW_CORNER_RADIUS, titlebar_top);
-    r.fill_rect(w.x, w.y + WINDOW_CORNER_RADIUS, w.width, (TITLEBAR_HEIGHT - WINDOW_CORNER_RADIUS) as u32, titlebar_bottom);
-    r.fill_rect_gradient_v(w.x, w.y, w.width, TITLEBAR_HEIGHT as u32, titlebar_top, titlebar_bottom);
+    r.fill_rounded_rect_alpha(
+        w.x,
+        w.y,
+        w.width,
+        total_h,
+        theme.corner_radius,
+        theme.window_bg,
+        theme.opacity,
+    );
 
-    r.draw_text(w.x + 10, w.y + 5, &w.title, Color::WHITE, None);
+    r.fill_rect_gradient_v(
+        w.x,
+        w.y,
+        w.width,
+        TITLEBAR_HEIGHT as u32,
+        title_bg_top,
+        title_bg_bot,
+    );
 
-    // Круглые кнопки "светофор" (close=красная, minimize=жёлтая,
-    // maximize=зелёная) вместо прямоугольного крестика — более
-    // современный/аккуратный вид, как в большинстве настольных ОС.
+    if is_focused {
+        r.draw_hline(w.x, w.y, w.width, theme.accent);
+    }
+
+    let title_color = if is_focused { theme.text_primary } else { theme.text_secondary };
+    r.draw_text(w.x + 12, w.y + (TITLEBAR_HEIGHT - 16) / 2, &w.title, title_color, None);
+
     let (close_cx, close_cy) = title_button_center(w, 0);
     let (min_cx, min_cy) = title_button_center(w, 1);
     let (max_cx, max_cy) = title_button_center(w, 2);
-    draw_circle_button(r, close_cx, close_cy, BUTTON_DIAMETER / 2, Color::rgb(230, 70, 60));
-    draw_circle_button(r, min_cx, min_cy, BUTTON_DIAMETER / 2, Color::rgb(230, 180, 40));
-    draw_circle_button(r, max_cx, max_cy, BUTTON_DIAMETER / 2, Color::rgb(70, 190, 90));
+
+    r.fill_circle(close_cx, close_cy, BUTTON_DIAMETER / 2, Color::RED);
+    r.fill_circle(min_cx, min_cy, BUTTON_DIAMETER / 2, Color::YELLOW);
+    r.fill_circle(max_cx, max_cy, BUTTON_DIAMETER / 2, Color::GREEN);
+
+    r.draw_line(close_cx - 2, close_cy - 2, close_cx + 2, close_cy + 2, Color::WHITE);
+    r.draw_line(close_cx + 2, close_cy - 2, close_cx - 2, close_cy + 2, Color::WHITE);
+    r.draw_hline(min_cx - 3, min_cy, 7, Color::WHITE);
+    r.draw_rect(max_cx - 3, max_cy - 3, 6, 6, Color::WHITE);
 
     let content_y = w.y + TITLEBAR_HEIGHT;
 
     match &w.content {
         WindowContent::Terminal { lines, current_line } => {
-            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(18, 18, 22));
-            let max_lines = (w.height as i32 - 8) / 16;
-            let start = lines.len().saturating_sub(max_lines.max(1) as usize - 1);
-            let mut line_y = content_y + 4;
-            for line in &lines[start..] {
-                r.draw_text(w.x + 6, line_y, truncate(line, (w.width as usize - 12) / 8), Color::rgb(90, 230, 120), None);
-                line_y += 16;
-            }
-            let prompt = format!("> {}_", current_line);
-            r.draw_text(w.x + 6, line_y, truncate(&prompt, (w.width as usize - 12) / 8), Color::rgb(90, 230, 120), None);
-        }
-        WindowContent::Files { entries, error } => {
-            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(240, 240, 245));
+            r.fill_rect_alpha(w.x, content_y, w.width, w.height, Color::rgb(15, 15, 25), theme.opacity);
+
+            let max_visible_lines = (w.height as usize / 18).saturating_sub(1);
+            let start_line = lines.len().saturating_sub(max_visible_lines);
+
             let mut line_y = content_y + 6;
-            if let Some(err) = error {
-                r.draw_text(w.x + 6, line_y, err, Color::RED, None);
-            } else if entries.is_empty() {
-                r.draw_text(w.x + 6, line_y, "(empty)", Color::DARK_GRAY, None);
-            } else {
-                for (row, entry) in entries.iter().enumerate() {
-                    // Лёгкая "зебра" на строках списка файлов — заметно
-                    // легче ориентироваться взглядом, чем сплошной список.
-                    if row % 2 == 1 {
-                        r.fill_rect(w.x + 2, line_y - 2, w.width - 4, 16, Color::rgb(225, 230, 240));
-                    }
-                    let label = if entry.is_directory {
-                        format!("[{}]", entry.name)
-                    } else {
-                        format!("{} ({} B)", entry.name, entry.size)
-                    };
-                    let color = if entry.is_directory { Color::rgb(0, 60, 160) } else { Color::BLACK };
-                    r.draw_text(w.x + 6, line_y, truncate(&label, (w.width as usize - 12) / 8), color, None);
-                    line_y += 16;
-                    if line_y > content_y + w.height as i32 - 16 {
-                        break;
-                    }
-                }
-            }
-        }
-        WindowContent::TextViewer { lines, scroll, error, .. } => {
-            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(252, 252, 244));
-            let mut line_y = content_y + 6;
-            if let Some(err) = error {
-                r.draw_text(w.x + 6, line_y, err, Color::RED, None);
-            } else if lines.is_empty() {
-                r.draw_text(w.x + 6, line_y, "(empty file)", Color::DARK_GRAY, None);
-            } else {
-                let max_lines = ((w.height as i32 - 12) / 16).max(1) as usize;
-                let start = (*scroll).min(lines.len().saturating_sub(1));
-                let end = (start + max_lines).min(lines.len());
-                for line in &lines[start..end] {
-                    r.draw_text(w.x + 6, line_y, truncate(line, (w.width as usize - 12) / 8), Color::BLACK, None);
-                    line_y += 16;
-                }
-                if lines.len() > max_lines {
-                    let indicator = format!("{}/{}", start + 1, lines.len());
-                    r.draw_text(
-                        w.x + w.width as i32 - (indicator.len() as i32 * 8) - 6,
-                        content_y + 4,
-                        &indicator,
-                        Color::GRAY,
-                        None,
-                    );
-                }
-            }
-        }
-        WindowContent::About => {
-            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(250, 250, 250));
-            let uptime_s = timer::uptime_ms() / 1000;
-            let lines = [
-                String::from("DeiX v0.2-beta"),
-                String::from("A mini x86_64 OS written in Rust"),
-                String::from("Bootloader: BIOS MBR (no GRUB)"),
-                String::from("Filesystem: ext2 (real, e2fsck-clean)"),
-                format!("Uptime: {}s", uptime_s),
-            ];
-            let mut line_y = content_y + 12;
-            for line in &lines {
-                r.draw_text(w.x + 12, line_y, line, Color::rgb(20, 20, 30), None);
+            for line in lines.iter().skip(start_line) {
+                let color = if line.starts_with('>') { Color::GREEN } else { theme.text_primary };
+                r.draw_text(w.x + 8, line_y, truncate(line, (w.width as usize - 16) / 8), color, None);
                 line_y += 18;
             }
+
+            let prompt = format!("root@deix:~# {}", current_line);
+            r.draw_text(w.x + 8, content_y + w.height as i32 - 20, truncate(&prompt, (w.width as usize - 16) / 8), theme.accent, None);
+        }
+        WindowContent::WebBrowser {
+            tabs,
+            active_tab,
+            address_input,
+            bookmarks: _,
+            status_msg,
+        } => {
+            r.fill_rect_alpha(w.x, content_y, w.width, w.height, theme.window_bg, theme.opacity);
+
+            // 1. Панель вкладок (Tabs Bar: 0..24)
+            r.fill_rect(w.x, content_y, w.width, 24, theme.titlebar_inactive);
+            let mut tab_x = w.x + 8;
+            for (idx, tab) in tabs.iter().enumerate() {
+                let is_act = idx == *active_tab;
+                let bg = if is_act { theme.accent } else { theme.titlebar_active };
+                r.fill_rounded_rect(tab_x, content_y + 2, 110, 20, 4, bg);
+                r.draw_text(tab_x + 6, content_y + 4, truncate(&tab.title, 11), Color::WHITE, None);
+                tab_x += 116;
+            }
+
+            // 2. Навигационная панель (Nav Bar: 26..50)
+            r.fill_rect(w.x, content_y + 24, w.width, 26, theme.titlebar_active);
+            r.draw_icon(w.x + 8, content_y + 29, IconType::Home, theme.accent);
+            r.draw_text(w.x + 28, content_y + 29, "Home", theme.text_primary, None);
+            r.draw_text(w.x + 68, content_y + 29, "Docs", theme.text_primary, None);
+
+            // Поле URL адреса
+            r.fill_rounded_rect(w.x + 110, content_y + 26, w.width - 120, 22, 4, Color::rgb(15, 23, 42));
+            r.draw_icon(w.x + 114, content_y + 29, IconType::Search, Color::GRAY);
+            r.draw_text(w.x + 132, content_y + 29, truncate(address_input, (w.width as usize - 150) / 8), Color::WHITE, None);
+
+            r.draw_hline(w.x, content_y + 50, w.width, theme.titlebar_inactive);
+
+            // 3. Область HTML контента
+            if let Some(tab) = tabs.get(*active_tab) {
+                let mut cy = content_y + 56;
+                for line in tab.content.iter() {
+                    if cy + 18 > content_y + w.height as i32 - 20 {
+                        break;
+                    }
+                    if line.starts_with("# ") {
+                        r.draw_text(w.x + 12, cy, &line[2..], theme.accent, None);
+                    } else if line.starts_with("## ") {
+                        r.draw_text(w.x + 12, cy, &line[3..], Color::GREEN, None);
+                    } else if line.starts_with("* ") {
+                        r.draw_text(w.x + 12, cy, line, theme.text_primary, None);
+                    } else {
+                        r.draw_text(w.x + 12, cy, line, theme.text_secondary, None);
+                    }
+                    cy += 18;
+                }
+            }
+
+            if let Some(msg) = status_msg {
+                r.draw_text(w.x + 12, content_y + w.height as i32 - 18, msg, Color::GRAY, None);
+            }
+        }
+        WindowContent::Files {
+            current_partition,
+            current_path,
+            entries,
+            selected_idx,
+            error,
+            status_msg,
+        } => {
+            r.fill_rect_alpha(w.x, content_y, w.width, w.height, theme.window_bg, theme.opacity);
+
+            let partitions = ["/userdata", "/system", "/kernel"];
+            let tab_w = 80u32;
+            for (idx, &part) in partitions.iter().enumerate() {
+                let px = w.x + 8 + (idx as i32 * tab_w as i32);
+                let is_sel = current_partition == part;
+                let bg = if is_sel { theme.accent } else { theme.titlebar_active };
+                r.fill_rounded_rect(px, content_y + 4, tab_w - 4, 20, 4, bg);
+                let label = if part == "/userdata" { "user" } else { &part[1..] };
+                r.draw_text(px + 6, content_y + 6, label, Color::WHITE, None);
+            }
+
+            r.fill_rect(w.x + 8, content_y + 26, 48, 22, theme.titlebar_active);
+            r.draw_text(w.x + 14, content_y + 29, "Up", theme.text_primary, None);
+
+            r.fill_rect(w.x + 64, content_y + 26, 72, 22, theme.titlebar_active);
+            r.draw_text(w.x + 70, content_y + 29, "+Folder", Color::GREEN, None);
+
+            r.fill_rect(w.x + 144, content_y + 26, 60, 22, theme.titlebar_active);
+            r.draw_text(w.x + 150, content_y + 29, "+File", theme.accent, None);
+
+            let path_display = format!("{}:{}", current_partition, current_path);
+            r.draw_text(w.x + 212, content_y + 29, truncate(&path_display, 24), theme.text_secondary, None);
+
+            r.draw_hline(w.x + 8, content_y + 52, w.width - 16, theme.titlebar_inactive);
+
+            let mut ey = content_y + 56;
+            if let Some(err) = error {
+                r.draw_text(w.x + 12, ey, err, Color::RED, None);
+            } else if entries.is_empty() {
+                r.draw_text(w.x + 12, ey, "(Folder empty)", Color::GRAY, None);
+            } else {
+                for (idx, entry) in entries.iter().enumerate() {
+                    if ey + 18 > content_y + w.height as i32 - 24 {
+                        break;
+                    }
+                    if *selected_idx == Some(idx) {
+                        r.fill_rect(w.x + 8, ey - 2, w.width - 16, 20, theme.titlebar_active);
+                    }
+                    r.draw_icon(w.x + 12, ey, IconType::Files, if entry.is_dir { Color::YELLOW } else { theme.accent });
+                    let size_str = if entry.is_dir { String::from("<DIR>") } else { format!("{} B", entry.size) };
+                    let name_str = format!("{:<22} {:>8}", entry.name, size_str);
+                    r.draw_text(w.x + 32, ey, truncate(&name_str, (w.width as usize - 40) / 8), theme.text_primary, None);
+                    ey += 20;
+                }
+            }
+
+            if let Some(msg) = status_msg {
+                r.draw_text(w.x + 12, content_y + w.height as i32 - 20, msg, Color::YELLOW, None);
+            }
+        }
+        WindowContent::ThemeSettings { volume_level, brightness_level } => {
+            r.fill_rect_alpha(w.x, content_y, w.width, w.height, theme.window_bg, theme.opacity);
+
+            r.draw_text(w.x + 12, content_y + 10, "Select UI Style Theme:", theme.text_primary, None);
+
+            let themes = [("Catppuccin", 12i32), ("Nord Light", 118i32), ("Cyberpunk", 218i32), ("Aero Glass", 318i32)];
+            for (t_name, tx) in themes.iter() {
+                r.fill_rounded_rect(w.x + tx, content_y + 30, 92, 26, 6, theme.titlebar_active);
+                r.draw_text(w.x + tx + 8, content_y + 35, t_name, theme.text_primary, None);
+            }
+
+            r.draw_hline(w.x + 12, content_y + 70, w.width - 24, theme.titlebar_inactive);
+
+            r.draw_text(w.x + 12, content_y + 80, "Quick Adjustments:", theme.text_primary, None);
+            let vol_str = format!("Volume: {}%", volume_level);
+            r.draw_text(w.x + 12, content_y + 105, &vol_str, theme.text_secondary, None);
+            let bri_str = format!("Brightness: {}%", brightness_level);
+            r.draw_text(w.x + 12, content_y + 130, &bri_str, theme.text_secondary, None);
+
+            r.draw_text(w.x + 12, content_y + w.height as i32 - 24, "Changes applied instantly across kernel UI.", theme.accent, None);
+        }
+        WindowContent::TaskManager { refresh_counter: _ } => {
+            r.fill_rect_alpha(w.x, content_y, w.width, w.height, theme.window_bg, theme.opacity);
+
+            r.draw_text(w.x + 12, content_y + 10, "PID   NAME           STATE       SWITCHES", theme.accent, None);
+            r.draw_hline(w.x + 12, content_y + 28, w.width - 24, theme.titlebar_inactive);
+
+            let cur_id = crate::sched::current_id();
+            let total_switches = crate::sched::switch_count();
+
+            let row1 = format!("{:02}    dinit (kernel)  Running     {}", 0, total_switches / 2);
+            let row2 = format!("{:02}*   desktop_ui     Active      {}", cur_id, total_switches);
+
+            r.draw_text(w.x + 12, content_y + 36, &row1, Color::GREEN, None);
+            r.draw_text(w.x + 12, content_y + 56, &row2, Color::YELLOW, None);
+
+            let mem_info = format!("Switches: {} | Timer: {} ms", total_switches, timer::uptime_ms());
+            r.draw_text(w.x + 12, content_y + w.height as i32 - 24, &mem_info, theme.text_primary, None);
+        }
+        WindowContent::About => {
+            r.fill_rect_alpha(w.x, content_y, w.width, w.height, theme.window_bg, theme.opacity);
+
+            draw_text_scaled(r, w.x + 16, content_y + 12, "DeiX OS", theme.accent, 2);
+            r.draw_text(w.x + 16, content_y + 50, "Version: 0.2.1-beta (Preemptive GUI)", theme.text_primary, None);
+            r.draw_text(w.x + 16, content_y + 68, "Kernel: 64-bit Long Mode (no_std Rust)", theme.text_secondary, None);
+            r.draw_text(w.x + 16, content_y + 86, "Renderer: Software 2D + VBE Double Buffer", theme.text_secondary, None);
+
+            let uptime_secs = timer::uptime_ms() / 1000;
+            let uptime_str = format!("Uptime: {}m {}s", uptime_secs / 60, uptime_secs % 60);
+            r.draw_text(w.x + 16, content_y + 110, &uptime_str, Color::GREEN, None);
         }
         WindowContent::DisplaySettings => {
-            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(245, 246, 250));
-            r.draw_text(w.x + 10, content_y + 10, "Choose resolution:", Color::rgb(20, 20, 30), None);
-            let mut line_y = content_y + 36;
-            for &(rw, rh) in RESOLUTION_PRESETS.iter() {
-                let is_current = rw == r.width() && rh == r.height();
-                if is_current {
-                    r.fill_rect(w.x + 6, line_y - 3, w.width - 12, 22, Color::rgb(200, 220, 250));
-                }
-                let label = format!("{}x{}{}", rw, rh, if is_current { "  (current)" } else { "" });
-                r.draw_text(w.x + 12, line_y, &label, Color::rgb(20, 20, 30), None);
-                line_y += 28;
+            r.fill_rect_alpha(w.x, content_y, w.width, w.height, theme.window_bg, theme.opacity);
+            r.draw_text(w.x + 12, content_y + 8, "Select Resolution:", theme.text_primary, None);
+
+            let cur_w = r.width();
+            let cur_h = r.height();
+
+            let mut py = content_y + 30;
+            for (w_res, h_res) in RESOLUTION_PRESETS.iter() {
+                let is_current = *w_res == cur_w && *h_res == cur_h;
+                let bg = if is_current { theme.titlebar_active } else { theme.window_bg };
+                r.fill_rounded_rect(w.x + 8, py, w.width - 16, 24, 4, bg);
+
+                let label = format!("{} x {}{}", w_res, h_res, if is_current { " (active)" } else { "" });
+                let fg = if is_current { theme.accent } else { theme.text_primary };
+                r.draw_text(w.x + 16, py + 4, &label, fg, None);
+                py += 28;
             }
         }
-        WindowContent::Browser { html_lines, title, loading, error, scroll, .. } => {
-            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(30, 30, 36));
-            if *loading {
-                r.draw_text(w.x + 10, content_y + 8, "Loading page...", Color::rgb(100, 200, 255), None);
-            } else if let Some(e) = error {
-                r.draw_text(w.x + 10, content_y + 8, &format!("ERROR: {}", e), Color::rgb(255, 80, 80), None);
-            } else {
-                r.draw_text(w.x + 10, content_y + 6, truncate(title, (w.width as usize - 20) / 8), Color::rgb(255, 200, 60), None);
-                r.draw_hline(w.x + 4, content_y + 20, w.width - 8, Color::rgb(60, 60, 70));
-                let max_lines = ((w.height as i32 - 32) / 15).max(1) as usize;
-                let start = (*scroll).min(html_lines.len().saturating_sub(1));
-                let end = (start + max_lines).min(html_lines.len());
-                let mut ly = content_y + 24;
-                for i in start..end {
-                    let line = &html_lines[i];
-                    let clean: String = line.chars().filter(|&c| c.is_ascii_graphic() || c == ' ').collect();
-                    r.draw_text(w.x + 8, ly, truncate(&clean, (w.width as usize - 20) / 8), Color::rgb(220, 220, 230), None);
-                    ly += 15;
-                }
-                if html_lines.len() > max_lines {
-                    let indicator = format!("{}/{}", start + 1, html_lines.len());
-                    r.draw_text(w.x + w.width as i32 - 60, content_y + 6, &indicator, Color::rgb(140, 140, 150), None);
-                }
-            }
-        }
-        WindowContent::FmGui { entries, current_idx, scroll, .. } => {
-            r.fill_rect(w.x, content_y, w.width, w.height, Color::rgb(248, 248, 252));
-            let max_lines = ((w.height as i32 - 16) / 18).max(1) as usize;
-            let start = (*scroll).min(entries.len().saturating_sub(1));
-            let end = (start + max_lines).min(entries.len());
-            let mut ly = content_y + 6;
-            for i in start..end {
-                let e = &entries[i];
-                // zebra striping
-                if i % 2 == 1 { r.fill_rect(w.x + 2, ly - 1, w.width - 4, 18, Color::rgb(238, 242, 248)); }
-                if i == *current_idx { r.fill_rect(w.x + 2, ly - 1, w.width - 4, 18, Color::rgb(180, 210, 245)); }
-                let icon = if e.is_dir { "📁" } else { "📄" };
-                let sys_mark = if e.system { " 🔒" } else { "" };
-                let size_str = if e.is_dir { String::from("<DIR>") } else if e.size < 1024 { format!("{}B", e.size) } else { format!("{}K", e.size/1024) };
-                let line = format!(" {} {:<28} {:>8}{}", icon, e.name, size_str, sys_mark);
-                let color = if e.system { Color::rgb(180, 60, 60) } else if e.is_dir { Color::rgb(20, 50, 160) } else { Color::rgb(30, 30, 40) };
-                r.draw_text(w.x + 6, ly, truncate(&line, (w.width as usize - 16) / 8), color, None);
-                ly += 18;
-            }
-            if entries.len() > max_lines {
-                let indicator = format!("{}/{}", *current_idx + 1, entries.len());
-                r.draw_text(w.x + w.width as i32 - 40, content_y + 4, &indicator, Color::GRAY, None);
-            }
-        }
+        _ => {}
     }
 
-    r.draw_rect(w.x, w.y, w.width, w.height as u32 + TITLEBAR_HEIGHT as u32, Color::rgb(10, 10, 15));
-}
-
-fn draw_circle_button(r: &mut Renderer, cx: i32, cy: i32, radius: i32, color: Color) {
-    for y in -radius..=radius {
-        let dx = isqrt_local((radius * radius - y * y).max(0));
-        r.draw_hline(cx - dx, cy + y, (dx * 2 + 1) as u32, color);
-    }
-}
-
-/// Локальная копия целочисленного квадратного корня — та же реализация,
-/// что и в renderer.rs (не экспортируется оттуда, чтобы не разрастался
-/// публичный API рендерера ради одной вспомогательной функции отрисовки
-/// кнопок UI).
-fn isqrt_local(n: i32) -> i32 {
-    if n <= 0 {
-        return 0;
-    }
-    let mut x = n;
-    let mut y = (x + 1) / 2;
-    while y < x {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    x
+    r.draw_rect_outline_alpha(w.x, w.y, w.width, total_h, theme.titlebar_active, 120);
 }
 
 fn truncate(s: &str, max_chars: usize) -> &str {
@@ -1171,87 +1614,116 @@ fn truncate(s: &str, max_chars: usize) -> &str {
     }
 }
 
-// ==================== Отрисовка: панель задач и меню ====================
+// ==================== Отрисовка: Панель задач, Меню и Трей ====================
 
-fn draw_taskbar(r: &mut Renderer, desktop: &Desktop, screen_w: i32, screen_h: i32) {
+fn draw_taskbar(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen_w: i32, screen_h: i32) {
     let y = screen_h - TASKBAR_HEIGHT as i32;
 
-    // Полупрозрачная (через shade+градиент) тёмная панель вместо плоской
-    // заливки одним серым цветом.
-    r.fill_rect_gradient_v(0, y, screen_w as u32, TASKBAR_HEIGHT, Color::rgb(35, 38, 48), Color::rgb(22, 24, 32));
-    r.draw_hline(0, y, screen_w as u32, Color::rgb(70, 130, 220));
+    r.fill_rect_gradient_v(0, y, screen_w as u32, TASKBAR_HEIGHT, theme.titlebar_active, theme.bg_top);
+    r.draw_hline(0, y, screen_w as u32, theme.accent);
 
-    // Кнопка "Пуск" — закруглённая, с изменением цвета при открытом меню.
-    let start_color = if desktop.start_menu_open {
-        Color::rgb(70, 130, 220)
-    } else {
-        Color::rgb(50, 100, 180)
-    };
-    r.fill_rounded_rect(4, y + 4, (START_BUTTON_WIDTH - 8) as u32, TASKBAR_HEIGHT - 8, 6, start_color);
-    r.draw_text(16, y + (TASKBAR_HEIGHT as i32 - 16) / 2, "Start", Color::WHITE, None);
+    let start_bg = if desktop.start_menu_open { theme.accent } else { theme.titlebar_active };
+    r.fill_rounded_rect(6, y + 5, (START_BUTTON_WIDTH - 12) as u32, TASKBAR_HEIGHT - 10, 6, start_bg);
+    r.draw_text(24, y + (TASKBAR_HEIGHT as i32 - 16) / 2, "Start", Color::WHITE, None);
 
-    // Список открытых окон в виде "вкладок" на панели задач — фокусное
-    // окно выделено более светлым фоном, свёрнутое — приглушённым.
     for (i, w) in desktop.windows.iter().enumerate() {
         let item_x = START_BUTTON_WIDTH + 8 + i as i32 * TASKBAR_ITEM_WIDTH;
-        if item_x + TASKBAR_ITEM_WIDTH > screen_w - 90 {
+        if item_x + TASKBAR_ITEM_WIDTH > screen_w - 120 {
             break;
         }
         let is_focused = desktop.focused_window == Some(i) && !w.minimized;
-        let bg = if is_focused {
-            Color::rgb(60, 90, 150)
-        } else if w.minimized {
-            Color::rgb(30, 32, 40)
-        } else {
-            Color::rgb(45, 48, 58)
-        };
-        r.fill_rounded_rect(item_x, y + 5, (TASKBAR_ITEM_WIDTH - 6) as u32, TASKBAR_HEIGHT - 10, 5, bg);
-        let label_color = if w.minimized { Color::GRAY } else { Color::WHITE };
-        r.draw_text(item_x + 8, y + (TASKBAR_HEIGHT as i32 - 16) / 2, truncate(&w.title, 15), label_color, None);
+        let bg = if is_focused { theme.titlebar_active } else { theme.window_bg };
+
+        r.fill_rounded_rect(item_x, y + 6, (TASKBAR_ITEM_WIDTH - 6) as u32, TASKBAR_HEIGHT - 12, 6, bg);
+
+        if is_focused {
+            r.draw_hline(item_x + 12, y + TASKBAR_HEIGHT as i32 - 4, (TASKBAR_ITEM_WIDTH - 30) as u32, theme.accent);
+        }
+
+        let label_color = if w.minimized { Color::GRAY } else { theme.text_primary };
+        r.draw_text(item_x + 8, y + (TASKBAR_HEIGHT as i32 - 16) / 2, truncate(&w.title, 14), label_color, None);
     }
 
-    // Часы (uptime в формате мм:сс) в правом углу панели.
-    let ms = timer::uptime_ms();
-    let secs = ms / 1000;
+    // Трей
+    r.draw_icon(screen_w - 110, y + 12, IconType::Wifi, theme.text_primary);
+    r.draw_icon(screen_w - 90, y + 12, IconType::Volume, theme.text_primary);
+
+    let secs = timer::uptime_ms() / 1000;
     let clock = format!("{:02}:{:02}", (secs / 60) % 100, secs % 60);
-    r.draw_text(screen_w - 56, y + (TASKBAR_HEIGHT as i32 - 16) / 2, &clock, Color::WHITE, None);
+    r.draw_text(screen_w - 60, y + (TASKBAR_HEIGHT as i32 - 16) / 2, &clock, theme.text_primary, None);
 }
 
-fn draw_start_menu(r: &mut Renderer, screen_w: i32, screen_h: i32) {
+fn draw_start_menu(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_h: i32) {
     let items = start_menu_items();
     let taskbar_y = screen_h - TASKBAR_HEIGHT as i32;
-    let menu_h = items.len() as i32 * START_MENU_ITEM_HEIGHT;
+    let menu_h = items.len() as i32 * START_MENU_ITEM_HEIGHT + 48;
     let menu_y = taskbar_y - menu_h;
 
-    // Затемняем область позади меню (кроме самого меню) — простой, но
-    // эффективный способ визуально выделить, что сейчас модальная область.
-    r.shade_rect(0, 0, screen_w as u32, taskbar_y as u32, 60);
+    r.shade_rect(0, 0, screen_w as u32, taskbar_y as u32, 50);
 
-    r.fill_rounded_rect(0, menu_y, START_MENU_WIDTH as u32, menu_h as u32, 8, Color::rgb(248, 248, 250));
-    r.draw_rect(0, menu_y, START_MENU_WIDTH as u32, menu_h as u32, Color::rgb(40, 40, 50));
+    r.fill_rounded_rect(0, menu_y, START_MENU_WIDTH as u32, menu_h as u32, 10, theme.window_bg);
+    r.draw_rect_outline_alpha(0, menu_y, START_MENU_WIDTH as u32, menu_h as u32, theme.titlebar_active, 180);
 
-    for (i, (label, _)) in items.iter().enumerate() {
-        let item_y = menu_y + i as i32 * START_MENU_ITEM_HEIGHT;
-        if i > 0 {
-            r.draw_hline(4, item_y, (START_MENU_WIDTH - 8) as u32, Color::rgb(225, 225, 230));
-        }
+    r.fill_rect_gradient_v(0, menu_y, START_MENU_WIDTH as u32, 38, theme.titlebar_active, theme.window_bg);
+    r.draw_text(12, menu_y + 10, "root @ DeiX OS", theme.accent, None);
+    r.draw_hline(0, menu_y + 38, START_MENU_WIDTH as u32, theme.titlebar_active);
+
+    let items_start_y = menu_y + 44;
+
+    for (i, (label, _, icon)) in items.iter().enumerate() {
+        let item_y = items_start_y + i as i32 * START_MENU_ITEM_HEIGHT;
+
+        r.draw_icon(12, item_y + 8, match icon {
+            IconType::Terminal => IconType::Terminal,
+            IconType::Files => IconType::Files,
+            IconType::Browser => IconType::Browser,
+            IconType::TaskManager => IconType::TaskManager,
+            IconType::Theme => IconType::Theme,
+            IconType::Display => IconType::Display,
+            IconType::About => IconType::About,
+            IconType::Power => IconType::Power,
+            _ => IconType::Terminal,
+        }, theme.accent);
+
         let color = if label.contains("Shut") || label.contains("Restart") {
-            Color::rgb(180, 40, 40)
+            Color::RED
         } else {
-            Color::rgb(20, 20, 30)
+            theme.text_primary
         };
-        r.draw_text(16, item_y + (START_MENU_ITEM_HEIGHT - 16) / 2, label, color, None);
+        r.draw_text(34, item_y + (START_MENU_ITEM_HEIGHT - 16) / 2, label, color, None);
     }
+}
+
+fn draw_control_center(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_h: i32) {
+    let taskbar_y = screen_h - TASKBAR_HEIGHT as i32;
+    let cc_w = 200i32;
+    let cc_h = 160i32;
+    let cc_x = screen_w - cc_w - 8;
+    let cc_y = taskbar_y - cc_h - 8;
+
+    r.fill_rounded_rect(cc_x, cc_y, cc_w as u32, cc_h as u32, 10, theme.window_bg);
+    r.draw_rect_outline_alpha(cc_x, cc_y, cc_w as u32, cc_h as u32, theme.accent, 150);
+
+    r.draw_text(cc_x + 12, cc_y + 12, "Quick Control Center", theme.accent, None);
+    r.draw_hline(cc_x + 12, cc_y + 32, cc_w as u32 - 24, theme.titlebar_active);
+
+    r.draw_icon(cc_x + 12, cc_y + 44, IconType::Wifi, Color::GREEN);
+    r.draw_text(cc_x + 36, cc_y + 44, "eth0: 192.168.1.10", theme.text_primary, None);
+
+    r.draw_icon(cc_x + 12, cc_y + 70, IconType::Volume, theme.accent);
+    r.draw_text(cc_x + 36, cc_y + 70, "Audio: 80% [HDA]", theme.text_primary, None);
+
+    r.draw_icon(cc_x + 12, cc_y + 96, IconType::Theme, Color::YELLOW);
+    r.draw_text(cc_x + 36, cc_y + 96, "Theme: Active", theme.text_primary, None);
+
+    r.fill_rounded_rect(cc_x + 12, cc_y + 124, cc_w - 24, 24, 4, theme.titlebar_active);
+    r.draw_text(cc_x + 32, cc_y + 128, "System Running", Color::GREEN, None);
 }
 
 fn draw_cursor(r: &mut Renderer) {
     let m = mouse::snapshot();
     let (x, y) = (m.x, m.y);
 
-    // Классическая стрелка-курсор (несколько треугольных линий) с чёрной
-    // обводкой и белой (или красной при зажатой ЛКМ) заливкой — как и
-    // раньше, но с дополнительной диагональю для более узнаваемой формы
-    // стрелки вместо "растопыренного веера" линий.
     let color = if m.left_button { Color::RED } else { Color::WHITE };
     let points: [(i32, i32); 7] = [
         (0, 0), (0, 14), (4, 11), (6, 16), (8, 15), (6, 10), (11, 10),
@@ -1264,17 +1736,6 @@ fn draw_cursor(r: &mut Renderer) {
     r.fill_rect(x + 1, y + 1, 4, 8, color);
 }
 
-/// Точка входа для CLI-команды `gpu mode` — запускает полноценный
-/// интерактивный desktop и обрабатывает переключения разрешения "на
-/// лету" (через окно Display settings), не выходя в текстовый режим
-/// между ними. Возвращает управление в cli.rs только когда пользователь
-/// нажимает Esc (настоящий выход в текстовый CLI).
-///
-/// `initial_width/initial_height` нужны, чтобы при смене разрешения
-/// вызывающий код (cli.rs) знал, какой видеорежим установить перед
-/// следующим вызовом with_renderer_long — сам Desktop не имеет доступа к
-/// gpu::GpuInfo/vbe::set_mode напрямую (не хотим тащить их зависимость
-/// в ui.rs, у которого и так достаточно ответственности).
 pub fn run_desktop_session(mut on_resolution_change: impl FnMut(u32, u32) -> bool) {
     let mut desktop = Desktop::new();
     let mut preserve_windows = false;
@@ -1287,10 +1748,6 @@ pub fn run_desktop_session(mut on_resolution_change: impl FnMut(u32, u32) -> boo
             Some(DesktopExit::ChangeResolution(w, h)) => {
                 preserve_windows = true;
                 if !on_resolution_change(w, h) {
-                    // Не удалось установить новый видеорежим (например,
-                    // Bochs VBE отклонил недопустимую комбинацию) —
-                    // возвращаемся в текстовый режим, а не зависаем в
-                    // цикле с нерабочим framebuffer.
                     return;
                 }
             }
