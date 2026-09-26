@@ -40,7 +40,6 @@ mod init_parser;
 mod inflate;
 mod install;
 mod interrupts;
-mod kexec;
 mod kernel_loader;
 mod keyboard;
 mod lang;
@@ -254,13 +253,6 @@ pub extern "C" fn kernel_main() -> ! {
     // Если модуль не найден на диске — система продолжает работу без него.
     module::load_boot_modules();
 
-    // Если это перезапуск через kexec — сообщаем поколение загрузки.
-    // Счётчик лежит вне .bss, поэтому переживает обнуление секции.
-    let gen = kexec::boot_generation();
-    if gen > 0 {
-        crate::println!("  [kexec] ЯДРО ЗАПУЩЕНО ИЗ РАЗДЕЛА /kernel_* (поколение {})", gen);
-    }
-
     // GDT/TSS ставим ПЕРВЫМИ: планировщик кладёт в начальный кадр задачи
     // SS=0x10 (kernel data), а в GDT загрузчика есть только null и
     // kernel code — без полной GDT первое же переключение даёт #GP.
@@ -364,8 +356,6 @@ pub fn reset_all_globals() {
     crate::crashlog::clear_current_crash();
     crate::crashlog::clear_disk_crash();
     crate::syslog::clear();
-    crate::recovery_ui::reset_recovery_state();
-    crate::fastbootd_ui::reset_fastbootd_state();
     crate::crypto_storage::lock();
     crate::linux::syscall::reset_stats();
     *crate::dinit::DINIT.lock() = None;

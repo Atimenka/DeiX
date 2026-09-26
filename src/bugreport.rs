@@ -1,19 +1,16 @@
-// ❗ЗАВИСИМОТИ: инит скрипт pid 1 который будет ограничивать пользовательский
-// ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0). Интеграция в существующий код
-// bugreport — ПОЛНЫЙ ОТЛАДЧИК ОШИБОК (аналог `bugreport` из Android).
+// ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0).
+// bugreport — ПОЛНЫЙ ОТЛАДЧИК ОШИБОК.
 // Собирает единый диагностический отчёт: версия ОС, аптайм, память,
-// состояние dev-режима/Verified Boot/шифрования, карта разделов, TPM,
-// BCB, список пользователей, последние строки журнала ядра (dmesg) и
+// состояние dev-режима/Verified Boot/шифрования, карта разделов,
+// список пользователей, последние строки журнала ядра (dmesg) и
 // crash-лог (tombstone). Отчёт выводится на экран, уходит в serial и
-// сохраняется на /system-том (BUGREPORT.TXT) — его можно приложить к
-// баг-репорту.
+// сохраняется на /userdata-том (BUGREPORT.TXT).
 // no_std-совместимо: alloc (String, Vec), вывод — crate::println!.
-
 
 use alloc::format;
 use alloc::string::String;
 
-/// Имя файла отчёта на /system-томе (ext2 P1).
+/// Имя файла отчёта на /userdata-томе (ext2 P2).
 pub const BUGREPORT_FILE: &str = "BUGREPORT.TXT";
 
 /// Собирает полный диагностический отчёт в одну строку.
@@ -31,10 +28,6 @@ pub fn collect_report() -> String {
     out.push_str(&format!("  dev-mode: {}\n", if dev { "ON (bootloader unlocked, ORANGE)" } else { "OFF (bootloader locked, GREEN)" }));
     let enc = crate::crypto_storage::is_encryption_enabled();
     out.push_str(&format!("  disk encryption: {}\n", if enc { "XTS-AES-256 enabled (DEIXCRYP marker)" } else { "disabled (factory)" }));
-
-    // --- BOOT MODE ---
-    out.push_str("\n[BOOT]\n");
-    out.push_str(&format!("  current BCB mode: {}\n", crate::bcb::read_boot_mode().name()));
 
     // --- USERS ---
     out.push_str("\n[ACCOUNTS]\n");

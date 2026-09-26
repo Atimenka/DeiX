@@ -30,7 +30,7 @@ const ADB_PROMPT: &str = "adb> ";
 pub fn cmd_adb(arg: &str, avb: &mut crate::avb::VerifiedBoot) {
     crate::println!("=== DeiX ADB (debug bridge) ===");
     if arg.is_empty() {
-        crate::println!("adb <devices|shell|push|pull|reboot|install|ota|dev>");
+        crate::println!("adb <devices|shell|push|pull|reboot|install|dev>");
         return;
     }
 
@@ -38,7 +38,7 @@ pub fn cmd_adb(arg: &str, avb: &mut crate::avb::VerifiedBoot) {
     match parts.first() {
         Some(&"devices") => {
             crate::println!("List of devices attached");
-            crate::println!("deix-simulator   device   (DeiX OS v{})", crate::ota::FIRMWARE_VERSION);
+            crate::println!("deix-simulator   device   (DeiX OS v0.2.1)");
         }
         Some(&"shell") => {
             let cmd = parts.get(1).cloned().unwrap_or("").to_string();
@@ -73,12 +73,7 @@ pub fn cmd_adb(arg: &str, avb: &mut crate::avb::VerifiedBoot) {
             }
         }
         Some(&"reboot") => {
-            let mode = parts.get(1).cloned().unwrap_or("").to_string();
-            match mode.as_str() {
-                "recovery" => crate::recovery_ui::recovery_gui(),
-                "fastbootd" | "fastboot" => crate::fastbootd_ui::fastbootd_gui(),
-                _ => crate::println!("[adb] reboot: перезагрузка (в модели — возврат)"),
-            }
+            crate::println!("[adb] reboot: перезагрузка (в модели — возврат)");
         }
         Some(&"install") => {
             let pkg = parts.get(1).cloned().unwrap_or("").to_string();

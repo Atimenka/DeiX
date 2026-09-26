@@ -475,7 +475,6 @@ fn cmd_help() {
     println!("  arp                     - {}", t!(en: "show ARP cache", ru: "показать ARP-кэш"));
     println!("  ping <ip>               - {}", t!(en: "send ICMP echo request", ru: "отправить ICMP echo request"));
     println!("  threads [list|test]     - {}", t!(en: "preemptive multitasking: task list / selftest", ru: "вытесняющая многозадачность: список задач / самопроверка"));
-    println!("  kexec [a|b|check]       - {}", t!(en: "boot the kernel from /kernel_a|b partition", ru: "запустить ядро из раздела /kernel_a|b"));
     println!("  crypt <status|addpass|delpass|iter> - {}", t!(en: "volume password slots (LUKS-style)", ru: "пароли тома: слоты, как в LUKS"));
     println!("  dinit [status|services|mounts|users|audit|security|stage|reload] - {}", t!(en: "PID 1 supervisor: services, mounts, users, audit, secmon", ru: "супервизор PID 1: службы, монтирования, пользователи, аудит, монитор"));
     println!("  hal                     - {}", t!(en: "driver layer selftest on RTL8139", ru: "самопроверка прослойки драйверов на RTL8139"));
