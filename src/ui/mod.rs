@@ -912,16 +912,21 @@ impl Desktop {
             }
 
             for i in (0..self.windows.len()).rev() {
-                let win = &self.windows[i];
-                if win.minimized {
+                if self.windows[i].minimized {
                     continue;
                 }
 
-                let titlebar_rect = (win.x, win.y, win.width, TITLEBAR_HEIGHT as u32);
-                let close_btn = (win.x + win.width as i32 - 22, win.y + 6, 14, 14);
-                let max_btn = (win.x + win.width as i32 - 42, win.y + 6, 14, 14);
-                let min_btn = (win.x + win.width as i32 - 62, win.y + 6, 14, 14);
-                let resize_handle = (win.x + win.width as i32 - 16, win.y + win.height as i32 + TITLEBAR_HEIGHT - 16, 16, 16);
+                let win_x = self.windows[i].x;
+                let win_y = self.windows[i].y;
+                let win_w = self.windows[i].width;
+                let win_h = self.windows[i].height;
+                let win_maximized = self.windows[i].maximized;
+
+                let titlebar_rect = (win_x, win_y, win_w, TITLEBAR_HEIGHT as u32);
+                let close_btn = (win_x + win_w as i32 - 22, win_y + 6, 14, 14);
+                let max_btn = (win_x + win_w as i32 - 42, win_y + 6, 14, 14);
+                let min_btn = (win_x + win_w as i32 - 62, win_y + 6, 14, 14);
+                let resize_handle = (win_x + win_w as i32 - 16, win_y + win_h as i32 + TITLEBAR_HEIGHT - 16, 16, 16);
 
                 if point_in_rect(m.x, m.y, close_btn) {
                     self.close_window(i);
@@ -935,20 +940,21 @@ impl Desktop {
                     self.toggle_minimize(i);
                     return;
                 }
-                if point_in_rect(m.x, m.y, resize_handle) && !win.maximized {
+                if point_in_rect(m.x, m.y, resize_handle) && !win_maximized {
                     self.focus_window(i);
-                    self.resizing_window = Some((self.windows.len() - 1, m.x, m.y, win.width, win.height));
+                    self.resizing_window = Some((self.windows.len() - 1, m.x, m.y, win_w, win_h));
                     return;
                 }
                 if point_in_rect(m.x, m.y, titlebar_rect) {
                     self.focus_window(i);
                     let last_idx = self.windows.len() - 1;
-                    let w = &self.windows[last_idx];
-                    self.dragging_window = Some((last_idx, w.x, w.y, m.x, m.y));
+                    let cur_x = self.windows[last_idx].x;
+                    let cur_y = self.windows[last_idx].y;
+                    self.dragging_window = Some((last_idx, cur_x, cur_y, m.x, m.y));
                     return;
                 }
 
-                let win_rect = (win.x, win.y, win.width, win.height + TITLEBAR_HEIGHT as u32);
+                let win_rect = (win_x, win_y, win_w, win_h + TITLEBAR_HEIGHT as u32);
                 if point_in_rect(m.x, m.y, win_rect) {
                     self.focus_window(i);
                     self.handle_window_content_click(self.windows.len() - 1, m.x, m.y, screen_w, screen_h);
@@ -1186,7 +1192,7 @@ impl Desktop {
         self.selected_icon = None;
     }
 
-    fn handle_window_content_click(&mut self, win_idx: usize, mx: i32, my: i32, screen_w: i32, screen_h: i32) {
+    fn handle_window_content_click(&mut self, win_idx: usize, mx: i32, my: i32, _screen_w: i32, _screen_h: i32) {
         let win = &mut self.windows[win_idx];
         let rel_x = mx - win.x;
         let rel_y = my - (win.y + TITLEBAR_HEIGHT);
