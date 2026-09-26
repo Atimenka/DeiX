@@ -91,24 +91,10 @@ LOST_FOUND_INO = 11
 #     НАСТОЯЩИЕ EROFS-образы (магия 0xE0F5E1E2, проходят fsck.erofs);
 #   * /TPM — скрытый раздел (маркер DEIXTPM, тип 0xDA).
 PRIMARY = [
-    (1, 0x83, 4096,  8192, "/system"),    # bootable, рабочий том ядра
-    (2, 0x00, 0,     0,    ""),           # зарезервировано
-    (3, 0x83, 12800, 512,  "/userdata"),  # ext2, данные Ring 3
-    (4, 0x83, 18432, 2048, "/OTA"),       # ext2, скачанные OTA-пакеты (10 МиБ диск)
+    (1, 0x83, 4096,  8704, "/system"),    # bootable, системный EROFS
+    (2, 0x83, 12800, 5632, "/userdata"),  # ext2, пользовательские данные
 ]
-EXT_START = 13312
-EXT_SECTORS = 5120  # до LBA 18431 (разделы кратны блоку EROFS 4 КиБ)
-LOGICALS = [
-    (5, 0x83, 13313, 1279, "/kernel_a"),
-    (6, 0x83, 14593, 1279, "/kernel_b"),
-    (7, 0x83, 15873, 255, "/init_boot"),
-    (8, 0x83, 16129, 255, "/vendor_boot"),
-    (9, 0x83, 16385, 255, "/boot_a"),
-    (10, 0x83, 16641, 255, "/boot_b"),
-    (11, 0x83, 16897, 1023, "/super"),
-    (12, 0x83, 17921, 255, "/dsm"),
-    (13, 0x83, 18177, 255, "/recovery"),
-]
+LOGICALS = []
 ER0FS_MAGIC = 0xE0F5E1E2  # настоящая магия EROFS v1
 
 
@@ -562,28 +548,11 @@ def init_all_partitions(img, kernel_bin='build/kernel.bin'):
         kernel_targz = b'DEIXTAR\x00empty\x00' + b'\x00' * 64
 
     for num, typ, start, secs, name in PRIMARY + LOGICALS:
-        if name in ("/userdata", "/OTA"):
+        if name == "/userdata":
             format_ext2_at(img, start, secs)
-        elif name == "/init_boot":
-            write_erofs_image(img, start, secs, name, {"bootloader.bin": bootloader_bin})
-        elif name == "/dsm":
-            dsm_bin = b'DEIXDSM01\x00emergency\x00' + b'\x00' * 64
-            write_erofs_image(img, start, secs, name, {"dsm.bin": dsm_bin})
-        elif name == "/vendor_boot":
-            write_erofs_image(img, start, secs, name, {"vendor.bin": vendor_bin})
-
-        elif name in ("/kernel_a", "/kernel_b"):
-            write_erofs_image(img, start, secs, name, {"kernel.tar.gz": kernel_targz})
-        elif name in ("/boot_a", "/boot_b"):
-            write_erofs_image(img, start, secs, name,
-                              {"fastbootd.bin": fastbootd_bin, "recovery.bin": recovery_bin})
-        elif name == "/super":
-            # /super = контейнер system: системные read-only данные. Кроме
-            # заглушки system.img сюда же упаковываются системные библиотеки
-            # (libdeix_*.so) и UI-звуки (DPS из build/sounds — их готовит
-            # build.sh шагом [2e/8]): ядро играет их через PC speaker (src/sound.rs).
-            # Как /system/media/audio/ui в Android: неизменяемые системные ресурсы в EROFS.
-            super_files = {
+        elif name == "/system":
+            system_files = {
+                "kernel.tar.gz": kernel_targz,
                 "system.img": system_img,
                 "libdeix_core.so": b"DEIXLIB1\x00core\x00" + b"\x00" * 64,
                 "libdeix_net.so":  b"DEIXLIB1\x00net\x00" + b"\x00" * 64,
@@ -597,12 +566,8 @@ def init_all_partitions(img, kernel_bin='build/kernel.bin'):
                 for _f in sorted(_os.listdir(snd_dir)):
                     if _f.endswith(".dps"):
                         with open(_os.path.join(snd_dir, _f), "rb") as _fh:
-                            super_files[_f] = _fh.read()
-            write_erofs_image(img, start, secs, name, super_files)
-        elif name == "/recovery":
-            write_erofs_image(img, start, secs, name, {"recovery.bin": recovery_bin})
-        else:
-            write_erofs_image(img, start, secs, name)
+                            system_files[_f] = _fh.read()
+            write_erofs_image(img, start, secs, name, system_files)
 
 
 def main():

@@ -157,46 +157,27 @@ pub struct PartitionLayout {
 /// A/B СЛОТЫ: /kernel и /boot имеют два слота (a/b). Активный слот хранится
 /// в BCB (bcb::read_slot/write_slot). OTA прошивает НЕактивный слот и
 /// переключает — откат через bcb/rollback.
-pub const PARTITION_LAYOUT: [PartitionLayout; 12] = [
-    PartitionLayout { name: "/system",     start_lba: 4096,  sectors: 8192, fs: "ext2",  flashable: true },
-    PartitionLayout { name: "/userdata",   start_lba: 12800, sectors: 512,  fs: "ext2",  flashable: true },
-    PartitionLayout { name: "/kernel_a",   start_lba: 13313, sectors: 1279,  fs: "erofs", flashable: true },
-    PartitionLayout { name: "/kernel_b",   start_lba: 14593, sectors: 1279,  fs: "erofs", flashable: true },
-    PartitionLayout { name: "/init_boot",  start_lba: 15873, sectors: 255,  fs: "erofs", flashable: true },
-    PartitionLayout { name: "/vendor_boot",start_lba: 16129, sectors: 255,  fs: "erofs", flashable: true },
-    PartitionLayout { name: "/boot_a",     start_lba: 16385, sectors: 255,  fs: "erofs", flashable: true },
-    PartitionLayout { name: "/boot_b",     start_lba: 16641, sectors: 255,  fs: "erofs", flashable: true },
-    PartitionLayout { name: "/super",      start_lba: 16897, sectors: 1023, fs: "erofs", flashable: true },
-    PartitionLayout { name: "/dsm",        start_lba: 17921, sectors: 255,  fs: "erofs", flashable: true },
-    PartitionLayout { name: "/recovery",   start_lba: 18177, sectors: 255,  fs: "erofs", flashable: true },
-    PartitionLayout { name: "/OTA",        start_lba: 18432, sectors: 2048, fs: "ext2",  flashable: true },
+pub const PARTITION_LAYOUT: [PartitionLayout; 2] = [
+    PartitionLayout { name: "/system",     start_lba: 4096,  sectors: 8704, fs: "erofs", flashable: true },
+    PartitionLayout { name: "/userdata",   start_lba: 12800, sectors: 5632, fs: "ext2",  flashable: true },
 ];
 
-/// Имя активного слота ядра (по BCB): "/kernel_a" или "/kernel_b".
+/// Системный раздел ядра и компонентов OS.
 pub fn active_kernel_layout() -> &'static PartitionLayout {
-    match crate::bcb::read_slot() {
-        1 => lookup_layout("/kernel_b").unwrap(),
-        _ => lookup_layout("/kernel_a").unwrap(),
-    }
+    lookup_layout("/system").unwrap()
 }
 
-/// Раздел ядра для конкретного слота: 0 = A, иначе B.
-pub fn kernel_layout_for_slot(slot: u8) -> &'static PartitionLayout {
-    match slot {
-        0 => lookup_layout("/kernel_a").unwrap(),
-        _ => lookup_layout("/kernel_b").unwrap(),
-    }
+pub fn kernel_layout_for_slot(_slot: u8) -> &'static PartitionLayout {
+    lookup_layout("/system").unwrap()
 }
 
-/// Имя активного слота boot (по BCB): "/boot_a" или "/boot_b".
 pub fn active_boot_layout() -> &'static PartitionLayout {
-    match crate::bcb::read_slot() {
-        1 => lookup_layout("/boot_b").unwrap(),
-        _ => lookup_layout("/boot_a").unwrap(),
-    }
+    lookup_layout("/system").unwrap()
 }
 
-/// НЕактивный слот ядра (куда OTA пишет новое ядро).
+pub fn inactive_kernel_layout() -> &'static PartitionLayout {
+    lookup_layout("/system").unwrap()
+}
 pub fn inactive_kernel_layout() -> &'static PartitionLayout {
     match crate::bcb::read_slot() {
         1 => lookup_layout("/kernel_a").unwrap(),

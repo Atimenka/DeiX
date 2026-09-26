@@ -32,21 +32,12 @@ SECTOR = 512
 
 # Карта слотов (совпадает с src/partition_map.rs PARTITION_LAYOUT)
 SLOTS = {
-    "/kernel_a": 13313,
-    "/kernel_b": 14593,
-    "/init_boot": 15873,
-    "/vendor_boot": 16129,
-    "/boot_a": 16385,
-    "/boot_b": 16641,
-    "/super": 16897,
-    "/dsm": 17921,
-    "/recovery": 18177,
+    "/system": 4096,
+    "/userdata": 12800,
 }
-SLOT_SECS = {  # размеры разделов (секторов)
-    "/kernel_a": 1279, "/kernel_b": 1279,
-    "/init_boot": 255, "/vendor_boot": 255,
-    "/boot_a": 255, "/boot_b": 255,
-    "/super": 1023, "/dsm": 255, "/recovery": 255,
+SLOT_SECS = {
+    "/system": 8704,
+    "/userdata": 5632,
 }
 
 # ---------- OTA-пакет ----------

@@ -83,69 +83,16 @@ struct ChainLink {
 /// вызывается отдельно (см. load_mode_image).
 pub fn run_boot_chain() -> Result<String, String> {
     let mut out = String::new();
-    out.push_str("  [bootchain] Полная цепочка загрузки:\n");
-    let mut total = 0usize;
+    out.push_str("  [bootchain] Цепочка загрузки системного раздела /system (EROFS):\n");
 
-    // 1) /dsm -> dsm.bin (emergency Download System Manager — сразу после
-    //    первого загрузчика, доступен всегда, даже при сломанной ОС)
-    match load_link("/dsm", &["dsm.bin"]) {
-        Ok(link) => {
-            out.push_str(&format!(
-                "    /dsm -> {} ({} байт: emergency DSM готов)\n",
-                link.files.join(", "), link.loaded
-            ));
-            total += link.loaded;
-        }
-        Err(e) => return Err(format!("dsm: {}", e)),
-    }
-
-    // 2) /init_boot -> bootloader.bin (загрузчик второго уровня)
-    match load_link("/init_boot", &["bootloader.bin"]) {
-        Ok(link) => {
-            out.push_str(&format!(
-                "    /init_boot -> {} ({} байт: {})\n",
-                link.files.join(", "), link.loaded, "bootloader v2 loaded"
-            ));
-            total += link.loaded;
-        }
-        Err(e) => return Err(format!("init_boot: {}", e)),
-    }
-
-    // 3) /vendor_boot -> vendor.bin (прошивка вендора/HAL)
-    match load_link("/vendor_boot", &["vendor.bin"]) {
-        Ok(link) => {
-            out.push_str(&format!(
-                "    /vendor_boot -> {} ({} байт: {})\n",
-                link.files.join(", "), link.loaded, "vendor HAL loaded"
-            ));
-            total += link.loaded;
-        }
-        Err(e) => return Err(format!("vendor_boot: {}", e)),
-    }
-
-    // 4) /boot_<slot> -> fastbootd.bin + recovery.bin (образы режимов, A/B слот)
-    let boot_name = crate::partition_map::active_boot_layout().name;
-    match load_link(boot_name, &["fastbootd.bin", "recovery.bin"]) {
-        Ok(link) => {
-            out.push_str(&format!(
-                "    {} -> {} ({} байт: режимы fastbootd/recovery готовы, слот {})\n",
-                boot_name, link.files.join(", "), link.loaded, crate::bcb::slot_name()
-            ));
-            total += link.loaded;
-        }
-        Err(e) => return Err(format!("boot: {}", e)),
-    }
-
-    // 5) /kernel_<slot> -> kernel.tar.gz (распаковка kernel.bin + библиотек)
     match load_kernel() {
         Ok(info) => {
-            out.push_str(&format!("    /kernel -> kernel.tar.gz ({})\n", info));
-            total += 1;
+            out.push_str(&format!("    /system -> {}\n", info));
         }
-        Err(e) => return Err(format!("kernel: {}", e)),
+        Err(e) => return Err(format!("system: {}", e)),
     }
 
-    out.push_str(&format!("  [bootchain] Все разделы задействованы ({} звеньев, {} байт).\n", 5, total));
+    out.push_str("  [bootchain] Системный раздел проверен и загружен.\n");
     Ok(out)
 }
 
