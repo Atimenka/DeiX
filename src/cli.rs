@@ -282,41 +282,7 @@ pub fn execute(line: &str) {
                 crate::bugreport::cmd_crashlog();
             }
         }
-        "reboot" => {
-            // reboot recovery / reboot fastbootd / reboot dsm — одноразовый флажок.
-            match rest.trim() {
-                "recovery" => {
-                    crate::bcb::write_boot_mode(crate::bcb::BootMode::Recovery);
-                    println!("Перезагрузка в RECOVERY при следующей загрузке (флажок одноразовый).");
-                }
-                "fastbootd" | "fastboot" => {
-                    crate::bcb::write_boot_mode(crate::bcb::BootMode::Fastbootd);
-                    println!("Перезагрузка в FASTBOOTD при следующей загрузке (выше recovery).");
-                }
-                "dsm" => {
-                    crate::bcb::write_boot_mode(crate::bcb::BootMode::Dsm);
-                    println!("Перезагрузка в DSM (Download System Manager) при следующей загрузке (выше fastbootd).");
-                }
-                _ => cmd_reboot(),
-            }
-        }
-        "bcb" => {
-            let p: Vec<&str> = rest.split_whitespace().collect();
-            match p.first().copied().unwrap_or("") {
-                "recovery" => crate::bcb::write_boot_mode(crate::bcb::BootMode::Recovery),
-                "fastbootd" => crate::bcb::write_boot_mode(crate::bcb::BootMode::Fastbootd),
-                "dsm" => crate::bcb::write_boot_mode(crate::bcb::BootMode::Dsm),
-                "normal" | "clear" => crate::bcb::clear_boot_mode(),
-                "slot" => {
-                    match p.get(1).copied().unwrap_or("") {
-                        "a" => crate::bcb::write_slot(0),
-                        "b" => crate::bcb::write_slot(1),
-                        _ => println!("bcb slot <a|b> - switch active A/B slot"),
-                    }
-                }
-                _ => println!("bcb <recovery|fastbootd|dsm|normal|slot <a|b>> - boot flag / A/B slot"),
-            }
-        }
+        "reboot" => cmd_reboot(),
         "halt" => cmd_halt(),
         "duil" => crate::duil::cmd_duil(rest),
         "ds" => crate::ds::cmd_ds(rest),
@@ -333,9 +299,6 @@ pub fn execute(line: &str) {
                 _ => crate::devmode::dev_status(&a),
             }
         }
-        "recovery" => crate::recovery_ui::recovery_gui(),
-        "fastbootd" => crate::fastbootd_ui::fastbootd_gui(),
-        "dsm" => crate::dsm::dsm_gui(),
         "nvidia" => crate::drivers::nvidia::cmd_nvidia(rest),
         "microcode" => crate::microcode::cmd_microcode(rest),
         "hal" => crate::drivers::hal_selftest(),
@@ -345,7 +308,6 @@ pub fn execute(line: &str) {
         "linux" => crate::linux::cmd_linux(rest),
         "profile" => crate::userfs::cmd_profile(rest, &current_user().unwrap_or_default()),
         "lock" => crate::loginui::cmd_lock(&current_user().unwrap_or_default()),
-        "kexec" => crate::kexec::cmd_kexec(rest),
         "threads" => crate::sched::cmd_threads(rest),
         "su" | "sudo" | "root" => {
             if crate::devmode::sudo_allowed() {

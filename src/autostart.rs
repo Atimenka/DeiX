@@ -116,7 +116,7 @@ pub fn run() {
         // зависание системы сразу после входа: CLI не стартует.
         // Проверять руками нечем, поэтому отсекаем их здесь.
         let cmd = line.split_whitespace().next().unwrap_or("");
-        const BLOCKING: [&str; 6] = ["gpu", "dsm", "recovery", "fastbootd", "lock", "logo"];
+        const BLOCKING: [&str; 3] = ["gpu", "lock", "logo"];
         if BLOCKING.contains(&cmd) {
             crate::println!(
                 "  [autostart] пропуск '{}': команда блокирующая (запустите вручную)",

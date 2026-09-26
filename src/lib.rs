@@ -13,7 +13,6 @@ mod ramdisk;
 mod auth;
 mod autostart;
 mod avb;
-mod bcb;
 mod bootlogo;
 mod bootchain;
 mod bugreport;
@@ -26,11 +25,9 @@ mod devmode;
 mod dialog;
 mod dinit;
 mod ds;
-mod dsm;
 mod duil;
 mod erofs;
 mod ext2;
-mod fastbootd_ui;
 mod font;
 mod font_cyrillic;
 mod font_full;
@@ -61,10 +58,8 @@ mod partition_map;
 mod pci;
 mod pkg;
 mod port;
-mod recovery_flash_engine;
 mod renderer;
 mod rng;
-mod recovery_ui;
 mod rtl8139;
 mod sched;
 mod security_monitor;
@@ -204,26 +199,6 @@ pub extern "C" fn kernel_main() -> ! {
 
     println!("Default language: English. Type 'lang ru' to switch to Russian.");
 
-    // BCB: одноразовый флажок загрузки. DSM > Fastbootd > Recovery > ОС.
-    // Вызывается ПОСЛЕ инициализации heap/шрифтов/GPU — оболочки получают
-    // полный GUI (framebuffer) и аллокатор. Если флажок установлен —
-    // запускаем оболочку и НЕ продолжаем обычную загрузку (оболочка
-    // «выше» ОС в запуске; AVB/логин и т.д. при этом не выполняются).
-    if crate::bcb::boot_flow() {
-        crate::serial_println!("[bcb] оболочка завершена — обычная ОС при следующей загрузке.");
-        loop {
-            unsafe { core::arch::asm!("hlt"); }
-        }
-    }
-
-    // ПОЛНАЯ ЦЕПОЧКА ЗАГРУЗКИ через все разделы (не пустышки!):
-    //   dsm -> init_boot -> vendor_boot -> boot -> kernel (kernel.tar.gz).
-    // Каждый раздел реально читается и верифицируется.
-    // КРИТИЧНО: если звено цепочки повреждено или стёрто (например,
-    // `dsm erase /kernel`), загрузка ОСТАНАВЛИВАЕТСЯ — система не должна
-    // стартовать без ядра (как Android RED state). Восстановление — через
-    // DSM/fastbootd прошивку раздела.
-    // Лого на экране, полный лог — в COM1.
     bootlogo::show("starting system...");
 
     bootlogo::set_status("verifying boot partitions...");

@@ -80,7 +80,6 @@ def main():
     print("  DeiX OS Subsystem & Toolchain Test Suite")
     print("=" * 60)
     test_partition_map()
-    test_ota_and_boot_tools()
     test_mexcc_compilation()
     print("=" * 60)
     print("  ВСЕ ТЕСТЫ ПОДСИСТЕМ УСПЕШНО ПРОЙДЕНЫ!")
