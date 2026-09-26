@@ -220,7 +220,7 @@ def chs(lba):
 
 
 def fill_mbr(img):
-    """Заполняет MBR: PRIMARY (3) + extended; EBR с LOGICALS."""
+    """Заполняет MBR: PRIMARY разделы."""
     for i, (num, typ, start, secs, name) in enumerate(PRIMARY):
         boot = 0x80 if i == 0 else 0x00
         off = 446 + i * 16
@@ -230,33 +230,19 @@ def fill_mbr(img):
         img[off + 5:off + 8] = chs(start + secs - 1)
         img[off + 8:off + 12] = struct.pack("<I", start)
         img[off + 12:off + 16] = struct.pack("<I", secs)
-    # Extended (4-я запись).
-    off = 446 + 3 * 16
-    img[off] = 0x00
-    img[off + 1:off + 4] = chs(EXT_START)
-    img[off + 4] = 0x05
-    img[off + 5:off + 8] = chs(EXT_START + EXT_SECTORS - 1)
-    img[off + 8:off + 12] = struct.pack("<I", EXT_START)
-    img[off + 12:off + 16] = struct.pack("<I", EXT_SECTORS)
     img[510] = 0x55
     img[511] = 0xAA
 
-    # EBR (Extended Boot Record): по одному на каждый логический раздел.
-    # Каждый EBR занимает 1 сектор в начале своего логического раздела.
-    # Запись 1: сам логический раздел (начинается СРАЗУ ПОСЛЕ EBR =>
-    # относительный старт = 1, размер = secs-1).
-    # Запись 2: указатель на СЛЕДУЮЩИЙ EBR (относительно начала extended),
-    # либо нули для последнего.
     for idx, (num, typ, start, secs, name) in enumerate(LOGICALS):
         ebr_off = start * SECTOR
-        # Запись 1: текущий логический раздел.
         e1 = bytearray(16)
         e1[0] = 0x00
         e1[1:4] = chs(start + 1)
         e1[4] = typ
         e1[5:8] = chs(start + secs - 1)
-        e1[8:12] = struct.pack("<I", 1)  # relative start (после EBR)
+        e1[8:12] = struct.pack("<I", 1)
         e1[12:16] = struct.pack("<I", secs - 1)
+        img[ebr_off + 446:ebr_off + 462] = e1
         img[ebr_off + 446:ebr_off + 462] = e1
         # Запись 2: указатель на следующий EBR.
         if idx + 1 < len(LOGICALS):
@@ -572,47 +558,33 @@ def init_all_partitions(img, kernel_bin='build/kernel.bin'):
 
 def main():
     img_path = sys.argv[1] if len(sys.argv) > 1 else "build/deix_disk.img"
-    size = os.path.getsize(img_path)
-    # Образ должен быть >= 8 МиБ (16384 секторов), чтобы вместить extended.
-    need = 20480 * SECTOR  # образ 10 МиБ (20480 секторов): /OTA расширен до 4352 сект
-    if size < need:
-        # Дополняем нулями до 10 МиБ.
-        with open(img_path, "ab") as f:
-            f.write(b"\x00" * (need - size))
-        size = need
+    parent_dir = os.path.dirname(img_path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+    need = 20480 * SECTOR
+    if not os.path.exists(img_path) or os.path.getsize(img_path) < need:
+        with open(img_path, "wb") as f:
+            f.write(b"\x00" * need)
+
     with open(img_path, "rb") as f:
         img = bytearray(f.read())
 
     fill_mbr(img)
-    format_ext2(img)            # P1: рабочий ext2-том ядра (пустой — заводской)
-    init_all_partitions(img, os.path.join(os.path.dirname(img_path) if os.path.dirname(img_path) else '.', 'kernel.bin'))
+    format_ext2(img)            # P1: рабочий ext2-том ядра
+    init_all_partitions(img, os.path.join(parent_dir if parent_dir else '.', 'kernel.bin'))
 
-    # ЗАВОДСКОЙ СБРОС служебных секторов (иначе остатки от прошлых
-    # прошивок/прогонов QEMU ломают первичную настройку):
-    #   * LBA 3000 (BCB)  -> DEIXBCB1 + mode=Normal (0) + 0xFF;
-    #   * LBA 4095 (маркер шифрования crypto_storage MARKER_LBA) -> нули
-    #     (диск НЕ зашифрован; enable_encryption при первой настройке
-    #      должен реально выполнить шифрование, а не увидеть чужой маркер).
-    img[3000 * SECTOR:3000 * SECTOR + 8] = b"DEIXBCB1"
-    img[3000 * SECTOR + 8:3000 * SECTOR + 12] = struct.pack("<I", 0)   # boot_mode = normal
-    img[3000 * SECTOR + 12:3000 * SECTOR + 16] = struct.pack("<I", 0)  # current_slot = a (A/B)
-    img[3000 * SECTOR + 16:3000 * SECTOR + 20] = struct.pack("<I", 0)  # ota_pending = 0
-    img[3000 * SECTOR + 20:3000 * SECTOR + 512] = b"\xff" * 492
     img[4095 * SECTOR:4095 * SECTOR + 512] = b"\x00" * 512
 
     with open(img_path, "wb") as f:
         f.write(img)
 
-    print(f"OK: DeiX OS — заводской образ с ПОЛНОЙ MBR-разметкой ({img_path})")
+    print(f"OK: DeiX OS — заводской образ с MBR-разметкой ({img_path})")
     print("  Все разделы DeiX (каждый со своей ФС):")
     for num, typ, start, secs, name in PRIMARY:
-        fs = "ext2(рабочий том ядра)" if name == "/system" else ("ext2" if name == "/userdata" else "маркер TPM")
+        fs = "ext2" if name in ("/system", "/userdata") else "raw"
         print(f"    P{num}: 0x{typ:02X} {name:<13} LBA {start:>6}..{start+secs-1:>6} ({secs:>4} сект)  {fs}")
-    print(f"    E : 0x05 extended    LBA {EXT_START:>6}..{EXT_START+EXT_SECTORS-1:>6} ({EXT_SECTORS:>4} сект)")
     for num, typ, start, secs, name in LOGICALS:
         print(f"    L{num}: 0x{typ:02X} {name:<13} LBA {start:>6}..{start+secs-1:>6} ({secs:>4} сект)  EROFS")
-    print("  /system = рабочий ext2-том ядра (пустой — первая настройка)")
-    print("  Шифрование: включится при создании первого аккаунта (ключ = пароль)")
 
 
 if __name__ == "__main__":
