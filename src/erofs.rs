@@ -322,6 +322,37 @@ pub fn read_dir(img: &[u8], sb: &Superblock, nid: u64) -> Result<Vec<DirEntry>, 
     Ok(out)
 }
 
+/// Ищет обычный файл по пути (например "kernel/kernel.bin" или "kernel.bin") и возвращает его инод.
+pub fn lookup_path(img: &[u8], path: &str) -> Result<Inode, ErofsError> {
+    let sb = parse_superblock(img)?;
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    if parts.is_empty() {
+        return Err(ErofsError::Corrupt);
+    }
+
+    let mut current_nid = sb.root_nid;
+    for (i, part) in parts.iter().enumerate() {
+        let is_last = i == parts.len() - 1;
+        let entries = read_dir(img, &sb, current_nid)?;
+        let mut found = false;
+        for e in entries {
+            if e.name == *part {
+                if is_last {
+                    return read_inode(img, &sb, e.nid);
+                } else if e.file_type == EROFS_FT_DIR {
+                    current_nid = e.nid;
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if !found && !is_last {
+            return Err(ErofsError::Corrupt);
+        }
+    }
+    Err(ErofsError::Corrupt)
+}
+
 /// Ищет обычный файл в корне и возвращает его инод.
 pub fn lookup(img: &[u8], name: &str) -> Result<Inode, ErofsError> {
     let sb = parse_superblock(img)?;
@@ -333,24 +364,45 @@ pub fn lookup(img: &[u8], name: &str) -> Result<Inode, ErofsError> {
     Err(ErofsError::Corrupt)
 }
 
-/// Список обычных файлов корня: `(имя, размер)`.
+fn collect_files_rec(
+    img: &[u8],
+    sb: &Superblock,
+    nid: u64,
+    prefix: &str,
+    out: &mut Vec<(String, usize)>,
+) -> Result<(), ErofsError> {
+    for e in read_dir(img, sb, nid)? {
+        if e.name == "." || e.name == ".." {
+            continue;
+        }
+        let full_path = if prefix.is_empty() {
+            e.name.clone()
+        } else {
+            alloc::format!("{}/{}", prefix, e.name)
+        };
+        if e.file_type == EROFS_FT_DIR {
+            let _ = collect_files_rec(img, sb, e.nid, &full_path, out);
+        } else if e.file_type == EROFS_FT_REG_FILE {
+            if let Ok(ino) = read_inode(img, sb, e.nid) {
+                out.push((full_path, ino.size as usize));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Список обычных файлов в EROFS (включая подкаталоги): `(путь, размер)`.
 pub fn list_files(img: &[u8]) -> Result<Vec<(String, usize)>, ErofsError> {
     let sb = parse_superblock(img)?;
     let mut out = Vec::new();
-    for e in read_dir(img, &sb, sb.root_nid)? {
-        if e.file_type != EROFS_FT_REG_FILE {
-            continue;
-        }
-        let ino = read_inode(img, &sb, e.nid)?;
-        out.push((e.name, ino.size as usize));
-    }
+    let _ = collect_files_rec(img, &sb, sb.root_nid, "", &mut out);
     Ok(out)
 }
 
-/// Читает содержимое файла из образа (FLAT_PLAIN и FLAT_INLINE).
-pub fn read_file(img: &[u8], name: &str) -> Result<Vec<u8>, ErofsError> {
+/// Читает содержимое файла из образа по имени или пути.
+pub fn read_file(img: &[u8], path: &str) -> Result<Vec<u8>, ErofsError> {
     let sb = parse_superblock(img)?;
-    let ino = lookup(img, name)?;
+    let ino = lookup_path(img, path).or_else(|_| lookup(img, path))?;
     inode_data(img, &sb, &ino)
 }
 

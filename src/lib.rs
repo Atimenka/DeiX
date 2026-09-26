@@ -217,12 +217,11 @@ pub extern "C" fn kernel_main() -> ! {
     fs::load_meta_db();
     println!("  [fs] File access control + TrustedInstaller: OK");
 
-    // TPM / полнодисковое шифрование. ЕДИНЫЙ ПАРОЛЬ: пароль учётной
-    // записи пользователя является ключом шифрования диска (XTS-AES-256).
+    // Полнодисковое шифрование (XTS-AES-256). ЕДИНЫЙ ПАРОЛЬ: пароль учётной
+    // записи пользователя является ключом шифрования диска.
     // При заводской настройке диск не зашифрован; первая настройка
-    // (создание первого аккаунта в auth.rs) ВКЛЮЧАЕТ шифрование. При
-    // последующих загрузках разблокировка происходит на экране входа
-    // (crypto_storage::try_unlock). Скрытый раздел /TPM недоступен.
+    // (создание первого аккаунта) ВКЛЮЧАЕТ шифрование. При
+    // последующих загрузках разблокировка происходит на экране входа.
     match crate::crypto_storage::is_encryption_enabled() {
         true => {
             crate::serial_println!("[crypto] Диск зашифрован (XTS-AES-256) — разблокировка при входе.");
@@ -253,17 +252,14 @@ pub extern "C" fn kernel_main() -> ! {
     // упёрся в потолок 572 КиБ — буфер загрузчика на 0x11000 граничит
     // с видеопамятью VGA. Запустить вручную: 'threads test'.
 
-    // DeiX Security Subsystem (Ring 0 / Vault): стадия init_boot — проверка
-    // карты разделов и разбор скрипта init.deix процессом PID 1. Встроенный
-    // эталонный скрипт имитирует содержимое защищённого раздела /init_boot
-    // (EROFS, ReadOnly). Любая попытка rw-монтирования системного раздела
-    // вне прошивочных контекстов (Fastbootd/EDL/Recovery) вызывает panic! —
-    // ядро немедленно останавливается (см. init_parser.rs / vault.rs).
+    // DeiX Security Subsystem (Ring 0 / Vault): проверка карты разделов
+    // /system (EROFS RO) + /userdata (EXT2 RW) и разбор скрипта init.deix
+    // процессом PID 1 (Dinit).
     partition_map::validate_partition_map_report();
     init_parser::boot_report(init_parser::INIT_DEIX_SCRIPT);
     security_monitor::boot_selfcheck();
     crate::dinit::init();
-    crate::serial_println!("[deix] init_boot: Dinit (PID 1, Ring 0) запущен");
+    crate::serial_println!("[deix] Dinit (PID 1, Ring 0) запущен");
 
     // ВНИМАНИЕ: autostart::run() ПЕРЕНЕСЁН за экран входа (см. ниже).
     // Раньше он выполнялся здесь — до аутентификации, и любой, кто мог

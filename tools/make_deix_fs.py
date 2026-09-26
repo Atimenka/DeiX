@@ -259,14 +259,7 @@ def fill_mbr(img):
 
 
 def build_real_erofs(files, label=""):
-    """Собирает НАСТОЯЩИЙ EROFS-образ (спецификация v1, магия 0xE0F5E1E2).
-
-    Приоритет — системный mkfs.erofs (эталонная утилита erofs-utils).
-    Если её нет, собираем образ сами по спецификации: суперблок @1024,
-    compact-иноды по 32 байта (nid = off/32), FLAT_PLAIN-данные в блоках
-    по 4096. Записи каталога обязаны быть отсортированы лексикографически
-    (это проверяет fsck.erofs).
-    """
+    """Собирает НАСТОЯЩИЙ EROFS-образ (спецификация v1, магия 0xE0F5E1E2)."""
     import shutil, subprocess, tempfile, os
     mkfs = shutil.which("mkfs.erofs")
     if mkfs:
@@ -274,7 +267,9 @@ def build_real_erofs(files, label=""):
             src = os.path.join(td, "root")
             os.makedirs(src)
             for name, data in files.items():
-                with open(os.path.join(src, name), "wb") as f:
+                file_path = os.path.join(src, name.lstrip("/"))
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                with open(file_path, "wb") as f:
                     f.write(data)
             out = os.path.join(td, "out.erofs")
             r = subprocess.run([mkfs, "-b4096", "-T0", "-U",
@@ -288,7 +283,7 @@ def build_real_erofs(files, label=""):
 
 
 def _erofs_fallback(files):
-    """Чистая Python-реализация формата EROFS v1 (без внешних утилит)."""
+    """Чистая Python-реализация формата EROFS v1 с поддержкой подкаталогов."""
     BS = 4096
     SB_OFF, SB_SIZE, ISLOT = 1024, 128, 32
     FT_REG, FT_DIR = 1, 2
@@ -296,36 +291,66 @@ def _erofs_fallback(files):
 
     inode_area = SB_OFF + SB_SIZE          # 1152
     root_nid = inode_area // ISLOT         # 36
-    names = list(files.keys())
-    nids = {n: root_nid + 1 + i for i, n in enumerate(names)}
-    if inode_area + (1 + len(names)) * ISLOT > BS:
-        raise ValueError("слишком много файлов для одноблочной области инодов")
 
-    # Записи каталога — отсортированы лексикографически (требование EROFS).
-    dirents = [(".", root_nid, FT_DIR), ("..", root_nid, FT_DIR)]
-    dirents += [(n, nids[n], FT_REG) for n in names]
-    dirents.sort(key=lambda e: e[0].encode())
+    dirs = {""}
+    for p in files.keys():
+        parts = p.strip("/").split("/")
+        for i in range(1, len(parts)):
+            dirs.add("/".join(parts[:i]))
 
-    dir_blk = bytearray()
-    used = sum(12 for _ in dirents) + sum(len(e[0]) for e in dirents)
-    if used > BS:
-        raise ValueError("каталог не помещается в один блок")
-    blk = bytearray(BS)
-    nameoff = len(dirents) * 12
-    for i, (nm, nid, ft) in enumerate(dirents):
-        e = i * 12
-        struct.pack_into("<QHBB", blk, e, nid, nameoff, ft, 0)
-        blk[nameoff:nameoff + len(nm)] = nm.encode()
-        nameoff += len(nm)
-    dir_blk += blk
-    dir_size = used
+    sorted_dirs = sorted(list(dirs))
+    dir_nids = {d: root_nid + i for i, d in enumerate(sorted_dirs)}
 
-    blocks = bytearray(dir_blk)
-    dir_blkaddr = 1
+    file_nids = {}
+    next_nid = root_nid + len(sorted_dirs)
+    for p in sorted(files.keys()):
+        file_nids[p] = next_nid
+        next_nid += 1
+
+    dir_contents = {d: [] for d in sorted_dirs}
+    for d in sorted_dirs:
+        parent = "/".join(d.split("/")[:-1]) if d else ""
+        parent_nid = dir_nids[parent]
+        dir_contents[d].append((".", dir_nids[d], FT_DIR))
+        dir_contents[d].append(("..", parent_nid, FT_DIR))
+
+    for d in sorted_dirs:
+        if not d:
+            continue
+        parent = "/".join(d.split("/")[:-1])
+        base_name = d.split("/")[-1]
+        dir_contents[parent].append((base_name, dir_nids[d], FT_DIR))
+
+    for p in sorted(files.keys()):
+        parts = p.strip("/").split("/")
+        parent = "/".join(parts[:-1])
+        base_name = parts[-1]
+        dir_contents[parent].append((base_name, file_nids[p], FT_REG))
+
+    dir_blocks = {}
+    dir_sizes = {}
+    for d, entries in dir_contents.items():
+        entries.sort(key=lambda e: e[0].encode())
+        blk = bytearray(BS)
+        nameoff = len(entries) * 12
+        for i, (nm, nid, ft) in enumerate(entries):
+            e = i * 12
+            struct.pack_into("<QHBB", blk, e, nid, nameoff, ft, 0)
+            blk[nameoff:nameoff + len(nm)] = nm.encode()
+            nameoff += len(nm)
+        dir_blocks[d] = blk
+        dir_sizes[d] = nameoff
+
+    blocks = bytearray()
+    dir_blkaddr = {}
+    for d in sorted_dirs:
+        dir_blkaddr[d] = 1 + len(blocks) // BS
+        blocks += dir_blocks[d]
+
     file_addr = {}
-    for n in names:
-        file_addr[n] = dir_blkaddr + len(blocks) // BS
-        data = files[n]
+    for p in sorted(files.keys()):
+        file_addr[p] = 1 + len(blocks) // BS
+        data = files[p]
         blocks += data
         blocks += b"\x00" * ((-len(data)) % BS)
 
@@ -340,17 +365,23 @@ def _erofs_fallback(files):
                          blkaddr,    # i_u.raw_blkaddr
                          ino, 0, 0, 0)
 
+    total_inos = len(sorted_dirs) + len(files)
     struct.pack_into("<I", img, SB_OFF, 0xE0F5E1E2)      # magic
     img[SB_OFF + 12] = 12                                 # blkszbits
     struct.pack_into("<H", img, SB_OFF + 14, root_nid)    # root_nid
-    struct.pack_into("<Q", img, SB_OFF + 16, 1 + len(names))
+    struct.pack_into("<Q", img, SB_OFF + 16, total_inos)
     struct.pack_into("<I", img, SB_OFF + 36, len(img) // BS)
     struct.pack_into("<I", img, SB_OFF + 40, 0)           # meta_blkaddr
 
-    wr_inode(inode_area, S_IFDIR | 0o755, 2, dir_size, dir_blkaddr, 1)
-    for i, n in enumerate(names):
-        wr_inode(inode_area + (1 + i) * ISLOT, S_IFREG | 0o644, 1,
-                 len(files[n]), file_addr[n], i + 2)
+    for d in sorted_dirs:
+        nid = dir_nids[d]
+        off = SB_OFF + SB_SIZE + (nid - root_nid) * ISLOT
+        wr_inode(off, S_IFDIR | 0o755, 2, dir_sizes[d], dir_blkaddr[d], nid - root_nid + 1)
+
+    for p in sorted(files.keys()):
+        nid = file_nids[p]
+        off = SB_OFF + SB_SIZE + (nid - root_nid) * ISLOT
+        wr_inode(off, S_IFREG | 0o644, 1, len(files[p]), file_addr[p], nid - root_nid + 1)
 
     img[BS:BS + len(blocks)] = blocks
     return bytes(img)
@@ -517,42 +548,36 @@ def format_ext2_at(img, start_lba, total_sectors):
 
 
 def init_all_partitions(img, kernel_bin='build/kernel.bin'):
-    """Инициализирует ФС во всех разделах: EROFS с РЕАЛЬНЫМИ файлами
-    (bootchain: init_boot->bootloader, vendor_boot->vendor, boot->fastbootd/
-    recovery, kernel->kernel.tar.gz с kernel.bin и библиотеками), ext2
-    (/userdata), маркер (/TPM)."""
+    """Инициализирует ФС во всех разделах: /system (EROFS RO) + /userdata (EXT2 RW)."""
     import os as _os
-    # Содержимое разделов загрузочной цепочки.
-    bootloader_bin = b'DEIXBOOTLDR\x00v2.0\x00\x00' + b'\x00' * 48
-    vendor_bin = b'DEIXVENDOR\x00hal\x00' + b'\x00' * 64
-    fastbootd_bin = b'DEIXFB01\x00fastbootd\x00' + b'\x00' * 64
-    recovery_bin = b'DEIXREC01\x00recovery\x00' + b'\x00' * 64
-    system_img = b'DEIXSYS01\x00system\x00' + b'\x00' * 64
     if _os.path.exists(kernel_bin):
-        kernel_targz = make_kernel_targz(kernel_bin)
+        kernel_bytes = open(kernel_bin, 'rb').read()
     else:
-        kernel_targz = b'DEIXTAR\x00empty\x00' + b'\x00' * 64
+        kernel_bytes = b'DEIXKERN1\x00kernel.bin\x00' + b'\x00' * 64
 
     for num, typ, start, secs, name in PRIMARY + LOGICALS:
         if name == "/userdata":
             format_ext2_at(img, start, secs)
         elif name == "/system":
             system_files = {
-                "kernel.tar.gz": kernel_targz,
-                "system.img": system_img,
-                "libdeix_core.so": b"DEIXLIB1\x00core\x00" + b"\x00" * 64,
-                "libdeix_net.so":  b"DEIXLIB1\x00net\x00" + b"\x00" * 64,
-                "libdeix_gfx.so":  b"DEIXLIB1\x00gfx\x00" + b"\x00" * 64,
-                "libdeix_sys.so":  b"DEIXLIB1\x00sys\x00" + b"\x00" * 64,
-                "libdeix_gui.so":  b"DEIXLIB1\x00gui\x00" + b"\x00" * 64,
-                "libdeix_ds.so":   b"DEIXLIB1\x00ds\x00" + b"\x00" * 64,
+                "kernel/kernel.bin":   kernel_bytes,
+                "lib/libdeix_core.so": b"DEIXLIB1\x00core\x00" + b"\x00" * 64,
+                "lib/libdeix_net.so":  b"DEIXLIB1\x00net\x00" + b"\x00" * 64,
+                "lib/libdeix_gfx.so":  b"DEIXLIB1\x00gfx\x00" + b"\x00" * 64,
+                "lib/libdeix_sys.so":  b"DEIXLIB1\x00sys\x00" + b"\x00" * 64,
+                "lib/libdeix_gui.so":  b"DEIXLIB1\x00gui\x00" + b"\x00" * 64,
+                "lib/libdeix_ds.so":   b"DEIXLIB1\x00ds\x00" + b"\x00" * 64,
+                "kmod/gfx.kmod":       b"DEIXKMOD1\x00gfx\x00" + b"\x00" * 64,
+                "kmod/net.kmod":       b"DEIXKMOD1\x00net\x00" + b"\x00" * 64,
+                "etc/init.deix":       b"# DeiX OS init script\nmount /system\nmount /userdata\n",
+                "services/dinit.cfg":  b"# Dinit services config\n",
             }
             snd_dir = _os.path.join("build", "sounds")
             if _os.path.isdir(snd_dir):
                 for _f in sorted(_os.listdir(snd_dir)):
                     if _f.endswith(".dps"):
                         with open(_os.path.join(snd_dir, _f), "rb") as _fh:
-                            system_files[_f] = _fh.read()
+                            system_files[f"media/{_f}"] = _fh.read()
             write_erofs_image(img, start, secs, name, system_files)
 
 

@@ -48,25 +48,11 @@ const FS_TOTAL_SECTORS: u32 = 8192;
 /// Размер тома /system в блоках (1024 байта = 2 сектора).
 const FS_TOTAL_BLOCKS: u32 = FS_TOTAL_SECTORS / 2;
 
-/// Карта разделов (совпадает с tools/make_deix_fs.py):
-/// P1 /system (bootable, рабочий ext2-том ядра), P2 /TPM (скрытый),
-/// P3 /userdata (ext2), E extended, логические EROFS.
-const PART_SYSTEM: (u32, u32) = (4096, 8192);   // P1: ext2 рабочий том
-// const PART_TPM removed
-const PART_USERDATA: (u32, u32) = (12800, 512); // P3: ext2 данных
-const EXT_START: u32 = 13312;                   // расширенный
-const EXT_SECTORS: u32 = 3072;
-const LOGICALS: [(u32, u32, u32, &str); 9] = [  // (type, start, secs, name)
-    (0x83, 13313, 511, "/kernel_a"),
-    (0x83, 13825, 511, "/kernel_b"),
-    (0x83, 14337, 255, "/init_boot"),
-    (0x83, 14593, 255, "/vendor_boot"),
-    (0x83, 14849, 255, "/boot_a"),
-    (0x83, 15105, 255, "/boot_b"),
-    (0x83, 15361, 255, "/super"),
-    (0x83, 15617, 255, "/dsm"),
-    (0x83, 15873, 255, "/recovery"),
-];
+/// Карта разделов (2-partition scheme, совпадает с tools/make_deix_fs.py):
+/// P1 /system (4096..12799, 8704 сект, EROFS RO)
+/// P2 /userdata (12800..18431, 5632 сект, EXT2 RW)
+const PART_SYSTEM: (u32, u32) = (4096, 8704);
+const PART_USERDATA: (u32, u32) = (12800, 5632);
 
 /// MBR-загрузчик, включённый в ядро (build.sh собирает boot_sector.bin ДО
 /// компиляции ядра; NUM_SECTORS = размер stage2).
@@ -353,8 +339,8 @@ fn build_ext2_volume(drive: Drive) {
     lf_ptrs[0] = dstart + 1;
     write_inode(drive, 11, 0o040700, BLOCK as u32, 2, &lf_ptrs, 1);
 
-    // Точки монтирования (каталоги в корне).
-    for name in ["kernel", "init_boot", "boot", "vendor_boot", "super", "system", "recovery", "userdata"] {
+    // Точки монтирования (каталоги в корне /userdata).
+    for name in ["system", "userdata", "home", "config", "apps", "packages", "downloads", "update"] {
         let ino = alloc_inode(drive);
         if ino == 0 {
             continue;
@@ -376,17 +362,15 @@ fn chs(lba: u32) -> [u8; 3] {
     [h, (s & 0x3F) | (((c >> 2) & 0xC0) as u8), (c & 0xFF) as u8]
 }
 
-/// Собирает MBR: загрузчик + полная таблица разделов DeiX.
+/// Собирает MBR: загрузчик + таблица разделов DeiX (P1 /system, P2 /userdata).
 fn build_mbr() -> [u8; 512] {
     let mut mbr = [0u8; 512];
     let n = BOOT_SECTOR.len().min(512);
     mbr[..n].copy_from_slice(&BOOT_SECTOR[..n]);
 
-    // Первичные: P1 /system (boot), P2 /TPM, P3 /userdata.
     let prim = [
         (0x80u8, 0x83u8, PART_SYSTEM.0, PART_SYSTEM.1),
-        (0x00, 0x00, 0, 0),
-        (0x00, 0x83, PART_USERDATA.0, PART_USERDATA.1),
+        (0x00u8, 0x83u8, PART_USERDATA.0, PART_USERDATA.1),
     ];
     for (i, (boot, typ, start, secs)) in prim.iter().enumerate() {
         let off = 446 + i * 16;
@@ -397,46 +381,9 @@ fn build_mbr() -> [u8; 512] {
         mbr[off + 8..off + 12].copy_from_slice(&start.to_le_bytes());
         mbr[off + 12..off + 16].copy_from_slice(&secs.to_le_bytes());
     }
-    // Extended (4-я запись).
-    let off = 446 + 3 * 16;
-    mbr[off] = 0x00;
-    mbr[off + 1..off + 4].copy_from_slice(&chs(EXT_START));
-    mbr[off + 4] = 0x05;
-    mbr[off + 5..off + 8].copy_from_slice(&chs(EXT_START + EXT_SECTORS - 1));
-    mbr[off + 8..off + 12].copy_from_slice(&EXT_START.to_le_bytes());
-    mbr[off + 12..off + 16].copy_from_slice(&EXT_SECTORS.to_le_bytes());
     mbr[510] = 0x55;
     mbr[511] = 0xAA;
     mbr
-}
-
-/// EBR для логических разделов (в начале каждого логического).
-fn write_ebrs(drive: Drive) {
-    for (idx, (typ, start, secs, _name)) in LOGICALS.iter().enumerate() {
-        let _ebr = start * 512;
-        let mut e1 = [0u8; 16];
-        e1[0] = 0x00;
-        e1[1..4].copy_from_slice(&chs(start + 1));
-        e1[4] = *typ as u8;
-        e1[5..8].copy_from_slice(&chs(start + secs - 1));
-        e1[8..12].copy_from_slice(&1u32.to_le_bytes());
-        e1[12..16].copy_from_slice(&(secs - 1).to_le_bytes());
-        let mut e2 = [0u8; 16];
-        if idx + 1 < LOGICALS.len() {
-            let nxt = LOGICALS[idx + 1].1;
-            e2[0] = 0x00;
-            e2[1..4].copy_from_slice(&chs(EXT_START + (nxt - EXT_START)));
-            e2[4] = 0x05;
-            e2[8..12].copy_from_slice(&(nxt - EXT_START).to_le_bytes());
-            e2[12..16].copy_from_slice(&LOGICALS[idx + 1].2.to_le_bytes());
-        }
-        let mut sector = [0u8; 512];
-        sector[446..462].copy_from_slice(&e1);
-        sector[462..478].copy_from_slice(&e2);
-        sector[510] = 0x55;
-        sector[511] = 0xAA;
-        let _ = ata::write_sectors_to(drive, *start, 1, &sector);
-    }
 }
 
 
@@ -466,25 +413,13 @@ fn kernel_sectors() -> u32 {
 // ==================== ЗАПИСЬ ОБРАЗА ====================
 
 fn write_image_to(drive: Drive) -> Result<(), ()> {
-    // MBR с полной таблицей.
+    // MBR с таблицей разделов (P1 /system, P2 /userdata).
     let mbr = build_mbr();
     ata::write_sectors_to(drive, 0, 1, &mbr)?;
 
-    // СБРОС служебных секторов ЦЕЛЕВОГО диска (как make_deix_fs для заводского
-    // образа): иначе остатки от ПРОШЛЫХ настроек ломают новую установку:
-    //   * LBA 4095 (маркер шифрования DEIXCRYP): если диск был зашифрован
-    //     старым паролем (например, первичная настройка), install перезапишет
-    //     том ОТКРЫТЫМ, а enable_encryption с новым паролем увидит старый
-    //     маркер и НЕ перешифрует — диск станет «зашифрован», но ключ не тот
-    //     (вход: Invalid password). Маркер стираем -> установка начинается
-    //     «с нуля», шифрование включится с правильным паролем.
-    //   * LBA 3000 (BCB) -> normal (одноразовый флажок загрузки).
+    // СБРОС маркерного сектора 4095
     let zero = [0u8; 512];
     ata::write_sectors_to(drive, 4095, 1, &zero)?;
-    let mut bcb = [0xFFu8; 512];
-    bcb[..8].copy_from_slice(b"DEIXBCB1");
-    bcb[8..12].copy_from_slice(&0u32.to_le_bytes());
-    ata::write_sectors_to(drive, 3000, 1, &bcb)?;
 
     // Перед копированием СБРАСЫВАЕМ критичные .data-глобалы в безопасное
     // состояние: .data копируется как есть (живые указатели на кучу live
@@ -532,29 +467,17 @@ fn write_image_to(drive: Drive) -> Result<(), ()> {
         }
     }
 
-    // EBR логических.
-    write_ebrs(drive);
-
-    // /system: ext2-том.
-    build_ext2_volume(drive);
-
-    // /userdata: ext2-том (маленький, 512 секторов).
-    write_userdata_ext2(drive);
-
-    // EROFS в системных логических: КОПИРУЕМ реальные образы разделов с
-    // загрузочного диска (там лежат файлы bootchain: bootloader.bin,
-    // vendor.bin, fastbootd.bin/recovery.bin, kernel.tar.gz и т.д.) —
-    // иначе установленная система получила бы пустые EROFS-разделы и
-    // цепочка загрузки (init_boot->vendor_boot->boot->kernel) не работала.
-    for (_typ, start, secs, _name) in LOGICALS.iter() {
-        let mut buf = [0u8; 512];
-        for i in 0..*secs {
-            if ata::read_sectors_from(Drive::Master, start + i, 1, &mut buf).is_ok() {
-                let _ = ata::write_sectors_to(drive, start + i, 1, &buf);
-            }
+    // /system: копируем EROFS-образ с Master-диска P1 (LBA 4096).
+    let (start_sys, secs_sys) = PART_SYSTEM;
+    let mut buf = [0u8; 512];
+    for i in 0..secs_sys {
+        if ata::read_sectors_from(Drive::Master, start_sys + i, 1, &mut buf).is_ok() {
+            let _ = ata::write_sectors_to(drive, start_sys + i, 1, &buf);
         }
     }
-    // /system (P1) и /userdata (P3) уже записаны отдельно; /TPM тоже.
+
+    // /userdata: ext2-том на P2 (LBA 12800).
+    write_userdata_ext2(drive);
 
     Ok(())
 }
@@ -670,8 +593,7 @@ pub fn cmd_install(arg: &str) {
     crate::println!("==================================================");
     crate::println!("     DeiX OS - Installer (setup wizard)          ");
     crate::println!("==================================================");
-    crate::println!("  Full layout: /system /TPM /userdata /kernel");
-    crate::println!("  /init_boot /boot /vendor_boot /super /recovery");
+    crate::println!("  Full layout: /system (EROFS RO), /userdata (EXT2 RW)");
     crate::println!();
 
     // ---- Режим --test (автоматизация) ----
@@ -786,11 +708,9 @@ pub fn cmd_install(arg: &str) {
     crate::println!("  Step 5/5 - installing DeiX to disk...");
     match write_image_to(target) {
         Ok(()) => {
-            crate::println!("  [install] MBR layout: OK (10 partitions)");
+            crate::println!("  [install] MBR layout: OK (2 partitions: /system, /userdata)");
             crate::println!("  [install] Kernel: {} bytes ({} sectors) - OK", kernel_size(), kernel_sectors());
-            crate::println!("  [install] ext2 volume /system + /userdata: OK");
-            crate::println!("  [install] EROFS: /kernel /init_boot /boot /vendor_boot /super /recovery - OK");
-            crate::println!("  [install] /TPM (hidden): OK");
+            crate::println!("  [install] /system (EROFS RO) + /userdata (EXT2 RW): OK");
         }
         Err(_) => {
             crate::println!("  ERROR writing image to disk.");

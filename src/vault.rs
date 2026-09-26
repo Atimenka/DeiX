@@ -1,27 +1,12 @@
-// ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0). Интеграция в существующий код
-// vault — KERNEL SECURITY VAULT: 7 системных разделов erofs/ro, rw только в
-// Fastbootd/EDL/Recovery (иначе panic!), политика /userdata (ext4/rw).
-// no_std-совместимо (ядро DeiX OS): только core/alloc (BTreeMap, String, Vec),
-// вывод — через crate::println!/crate::print! (стиль dxinit.rs).
-
+// ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0).
+// vault — KERNEL SECURITY VAULT: /system (EROFS RO) и /userdata (EXT2/EXT4 RW).
 
 use crate::init_parser::{BootStage, MountMode};
 use alloc::string::String;
 use alloc::format;
 
-/// Список критических системных разделов ядра (KERNEL SECURITY VAULT).
-/// Эти семь точек монтируются исключительно через erofs и по умолчанию
-/// блокируются в ReadOnly. /userdata в этот список не входит — он
-/// обрабатывается отдельной веткой политики.
-pub const SYSTEM_PARTITIONS: [&str; 7] = [
-"/kernel",
-"/init_boot",
-"/boot",
-"/vendor_boot",
-"/super",
-"/system",
-"/recovery",
-];
+/// Список системных EROFS-разделов ядра.
+pub const SYSTEM_PARTITIONS: [&str; 1] = ["/system"];
 
 
 /// Отказ политики, НЕ являющийся терминальным: нарушение правил /userdata.
@@ -64,16 +49,7 @@ pub fn kind_name(&self) -> &'static str {
 /// через манипуляции с условиями (требование ТЗ).
 pub fn evaluate(dst: &str, fs_type: &str, mode: MountMode, stage: BootStage) -> Result<(), VaultRejection> {
 // Шаг 1: идентификация точки монтирования развёрнутым match.
-let is_system: bool = match dst {
-    "/kernel" => true,
-    "/init_boot" => true,
-    "/boot" => true,
-    "/vendor_boot" => true,
-    "/super" => true,
-    "/system" => true,
-    "/recovery" => true,
-    _ => false,
-};
+let is_system: bool = dst == "/system";
 
 match dst {
     // ---- ПОЛЬЗОВАТЕЛЬСКИЙ РАЗДЕЛ /userdata ------------------------------

@@ -115,71 +115,20 @@ fn load_link(partition: &str, wanted: &[&str]) -> Result<ChainLink, String> {
     Ok(ChainLink { files: found, loaded })
 }
 
-/// Загружает kernel.tar.gz из /kernel и распаковывает (gzip + tar).
-/// Возвращает строку-сводку (kernel.bin + библиотеки).
+/// Загружает kernel.bin из /system/kernel/kernel.bin (EROFS).
 pub fn load_kernel() -> Result<String, String> {
     let layout = crate::partition_map::active_kernel_layout();
     let image = read_partition_image(layout)?;
-    let tar_gz = erofs_extract(&image, "kernel.tar.gz")?;
 
-    // Распаковка gzip (deflate).
-    let tar = crate::inflate::gunzip(&tar_gz, 4 * 1024 * 1024)
-        .map_err(|e| format!("gunzip: {:?}", e))?;
+    let kernel_bin = erofs_extract(&image, "kernel/kernel.bin")
+        .or_else(|_| erofs_extract(&image, "kernel.bin"))?;
 
-    // Разбор tar (ustar) — используем kernel_loader::TarArchive.
-    let archive = crate::kernel_loader::TarArchive::parse(tar)
-        .map_err(|e| format!("tar: {}", e.message()))?;
-
-    // Извлекаем kernel.bin и библиотеки.
-    let kernel_bin = archive.extract("kernel.bin").map_err(|e| e.message())?;
-    let mut summary = format!(
-        "kernel.bin {} байт, EROFS-магия {}",
-        kernel_bin.len(),
-        if kernel_bin.len() >= 1028 {
-            let m = u32::from_le_bytes([kernel_bin[1024], kernel_bin[1025], kernel_bin[1026], kernel_bin[1027]]);
-            format!("{:#010x}", m)
-        } else {
-            "—".to_string()
-        }
+    let summary = format!(
+        "/system/kernel/kernel.bin ({} байт)",
+        kernel_bin.len()
     );
 
-    // Библиотеки и модули подсистем ядра.
-    for lib in [
-        "libdeix_core.so",
-        "libdeix_net.so",
-        "libdeix_gfx.so",
-        "libdeix_sys.so",
-        "libdeix_gui.so",
-        "libdeix_ds.so",
-    ] {
-        if let Ok(data) = archive.extract(lib) {
-            summary.push_str(&format!(", {} ({} байт)", lib, data.len()));
-        }
-    }
     Ok(summary)
-}
-
-/// Загружает образ режима из его раздела:
-///   fastbootd/recovery -> /boot, dsm -> /dsm.
-/// Вызывается перед запуском соответствующей оболочки — режим реально
-/// берётся из раздела.
-pub fn load_mode_image(mode: &str) -> Result<Vec<u8>, String> {
-    let (partition, fname) = match mode {
-        "fastbootd" | "recovery" => (crate::partition_map::active_boot_layout().name, match mode {
-            "fastbootd" => "fastbootd.bin",
-            _ => "recovery.bin",
-        }),
-        "dsm" => ("/dsm", "dsm.bin"),
-        _ => return Err(format!("неизвестный режим {}", mode)),
-    };
-    let layout = lookup_layout(partition).ok_or_else(|| format!("нет раздела {}", partition))?;
-    let image = read_partition_image(layout)?;
-    let data = erofs_extract(&image, fname)?;
-    crate::println!(
-        "  [bootchain] Режим {} загружен из {} ({} байт: {})",
-        mode, partition, data.len(), describe(&data)
-    );
-    Ok(data)
 }
 
 /// Показывает файлы во всех разделах (диагностика).
