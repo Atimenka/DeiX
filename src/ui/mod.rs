@@ -1,11 +1,12 @@
 //! UI-драйвер: композитор окон и графическая оболочка DeiX OS.
-//!
-//! Включает:
-//! * Композитор окон ядра (`KernelGuiCompositorService`), управляемый через менеджер модулей (GFX.KMOD)
-//! * Диспетчер задач (Task Manager) с живыми показателями CPU, ОЗУ, Диска и Сети, а также защитой системных PID
-//! * Центр Персонализации (Theme Customizer) с живым предпросмотром, акцентными цветами и заменяемыми палитрами
-//! * Полнофункциональный Файловый Менеджер с сайдбаром разделов, поиском, просмотром и редактированием
-//! * Веб-браузер со всемирным выходом в Интернет, поддержкой TCP HTTP/1.0, парсингом HTML и вкладками
+
+pub mod metrics;
+pub mod surface;
+pub mod theme;
+
+pub use metrics::*;
+pub use surface::*;
+pub use theme::*;
 
 use crate::ext2;
 use crate::keyboard;
@@ -1946,42 +1947,46 @@ fn draw_taskbar(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen_w: 
 fn draw_start_menu(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_h: i32) {
     let items = start_menu_items();
     let taskbar_y = screen_h - TASKBAR_HEIGHT as i32;
-    let menu_h = items.len() as i32 * START_MENU_ITEM_HEIGHT + 48;
-    let menu_y = taskbar_y - menu_h;
+    let menu_w = 260i32;
+    let menu_h = 240i32;
+    let menu_y = taskbar_y - menu_h - 4;
 
-    r.shade_rect(0, 0, screen_w as u32, taskbar_y as u32, 50);
+    r.shade_rect(0, 0, screen_w as u32, taskbar_y as u32, 40);
 
-    r.fill_rounded_rect(0, menu_y, START_MENU_WIDTH as u32, menu_h as u32, 10, theme.window_bg);
-    r.draw_rect_outline_alpha(0, menu_y, START_MENU_WIDTH as u32, menu_h as u32, theme.titlebar_active, 180);
+    r.fill_rounded_rect(4, menu_y, menu_w as u32, menu_h as u32, theme.corner_radius, theme.window_bg);
+    r.draw_rect_outline_alpha(4, menu_y, menu_w as u32, menu_h as u32, theme.titlebar_active, 180);
 
-    r.fill_rect_gradient_v(0, menu_y, START_MENU_WIDTH as u32, 38, theme.titlebar_active, theme.window_bg);
-    r.draw_text(12, menu_y + 10, "root @ DeiX OS", theme.accent, None);
-    r.draw_hline(0, menu_y + 38, START_MENU_WIDTH as u32, theme.titlebar_active);
+    // Search bar
+    r.fill_rounded_rect(12, menu_y + 10, (menu_w - 24) as u32, 24, 4, theme.titlebar_active);
+    r.draw_icon(18, menu_y + 14, IconType::Search, theme.text_secondary);
+    r.draw_text(38, menu_y + 14, "Search apps...", theme.text_secondary, None);
 
-    let items_start_y = menu_y + 44;
-
+    // 2xN grid items
+    let col_w = (menu_w - 24) / 2;
     for (i, (label, _, icon)) in items.iter().enumerate() {
-        let item_y = items_start_y + i as i32 * START_MENU_ITEM_HEIGHT;
+        if i >= 6 { break; }
+        let row = i as i32 / 2;
+        let col = i as i32 % 2;
+        let ix = 12 + col * col_w;
+        let iy = menu_y + 42 + row * 32;
 
-        r.draw_icon(12, item_y + 8, match icon {
+        r.fill_rounded_rect(ix, iy, (col_w - 4) as u32, 28, 4, theme.surface);
+        r.draw_icon(ix + 6, iy + 6, match icon {
             IconType::Terminal => IconType::Terminal,
             IconType::Files => IconType::Files,
             IconType::Browser => IconType::Browser,
             IconType::TaskManager => IconType::TaskManager,
             IconType::Theme => IconType::Theme,
-            IconType::Display => IconType::Display,
-            IconType::About => IconType::About,
-            IconType::Power => IconType::Power,
             _ => IconType::Terminal,
         }, theme.accent);
-
-        let color = if label.contains("Shut") || label.contains("Restart") {
-            Color::RED
-        } else {
-            theme.text_primary
-        };
-        r.draw_text(34, item_y + (START_MENU_ITEM_HEIGHT - 16) / 2, label, color, None);
+        r.draw_text(ix + 26, iy + 6, truncate(label, 9), theme.text_primary, None);
     }
+
+    // Quick System Power Footer
+    r.draw_hline(12, menu_y + menu_h - 36, (menu_w - 24) as u32, theme.titlebar_active);
+    r.draw_text(16, menu_y + menu_h - 26, "root @ DeiX", theme.text_secondary, None);
+    r.fill_rounded_rect(menu_w - 60, menu_y + menu_h - 30, 48, 22, 4, Color::RED);
+    r.draw_text(menu_w - 52, menu_y + menu_h - 26, "Power", Color::WHITE, None);
 }
 
 fn draw_control_center(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_h: i32) {
