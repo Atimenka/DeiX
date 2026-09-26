@@ -1,41 +1,13 @@
 //! Простой аллокатор кучи (heap) для нашего мини-ядра.
-//!
-//! Загрузчик (boot/stage2.asm) настраивает identity-mapping первого 4GiB
-//! физической памяти через 2MiB huge pages, поэтому нам не нужно отдельно
-//! возиться со страницами — достаточно зарезервировать статический массив
-//! в .bss и отдать его аллокатору как область кучи.
-//!
-//! Алгоритм — классический связный список свободных блоков (linked list
-//! allocator, first-fit): просто, понятно, для мини-ОС более чем достаточно.
-//! Не самый быстрый и склонен к фрагментации при долгой работе, но у нас
-//! пока нет процессов, которые бы гоняли аллокации сутками.
-//!
-//! ВАЖНО, физическое расположение HEAP_STORAGE: этот статический массив
-//! обязан начинаться ВЫШЕ физического адреса 0x100000 (1 МиБ). Классическая
-//! карта памяти PC резервирует диапазон 0xA0000-0xFFFFF (640 КиБ - 1 МиБ)
-//! под legacy VGA framebuffer (0xA0000-0xBFFFF) и теневую память BIOS/
-//! опциональных ROM (0xC0000-0xFFFFF) — на этих физических адресах стоит
-//! MMIO-alias видеокарты, а не настоящая RAM, поэтому запись туда либо не
-//! сохраняется, либо считывается обратно как "чужие" данные видеокарты,
-//! даже при полном идентити-маппинге страниц (страница честно смаплена,
-//! но физически это не DRAM). Раньше куча естественным образом
-//! размещалась линкером сразу после короткого ассемблерного .bss (около
-//! физического адреса 0x44000) и была настолько большой (на тот момент
-//! 16 МиБ), что простиралась через всю эту "дыру" — если аллокация вроде
-//! back buffer графического рендерера (renderer.rs) попадала на адрес
-//! внутри 0xA0000-0xFFFFF, то на экране появлялся необъяснимый "шум"
-//! (мусорные пиксели), не лечившийся никакими изменениями в самой логике
-//! рендеринга, потому что причина была не в рендеринге, а в том, что
-//! часть "кучи" физически не была настоящей оперативной памятью.
-//! Исправлено в boot/linker_kernel.ld: линкер теперь явно "перепрыгивает"
-//! адрес счётчика на 0x200000 (2 МиБ) перед Rust-частью .bss, так что
-//! HEAP_STORAGE гарантированно оказывается выше всей опасной зоны.
+
 use crate::sync::without_interrupts;
 use core::alloc::{GlobalAlloc, Layout};
 use core::mem;
 use core::ptr;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 const HEAP_SIZE: usize = 16 * 1024 * 1024;
+static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(align(16))]
 struct HeapStorage([u8; HEAP_SIZE]);
@@ -69,7 +41,7 @@ struct LinkedListAllocator {
 impl LinkedListAllocator {
     const fn new() -> Self {
         LinkedListAllocator {
-            head: FreeBlock { size: 0, next: None },
+            head: FreeBlock::new(0),
             initialized: false,
         }
     }
@@ -80,33 +52,28 @@ impl LinkedListAllocator {
     }
 
     unsafe fn add_free_region(&mut self, addr: usize, size: usize) {
-        assert_eq!(align_up(addr, mem::align_of::<FreeBlock>()), addr);
+        assert!(align_up(addr, mem::align_of::<FreeBlock>()) == addr);
         assert!(size >= mem::size_of::<FreeBlock>());
 
-        let mut block = FreeBlock::new(size);
-        block.next = self.head.next.take();
-        let block_ptr = addr as *mut FreeBlock;
-        block_ptr.write(block);
-        self.head.next = Some(&mut *block_ptr);
+        let mut node = FreeBlock::new(size);
+        node.next = self.head.next.take();
+        let node_ptr = addr as *mut FreeBlock;
+        node_ptr.write(node);
+        self.head.next = Some(&mut *node_ptr);
     }
 
-    /// Ищет свободный блок, в который поместится запрошенный размер, и
-    /// возвращает его вместе с ссылкой на предыдущий элемент списка (чтобы
-    /// можно было "вырезать" найденный блок из списка).
     fn find_region(&mut self, size: usize, align: usize) -> Option<(&'static mut FreeBlock, usize)> {
         let mut current = &mut self.head;
-
         while let Some(ref mut region) = current.next {
             if let Ok(alloc_start) = Self::alloc_from_region(region, size, align) {
                 let next = region.next.take();
-                let ret = Some((current.next.take().unwrap(), alloc_start));
+                let ret = current.next.take().unwrap();
                 current.next = next;
-                return ret;
+                return Some((ret, alloc_start));
             } else {
                 current = current.next.as_mut().unwrap();
             }
         }
-
         None
     }
 
@@ -120,7 +87,6 @@ impl LinkedListAllocator {
 
         let excess_size = region.end_addr() - alloc_end;
         if excess_size > 0 && excess_size < mem::size_of::<FreeBlock>() {
-            // остаток слишком мал, чтобы хранить в нём FreeBlock — блок не подходит
             return Err(());
         }
 
@@ -130,7 +96,7 @@ impl LinkedListAllocator {
     fn size_align(layout: Layout) -> (usize, usize) {
         let layout = layout
             .align_to(mem::align_of::<FreeBlock>())
-            .expect("adjusting alignment failed")
+            .expect("align_to failed")
             .pad_to_align();
         let size = layout.size().max(mem::size_of::<FreeBlock>());
         (size, layout.align())
@@ -141,12 +107,12 @@ fn align_up(addr: usize, align: usize) -> usize {
     (addr + align - 1) & !(align - 1)
 }
 
-pub struct LockedAllocator {
+struct LockedAllocator {
     inner: crate::spinlock::SpinLock<LinkedListAllocator>,
 }
 
 impl LockedAllocator {
-    pub const fn new() -> Self {
+    const fn new() -> Self {
         LockedAllocator {
             inner: crate::spinlock::SpinLock::new(LinkedListAllocator::new()),
         }
@@ -175,6 +141,7 @@ unsafe impl GlobalAlloc for LockedAllocator {
                 if excess_size > 0 {
                     allocator.add_free_region(alloc_end, excess_size);
                 }
+                ALLOCATED_BYTES.fetch_add(size, Ordering::Relaxed);
                 alloc_start as *mut u8
             } else {
                 ptr::null_mut()
@@ -187,6 +154,7 @@ unsafe impl GlobalAlloc for LockedAllocator {
             let (size, _) = LinkedListAllocator::size_align(layout);
             let mut allocator = self.inner.lock();
             allocator.add_free_region(ptr as usize, size);
+            ALLOCATED_BYTES.fetch_sub(size.min(ALLOCATED_BYTES.load(Ordering::Relaxed)), Ordering::Relaxed);
         })
     }
 }
@@ -194,14 +162,18 @@ unsafe impl GlobalAlloc for LockedAllocator {
 #[global_allocator]
 static ALLOCATOR: LockedAllocator = LockedAllocator::new();
 
-/// Вызывается один раз из kernel_main перед любым использованием
-/// Vec/String/Box.
 pub fn init() {
     ALLOCATOR.init();
 }
 
-/// Обработчик ошибки аллокации (вызывается, если alloc вернул null, а
-/// компилятор ожидал успех — например, при `vec![...]` без ручной проверки).
+pub fn total_heap_bytes() -> usize {
+    HEAP_SIZE
+}
+
+pub fn allocated_heap_bytes() -> usize {
+    ALLOCATED_BYTES.load(Ordering::Relaxed)
+}
+
 #[alloc_error_handler]
 fn alloc_error_handler(layout: Layout) -> ! {
     panic!("allocation error: {:?}", layout);

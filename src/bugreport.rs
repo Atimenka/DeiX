@@ -25,7 +25,7 @@ pub fn collect_report() -> String {
 
     // --- SYSTEM ---
     out.push_str("\n[SYSTEM]\n");
-    out.push_str(&format!("  OS: DeiX v0.2-beta (x86_64, no_std, Safe Rust)\n"));
+    out.push_str(&format!("  OS: DeiX v0.2.1-beta (x86_64, no_std, Safe Rust)\n"));
     out.push_str(&format!("  uptime: {} ms\n", crate::timer::uptime_ms()));
     let dev = crate::devmode::sudo_allowed();
     out.push_str(&format!("  dev-mode: {}\n", if dev { "ON (bootloader unlocked, ORANGE)" } else { "OFF (bootloader locked, GREEN)" }));

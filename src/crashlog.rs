@@ -50,7 +50,7 @@ fn format_crash_header(msg: &str) -> String {
     out.push_str("message: ");
     out.push_str(msg);
     out.push('\n');
-    out.push_str("kernel: DeiX v0.2-beta (x86_64, no_std)\n");
+    out.push_str("kernel: DeiX v0.2.1-beta (x86_64, no_std)\n");
     out.push_str("cause hint: последние строки журнала — 'dmesg' / 'bugreport'\n");
     out
 }

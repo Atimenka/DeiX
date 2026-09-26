@@ -172,10 +172,10 @@ pub const PARTITION_LAYOUT: [PartitionLayout; 13] = [
     PartitionLayout { name: "/vendor_boot",start_lba: 16129, sectors: 255,  fs: "erofs", flashable: true },
     PartitionLayout { name: "/boot_a",     start_lba: 16385, sectors: 255,  fs: "erofs", flashable: true },
     PartitionLayout { name: "/boot_b",     start_lba: 16641, sectors: 255,  fs: "erofs", flashable: true },
-    PartitionLayout { name: "/super",      start_lba: 16897, sectors: 255,  fs: "erofs", flashable: true },
-    PartitionLayout { name: "/dsm",        start_lba: 17153, sectors: 255,  fs: "erofs", flashable: true },
-    PartitionLayout { name: "/recovery",   start_lba: 17409, sectors: 255,  fs: "erofs", flashable: true },
-    PartitionLayout { name: "/OTA",        start_lba: 17664, sectors: 2816, fs: "ext2",  flashable: true },
+    PartitionLayout { name: "/super",      start_lba: 16897, sectors: 1023, fs: "erofs", flashable: true },
+    PartitionLayout { name: "/dsm",        start_lba: 17921, sectors: 255,  fs: "erofs", flashable: true },
+    PartitionLayout { name: "/recovery",   start_lba: 18177, sectors: 255,  fs: "erofs", flashable: true },
+    PartitionLayout { name: "/OTA",        start_lba: 18432, sectors: 2048, fs: "ext2",  flashable: true },
     PartitionLayout { name: "/TPM",        start_lba: 12288, sectors: 512,  fs: "tpm",   flashable: false },
 ];
 

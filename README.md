@@ -1,72 +1,77 @@
-# 🪐 DeiX OS (v0.2-beta · Release)
+# 🪐 DeiX OS (v0.2.1-beta · Release)
 
 A modern, highly-secure 64-bit Operating System written from scratch in **Rust** and **Assembly** for the `x86_64` architecture. Developed in a unique collaboration between a Human Architect and an AI Agent.
 
-Операционная система нового поколения, написанная с нуля на **Rust** и **Ассемблере** под `x86_64`. Релиз **v0.2-beta** включает супервизор **Dinit (PID 1, Ring 0)**, эвристический монитор безопасности **Security Monitor**, полноценный звуковой драйвер **Intel High Definition Audio (HDA)** с кольцевым DMA-буфером, сжатый загрузочный логотип **DXLG**, полнодисковое шифрование **TPM 2.0 / LUKS**, графический вход, вытесняющую многозадачность и A/B OTA-обновления.
+Операционная система нового поколения, написанная с нуля на **Rust** и **Ассемблере** под `x86_64`. Релиз **v0.2.1-beta** приносит единый канонический источник ядра в `/kernel_a` (LBA 13313), исправление персистентности аккаунтов и маркера `DEIXTPM1`, исключение пользовательских данных из VBMETA, декларативный UI-фреймворк **DUIL**, интерпретатор скриптов **DeiX Script (DS)**, кросс-компилятор **MEX v1.2 C/C++**, модульные системные библиотеки (`libdeix_*.so`), оптимизацию скорости загрузки и автоматизированный тестовый набор подсистем.
 
-**Ядро:** ~0.7 МБ (Rust `#![no_std]` + NASM stage2) · **Лимит ядра:** 1 МиБ (2048 секторов) · **Образ диска:** 10 МиБ · **Код:** ~28 000 строк Rust, 102 файла · реальное железо и QEMU.
+**Ядро:** ~0.7 МБ (Rust `#![no_std]` + NASM stage2) · **Лимит ядра:** 1 МиБ (2048 секторов) · **Образ диска:** 10 МиБ · **Код:** ~30 000 строк Rust, 105 файлов · реальное железо и QEMU.
 
 ---
 
-## ⚡ Новое в версии v0.2-beta
+## ⚡ Новое в версии v0.2.1-beta
 
-### 🛡️ Dinit — Супервизор PID 1 (Ring 0)
-Корневой инит-процесс и супервизор (`src/dinit/`), исполняемый в привилегированном режиме ядра:
-- **Управление жизненным циклом служб:** состояния `Stopped`, `Starting`, `Running`, `Restarting`, `Failed`, `Terminated`, `Crashed`, `Disabled`.
-- **Политики перезапуска с backoff:** политики `Always`, `OnFailure`, `Never`, `UnlessStopped` с экспоненциальной задержкой (`restart_backoff_ms`) и защитой от циклического падения (`max_restarts`).
-- **Разделение по кольцам:** раздельный запуск служб ядра (Ring 0) и системных демонов пользователя (Ring 3).
-- **Исполнение сценариев `init.deix`:** парсинг декларативного конфига и переключение стадий загрузки (`InitBoot` → `VendorBoot` → `Boot`).
-- **Каталог точек монтирования:** контроль и динамический опрос точек монтирования `/kernel`, `/init_boot`, `/system`, `/userdata`, `/dev`, `/proc`.
-- **Изоляция пространств имён и Capabilities:** битовые привилегии (`CAP_MOUNT`, `CAP_REBOOT`, `CAP_KILL`, `CAP_AUDIT`, `CAP_SETUID`, `CAP_RAW_IO`, `CAP_NET_ADMIN`, `CAP_SYS_ADMIN`, `CAP_PTRACE`, `CAP_CHROOT`) и лимиты ресурсов `ResourceLimits`.
-- **Централизованная матрица авторизации (`authorize.rs`):** изоляция профилей пользователей (`/users/<user>`), аппаратная изоляция enclava `/TPM` (запрещён абсолютно всем, включая UID 0).
-- **Кольцевой журнал аудита (`audit.rs`):** буфер на 1024 события с фиксацией операций, нарушений, предупреждений и ликвидаций процессов.
-- **Управление через CLI:** команды `dinit status`, `dinit services`, `dinit mounts`, `dinit users`, `dinit audit`, `dinit security`, `dinit stage`, `dinit reload`.
+### 🎯 Консолидация ядра в `/kernel_a` (LBA 13313)
+- Убрано дублирование сырых секторов `kernel.bin` на LBA 3.
+- Единым источником правды для загрузчиков `ramboot` и `stage2` стал раздел `/kernel_a` (LBA 13313).
 
-### 🚨 Эвристический монитор безопасности (Security Monitor)
-Интегрированный в ядро движок предотвращения вторжений (`src/security_monitor.rs`) с порогом риска 0.85:
-- **Ransomware-детектор:** отслеживание лавинообразной записи (`sys_write` с частотой > 150) и высокой энтропии данных (> 0.75) с нелинейным ростом риска.
-- **Защита от инъекций кода:** блокировка вызовов `sys_mmap` и `sys_ptrace`, направленных на системные разделы (`/kernel`, `/system`, `/init_boot`), с присвоением максимального риска 1.0.
-- **Ликвидация угроз:** мгновенная генерация `KillSignal(SIGKILL)` и принудительное уничтожение процесса через планировщик ядра (`sched::terminate`).
-- **Самоконтроль при старте:** этап `boot_selfcheck()` проверяет работу детектора на легитимных и вредоносных событиях во время загрузки.
+### 🔑 Сохранение аккаунтов и выравнивание маркера `/TPM`
+- Выравнен маркер `/TPM`: унифицирована сигнатура `DEIXTPM1` с сохранением полной обратной совместимости с `DEIXTPM`.
+- Поддержка многосекторного хранения базы пользователей в разделе `/TPM` (до 16 секторов / 8 КиБ).
+- Устранена гонка при первой загрузке: функция `has_any_users()` проверяет состояние шифрования и LUKS-заголовков перед попыткой чтения `USERS.DB`.
 
-### 🔊 Intel High Definition Audio (HDA) + PC Speaker
-Полноценная аудиоподсистема (`src/hda.rs` и `src/sound.rs`):
-- **Драйвер контроллера Intel HDA (PCI):** инициализация колец CORB/RIRB, Immediate Command Interface (ICW), обнаружение аудио-узлов AFG, DAC и Output Pin.
-- **DMA-воспроизведение 48 кГц / 16-бит стерео:** кольцевой 4-периодный буфер на 64 КиБ, плавное воспроизведение без прерываний и задержек, потокобезопасный неблокирующий вывод.
-- **Линейный ресемплер:** передискретизация DPS-звуков с фиксированной точкой 16.16 в 48 000 Гц.
-- **Гибридный вывод:** автоматическое переключение HDA / PC Speaker (ШИМ), команды CLI `sound hda info|play|beep` и `sound mode hda|speaker`.
-- **Утилиты конвертации:** `tools/wav2dps.py`, корневые скрипты `wav2dps.py` и `dps2wav.py` для двустороннего преобразования WAV ↔ DPS1.
+### 🛡️ Корректировка AVB VBMETA и пользовательских данных
+- Из статического снимка VBMETA исключён динамический файл `USERS.DB`.
+- VBMETA отныне проверяет строго неизменяемые системные компоненты (`SYSTEM.IMG`, `DXINIT.CFG`, `init.deix`), а пользовательские данные защищены шифрованием XTS-AES-256 / LUKS / TPM 2.0 без ложных блокировок `RED STATE`.
 
-### 🖼️ Загрузочное лого DXLG и графический вход
-- **Компактный формат DXLG:** 128x128 пикселей, 5-цветная оптимизированная палитра, RLE-сжатие в 21 раз (2.3 КиБ вместо 48 КиБ сырого RGB).
-- **Чистый сборщик `make_logo.py`:** встроенный декодер PNG (zlib + struct) работает автономно без внешних библиотек (Pillow опционален).
-- **Плавный индикатор прогресса:** отображение этапов инициализации ядра (партиции, память, AVB, TPM, Dinit) с масштабированным шрифтом.
-- **Логотип в окне авторизации:** рендеринг эмблемы DeiX над графической панелью входа.
-- **Интерактивный просмотрщик:** команда CLI `logo show` с возвратом по Esc/Enter/Space.
+### 🖼️ Декларативный GUI-фреймворк DUIL (`src/duil.rs`)
+- Иерархический парсер разметки DUIL с поддержкой виджетов `Window`, `VBox`, `HBox`, `Grid`, `Button`, `Label`, `Input`, `ProgressBar`, `CheckBox`, `GroupBox`.
+- Движок автоматического расчёта геометрии (Layout) и программный 2D-рендерер в буферы поверхностей `Compositor` / `VBE`.
+- Интерактивная обработка кликов мыши, хитбоксы и переключение состояний компонентов.
+- Графические C++ и DUIL калькуляторы.
 
-### 🔐 TPM 2.0 / LUKS полнодисковое шифрование
-- Поддержка LUKS-подобных слотов паролей, деривация ключей `PBKDF2-HMAC-SHA512` (100 000 итераций).
-- Шифрование диска по умолчанию алгоритмом XTS-AES-256.
-- Запрос пароля при старте через PS/2 клавиатуру или COM1 serial.
+### 📜 Скриптовый язык DeiX Script (`src/ds.rs`)
+- Полноценный интерпретатор с ветвлениями `if`/`else`/`fi`, циклами `while`/`done` и функциями `fn`/`end`.
+- Подстановка переменных (`$var`), системные переменные (`PATH`, `HOME`, `SHELL`), арифметика (`expr $a + $b`) и логические операторы (`==`, `!=`, `<`, `>`, `<=`, `>=`).
+- Команды взаимодействия с файловой системой ext2 (`cat`, `write`, `append`, `mkdir`, `rm`, `ls`, `cd`, `pwd`) и интерактивный REPL (`ds -i`).
 
-### 💾 Расширение лимита ядра до 1 МиБ
-- Лимит `KERNEL_SECTORS` расширен с 1400 до 2048 секторов (1 048 576 байт), `KERNEL_SIZE_DWORDS` = 262 144.
-- Ядро чисто компилируется без ошибок и предупреждений с флагом `#![allow(dead_code)]`.
+### 🛠️ Фристендинг C/C++ SDK MEX v1.2
+- В заголовок `tools/include/deix/mex.h` добавлены базовые функции памяти (`memset`, `memcpy`, `memmove`, `memcmp`) с атрибутом `weak` для сборки C/C++ программ без `glibc`.
+- Драйвер `mexcc.cpp` поддерживает каскадный поиск ресурсов `locate_resource()` (`mex.ld`, `mex_pack.py`, `include/`).
+
+### 🏛️ Модульные системные библиотеки (`kernel.tar.gz` и `/system`)
+- Выделение системных библиотек в архиве ядра и EROFS `/system`:
+  - `libdeix_core.so` — ядро, многозадачность, память.
+  - `libdeix_net.so` — сетевой стек и RTL8139.
+  - `libdeix_gfx.so` — 2D-рендерер и VBE.
+  - `libdeix_sys.so` — супервизор Dinit и Security Monitor.
+  - `libdeix_gui.so` — UI-фреймворк DUIL.
+  - `libdeix_ds.so` — интерпретатор DeiX Script.
+
+### ⚡ Оптимизация скорости загрузки
+- `Ramboot`: Размер портативного блока INT 13h увеличен до 127 секторов (сокращение вызовов BIOS и смен режимов в 2 раза, ускорение считывания на ~40%).
+- `Bootchain`: Zero-copy чтение EROFS-разделов прямо в целевые срезы памяти без промежуточных аллокаций.
+- `Inflate`: Пакетное декодирование битпотока DEFLATE для быстрой распаковки `kernel.tar.gz`.
+
+### 🧪 Набор сквозных тестов (`tools/test_all_subsystems.py`)
+- Автоматизированный скрипт тестирования карты разделов, флагов BCB, OTA-пакетов и кросс-компиляции C++ приложений.
 
 ---
 
 ## ⚡ Базовые возможности ядра
 
 - **🦀 Pure Rust `#![no_std]`**, старт в long mode: `boot_sector` (MBR) → `stage2` (32-бит → long mode) → `kernel.bin` @ 0x100000.
+- **🛡 Dinit (PID 1, Ring 0)** — супервизор служб, точек монтирования, системных стадий и аудита.
+- **🚨 Security Monitor** — эвристический детектор угроз (ransomware, code-injection) с ликвидацией (SIGKILL).
+- **🔊 Intel HDA + PC Speaker** — DMA 48 кГц / 16-бит стерео воспроизведение + ШИМ PC Speaker.
+- **🖼️ DXLG & VBE** — сжатый 5-цветный логотип, VBE 32bpp графика, кириллический шрифт.
 - **🛡 Ring 3 + syscall/sysret** — аппаратная изоляция (GDT + TSS).
 - **🧵 Вытесняющая многозадачность** — планировщик с переключением по прерыванию IRQ0 PIT (`threads list/test`).
 - **🔁 kexec** — запуск нового ядра из `/kernel_a|b` без перезагрузки BIOS (`kexec check/a/b`).
 - **📦 A/B-слоты + OTA** — разделы `/kernel_a|b`, `/boot_a|b`, активный слот в BCB; команды `ota check/fetch/apply/rollback`.
 - **🧾 Настоящий EROFS** (магия `0xE0F5E1E2`, валидируется `fsck.erofs`) на всех системных разделах.
-- **🔒 Верифицированная загрузка (AVB)** — проверка цепочки разделов `/dsm` → `/init_boot` → `/vendor_boot` → `/boot` → `/kernel`.
+- **🔒 Верифицированная загрузка (AVB)** — проверка целостности VBMETA.
 - **🥽 Режимы BCB**: **DSM** (аварийный COM1-прошивальщик), **fastbootd** (графический прошивальщик), **recovery** (TWRP-подобное меню).
 - **🐧 Совместимость с Linux** — загрузчик ELF64 + слой системных вызовов Linux ABI (`src/linux/`).
-- **🎨 Графика и UI** — VBE до 1280x1024, мышь, кириллический шрифт (VGA Plane 2), локализация en/ru (`lang`).
 - **🌐 Сеть** — RTL8139 + ARP + IPv4 + ICMP + TCP + HTTP (`ifconfig`, `ping`).
 - **📦 MEX-приложения** — собственный формат бинарников DeiX (`run`, `pkg`, `mexcc`).
 
@@ -77,9 +82,9 @@ A modern, highly-secure 64-bit Operating System written from scratch in **Rust**
 | Раздел | LBA | Секторов | ФС | Назначение |
 |---|---|---|---|---|
 | `/system` | 4096 | 8192 | ext2 rw | рабочий том ядра (USERS.DB, AUTOSTART.CFG, профили) |
-| `/TPM` | 12288 | 512 | скрытый 0xDA | аппаратно изолированный маркер TPM |
+| `/TPM` | 12288 | 512 | скрытый 0xDA | аппаратно изолированный маркер TPM (`DEIXTPM1`) |
 | `/userdata` | 12800 | 512 | ext2/ext4 rw | пользовательские данные и пакеты Ring 3 |
-| `/kernel_a` | 13313 | 1279 | EROFS ro | слот A: `kernel.tar.gz` (gzip, inflate в ядре) |
+| `/kernel_a` | 13313 | 1279 | EROFS ro | слот A: `kernel.tar.gz` (GZIP + USTAR) |
 | `/kernel_b` | 14593 | 1279 | EROFS ro | слот B |
 | `/init_boot` | 15873 | 255 | EROFS ro | сценарий `init.deix`, `bootloader.bin` |
 | `/vendor_boot` | 16129 | 255 | EROFS ro | `vendor.bin` (HAL, прошивки) |
@@ -98,9 +103,9 @@ A modern, highly-secure 64-bit Operating System written from scratch in **Rust**
 help about echo clear uptime color cpuid mem lang
 ifconfig arp ping gpu [info|nvinfo|mode] sound [list|play|beep|mode|hda]
 dinit [status|services|mounts|users|audit|security|stage|reload]
-ls cat write rm pkg run install bigfile
-useradd passwd whoami users encrypt crypt
-nvidia hal microcode logo linux profile lock
+duil [run|calc] ds [script.dxs|-i|-c] avb [status|verify|lock|unlock]
+tpm [status|dump|pcr] taskmgr ls cat write rm pkg run install bigfile
+useradd passwd whoami users encrypt crypt nvidia hal microcode logo linux profile lock
 threads kexec crash bugreport dmesg crashlog
 reboot [normal|recovery|fastbootd|dsm] bcb ota adb dev root halt
 ```
@@ -145,59 +150,12 @@ qemu-system-x86_64 -drive file=build/deix_disk.img,format=raw,if=ide \
 ## 🧪 Тестирование
 
 ```bash
+python3 tools/test_all_subsystems.py    # сквозной тест всех подсистем и тулчейна
 python3 tools/check_partition_map.py    # проверка синхронизации 13 разделов
 python3 tools/make_logo.py assets/logo.png build/logo.dxlg 128
 python3 tools/wav2dps.py assets/start.wav build/sounds/start.dps 8000
-python3 dps2wav.py build/sounds/start.dps build/sounds/test.wav
 python3 tools/qemu_mode_test.py os      # сквозной QEMU-тест
 ```
-
----
-
-## 📂 Структура проекта
-
-```
-DeiX/
-├── boot/                # Ассемблер: boot_sector, stage2, long_mode_init, ramboot, линкеры
-├── src/                 # Ядро Rust (102 файла, ~28k строк кода)
-│   ├── dinit/           # PID 1 Ring 0 супервизор: службы, монтирование, namespaces, аудит, авторизация
-│   ├── security_monitor.rs # Эвристический монитор угроз (ransomware / code-injection)
-│   ├── hda.rs           # Драйвер Intel High Definition Audio (HDA) с DMA-стримингом
-│   ├── sound.rs         # Аудиоподсистема: HDA + PC Speaker (ШИМ), UiSound
-│   ├── bootlogo.rs      # Рендерер DXLG-логотипа и статус загрузки
-│   ├── loginui.rs       # Графический экран входа (VBE) с эмблемой DeiX
-│   ├── init_parser.rs   # Движок разбора сценариев init.deix
-│   ├── vault.rs         # KERNEL SECURITY VAULT (защита системных разделов)
-│   ├── crypto/          # AES, SHA-256/512, PBKDF2-HMAC, XTS
-│   ├── drivers/ + hal/  # Драйверный уровень HAL и NVIDIA nouveau
-│   ├── linux/           # Загрузчик ELF64 и эмуляция Linux syscall ABI
-│   ├── mm/              # Физическая память (Buddy Allocator), куча 16 МиБ
-│   ├── net/             # RTL8139, ARP, IPv4, ICMP, TCP, HTTP
-│   └── sched.rs / usermode.rs / kexec.rs / ext2.rs / erofs.rs / ...
-├── tools/               # make_deix_fs.py, make_logo.py, wav2dps.py, dps2wav.py, check_partition_map.py
-├── assets/              # logo.png, logo.dxlg, UI-звуки (*.wav)
-├── docs/                # Техническая документация, спецификации форматов и бут-логи
-└── security/            # master_spec — спецификация архитектуры безопасности
-```
-
----
-
-## 🗺️ Roadmap
-
-- [x] Dinit (PID 1, Ring 0 supervisor) с супервизией служб и namespaces
-- [x] Эвристический монитор угроз (Heuristic Security Monitor, SIGKILL)
-- [x] Intel High Definition Audio (HDA) с кольцевым DMA и ресемплером
-- [x] Компактный формат логотипа DXLG + автономный конвертер
-- [x] Расширение лимита ядра до 1 МиБ (2048 секторов)
-- [x] Настоящий EROFS во всех системных разделах + ext2/ext4 `/userdata`
-- [x] LUKS-слоты + PBKDF2-HMAC-SHA512 + TPM 2.0 полнодисковое шифрование
-- [x] Графический экран входа, профили пользователей, блокировка экрана
-- [x] TCP + HTTP/1.0 (OTA-обновления по воздуху)
-- [x] Открытый драйвер NVIDIA (HAL + MMIO)
-- [x] USB-загрузка (ramboot / Ventoy)
-- [ ] ACPI + мониторинг питания и батареи
-- [ ] USB-стек устройств (HID мышь/клавиатура)
-- [ ] Многоядерность (SMP / APIC)
 
 ---
 

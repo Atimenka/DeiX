@@ -39,14 +39,14 @@ SLOTS = {
     "/boot_a": 16385,
     "/boot_b": 16641,
     "/super": 16897,
-    "/dsm": 17153,
-    "/recovery": 17409,
+    "/dsm": 17921,
+    "/recovery": 18177,
 }
 SLOT_SECS = {  # размеры разделов (секторов)
     "/kernel_a": 1279, "/kernel_b": 1279,
     "/init_boot": 255, "/vendor_boot": 255,
     "/boot_a": 255, "/boot_b": 255,
-    "/super": 255, "/dsm": 255, "/recovery": 255,
+    "/super": 1023, "/dsm": 255, "/recovery": 255,
 }
 
 # ---------- OTA-пакет ----------
@@ -155,6 +155,9 @@ def cmd_build(args):
             "libdeix_core.so": b"DEIXLIB1\x00core\x00" + b"\x00" * 64,
             "libdeix_net.so": b"DEIXLIB1\x00net\x00" + b"\x00" * 64,
             "libdeix_gfx.so": b"DEIXLIB1\x00gfx\x00" + b"\x00" * 64,
+            "libdeix_sys.so": b"DEIXLIB1\x00sys\x00" + b"\x00" * 64,
+            "libdeix_gui.so": b"DEIXLIB1\x00gui\x00" + b"\x00" * 64,
+            "libdeix_ds.so":  b"DEIXLIB1\x00ds\x00" + b"\x00" * 64,
         }
     tgz = make_kernel_targz(kernel, libs)
     pkg = build_ota(tgz, args.version)
@@ -189,6 +192,9 @@ def cmd_push(args):
             "libdeix_core.so": b"DEIXLIB1\x00core\x00" + b"\x00" * 64,
             "libdeix_net.so": b"DEIXLIB1\x00net\x00" + b"\x00" * 64,
             "libdeix_gfx.so": b"DEIXLIB1\x00gfx\x00" + b"\x00" * 64,
+            "libdeix_sys.so": b"DEIXLIB1\x00sys\x00" + b"\x00" * 64,
+            "libdeix_gui.so": b"DEIXLIB1\x00gui\x00" + b"\x00" * 64,
+            "libdeix_ds.so":  b"DEIXLIB1\x00ds\x00" + b"\x00" * 64,
         }
         tgz = make_kernel_targz(kernel, libs)
     # слоты для прошивки

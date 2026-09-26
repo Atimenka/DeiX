@@ -250,6 +250,9 @@ pub fn build_fresh_kernel_targz() -> Vec<u8> {
         ("libdeix_core.so", b"DEIXLIB1\x00core\x00"),
         ("libdeix_net.so", b"DEIXLIB1\x00net\x00"),
         ("libdeix_gfx.so", b"DEIXLIB1\x00gfx\x00"),
+        ("libdeix_sys.so", b"DEIXLIB1\x00sys\x00"),
+        ("libdeix_gui.so", b"DEIXLIB1\x00gui\x00"),
+        ("libdeix_ds.so", b"DEIXLIB1\x00ds\x00"),
     ]);
     build_gzip_stored(&tar)
 }

@@ -170,6 +170,16 @@ pub fn set_cwd(dir: &str) {
     *CWD.lock() = alloc::string::String::from(dir);
 }
 
+/// Возвращает текущий рабочий каталог (для DS `pwd`).
+pub fn get_cwd() -> alloc::string::String {
+    let cwd = CWD.lock();
+    if cwd.is_empty() {
+        alloc::string::String::from("/")
+    } else {
+        cwd.clone()
+    }
+}
+
 
 pub fn execute(line: &str) {
     let line = line.trim();
@@ -308,6 +318,11 @@ pub fn execute(line: &str) {
             }
         }
         "halt" => cmd_halt(),
+        "duil" => crate::duil::cmd_duil(rest),
+        "ds" => crate::ds::cmd_ds(rest),
+        "avb" => crate::avb::cmd_avb(rest),
+        "tpm" => crate::tpm::cmd_tpm(rest),
+        "taskmgr" => crate::sched::cmd_threads(rest),
         // Политика безопасности DeiX OS: эскалация привилегий ПОЛНОСТЬЮ
         // запрещена. Пользователь Ring 3 не может выполнить su/sudo/root —
         // система не имеет суперпользователя в пользовательском пространстве
@@ -528,6 +543,11 @@ fn cmd_help() {
     println!("  users                   - {}", t!(en: "list registered user accounts", ru: "список зарегистрированных пользователей"));
     println!("  encrypt confirm <pass>  - {}", t!(en: "enable full-disk AES-256-XTS encryption (erases data!)", ru: "включить шифрование диска AES-256-XTS (стирает данные!)"));
     println!("  crash <divzero|bp|inv>  - {}", t!(en: "demonstrate exception handling", ru: "демонстрация обработки исключений"));
+    println!("  duil [run|calc]         - {}", t!(en: "DUIL declarative UI engine and calculator demo", ru: "декларативный UI-движок DUIL и калькулятор"));
+    println!("  ds [script.dxs|-i|-c]   - {}", t!(en: "DeiX Script interpreter and REPL shell", ru: "интерпретатор скриптов DeiX Script и REPL"));
+    println!("  avb [status|verify|lock|unlock] - {}", t!(en: "Android Verified Boot (VBMETA) integrity", ru: "проверка целостности VBMETA (Android Verified Boot)"));
+    println!("  tpm [status|dump|pcr]   - {}", t!(en: "TPM 2.0 security chip status and user DB", ru: "статус крипточипа TPM 2.0 и база пользователей"));
+    println!("  taskmgr                 - {}", t!(en: "system task manager and process list", ru: "диспетчер задач и процессов"));
     println!("  reboot                  - {}", t!(en: "reboot (via keyboard controller)", ru: "перезагрузка (через контроллер клавиатуры)"));
     println!("  halt                    - {}", t!(en: "halt the CPU (cli; hlt)", ru: "остановить процессор (cli; hlt)"));
     println!();
@@ -535,7 +555,7 @@ fn cmd_help() {
 }
 
 fn cmd_about() {
-    println!("{}", t!(en: "DeiX v0.2-beta - mini kernel written in Rust", ru: "DeiX v0.2-beta - мини-ядро на Rust"));
+    println!("{}", t!(en: "DeiX v0.2.1-beta - mini kernel written in Rust", ru: "DeiX v0.2.1-beta - мини-ядро на Rust"));
     println!(
         "{}",
         t!(

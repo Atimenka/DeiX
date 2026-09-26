@@ -94,10 +94,10 @@ PRIMARY = [
     (1, 0x83, 4096,  8192, "/system"),    # bootable, рабочий том ядра
     (2, 0xDA, 12288, 512,  "/TPM"),       # скрытый
     (3, 0x83, 12800, 512,  "/userdata"),  # ext2, данные Ring 3
-    (4, 0x83, 17664, 2816, "/OTA"),       # ext2, скачанные OTA-пакеты (10 МиБ диск)
+    (4, 0x83, 18432, 2048, "/OTA"),       # ext2, скачанные OTA-пакеты (10 МиБ диск)
 ]
 EXT_START = 13312
-EXT_SECTORS = 4352  # до LBA 17151 (разделы кратны блоку EROFS 4 КиБ)
+EXT_SECTORS = 5120  # до LBA 18431 (разделы кратны блоку EROFS 4 КиБ)
 LOGICALS = [
     (5, 0x83, 13313, 1279, "/kernel_a"),
     (6, 0x83, 14593, 1279, "/kernel_b"),
@@ -105,9 +105,9 @@ LOGICALS = [
     (8, 0x83, 16129, 255, "/vendor_boot"),
     (9, 0x83, 16385, 255, "/boot_a"),
     (10, 0x83, 16641, 255, "/boot_b"),
-    (11, 0x83, 16897, 255, "/super"),
-    (12, 0x83, 17153, 255, "/dsm"),
-    (13, 0x83, 17409, 255, "/recovery"),
+    (11, 0x83, 16897, 1023, "/super"),
+    (12, 0x83, 17921, 255, "/dsm"),
+    (13, 0x83, 18177, 255, "/recovery"),
 ]
 ER0FS_MAGIC = 0xE0F5E1E2  # настоящая магия EROFS v1
 
@@ -415,10 +415,13 @@ def make_kernel_targz(kernel_bin_path):
             ti.mode = 0o100644
             tar.addfile(ti, io.BytesIO(data))
         add('kernel.bin', kernel)
-        # Важные библиотеки ядра (модель: встроенные компоненты ядра).
+        # Важные системные и модульные библиотеки ядра.
         add('libdeix_core.so', b'DEIXLIB1\x00core\x00' + b'\x00' * 64)
         add('libdeix_net.so',  b'DEIXLIB1\x00net\x00' + b'\x00' * 64)
         add('libdeix_gfx.so',  b'DEIXLIB1\x00gfx\x00' + b'\x00' * 64)
+        add('libdeix_sys.so',  b'DEIXLIB1\x00sys\x00' + b'\x00' * 64)
+        add('libdeix_gui.so',  b'DEIXLIB1\x00gui\x00' + b'\x00' * 64)
+        add('libdeix_ds.so',   b'DEIXLIB1\x00ds\x00' + b'\x00' * 64)
     raw_tar = buf.getvalue()
     # Сжимаем настоящим gzip (deflate).
     import gzip
@@ -591,11 +594,19 @@ def init_all_partitions(img, kernel_bin='build/kernel.bin'):
                               {"fastbootd.bin": fastbootd_bin, "recovery.bin": recovery_bin})
         elif name == "/super":
             # /super = контейнер system: системные read-only данные. Кроме
-            # заглушки system.img сюда же упаковываются UI-звуки (DPS из
-            # build/sounds — их готовит build.sh шагом [2e/8]): ядро играет
-            # их через PC speaker (src/sound.rs). Как /system/media/audio/ui
-            # в Android: неизменяемые системные ресурсы в EROFS.
-            super_files = {"system.img": system_img}
+            # заглушки system.img сюда же упаковываются системные библиотеки
+            # (libdeix_*.so) и UI-звуки (DPS из build/sounds — их готовит
+            # build.sh шагом [2e/8]): ядро играет их через PC speaker (src/sound.rs).
+            # Как /system/media/audio/ui в Android: неизменяемые системные ресурсы в EROFS.
+            super_files = {
+                "system.img": system_img,
+                "libdeix_core.so": b"DEIXLIB1\x00core\x00" + b"\x00" * 64,
+                "libdeix_net.so":  b"DEIXLIB1\x00net\x00" + b"\x00" * 64,
+                "libdeix_gfx.so":  b"DEIXLIB1\x00gfx\x00" + b"\x00" * 64,
+                "libdeix_sys.so":  b"DEIXLIB1\x00sys\x00" + b"\x00" * 64,
+                "libdeix_gui.so":  b"DEIXLIB1\x00gui\x00" + b"\x00" * 64,
+                "libdeix_ds.so":   b"DEIXLIB1\x00ds\x00" + b"\x00" * 64,
+            }
             snd_dir = _os.path.join("build", "sounds")
             if _os.path.isdir(snd_dir):
                 for _f in sorted(_os.listdir(snd_dir)):

@@ -310,7 +310,7 @@ fn action_getvar() -> (String, u32, bool) {
     let dev = crate::devmode::sudo_allowed();
     let mut out = String::new();
     out.push_str("GETVAR:\n");
-    out.push_str("  version: 0.2-beta\n");
+    out.push_str("  version: 0.2.1-beta\n");
     out.push_str("  version-bootloader: deiX-boot-1.0\n");
     out.push_str("  product: deiX_vbox\n");
     out.push_str("  serialno: DEIX-QEMU-0001\n");

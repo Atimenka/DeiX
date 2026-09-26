@@ -12,15 +12,18 @@ if [ ! -f "$IMG" ]; then
 fi
 
 AUDIO_ARGS=()
-if [ -n "${PULSE_SERVER:-}" ] || [ -e "/mnt/wslg/PulseServer" ] || [ -e "${XDG_RUNTIME_DIR:-/run/user/1000}/pulse/native" ]; then
-  if [ -e "/mnt/wslg/PulseServer" ] && [ -z "${PULSE_SERVER:-}" ]; then
-    export PULSE_SERVER="unix:/mnt/wslg/PulseServer"
-  fi
+if [ "${AUDIO_OFF:-0}" = "1" ] || [ "${QEMU_AUDIO_DRV:-}" = "none" ]; then
+  AUDIO_ARGS=(-audiodev none,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0)
+elif [ -e "/mnt/wslg/PulseServer" ]; then
+  export PULSE_SERVER="unix:/mnt/wslg/PulseServer"
   AUDIO_ARGS=(-audiodev pa,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0)
-elif [ -e "/dev/snd" ]; then
+elif [ -n "${PULSE_SERVER:-}" ] && { [ -f "/run/user/$(id -u)/pulse/pid" ] || [ -f "/run/user/1000/pulse/pid" ] || pulseaudio --check 2>/dev/null; }; then
+  AUDIO_ARGS=(-audiodev pa,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0)
+elif [ -e "/dev/snd" ] && [ "$(id -u)" -ne 0 ]; then
   AUDIO_ARGS=(-audiodev alsa,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0)
 else
-  AUDIO_ARGS=(-device intel-hda -device hda-duplex)
+  # Безопасный режим: эмуляция HDA в гости без зависания от системного PulseAudio root
+  AUDIO_ARGS=(-audiodev none,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0)
 fi
 
 qemu-system-x86_64 \

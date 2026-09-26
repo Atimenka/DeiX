@@ -85,8 +85,7 @@ fn valid_component(s: &str) -> bool {
         && s.len() <= MAX_NAME
         && s != "."
         && s != ".."
-        && !s.contains('/')
-        && !s.contains('\\')
+        && !s.chars().any(|c| c == '/' || c == '\\' || c == '~' || c.is_control())
 }
 
 /// Полный путь файла в профиле пользователя.

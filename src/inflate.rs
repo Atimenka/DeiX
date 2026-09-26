@@ -33,31 +33,38 @@ impl<'a> BitReader<'a> {
         BitReader { data, pos: 0, bitbuf: 0, bitcnt: 0 }
     }
 
-    fn read_bit(&mut self) -> Result<u32, InflateError> {
-        if self.bitcnt == 0 {
-            if self.pos >= self.data.len() {
-                return Err(InflateError::Corrupt("bitstream end"));
-            }
-            self.bitbuf = self.data[self.pos] as u32;
+    #[inline]
+    fn fill_bits(&mut self) {
+        while self.bitcnt <= 24 && self.pos < self.data.len() {
+            self.bitbuf |= (self.data[self.pos] as u32) << self.bitcnt;
             self.pos += 1;
-            self.bitcnt = 8;
+            self.bitcnt += 8;
         }
-        let b = self.bitbuf & 1;
-        self.bitbuf >>= 1;
-        self.bitcnt -= 1;
-        Ok(b)
     }
 
+    #[inline]
+    fn read_bit(&mut self) -> Result<u32, InflateError> {
+        self.read_bits(1)
+    }
+
+    #[inline]
     fn read_bits(&mut self, n: u32) -> Result<u32, InflateError> {
-        let mut v = 0u32;
-        for i in 0..n {
-            v |= self.read_bit()? << i;
+        if n == 0 {
+            return Ok(0);
         }
+        self.fill_bits();
+        if self.bitcnt < n {
+            return Err(InflateError::Corrupt("bitstream end"));
+        }
+        let v = self.bitbuf & ((1u32 << n) - 1);
+        self.bitbuf >>= n;
+        self.bitcnt -= n;
         Ok(v)
     }
 
     fn align_byte(&mut self) {
         self.bitcnt = 0;
+        self.bitbuf = 0;
     }
 
     fn read_byte(&mut self) -> Result<u8, InflateError> {
@@ -143,6 +150,75 @@ fn build_tree(lengths: &[u16]) -> Result<Vec<HuffNode>, InflateError> {
         nodes[idx].sym = sym;
     }
     Ok(nodes)
+}
+
+/// Быстрое построение 9-битного LUT (Lookup Table) для декодирования Хаффмана за 1 шаг.
+fn build_lut(lengths: &[u16]) -> Vec<u32> {
+    let mut lut = vec![0u32; 512];
+    let max_bits = lengths.iter().max().copied().unwrap_or(0) as usize;
+    if max_bits == 0 {
+        return lut;
+    }
+
+    let mut bl_count = vec![0usize; max_bits + 1];
+    for &l in lengths.iter() {
+        if (l as usize) <= max_bits {
+            bl_count[l as usize] += 1;
+        }
+    }
+
+    let mut code = 0usize;
+    let mut next_code = vec![0usize; max_bits + 1];
+    for bits in 1..=max_bits {
+        code = (code + bl_count[bits - 1]) << 1;
+        next_code[bits] = code;
+    }
+
+    let mut syms: Vec<u16> = (0..lengths.len() as u16)
+        .filter(|&s| lengths[s as usize] > 0)
+        .collect();
+    syms.sort_by_key(|&s| (lengths[s as usize], s));
+
+    for &sym in syms.iter() {
+        let len = lengths[sym as usize] as usize;
+        if len > 0 {
+            let c = next_code[len];
+            next_code[len] += 1;
+            if len <= 9 {
+                let mut rev_code = 0usize;
+                let mut tmp = c;
+                for _ in 0..len {
+                    rev_code = (rev_code << 1) | (tmp & 1);
+                    tmp >>= 1;
+                }
+                let fill = 1usize << (9 - len);
+                for suffix in 0..fill {
+                    let key = rev_code | (suffix << len);
+                    if key < 512 {
+                        lut[key] = ((sym as u32) << 8) | (len as u32);
+                    }
+                }
+            }
+        }
+    }
+    lut
+}
+
+/// Декодирование одного символа по LUT или дереву.
+fn decode_sym_fast(bit: &mut BitReader, lut: &[u32], nodes: &[HuffNode]) -> Result<u16, InflateError> {
+    bit.fill_bits();
+    if bit.bitcnt >= 9 {
+        let key = (bit.bitbuf & 0x1FF) as usize;
+        let entry = lut[key];
+        if entry != 0 {
+            let len = entry & 0xFF;
+            let sym = (entry >> 8) as u16;
+            bit.bitbuf >>= len;
+            bit.bitcnt -= len;
+            return Ok(sym);
+        }
+    }
+    decode_sym(bit, nodes)
 }
 
 /// Декодирование одного символа по дереву.
@@ -240,9 +316,11 @@ fn decode_block(bit: &mut BitReader, out: &mut Vec<u8>, max_out: usize) -> Resul
             };
             let lit_tree = build_tree(&lit_len)?;
             let dist_tree = build_tree(&dist)?;
+            let lit_lut = build_lut(&lit_len);
+            let dist_lut = build_lut(&dist);
             // Декодируем поток.
             loop {
-                let sym = decode_sym(bit, &lit_tree)? as usize;
+                let sym = decode_sym_fast(bit, &lit_lut, &lit_tree)? as usize;
                 if sym < 256 {
                     if out.len() >= max_out {
                         return Err(InflateError::OutputTooLarge { limit: max_out });
@@ -268,7 +346,7 @@ fn decode_block(bit: &mut BitReader, out: &mut Vec<u8>, max_out: usize) -> Resul
                         length += bit.read_bits(len_extra)? as usize;
                     }
                     // Расстояние.
-                    let dsym = decode_sym(bit, &dist_tree)? as usize;
+                    let dsym = decode_sym_fast(bit, &dist_lut, &dist_tree)? as usize;
                     let (d_base, d_extra): (usize, u32) = match dsym {
                         0 => (1, 0), 1 => (2, 0), 2 => (3, 0), 3 => (4, 0),
                         4 => (5, 1), 5 => (7, 1), 6 => (9, 2), 7 => (13, 2),
@@ -288,13 +366,18 @@ fn decode_block(bit: &mut BitReader, out: &mut Vec<u8>, max_out: usize) -> Resul
                     if dist > out.len() {
                         return Err(InflateError::Corrupt("dist too far"));
                     }
-                    for _ in 0..length {
-                        if out.len() >= max_out {
-                            return Err(InflateError::OutputTooLarge { limit: max_out });
+                    if dist >= length && out.len() + length <= max_out {
+                        let start = out.len() - dist;
+                        out.extend_from_within(start..start + length);
+                    } else {
+                        for _ in 0..length {
+                            if out.len() >= max_out {
+                                return Err(InflateError::OutputTooLarge { limit: max_out });
+                            }
+                            let idx = out.len() - dist;
+                            let b = out[idx];
+                            out.push(b);
                         }
-                        let idx = out.len() - dist;
-                        let b = out[idx];
-                        out.push(b);
                     }
                 }
             }

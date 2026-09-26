@@ -424,3 +424,26 @@ fn parse_kmod_header(data: &[u8]) -> Option<KmodHeader> {
 pub fn reset_loaded_modules() {
     *LOADED_MODULES.lock() = alloc::vec::Vec::new();
 }
+
+/// Возвращает список текущих загруженных модулей ядра.
+pub fn get_loaded_modules() -> Vec<LoadedModule> {
+    LOADED_MODULES.lock().clone()
+}
+
+/// Регистрирует встроенный модуль ядра (например, GFX.KMOD Compositor).
+pub fn register_builtin_module(name: &str, version: (u16, u16), addr: usize, size: usize) {
+    let mut modules = LOADED_MODULES.lock();
+    for m in modules.iter() {
+        if m.name == name {
+            return;
+        }
+    }
+    modules.push(LoadedModule {
+        name: name.to_string(),
+        version,
+        load_addr: addr,
+        body_size: size,
+        status: ModuleStatus::Initialized,
+    });
+}
+

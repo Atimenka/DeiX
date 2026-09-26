@@ -195,7 +195,7 @@ pm_copy_kernel:
     mov ds, ax
     mov es, ax
     mov esi, RAMDISK_DST + (KERNEL_LBA * 512)
-    mov edi, KERNEL_SRC
+    mov edi, 0x100000         ; KERNEL_DST (1 МиБ)
     mov ecx, KERNEL_SECTORS * 512 / 4
     rep movsd
 

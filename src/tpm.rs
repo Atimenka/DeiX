@@ -410,3 +410,34 @@ pub fn tpm_load_users_db() -> Result<Vec<u8>, TpmError> {
 pub fn tpm_has_users_db() -> bool {
     tpm_load_users_db().is_ok()
 }
+
+/// Обработчик CLI команды `tpm [status|dump|pcr]`
+pub fn cmd_tpm(arg: &str) {
+    let mut parts = arg.trim().split_whitespace();
+    let sub = parts.next().unwrap_or("status");
+
+    match sub {
+        "status" | "info" => {
+            crate::println!("=== TRUSTED PLATFORM MODULE (TPM 2.0) ===");
+            crate::println!("  Состояние:     АКТИВЕН (PCR 0..7)");
+            crate::println!("  Сохранена БД:  {}", if tpm_has_users_db() { "ДА" } else { "НЕТ" });
+        }
+        "dump" => {
+            if let Ok(data) = tpm_load_users_db() {
+                crate::println!("  [tpm] База пользователей (/TPM): {} байт", data.len());
+            } else {
+                crate::println!("  [tpm] База пользователей в /TPM отсутствует");
+            }
+        }
+        "pcr" => {
+            let dev = TpmDevice::new();
+            for pcr in 0..8 {
+                let val = dev.pcr_value(pcr as u32).unwrap_or(0);
+                crate::println!("  PCR {:02}: {:#010x}", pcr, val);
+            }
+        }
+        _ => {
+            crate::println!("Использование: tpm [status|dump|pcr]");
+        }
+    }
+}

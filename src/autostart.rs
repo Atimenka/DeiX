@@ -61,7 +61,7 @@ pub fn ensure_default() {
         return;
     }
     match ext2::write_file(AUTOSTART_FILE, DEFAULT_CFG.as_bytes()) {
-        Ok(()) => crate::println!("  [autostart] создан AUTOSTART.CFG (по умолчанию: gpu mode)"),
+        Ok(()) => crate::println!("  [autostart] создан AUTOSTART.CFG (шаблон)"),
         Err(_) => crate::println!("  [autostart] не удалось создать AUTOSTART.CFG"),
     }
 }

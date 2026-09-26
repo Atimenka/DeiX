@@ -24,19 +24,20 @@ use alloc::vec::Vec;
 use crate::ata;
 use crate::partition_map::{lookup_layout, PartitionLayout};
 
-/// Читает весь EROFS-раздел с диска.
+/// Читает весь EROFS-раздел с диска напрямую в результирующий вектор без лишних аллокаций.
 pub fn read_partition_image(layout: &PartitionLayout) -> Result<Vec<u8>, String> {
-    let mut out: Vec<u8> = Vec::with_capacity((layout.sectors as usize) * 512);
+    let total_bytes = (layout.sectors as usize) * 512;
+    let mut out: Vec<u8> = vec![0u8; total_bytes];
     let mut cur = 0u32;
     let mut left = layout.sectors;
     while left > 0 {
-        let batch = left.min(256);
-        let mut buf = vec![0u8; (batch * 512) as usize];
-        ata::read_sectors(layout.start_lba + cur, batch as u8, &mut buf)
+        let batch = left.min(128) as u8;
+        let start_byte = (cur as usize) * 512;
+        let end_byte = start_byte + (batch as usize) * 512;
+        ata::read_sectors(layout.start_lba + cur, batch, &mut out[start_byte..end_byte])
             .map_err(|_| format!("read {} err", layout.name))?;
-        out.extend_from_slice(&buf);
-        left -= batch;
-        cur += batch;
+        left -= batch as u32;
+        cur += batch as u32;
     }
     Ok(out)
 }
@@ -196,8 +197,15 @@ pub fn load_kernel() -> Result<String, String> {
         }
     );
 
-    // Библиотеки.
-    for lib in ["libdeix_core.so", "libdeix_net.so", "libdeix_gfx.so"] {
+    // Библиотеки и модули подсистем ядра.
+    for lib in [
+        "libdeix_core.so",
+        "libdeix_net.so",
+        "libdeix_gfx.so",
+        "libdeix_sys.so",
+        "libdeix_gui.so",
+        "libdeix_ds.so",
+    ] {
         if let Ok(data) = archive.extract(lib) {
             summary.push_str(&format!(", {} ({} байт)", lib, data.len()));
         }

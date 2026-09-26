@@ -33,8 +33,10 @@ SECTIONS {
        `. = 0x2000000;` внутри NOBITS-секции не двигает её в GNU ld. */
     .bss 0x2000000 :
     {
-        __bss_start = .;
+        __stage2_bss_start = .;
         *(.bss .bss.*)
-        __bss_end = .;
+        *(COMMON)
+        . = ALIGN(8);
+        __stage2_bss_end = .;
     }
 }

@@ -46,8 +46,10 @@ SECTIONS {
        не двигает её в GNU ld. */
     .bss 0x200000 :
     {
-        __bss_start = .;
+        __kernel_bss_start = .;
         *(.bss .bss.*)
-        __bss_end = .;
+        *(COMMON)
+        . = ALIGN(8);
+        __kernel_bss_end = .;
     }
 }

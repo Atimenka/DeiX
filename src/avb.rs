@@ -327,3 +327,42 @@ pub fn boot_verify() {
         }
     }
 }
+
+/// Обработчик команды CLI `avb [status|verify|lock|unlock]`
+pub fn cmd_avb(arg: &str) {
+    let mut parts = arg.trim().split_whitespace();
+    let sub = parts.next().unwrap_or("status");
+
+    let mut vb = VERIFIED_BOOT.lock();
+
+    match sub {
+        "status" | "info" => {
+            crate::println!("=== ANDROID VERIFIED BOOT (AVB / VBMETA) ===");
+            crate::println!("  Состояние AVB:    [AVB STATE: {}]", vb.boot_state.as_str());
+            crate::println!("  Загрузчик (Lock): {}", vb.lock.as_str());
+            crate::println!("  OTA-гарантия:    {}", if vb.ota_guarantee { "АКТИВНА" } else { "АННУЛИРОВАНА (dev-mode)" });
+            if let Some(ref vm) = vb.vbmeta {
+                crate::println!("  vbmeta:          Запечатана (компонентов: {})", vm.entries.len());
+                crate::println!("  Дайджест vbmeta: {}", vm.digest);
+            } else {
+                crate::println!("  vbmeta:          не запечатана (заводской образ)");
+            }
+        }
+        "verify" | "check" => {
+            crate::println!("  [avb] Запуск полной верификации VBMETA...");
+            drop(vb);
+            boot_verify();
+        }
+        "unlock" => {
+            vb.unlock_bootloader();
+            crate::println!("  [avb] Загрузчик РАЗБЛОКИРОВАН (переход в [AVB STATE: ORANGE]). OTA-гарантия аннулирована.");
+        }
+        "lock" => {
+            vb.lock_bootloader();
+            crate::println!("  [avb] Загрузчик ЗАБЛОКИРОВАН (возврат к заводскому состоянию [AVB STATE: GREEN]).");
+        }
+        _ => {
+            crate::println!("Использование: avb [status|verify|lock|unlock]");
+        }
+    }
+}

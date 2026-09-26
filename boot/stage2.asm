@@ -11,8 +11,8 @@
 bits 32
 
 global stage2_start
-extern __bss_start
-extern __bss_end
+extern __stage2_bss_start
+extern __stage2_bss_end
 
 %ifndef KERNEL_SRC
 KERNEL_SRC equ 0x800000   ; буфер kernel.bin (8 МиБ, ВЫШЕ legacy-дыры и .bss)
@@ -32,24 +32,21 @@ stage2_start:
     ; Обнуляем секцию .bss ДО первого call/push — там лежат таблицы страниц
     ; и стек загрузчика. Секция .bss физически не хранится в файле образа
     ; (NOBITS), поэтому загрузчик обязан сам обнулить эту память.
-    mov edi, __bss_start
-    mov ecx, __bss_end
+    mov edi, __stage2_bss_start
+    mov ecx, __stage2_bss_end
+    cmp ecx, edi
+    jbe .bss_done
     sub ecx, edi
+    shr ecx, 2
     xor eax, eax
     cld
-    rep stosb
+    rep stosd
+.bss_done:
 
     mov esp, stack_top
 
-    ; Копируем kernel.bin из real-памяти (0x20000, куда его загрузил
-    ; boot_sector через int13) в 0x100000 — там его ждёт линкер kernel.ld.
-    ; НЕ используем ATA PIO: в этой QEMU-версии прямой доступ к портам
-    ; 0x1F0 (READ SECTORS) возвращает ABRT, а BIOS int13 работает.
-    mov esi, KERNEL_SRC      ; 0x20000
-    mov edi, KERNEL_DST      ; 0x100000
-    mov ecx, KERNEL_SIZE_DWORDS
-    cld
-    rep movsd
+    ; kernel.bin уже скопирован напрямую по адресу 0x100000 в ramboot.asm —
+    ; дублирующий проход копирования 1 МиБ памяти убран для максимальной скорости загрузки.
 
     call check_cpuid
     call check_long_mode
