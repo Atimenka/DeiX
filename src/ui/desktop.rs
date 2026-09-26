@@ -82,6 +82,7 @@ pub struct Desktop {
     pub frame_counter: u64,
     pub wallpaper_cache: WallpaperSurface,
     pub dirty: bool,
+    pub last_cursor_pos: (i32, i32),
 }
 
 impl Desktop {
@@ -101,6 +102,7 @@ impl Desktop {
             frame_counter: 0,
             wallpaper_cache: WallpaperSurface::new(800, 600),
             dirty: true,
+            last_cursor_pos: (0, 0),
         }
     }
 
@@ -234,10 +236,17 @@ impl Desktop {
         }
     }
 
-    pub fn handle_input(&mut self, screen_w: i32, screen_h: i32) {
+    pub fn handle_input(&mut self, r: &mut Renderer, screen_w: i32, screen_h: i32) {
         let m = mouse::snapshot();
         let ui_m = UiMetrics::fluent();
         let taskbar_y = screen_h - ui_m.taskbar_height as i32;
+
+        if m.x != self.last_cursor_pos.0 || m.y != self.last_cursor_pos.1 {
+            r.add_damage(crate::renderer::Rect::new(self.last_cursor_pos.0 - 2, self.last_cursor_pos.1 - 2, 20, 24));
+            r.add_damage(crate::renderer::Rect::new(m.x - 2, m.y - 2, 20, 24));
+            self.last_cursor_pos = (m.x, m.y);
+            self.dirty = true;
+        }
 
         if m.left_button {
             self.dirty = true;
@@ -868,15 +877,16 @@ impl Desktop {
             self.dirty = true;
         }
 
-        let mut last_frame = timer::uptime_ms();
-        const FRAME_INTERVAL_MS: u64 = 33;
+        r.add_damage(crate::renderer::Rect::new(0, 0, screen_w as u32, screen_h as u32));
+        self.render(r);
+        self.dirty = false;
 
         loop {
             if keyboard::try_read_escape() {
                 self.should_exit = true;
             }
 
-            self.handle_input(screen_w, screen_h);
+            self.handle_input(r, screen_w, screen_h);
 
             if let Some((w, h)) = self.pending_resolution.take() {
                 return DesktopExit::ChangeResolution(w, h);
@@ -886,12 +896,10 @@ impl Desktop {
                 return DesktopExit::Quit;
             }
 
-            let now = timer::uptime_ms();
-            if self.dirty || now.saturating_sub(last_frame) >= FRAME_INTERVAL_MS {
-                self.frame_counter = now;
+            if self.dirty {
+                self.frame_counter = timer::uptime_ms();
                 self.render(r);
                 self.dirty = false;
-                last_frame = now;
             }
 
             unsafe { core::arch::asm!("hlt") };
@@ -944,10 +952,11 @@ fn draw_wallpaper(r: &mut Renderer, theme: &UiTheme, desktop: &mut Desktop, w: i
     let ui_m = UiMetrics::fluent();
     let taskbar_h = ui_m.taskbar_height as i32;
 
-    if !desktop.wallpaper_cache.valid
+    let cache_invalid = !desktop.wallpaper_cache.valid
         || desktop.wallpaper_cache.width != w as u32
-        || desktop.wallpaper_cache.height != h as u32
-    {
+        || desktop.wallpaper_cache.height != h as u32;
+
+    if cache_invalid {
         desktop.wallpaper_cache = WallpaperSurface::new(w as u32, h as u32);
         let mut idx = 0;
         for y in 0..h {
@@ -961,23 +970,57 @@ fn draw_wallpaper(r: &mut Renderer, theme: &UiTheme, desktop: &mut Desktop, w: i
             }
         }
         desktop.wallpaper_cache.valid = true;
+        r.add_damage(crate::renderer::Rect::new(0, 0, w as u32, h as u32));
     }
 
-    let src = &desktop.wallpaper_cache.pixels;
-    let dst = &mut r.back_buffer;
-    let copy_len = src.len().min(dst.len());
-    dst[..copy_len].copy_from_slice(&src[..copy_len]);
+    if r.damage.full_redraw || cache_invalid {
+        let src = &desktop.wallpaper_cache.pixels;
+        let dst = &mut r.back_buffer;
+        let copy_len = src.len().min(dst.len());
+        dst[..copy_len].copy_from_slice(&src[..copy_len]);
 
-    if theme.wallpaper_style == 0 {
-        let star_count = 36;
-        for i in 0..star_count {
-            let sx = ((i * 137 + 42) as i32) % w;
-            let sy = ((i * 269 + 17) as i32) % (h - taskbar_h);
-            r.put_pixel(sx, sy, theme.accent);
+        if theme.wallpaper_style == 0 {
+            let star_count = 36;
+            for i in 0..star_count {
+                let sx = ((i * 137 + 42) as i32) % w;
+                let sy = ((i * 269 + 17) as i32) % (h - taskbar_h);
+                r.put_pixel(sx, sy, theme.accent);
+            }
+        }
+    } else {
+        let count = r.damage.count;
+        let width = w as usize;
+        for i in 0..count {
+            let rect = r.damage.rects[i];
+            let x0 = rect.x.max(0) as usize;
+            let y0 = rect.y.max(0) as usize;
+            let x1 = ((rect.x + rect.w as i32).min(w)).max(0) as usize;
+            let y1 = ((rect.y + rect.h as i32).min(h)).max(0) as usize;
+
+            for row in y0..y1 {
+                let offset = row * width;
+                let start = offset + x0;
+                let end = offset + x1;
+                if end <= desktop.wallpaper_cache.pixels.len() && end <= r.back_buffer.len() {
+                    r.back_buffer[start..end].copy_from_slice(&desktop.wallpaper_cache.pixels[start..end]);
+                }
+            }
+        }
+
+        if theme.wallpaper_style == 0 {
+            let star_count = 36;
+            for i in 0..star_count {
+                let sx = ((i * 137 + 42) as i32) % w;
+                let sy = ((i * 269 + 17) as i32) % (h - taskbar_h);
+                for d in 0..count {
+                    if r.damage.rects[d].intersects(&crate::renderer::Rect::new(sx, sy, 1, 1)) {
+                        r.put_pixel(sx, sy, theme.accent);
+                        break;
+                    }
+                }
+            }
         }
     }
-
-    r.add_damage(crate::renderer::Rect::new(0, 0, w as u32, h as u32));
 }
 
 fn draw_desktop_icons(r: &mut Renderer, theme: &UiTheme, selected_idx: Option<usize>) {
