@@ -1,4 +1,3 @@
-// ❗ЗАВИСИМОТИ: инит скрипт pid 1 который будет ограничивать пользовательский
 // ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0). Интеграция в существующий код
 // init_parser — парсер init.deix (стадия init_boot, PID 1): карта разделов,
 // команды mount/service, реестр BTreeMap<BootStage, Vec<Command>>, Vault-проверка.

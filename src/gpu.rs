@@ -120,10 +120,10 @@ pub fn support_status_message(vendor: GpuVendor) -> (&'static str, &'static str)
         GpuVendor::QemuBochs => (
             "QEMU standard VGA (Bochs-compatible) detected — full support via the open, \
              documented Bochs VBE Display Interface (DISPI). This is a real, working \
-             graphics driver, not a stub.",
+             graphics driver.",
             "Обнаружена стандартная VGA-карта QEMU (совместимая с Bochs) — полная \
              поддержка через открытый, задокументированный интерфейс Bochs VBE (DISPI). \
-             Это настоящий рабочий графический драйвер, а не заглушка.",
+             Это настоящий рабочий графический драйвер.",
         ),
         GpuVendor::VirtIo => (
             "VirtIO GPU detected. Not supported by this kernel yet (would need a \

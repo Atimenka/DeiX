@@ -1,4 +1,3 @@
-// ❗ЗАВИСИМОТИ: инит скрипт pid 1 который будет ограничивать пользовательский
 // ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0). Интеграция в существующий код
 // kernel_loader — сэндвич ядра /kernel -> kernel.tar.gz -> kernel.img
 // (tar-ustar; gzip RFC 1952). Разбор EROFS — в src/erofs.rs.

@@ -1,4 +1,3 @@
-// ❗ЗАВИСИМОТИ: инит скрипт pid 1 который будет ограничивать пользовательский
 // ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0). Интеграция в существующий код
 // vault — KERNEL SECURITY VAULT: 7 системных разделов erofs/ro, rw только в
 // Fastbootd/EDL/Recovery (иначе panic!), политика /userdata (ext4/rw).
