@@ -374,30 +374,20 @@ pub fn reset_loaded_modules() {
     *LOADED_MODULES.lock() = alloc::vec::Vec::new();
 }
 
-<<<<<<< HEAD
 /// Возвращает список текущих загруженных модулей ядра.
-=======
->>>>>>> 0e43bcd (feat(module/ui): dynamic non-overlapping KMOD regions, Copy themes, and UI fixes)
 pub fn get_loaded_modules() -> Vec<LoadedModule> {
     LOADED_MODULES.lock().clone()
 }
 
-<<<<<<< HEAD
 /// Регистрирует встроенный модуль ядра (например, GFX.KMOD Compositor).
-pub fn register_builtin_module(name: &str, version: (u16, u16), addr: usize, size: usize) {
-=======
 pub fn register_builtin_module(name: &str, version: (u16, u16), size: usize) {
->>>>>>> 0e43bcd (feat(module/ui): dynamic non-overlapping KMOD regions, Copy themes, and UI fixes)
     let mut modules = LOADED_MODULES.lock();
     for m in modules.iter() {
         if m.name == name {
             return;
         }
     }
-<<<<<<< HEAD
-=======
     let addr = KMOD_LOAD_BASE + modules.len() * KMOD_MAX_SIZE;
->>>>>>> 0e43bcd (feat(module/ui): dynamic non-overlapping KMOD regions, Copy themes, and UI fixes)
     modules.push(LoadedModule {
         name: name.to_string(),
         version,
@@ -406,7 +396,3 @@ pub fn register_builtin_module(name: &str, version: (u16, u16), size: usize) {
         status: ModuleStatus::Initialized,
     });
 }
-<<<<<<< HEAD
-
-=======
->>>>>>> 0e43bcd (feat(module/ui): dynamic non-overlapping KMOD regions, Copy themes, and UI fixes)
