@@ -32,7 +32,11 @@ pub enum ThemePreset {
     SunsetGold,
 }
 
+<<<<<<< HEAD
 #[derive(Clone, Debug)]
+=======
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+>>>>>>> 0e43bcd (feat(module/ui): dynamic non-overlapping KMOD regions, Copy themes, and UI fixes)
 pub struct UiTheme {
     pub preset: ThemePreset,
     pub name: &'static str,
@@ -733,7 +737,11 @@ pub struct Desktop {
 impl Desktop {
     pub fn new() -> Self {
         // Регистрация модуля GUI Композитора в ядре
+<<<<<<< HEAD
         crate::module::register_builtin_module("GFX.KMOD", (1, 0), 0x00800000, 65536);
+=======
+        crate::module::register_builtin_module("GFX.KMOD", (1, 0), 65536);
+>>>>>>> 0e43bcd (feat(module/ui): dynamic non-overlapping KMOD regions, Copy themes, and UI fixes)
 
         Desktop {
             windows: Vec::new(),
