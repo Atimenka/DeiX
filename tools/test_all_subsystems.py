@@ -29,20 +29,15 @@ def test_partition_map():
     log("   -> Карта разделов синхронизирована и верна.")
 
 def test_ota_and_boot_tools():
-    log("2. Тестирование утилит выбора режима загрузки (BCB) и OTA...")
-    ota_cmd = [sys.executable, os.path.join(ROOT_DIR, "tools", "deix_ota.py"), "--help"]
+    log("2. Тестирование утилит выбора режима загрузки (BCB)...")
     mode_cmd = [sys.executable, os.path.join(ROOT_DIR, "tools", "set_boot_mode.py"), "--help"]
     
-    if subprocess.run(ota_cmd, capture_output=True).returncode != 0:
-        print("ОШИБКА: deix_ota.py упал при вызове --help", file=sys.stderr)
-        sys.exit(1)
-        
     res = subprocess.run(mode_cmd, capture_output=True, text=True)
     if "BCB" not in res.stdout:
         print("ОШИБКА: set_boot_mode.py не вернул справочную инфо!", file=sys.stderr)
         sys.exit(1)
         
-    log("   -> Утилиты управления BCB и OTA функционируют корректно.")
+    log("   -> Утилиты управления BCB функционируют корректно.")
 
 def test_mexcc_compilation():
     log("3. Тестирование C/C++ MEX Cross-Compiler v1.2...")

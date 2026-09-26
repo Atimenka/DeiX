@@ -56,8 +56,6 @@ mod module;
 mod mouse;
 mod microcode;
 mod net;
-mod ota;
-mod ota_store;
 mod nouveau;
 mod partition_map;
 mod pci;
@@ -326,14 +324,6 @@ pub extern "C" fn kernel_main() -> ! {
         crate::println!("  [debugger] ⚠ В прошлом сеансе произошла ошибка (crash-лог на диске).");
         crate::println!("  [debugger] Посмотреть дамп: 'crashlog' | стереть: 'crashlog clear'.");
         crate::serial_println!("[debugger] предыдущий сеанс завершился паникой (crash-лог на диске)");
-    }
-
-    // === OTA-уведомление + автоустановка ===
-    // Если OTA-пакет скачан (флаг pending в BCB) — сообщаем в терминале
-    // (со звуком) и ждём 5 минут; без ответа применяем автоматически.
-    // Весь цикл (уведомление, таймер, авто-apply из /OTA) — в ota.rs.
-    if crate::ota::ota_pending() {
-        crate::ota::ota_pending_flow();
     }
 
     bootlogo::set_status("system ready");

@@ -323,11 +323,6 @@ pub fn execute(line: &str) {
         "avb" => crate::avb::cmd_avb(rest),
 
         "taskmgr" => crate::sched::cmd_threads(rest),
-        // Политика безопасности DeiX OS: эскалация привилегий ПОЛНОСТЬЮ
-        // запрещена. Пользователь Ring 3 не может выполнить su/sudo/root —
-        // система не имеет суперпользователя в пользовательском пространстве
-        // (все привилегированные операции выполняет PID 1 в Ring 0).
-        "ota" => crate::ota::cmd_ota(rest, &mut crate::avb::avb_mut()),
         "adb" => crate::adb::cmd_adb(rest, &mut crate::avb::avb_mut()),
         "adb-repl" => crate::adb::adb_repl(&mut crate::avb::avb_mut()),
         "dev" => {

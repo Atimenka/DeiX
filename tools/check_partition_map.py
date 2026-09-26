@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-Скрипт сверки карты разделов DeiX OS между тремя источниками:
+Скрипт сверки карты разделов DeiX OS между источниками:
   1. src/partition_map.rs (PARTITION_LAYOUT)
   2. tools/make_deix_fs.py (PRIMARY + LOGICALS)
-  3. tools/deix_ota.py (SLOTS + SLOT_SECS)
 
 Запускается из build.sh перед сборкой образа диска для предотвращения
 рассинхронизации LBA и затирания разделов.
@@ -17,7 +16,6 @@ def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     pm_path = os.path.join(root, "src", "partition_map.rs")
     fs_path = os.path.join(root, "tools", "make_deix_fs.py")
-    ota_path = os.path.join(root, "tools", "deix_ota.py")
 
     errors = []
 
@@ -51,26 +49,6 @@ def main():
     if not fs_map:
         errors.append(f"Не удалось распарсить PRIMARY/LOGICALS в {fs_path}")
 
-    # 3. Читаем tools/deix_ota.py
-    with open(ota_path, "r", encoding="utf-8") as f:
-        ota_text = f.read()
-
-    ota_slots = {}
-    ota_secs = {}
-
-    slots_block = ota_text.split("SLOTS = {")[1].split("}")[0] if "SLOTS = {" in ota_text else ""
-    for m in re.finditer(r"\"(/[^\"]+)\":\s*(\d+)", slots_block):
-        name = m.group(1)
-        ota_slots[name] = int(m.group(2))
-
-    secs_block = ota_text.split("SLOT_SECS = {")[1].split("}")[0] if "SLOT_SECS = {" in ota_text else ""
-    for m in re.finditer(r"\"(/[^\"]+)\":\s*(\d+)", secs_block):
-        name = m.group(1)
-        ota_secs[name] = int(m.group(2))
-
-    if not ota_slots or not ota_secs:
-        errors.append(f"Не удалось распарсить SLOTS/SLOT_SECS в {ota_path}")
-
     # Сверка partition_map.rs <-> make_deix_fs.py
     for name, (lba, secs) in fs_map.items():
         if name not in pm_map:
@@ -86,32 +64,13 @@ def main():
         if name not in fs_map:
             errors.append(f"[partition_map] Раздел '{name}' отсутствует в tools/make_deix_fs.py")
 
-    # Сверка partition_map.rs <-> deix_ota.py
-    for name, lba in ota_slots.items():
-        if name not in pm_map:
-            errors.append(f"[deix_ota] Раздел '{name}' отсутствует в src/partition_map.rs")
-        else:
-            pm_lba, pm_secs = pm_map[name]
-            if pm_lba != lba:
-                errors.append(
-                    f"Несовпадение LBA для '{name}': deix_ota={lba} vs partition_map={pm_lba}"
-                )
-            ota_sec = ota_secs.get(name)
-            if ota_sec != pm_secs:
-                errors.append(
-                    f"Несовпадение секторов для '{name}': deix_ota={ota_sec} vs partition_map={pm_secs}"
-                )
-
     if errors:
-        print("ОШИБКА: Обнаружены расхождения в карте разделов!", file=sys.stderr)
-        for err in errors:
-            print(f"  * {err}", file=sys.stderr)
+        print("ОШИБКА: Обнаружены расхождения в карте разделов:", file=sys.stderr)
+        for e in errors:
+            print(f"  * {e}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"OK: Карта разделов проверена и синхронизирована ({len(pm_map)} разделов).")
-    for name, (lba, secs) in sorted(pm_map.items(), key=lambda x: x[1][0]):
-        ota_mark = " [OTA slot]" if name in ota_slots else ""
-        print(f"  {name:<13} LBA {lba:>6}..{lba+secs-1:>6} ({secs:>4} сект){ota_mark}")
+    print("Карта разделов синхронизирована и верна.")
 
 if __name__ == "__main__":
     main()

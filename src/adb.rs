@@ -88,10 +88,6 @@ pub fn cmd_adb(arg: &str, avb: &mut crate::avb::VerifiedBoot) {
                 crate::cli::execute(&format!("pacman -S {}", pkg));
             }
         }
-        Some(&"ota") => {
-            let payload = parts.get(1).cloned().unwrap_or("").to_string();
-            crate::cli::execute(&format!("ota apply {}", payload));
-        }
         Some(&"dev") => {
             let mode = parts.get(1).cloned().unwrap_or("").to_string();
             match mode.as_str() {
