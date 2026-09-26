@@ -978,6 +978,11 @@ pub fn mkdir_p(path: &str) -> Result<u32, Ext2Error> {
     mkdir_in(parent, &last)
 }
 
+/// `mkdir`: алиас для `mkdir_p`.
+pub fn mkdir(path: &str) -> Result<u32, Ext2Error> {
+    mkdir_p(path)
+}
+
 /// Список содержимого каталога по пути (`"/"` — корень).
 pub fn list_dir_path(path: &str) -> Result<Vec<FileEntry>, Ext2Error> {
     if !is_formatted() {

@@ -20,7 +20,7 @@ struct FreeBlock {
 }
 
 impl FreeBlock {
-    fn new(size: usize) -> Self {
+    const fn new(size: usize) -> Self {
         FreeBlock { size, next: None }
     }
 

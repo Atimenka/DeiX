@@ -13,7 +13,7 @@ use crate::mouse;
 use crate::renderer::{Color, IconType, Renderer};
 use crate::timer;
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 const TITLEBAR_HEIGHT: i32 = 28;
@@ -416,7 +416,7 @@ impl Window {
         }
     }
 
-    fn new_display_settings(x: i32, y: i32, cur_h: u32) -> Self {
+    fn new_display_settings(x: i32, _y: i32, cur_h: u32) -> Self {
         let height = RESOLUTION_PRESETS.len() as u32 * 28 + 40;
         let y_pos = (cur_h as i32 - height as i32) / 2;
         Window {
@@ -723,7 +723,7 @@ pub struct Desktop {
     pub start_menu_open: bool,
     pub control_center_open: bool,
     pub selected_icon: Option<usize>,
-    pub dragging_window: Option<(usize, i32, i32)>,
+    pub dragging_window: Option<(usize, i32, i32, i32, i32)>,
     pub resizing_window: Option<(usize, i32, i32, u32, u32)>,
     pub should_exit: bool,
     pub pending_resolution: Option<(u32, u32)>,
@@ -889,11 +889,11 @@ impl Desktop {
                 self.control_center_open = false;
             }
 
-            if let Some((idx, orig_x, orig_y)) = self.dragging_window {
+            if let Some((idx, orig_x, orig_y, mx0, my0)) = self.dragging_window {
                 if let Some(w) = self.windows.get_mut(idx) {
                     if !w.maximized {
-                        w.x = orig_x + (m.x - m.drag_start_x);
-                        w.y = (orig_y + (m.y - m.drag_start_y)).max(0);
+                        w.x = orig_x + (m.x - mx0);
+                        w.y = (orig_y + (m.y - my0)).max(0);
                     }
                 }
                 return;
@@ -944,7 +944,7 @@ impl Desktop {
                     self.focus_window(i);
                     let last_idx = self.windows.len() - 1;
                     let w = &self.windows[last_idx];
-                    self.dragging_window = Some((last_idx, w.x, w.y));
+                    self.dragging_window = Some((last_idx, w.x, w.y, m.x, m.y));
                     return;
                 }
 
@@ -2010,4 +2010,23 @@ fn draw_cursor(r: &mut Renderer) {
         r.draw_line(x + x0, y + y0, x + x1, y + y1, Color::BLACK);
     }
     r.fill_rect(x + 1, y + 1, 4, 8, color);
+}
+
+pub fn run_desktop_session(mut on_resolution_change: impl FnMut(u32, u32) -> bool) {
+    let mut desktop = Desktop::new();
+    let mut preserve_windows = false;
+
+    loop {
+        let exit = crate::renderer::with_renderer_long(|r| desktop.run_event_loop(r, preserve_windows));
+
+        match exit {
+            Some(DesktopExit::Quit) | None => return,
+            Some(DesktopExit::ChangeResolution(w, h)) => {
+                preserve_windows = true;
+                if !on_resolution_change(w, h) {
+                    return;
+                }
+            }
+        }
+    }
 }
