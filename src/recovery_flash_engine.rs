@@ -271,11 +271,8 @@ pub fn restore_from_backup(partition: &str) -> Result<usize, FlashError> {
 
 // ==================== FACTORY RESET ====================
 // Сброс к заводскому состоянию: стирание /userdata, удаление USERS.DB и
-// журналов из /system-тома, сброс /TPM-копии базы к заводскому маркеру.
+// журналов из /system-тома.
 // После этого при следующей загрузке ОС начнётся первичная настройка.
-
-/// Заводской маркер /TPM (как делает tools/make_deix_fs.py: "DEIXTPM" + v1 + count0).
-const FACTORY_TPM_MARKER: [u8; 16] = *b"DEIXTPM\x00\x01\x00\x00\x00\x00\x00\x00\x00";
 
 pub fn factory_reset_disk() -> Result<String, FlashError> {
     let mut log = String::new();
@@ -291,15 +288,6 @@ pub fn factory_reset_disk() -> Result<String, FlashError> {
     // 2b) Сырой crash-лог (LBA 2048) стираем.
     crate::crashlog::clear_disk_crash();
     log.push_str("  /system: USERS.DB, BUGREPORT.TXT удалены; crash-лог стёрт\n");
-
-    // 3) /TPM-копия базы — сброс к заводскому маркеру (записи базы больше нет).
-    let mut sector = [0u8; 512];
-    sector[..16].copy_from_slice(&FACTORY_TPM_MARKER);
-    let _ = crate::ata::write_sectors(crate::tpm::TPM_PARTITION_LBA, 1, &sector);
-    log.push_str(&format!(
-        "  /TPM (LBA {}): резервная копия базы сброшена к заводскому маркеру\n",
-        crate::tpm::TPM_PARTITION_LBA
-    ));
 
     Ok(log)
 }

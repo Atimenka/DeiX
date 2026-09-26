@@ -321,7 +321,7 @@ pub fn execute(line: &str) {
         "duil" => crate::duil::cmd_duil(rest),
         "ds" => crate::ds::cmd_ds(rest),
         "avb" => crate::avb::cmd_avb(rest),
-        "tpm" => crate::tpm::cmd_tpm(rest),
+
         "taskmgr" => crate::sched::cmd_threads(rest),
         // Политика безопасности DeiX OS: эскалация привилегий ПОЛНОСТЬЮ
         // запрещена. Пользователь Ring 3 не может выполнить su/sudo/root —
@@ -546,7 +546,7 @@ fn cmd_help() {
     println!("  duil [run|calc]         - {}", t!(en: "DUIL declarative UI engine and calculator demo", ru: "декларативный UI-движок DUIL и калькулятор"));
     println!("  ds [script.dxs|-i|-c]   - {}", t!(en: "DeiX Script interpreter and REPL shell", ru: "интерпретатор скриптов DeiX Script и REPL"));
     println!("  avb [status|verify|lock|unlock] - {}", t!(en: "Android Verified Boot (VBMETA) integrity", ru: "проверка целостности VBMETA (Android Verified Boot)"));
-    println!("  tpm [status|dump|pcr]   - {}", t!(en: "TPM 2.0 security chip status and user DB", ru: "статус крипточипа TPM 2.0 и база пользователей"));
+
     println!("  taskmgr                 - {}", t!(en: "system task manager and process list", ru: "диспетчер задач и процессов"));
     println!("  reboot                  - {}", t!(en: "reboot (via keyboard controller)", ru: "перезагрузка (через контроллер клавиатуры)"));
     println!("  halt                    - {}", t!(en: "halt the CPU (cli; hlt)", ru: "остановить процессор (cli; hlt)"));

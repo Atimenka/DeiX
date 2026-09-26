@@ -64,12 +64,7 @@ pub fn dinit_check_permission(
     if let Some(dinit) = lock.as_mut() {
         dinit.check_permission(uid, username, op, path)
     } else {
-        // До инициализации Dinit действует базовое правило ядра
-        if path.starts_with("/tpm") || path.starts_with("/TPM") {
-            Err(AccessError::VaultProtected)
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 }
 

@@ -92,7 +92,7 @@ LOST_FOUND_INO = 11
 #   * /TPM — скрытый раздел (маркер DEIXTPM, тип 0xDA).
 PRIMARY = [
     (1, 0x83, 4096,  8192, "/system"),    # bootable, рабочий том ядра
-    (2, 0xDA, 12288, 512,  "/TPM"),       # скрытый
+    (2, 0x00, 0,     0,    ""),           # зарезервировано
     (3, 0x83, 12800, 512,  "/userdata"),  # ext2, данные Ring 3
     (4, 0x83, 18432, 2048, "/OTA"),       # ext2, скачанные OTA-пакеты (10 МиБ диск)
 ]
@@ -428,19 +428,6 @@ def make_kernel_targz(kernel_bin_path):
     return gzip.compress(raw_tar, compresslevel=9)
 
 
-def write_tpm_marker(img, start_lba):
-    """Маркер скрытого раздела /TPM: 'DEIXTPM' + версия + счётчик."""
-    base = start_lba * SECTOR
-    # ВАЖНО: b"DEIXTPM" — это 7 байт, а срез [base:base+8] — 8; slice-assignment
-    # укорачивал весь образ на 1 байт (размер был 8 МиБ - 1, и ramboot не мог
-    # прочитать ровно 20480 секторов). Заводской маркер — ровно 8 байт,
-    # как в src/install.rs (b"DEIXTPM\x00"); база USERS.DB появится в /TPM
-    # после создания первого аккаунта (tpm.rs пишет "DEIXTPM1").
-    img[base:base + 8] = b"DEIXTPM\x00"
-    img[base + 8:base + 12] = struct.pack("<I", 1)  # версия
-    img[base + 12:base + 16] = struct.pack("<I", 0)  # sealed-slot count
-
-
 def format_ext2_at(img, start_lba, total_sectors):
     """Форматирует ext2-том начиная с произвольного LBA (для /userdata)."""
     total_blocks = total_sectors // SPB
@@ -575,9 +562,7 @@ def init_all_partitions(img, kernel_bin='build/kernel.bin'):
         kernel_targz = b'DEIXTAR\x00empty\x00' + b'\x00' * 64
 
     for num, typ, start, secs, name in PRIMARY + LOGICALS:
-        if name == "/TPM":
-            write_tpm_marker(img, start)
-        elif name in ("/userdata", "/OTA"):
+        if name in ("/userdata", "/OTA"):
             format_ext2_at(img, start, secs)
         elif name == "/init_boot":
             write_erofs_image(img, start, secs, name, {"bootloader.bin": bootloader_bin})

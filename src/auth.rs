@@ -94,17 +94,12 @@ fn hex_value(c: u8) -> Option<u8> {
 /// ни одного аккаунта не создано) — возвращает пустой список, это не
 /// ошибка.
 fn load_users() -> Result<Vec<UserRecord>, AuthError> {
-    // USERS.DB хранится в TPM (NV-слот + скрытый раздел /TPM) и дублируется
-    // в ext2-том. Приоритет: TPM (защищено PCR), затем ext2.
-    let data: alloc::vec::Vec<u8> = match crate::tpm::tpm_load_users_db() {
-        Ok(d) if !d.is_empty() => d,
-        _ => match ext2::read_file(USERS_DB_FILE) {
-            Ok(d) => d,
-            Err(ext2::Ext2Error::FileNotFound) | Err(ext2::Ext2Error::NotFormatted) => {
-                return Ok(Vec::new());
-            }
-            Err(_) => return Err(AuthError::DiskError),
-        },
+    let data: alloc::vec::Vec<u8> = match ext2::read_file(USERS_DB_FILE) {
+        Ok(d) => d,
+        Err(ext2::Ext2Error::FileNotFound) | Err(ext2::Ext2Error::NotFormatted) => {
+            return Ok(Vec::new());
+        }
+        Err(_) => return Err(AuthError::DiskError),
     };
 
     let text = core::str::from_utf8(&data).map_err(|_| AuthError::CorruptDatabase)?;
@@ -156,10 +151,8 @@ fn save_users(users: &[UserRecord]) -> Result<(), AuthError> {
         text.push('\n');
     }
 
-    // 1) ext2-том (рабочая копия).
+    // ext2-том (рабочая копия).
     ext2::write_file(USERS_DB_FILE, text.as_bytes()).map_err(|_| AuthError::DiskError)?;
-    // 2) TPM: NV-слот + скрытый раздел /TPM (защищённая копия).
-    let _ = crate::tpm::tpm_save_users_db(text.as_bytes());
     Ok(())
 }
 

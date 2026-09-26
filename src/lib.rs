@@ -76,7 +76,6 @@ mod syslog;
 mod spinlock;
 mod sync;
 mod timer;
-mod tpm;
 mod ui;
 mod userfs;
 mod usermode;
@@ -267,12 +266,12 @@ pub extern "C" fn kernel_main() -> ! {
     // (crypto_storage::try_unlock). Скрытый раздел /TPM недоступен.
     match crate::crypto_storage::is_encryption_enabled() {
         true => {
-            crate::serial_println!("[tpm] Диск зашифрован (XTS-AES-256) — разблокировка при входе.");
-            crate::println!("  [tpm] Диск зашифрован (XTS-AES-256). Разблокировка — паролем аккаунта.");
+            crate::serial_println!("[crypto] Диск зашифрован (XTS-AES-256) — разблокировка при входе.");
+            crate::println!("  [crypto] Диск зашифрован (XTS-AES-256). Разблокировка — паролем аккаунта.");
         }
         false => {
-            crate::serial_println!("[tpm] Заводские настройки: диск не зашифрован. Первая настройка включит шифрование.");
-            crate::println!("  [tpm] Заводские настройки: диск не зашифрован. Первая настройка включит шифрование ключом = пароль аккаунта.");
+            crate::serial_println!("[crypto] Диск не зашифрован.");
+            crate::println!("  [crypto] Хранилище готово.");
         }
     }
 

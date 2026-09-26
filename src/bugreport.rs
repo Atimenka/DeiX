@@ -70,13 +70,6 @@ pub fn collect_report() -> String {
         crate::partition_map::BOOTLOADER_SECTORS,
     ));
 
-    // --- TPM ---
-    out.push_str("\n[TPM]\n");
-    let tpm = crate::tpm::TpmDevice::new();
-    out.push_str(&format!("  tpm present: {}\n", tpm.present));
-    out.push_str(&format!("  users.db in TPM: {}\n", if crate::tpm::tpm_has_users_db() { "yes (NV or /TPM copy)" } else { "no" }));
-    out.push_str(&format!("  /TPM partition: LBA {} (hidden, 0xDA, writable=false)\n", crate::tpm::TPM_PARTITION_LBA));
-
     // --- LOGS (последние строки журнала ядра) ---
     out.push_str("\n[DMESG] (last 60 lines)\n");
     let lines = crate::syslog::last_lines(60);

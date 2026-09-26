@@ -80,13 +80,6 @@ pub fn check_permission(
         return Err(AccessError::InvalidPath);
     }
 
-    // 1. АБСОЛЮТНАЯ ЗАЩИТА TPM:
-    // Раздел /tpm и любые его подкаталоги аппаратно запечатаны и недоступны НИКОМУ,
-    // включая суперпользователя root (UID 0).
-    if path.starts_with("/tpm") || path.starts_with("/TPM") {
-        return Err(AccessError::VaultProtected);
-    }
-
     // 2. ЗАЩИТА СИСТЕМНЫХ РАЗДЕЛОВ:
     // /kernel, /init_boot, /system, /boot, /vendor_boot защищены от модификации
     if op.is_modifying() {

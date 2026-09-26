@@ -19,12 +19,6 @@ pub ring: &'static str,
 pub description: &'static str,
 }
 
-/// Скрытый раздел TPM (/TPM). НЕ входит в PARTITION_MAP — он не монтируется
-/// в Ring 3 и не перечисляется пользователю. Пароли и ключи живут в самом
-/// TPM (NV-хранилище, см. tpm.rs); раздел недоступен на чтение/запись из
-/// пользовательского пространства, стирание невозможно (writable=false).
-pub const TPM_PARTITION_NAME: &str = "/TPM";
-
 /// + /userdata ext4/rw; /system — логический раздел внутри /super).
 pub const PARTITION_MAP: [PartitionPolicy; 8] = [
 PartitionPolicy {
@@ -163,7 +157,7 @@ pub struct PartitionLayout {
 /// A/B СЛОТЫ: /kernel и /boot имеют два слота (a/b). Активный слот хранится
 /// в BCB (bcb::read_slot/write_slot). OTA прошивает НЕактивный слот и
 /// переключает — откат через bcb/rollback.
-pub const PARTITION_LAYOUT: [PartitionLayout; 13] = [
+pub const PARTITION_LAYOUT: [PartitionLayout; 12] = [
     PartitionLayout { name: "/system",     start_lba: 4096,  sectors: 8192, fs: "ext2",  flashable: true },
     PartitionLayout { name: "/userdata",   start_lba: 12800, sectors: 512,  fs: "ext2",  flashable: true },
     PartitionLayout { name: "/kernel_a",   start_lba: 13313, sectors: 1279,  fs: "erofs", flashable: true },
@@ -176,7 +170,6 @@ pub const PARTITION_LAYOUT: [PartitionLayout; 13] = [
     PartitionLayout { name: "/dsm",        start_lba: 17921, sectors: 255,  fs: "erofs", flashable: true },
     PartitionLayout { name: "/recovery",   start_lba: 18177, sectors: 255,  fs: "erofs", flashable: true },
     PartitionLayout { name: "/OTA",        start_lba: 18432, sectors: 2048, fs: "ext2",  flashable: true },
-    PartitionLayout { name: "/TPM",        start_lba: 12288, sectors: 512,  fs: "tpm",   flashable: false },
 ];
 
 /// Имя активного слота ядра (по BCB): "/kernel_a" или "/kernel_b".

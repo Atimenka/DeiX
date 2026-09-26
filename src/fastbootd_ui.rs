@@ -317,7 +317,7 @@ fn action_getvar() -> (String, u32, bool) {
     out.push_str(&format!("  variant: {}\n", if dev { "unlocked" } else { "locked" }));
     out.push_str(&format!("  unlocked: {}\n", if dev { "yes" } else { "no" }));
     out.push_str(&format!("  slot-count: 1\n"));
-    out.push_str("  secure: yes (Verified Boot + TPM)\n");
+    out.push_str("  secure: yes (Verified Boot)\n");
     out.push_str("  current-slot: a\n");
     crate::println!("{}", out);
     (out, OK, false)

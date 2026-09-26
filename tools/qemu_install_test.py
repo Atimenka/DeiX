@@ -100,7 +100,6 @@ def main():
         'stage2': d[512:512 + len(st2)] == st2,
         'kernel': d[kstart * 512:kstart * 512 + len(kb)] == kb,
         'ext2 magic': d[4096 * 512 + 1024 + 56:4096 * 512 + 1024 + 58].hex() == '53ef',
-        '/TPM marker': d[12288 * 512:12288 * 512 + 8] == b'DEIXTPM\x00',
     }
     for k, v in checks.items():
         print(f'  [{"OK" if v else "FAIL"}] target: {k}')

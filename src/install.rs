@@ -53,7 +53,7 @@ const FS_TOTAL_BLOCKS: u32 = FS_TOTAL_SECTORS / 2;
 /// P1 /system (bootable, рабочий ext2-том ядра), P2 /TPM (скрытый),
 /// P3 /userdata (ext2), E extended, логические EROFS.
 const PART_SYSTEM: (u32, u32) = (4096, 8192);   // P1: ext2 рабочий том
-const PART_TPM: (u32, u32) = (12288, 512);      // P2: скрытый
+// const PART_TPM removed
 const PART_USERDATA: (u32, u32) = (12800, 512); // P3: ext2 данных
 const EXT_START: u32 = 13312;                   // расширенный
 const EXT_SECTORS: u32 = 3072;
@@ -386,7 +386,7 @@ fn build_mbr() -> [u8; 512] {
     // Первичные: P1 /system (boot), P2 /TPM, P3 /userdata.
     let prim = [
         (0x80u8, 0x83u8, PART_SYSTEM.0, PART_SYSTEM.1),
-        (0x00, 0xDA, PART_TPM.0, PART_TPM.1),
+        (0x00, 0x00, 0, 0),
         (0x00, 0x83, PART_USERDATA.0, PART_USERDATA.1),
     ];
     for (i, (boot, typ, start, secs)) in prim.iter().enumerate() {
@@ -440,18 +440,6 @@ fn write_ebrs(drive: Drive) {
     }
 }
 
-
-/// Маркер скрытого раздела /TPM.
-fn write_tpm_partition(drive: Drive) {
-    // ЗАВОДСКОЙ маркер /TPM (как tools/make_deix_fs.py): "DEIXTPM" + версия 1
-    // + счётчик 0. НЕ "DEIXTPM1": это маркер ЗАПИСАННОЙ базы, и tpm_load_users_db
-    // тогда прочитал бы мусор как базу пользователей («No user accounts»).
-    let mut sector = [0u8; 512];
-    sector[..8].copy_from_slice(b"DEIXTPM\x00");
-    sector[8..12].copy_from_slice(&1u32.to_le_bytes());
-    sector[12..16].copy_from_slice(&0u32.to_le_bytes());
-    let _ = ata::write_sectors_to(drive, PART_TPM.0, 1, &sector);
-}
 
 /// База ядра в памяти (linker_kernel.ld): 0x100000 (1 МиБ).
 const KERNEL_BASE: usize = 0x100000;
@@ -569,10 +557,8 @@ fn write_image_to(drive: Drive) -> Result<(), ()> {
     }
     // /system (P1) и /userdata (P3) уже записаны отдельно; /TPM тоже.
 
-    // /TPM маркер.
-    write_tpm_partition(drive);
-
     Ok(())
+}
 }
 
 /// Форматирует ext2-том /userdata (отдельный маленький том на P3).
@@ -845,7 +831,6 @@ pub fn cmd_install(arg: &str) {
     } else {
         crate::println!("  [auth] WARNING: failed to write USERS.DB to target disk!");
     }
-    let _ = crate::tpm::tpm_save_users_db(text.as_bytes());
 
     // ---- Шифрование диска ----
     if target == Drive::Master {

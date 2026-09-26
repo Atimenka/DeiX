@@ -297,7 +297,6 @@ pub enum ParseWarningKind {
     TooManyStageCommands,
     UserdataPolicyViolation,
     NonExt4Userdata,
-    TpmPartitionDenied,
 }
 
 impl ParseWarningKind {
@@ -318,7 +317,6 @@ impl ParseWarningKind {
                 "rw-монтирование /userdata вне разрешённых стадий"
             }
             ParseWarningKind::NonExt4Userdata => "файловая система /userdata отличается от ext4",
-            ParseWarningKind::TpmPartitionDenied => "доступ к скрытому разделу /TPM запрещён",
         }
     }
 }
@@ -619,10 +617,6 @@ impl InitParser {
                                                 ),
                                                 VaultRejection::NonExt4Userdata(msg) => (
                                                     ParseWarningKind::NonExt4Userdata,
-                                                    msg,
-                                                ),
-                                                VaultRejection::TpmPartitionDenied(msg) => (
-                                                    ParseWarningKind::TpmPartitionDenied,
                                                     msg,
                                                 ),
                                             };

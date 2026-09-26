@@ -381,7 +381,7 @@ fn action_factory_reset() -> (String, u32, bool) {
     if !crate::dialog::confirm("Factory Reset? /userdata, USERS.DB and logs will be wiped") {
         return ("Factory Reset: cancelled".to_string(), HINT, false);
     }
-    rlog("Factory Reset: wiping /userdata, USERS.DB, logs, /TPM...");
+    rlog("Factory Reset: wiping /userdata, USERS.DB, logs...");
     match crate::recovery_flash_engine::factory_reset_disk() {
         Ok(log) => {
             crate::println!("{}", log);

@@ -102,18 +102,13 @@ impl MountCmd {
 
     /// Проверка команды через KERNEL SECURITY VAULT
     pub fn validate_with_vault(&self, stage: BootStage) -> Result<(), &'static str> {
-        // 1. Проверка защищённого хранилища TPM: /TPM закрыт категорически
-        if self.target.starts_with("/tpm") || self.target.starts_with("/TPM") {
-            return Err("VAULT_SECURITY_VIOLATION: /TPM partition is strictly sealed");
-        }
-
         let mode = if self.read_only {
             MountMode::ReadOnly
         } else {
             MountMode::ReadWrite
         };
 
-        // 2. Оценка через эталонный Vault-движок ядра (src/vault.rs)
+        // Оценка через эталонный Vault-движок ядра (src/vault.rs)
         match vault_evaluate(&self.target, &self.fs_type, mode, stage) {
             Ok(()) => Ok(()),
             Err(VaultRejection::UserdataPolicy(_)) => {
@@ -121,9 +116,6 @@ impl MountCmd {
             }
             Err(VaultRejection::NonExt4Userdata(_)) => {
                 Err("SECURITY_WARNING: Userdata requested non-ext4 filesystem")
-            }
-            Err(VaultRejection::TpmPartitionDenied(_)) => {
-                Err("SECURITY_VIOLATION: Attempt to mount TPM enclave directly")
             }
         }
     }

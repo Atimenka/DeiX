@@ -33,8 +33,6 @@ pub enum VaultRejection {
 UserdataPolicy(String),
 /// Файловая система /userdata отличается от ext4.
 NonExt4Userdata(String),
-/// Попытка доступа к скрытому разделу /TPM из пользовательского кода.
-TpmPartitionDenied(String),
 }
 
 impl VaultRejection {
@@ -43,7 +41,6 @@ pub fn detail(&self) -> String {
     match self {
         VaultRejection::UserdataPolicy(msg) => msg.clone(),
         VaultRejection::NonExt4Userdata(msg) => msg.clone(),
-        VaultRejection::TpmPartitionDenied(msg) => msg.clone(),
     }
 }
 
@@ -52,7 +49,6 @@ pub fn kind_name(&self) -> &'static str {
     match self {
         VaultRejection::UserdataPolicy(_) => "userdata-policy-violation",
         VaultRejection::NonExt4Userdata(_) => "non-ext4-userdata",
-VaultRejection::TpmPartitionDenied(_) => "tpm-partition-denied",
     }
 }
 }
@@ -81,13 +77,6 @@ let is_system: bool = match dst {
 };
 
 match dst {
-    // ---- СКРЫТЫЙ РАЗДЕЛ /TPM --------------------------------------------
-    // Доступ запрещён ВСЕГДА: раздел принадлежит TPM, пользовательский
-    // код не может его монтировать, читать или стирать. Единственный
-    // легальный доступ — сам TPM-модуль (Ring 0) и EDL.
-    "/TPM" => Err(VaultRejection::TpmPartitionDenied(format!(
-        "доступ к скрытому разделу /TPM запрещён (Ring 3); пароли — только в TPM NV"
-    ))),
     // ---- ПОЛЬЗОВАТЕЛЬСКИЙ РАЗДЕЛ /userdata ------------------------------
     "/userdata" => {
         match fs_type {
