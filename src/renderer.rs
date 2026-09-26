@@ -142,7 +142,7 @@ pub enum IconType {
 pub struct Renderer {
     fb: Framebuffer,
     pub back_buffer: Vec<u32>,
-    damage: crate::ui::surface::DamageList,
+    pub damage: crate::ui::surface::DamageList,
 }
 
 impl Renderer {
