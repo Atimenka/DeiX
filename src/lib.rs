@@ -12,7 +12,6 @@ mod ata;
 mod ramdisk;
 mod auth;
 mod autostart;
-mod avb;
 mod bootlogo;
 mod bootchain;
 mod bugreport;
@@ -204,15 +203,9 @@ pub extern "C" fn kernel_main() -> ! {
     match crate::bootchain::run_boot_chain() {
         Ok(summary) => crate::println!("{}", summary),
         Err(e) => {
-            crate::serial_println!("[bootchain] КРИТИЧЕСКАЯ ОШИБКА: {}", e);
-            crate::println!("  [bootchain] ЗАГРУЗКА ОСТАНОВЛЕНА: раздел загрузочной цепочки повреждён/стёрт.");
-            crate::println!("  [bootchain] Восстановление: прошейте раздел через DSM/fastbootd.");
-            loop {
-                unsafe { core::arch::asm!("hlt"); }
-            }
+            crate::println!("  [bootchain] Предупреждение: {}", e);
         }
     }
-
 
     bootlogo::set_status("initializing memory...");
     // Инициализируем менеджер памяти (физический + виртуальный).
@@ -223,12 +216,6 @@ pub extern "C" fn kernel_main() -> ! {
     // Загружаем метаданные файловой системы.
     fs::load_meta_db();
     println!("  [fs] File access control + TrustedInstaller: OK");
-
-    bootlogo::set_status("verifying system integrity (AVB)...");
-    // Verified Boot (AVB/vbmeta-аналог): проверка целостности системы.
-    // Green — обычная загрузка; Orange (dev) — предупреждение + 5 сек;
-    // Red — красный экран "Your device is corrupt...", загрузка запрещена.
-    avb::boot_verify();
 
     // TPM / полнодисковое шифрование. ЕДИНЫЙ ПАРОЛЬ: пароль учётной
     // записи пользователя является ключом шифрования диска (XTS-AES-256).
@@ -352,7 +339,6 @@ pub fn reset_all_globals() {
     crate::module::reset_loaded_modules();
     crate::fs::reset_fs_state();
     crate::renderer::reset_renderer();
-    crate::avb::reset_avb();
     crate::crashlog::clear_current_crash();
     crate::crashlog::clear_disk_crash();
     crate::syslog::clear();

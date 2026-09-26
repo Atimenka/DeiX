@@ -286,17 +286,15 @@ pub fn execute(line: &str) {
         "halt" => cmd_halt(),
         "duil" => crate::duil::cmd_duil(rest),
         "ds" => crate::ds::cmd_ds(rest),
-        "avb" => crate::avb::cmd_avb(rest),
 
         "taskmgr" => crate::sched::cmd_threads(rest),
-        "adb" => crate::adb::cmd_adb(rest, &mut crate::avb::avb_mut()),
-        "adb-repl" => crate::adb::adb_repl(&mut crate::avb::avb_mut()),
+        "adb" => crate::adb::cmd_adb(rest),
+        "adb-repl" => crate::adb::adb_repl(),
         "dev" => {
-            let mut a = crate::avb::avb_mut();
             match rest.trim() {
-                "on" => crate::devmode::enable_dev_mode(&mut a),
-                "off" => crate::devmode::disable_dev_mode(&mut a),
-                _ => crate::devmode::dev_status(&a),
+                "on" => crate::devmode::enable_dev_mode(),
+                "off" => crate::devmode::disable_dev_mode(),
+                _ => crate::devmode::dev_status(),
             }
         }
         "nvidia" => crate::drivers::nvidia::cmd_nvidia(rest),
@@ -501,7 +499,6 @@ fn cmd_help() {
     println!("  crash <divzero|bp|inv>  - {}", t!(en: "demonstrate exception handling", ru: "демонстрация обработки исключений"));
     println!("  duil [run|calc]         - {}", t!(en: "DUIL declarative UI engine and calculator demo", ru: "декларативный UI-движок DUIL и калькулятор"));
     println!("  ds [script.dxs|-i|-c]   - {}", t!(en: "DeiX Script interpreter and REPL shell", ru: "интерпретатор скриптов DeiX Script и REPL"));
-    println!("  avb [status|verify|lock|unlock] - {}", t!(en: "Android Verified Boot (VBMETA) integrity", ru: "проверка целостности VBMETA (Android Verified Boot)"));
 
     println!("  taskmgr                 - {}", t!(en: "system task manager and process list", ru: "диспетчер задач и процессов"));
     println!("  reboot                  - {}", t!(en: "reboot (via keyboard controller)", ru: "перезагрузка (через контроллер клавиатуры)"));

@@ -31,15 +31,11 @@ pub fn sudo_allowed() -> bool {
     DEV_MODE.load(core::sync::atomic::Ordering::Relaxed)
 }
 
-/// Включает dev-режим: разблокирует bootloader, даёт sudo, снимает гарантию.
+/// Включает dev-режим: дает sudo.
 /// Требует подтверждения (пользователь должен ввести 'yes').
-pub fn enable_dev_mode(avb: &mut crate::avb::VerifiedBoot) {
+pub fn enable_dev_mode() {
     crate::println!("  [dev] ВКЛЮЧЕНИЕ РЕЖИМА РАЗРАБОТЧИКА");
-    crate::println!("  [dev] Bootloader будет РАЗБЛОКИРОВАН.");
     crate::println!("  [dev] sudo/su/root станут доступны.");
-    crate::println!("  [dev] Verified Boot перейдёт в ORANGE state.");
-    crate::println!("  [dev] !!! OTA-гарантия и лицензия безопасности ПЕРЕСТАНУТ действовать.");
-    crate::println!("  [dev] Обновления — только вручную через рекавери/прошивальщик.");
     crate::print!("  Подтвердите вводом 'yes': ");
 
     let confirm = read_input_line();
@@ -49,33 +45,20 @@ pub fn enable_dev_mode(avb: &mut crate::avb::VerifiedBoot) {
     }
 
     DEV_MODE.store(true, core::sync::atomic::Ordering::Relaxed);
-    avb.unlock_bootloader();
-
     crate::println!("  [dev] РЕЖИМ РАЗРАБОТЧИКА ВКЛЮЧЁН.");
-    crate::println!("  [dev] bootloader: {}", avb.lock.as_str());
-    crate::println!("  [dev] OTA-гарантия: {}", avb.ota_guarantee);
-    crate::println!("  [dev] Проверка загрузки: {}", avb.boot_state.as_str());
 }
 
-/// Выключает dev-режим (блокирует bootloader). OTA-гарантия НЕ
-/// восстанавливается автоматически (нужна перепрошивка через EDL).
-pub fn disable_dev_mode(avb: &mut crate::avb::VerifiedBoot) {
+/// Выключает dev-режим.
+pub fn disable_dev_mode() {
     DEV_MODE.store(false, core::sync::atomic::Ordering::Relaxed);
-    avb.lock_bootloader();
-    crate::println!("  [dev] Dev-режим выключен. Bootloader заблокирован.");
-    crate::println!("  [dev] OTA-гарантия НЕ восстановлена: требуется перепрошивка");
-    crate::println!("  [dev] через EDL/рекавери (иначе возможен RED state).");
+    crate::println!("  [dev] Dev-режим выключен.");
 }
 
 /// Состояние dev-режима (команда `dev status`).
-pub fn dev_status(avb: &crate::avb::VerifiedBoot) {
-    crate::println!("=== Dev-режим / Verified Boot ===");
+pub fn dev_status() {
+    crate::println!("=== Dev-режим ===");
     crate::println!("  dev_mode: {}", sudo_allowed());
     crate::println!("  sudo доступен: {}", sudo_allowed());
-    crate::println!("  bootloader: {}", avb.lock.as_str());
-    crate::println!("  boot state: {}", avb.boot_state.as_str());
-    crate::println!("  OTA-гарантия: {}", avb.ota_guarantee);
-    crate::println!("  vbmeta запечатана: {}", avb.vbmeta.as_ref().map(|v| v.sealed).unwrap_or(false));
 }
 
 /// Чтение строки с клавиатуры или COM1.

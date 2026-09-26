@@ -25,8 +25,8 @@ use alloc::vec::Vec;
 /// Префикс команд ADB-обёртки.
 const ADB_PROMPT: &str = "adb> ";
 
-/// Обработчик команды adb. `avb` нужен для dev-режима/OTA.
-pub fn cmd_adb(arg: &str, avb: &mut crate::avb::VerifiedBoot) {
+/// Обработчик команды adb.
+pub fn cmd_adb(arg: &str) {
     crate::println!("=== DeiX ADB (debug bridge) ===");
     if arg.is_empty() {
         crate::println!("adb <devices|shell|push|pull|reboot|install|dev>");
@@ -85,8 +85,8 @@ pub fn cmd_adb(arg: &str, avb: &mut crate::avb::VerifiedBoot) {
         Some(&"dev") => {
             let mode = parts.get(1).cloned().unwrap_or("").to_string();
             match mode.as_str() {
-                "on" => crate::devmode::enable_dev_mode(avb),
-                "off" => crate::devmode::disable_dev_mode(avb),
+                "on" => crate::devmode::enable_dev_mode(),
+                "off" => crate::devmode::disable_dev_mode(),
                 _ => crate::println!("adb dev <on|off>"),
             }
         }
@@ -95,7 +95,7 @@ pub fn cmd_adb(arg: &str, avb: &mut crate::avb::VerifiedBoot) {
 }
 
 /// REPL-режим ADB: читает команды с COM1/клавиатуры до 'exit'.
-pub fn adb_repl(avb: &mut crate::avb::VerifiedBoot) {
+pub fn adb_repl() {
     crate::println!("DeiX ADB shell. Введите 'exit' для выхода.");
     loop {
         crate::print!("{}", ADB_PROMPT);
@@ -106,7 +106,7 @@ pub fn adb_repl(avb: &mut crate::avb::VerifiedBoot) {
         if line.trim().is_empty() {
             continue;
         }
-        cmd_adb(&line, avb);
+        cmd_adb(&line);
     }
 }
 

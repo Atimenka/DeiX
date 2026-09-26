@@ -570,7 +570,6 @@ def main():
         img = bytearray(f.read())
 
     fill_mbr(img)
-    format_ext2(img)            # P1: рабочий ext2-том ядра
     init_all_partitions(img, os.path.join(parent_dir if parent_dir else '.', 'kernel.bin'))
 
     img[4095 * SECTOR:4095 * SECTOR + 512] = b"\x00" * 512
@@ -581,7 +580,7 @@ def main():
     print(f"OK: DeiX OS — заводской образ с MBR-разметкой ({img_path})")
     print("  Все разделы DeiX (каждый со своей ФС):")
     for num, typ, start, secs, name in PRIMARY:
-        fs = "ext2" if name in ("/system", "/userdata") else "raw"
+        fs = "erofs" if name == "/system" else "ext2"
         print(f"    P{num}: 0x{typ:02X} {name:<13} LBA {start:>6}..{start+secs-1:>6} ({secs:>4} сект)  {fs}")
     for num, typ, start, secs, name in LOGICALS:
         print(f"    L{num}: 0x{typ:02X} {name:<13} LBA {start:>6}..{start+secs-1:>6} ({secs:>4} сект)  EROFS")

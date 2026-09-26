@@ -71,13 +71,10 @@ const PTRS_PER_INDIRECT_BLOCK: usize = BLOCK_SIZE / 4;
 /// Максимальный размер файла с прямыми + одинарным indirect блоком.
 const MAX_FILE_BLOCKS: usize = MAX_DIRECT_BLOCKS + PTRS_PER_INDIRECT_BLOCK;
 
-/// Начало тома ext2 на диске — тот же принцип, что и у fat16 (2 МиБ
-/// отступ после загрузчика/ядра с запасом на рост).
-pub const FS_START_LBA: u32 = 4096;
-/// Размер тома в секторах (совпадает с прежним объёмом, выделенным под
-/// fat16, — 4 МиБ), см. build.sh, где образ диска дополняется нулями
-/// до достаточного размера.
-const TOTAL_SECTORS: u32 = 8192;
+/// Начало тома ext2 на диске (/userdata раздел на LBA 12800).
+pub const FS_START_LBA: u32 = 12800;
+/// Размер тома в секторах (раздел /userdata = 5632 секторов).
+const TOTAL_SECTORS: u32 = 5632;
 const TOTAL_BLOCKS: u32 = TOTAL_SECTORS / SECTORS_PER_BLOCK;
 
 const SB_BLOCK: u32 = 1;
