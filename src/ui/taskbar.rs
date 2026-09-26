@@ -91,11 +91,11 @@ pub fn draw_start_menu(r: &mut Renderer, theme: &UiTheme, _screen_w: i32, screen
 
     let col_w = (menu_w - 24) / 2;
     for (i, (label, _, icon)) in items.iter().enumerate() {
-        if i >= 6 { break; }
+        if i >= 8 { break; }
         let col = i % 2;
         let row = i / 2;
         let ix = 12 + col as i32 * col_w;
-        let iy = menu_y + 44 + row as i32 * 36;
+        let iy = menu_y + 40 + row as i32 * 36;
 
         r.fill_rounded_rect(ix, iy, (col_w - 4) as u32, 32, 4, theme.titlebar_inactive);
         r.draw_icon(ix + 6, iy + 8, *icon, theme.accent);
