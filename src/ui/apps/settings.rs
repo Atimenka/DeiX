@@ -65,7 +65,7 @@ pub fn draw_display_settings(
 
     r.draw_text(w.x + 12, content_y + 8, "DISPLAY RESOLUTION", theme.accent, None);
 
-    let cur_res = r.resolution();
+    let cur_res = (r.width(), r.height());
     let mut ry = content_y + 32;
     for (width, height) in RESOLUTION_PRESETS.iter() {
         let is_current = cur_res == (*width, *height);

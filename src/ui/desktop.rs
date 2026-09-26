@@ -13,11 +13,11 @@ use crate::ui::taskbar::{
 };
 use crate::ui::theme::{get_theme, set_theme, UiTheme};
 use crate::ui::window::{
-    draw_window, fetch_and_render_web_page, load_partition_entries, BrowserTab, FileViewEntry,
-    Window, WindowContent, RESOLUTION_PRESETS,
+    draw_window, fetch_and_render_web_page, load_partition_entries, BrowserTab, Window,
+    WindowContent, RESOLUTION_PRESETS,
 };
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 pub struct DesktopShortcut {

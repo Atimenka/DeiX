@@ -8,12 +8,19 @@ pub mod taskbar;
 pub mod theme;
 pub mod window;
 
+#[allow(unused_imports)]
 pub use apps::*;
+#[allow(unused_imports)]
 pub use desktop::*;
+#[allow(unused_imports)]
 pub use metrics::*;
+#[allow(unused_imports)]
 pub use surface::*;
+#[allow(unused_imports)]
 pub use taskbar::*;
+#[allow(unused_imports)]
 pub use theme::*;
+#[allow(unused_imports)]
 pub use window::*;
 
 pub struct KernelGuiCompositorService {

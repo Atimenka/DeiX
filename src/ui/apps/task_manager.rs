@@ -4,6 +4,7 @@ use crate::renderer::{Color, Renderer};
 use crate::ui::theme::UiTheme;
 use crate::ui::window::Window;
 use alloc::format;
+use alloc::string::String;
 
 pub fn draw_task_manager(
     r: &mut Renderer,

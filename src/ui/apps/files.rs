@@ -24,7 +24,7 @@ pub fn draw_files(
     let partitions = ["/userdata", "/system", "/kernel"];
     let mut py = content_y + 8;
     for p in partitions.iter() {
-        let is_sel = current_partition == p;
+        let is_sel = current_partition == *p;
         let bg = if is_sel { theme.titlebar_active } else { theme.titlebar_inactive };
         let fg = if is_sel { theme.accent } else { theme.text_secondary };
         r.fill_rounded_rect(w.x + 4, py, 102, 28, 4, bg);

@@ -82,6 +82,7 @@ impl Color {
     pub const TITLEBAR_ACTIVE: Color = Color::rgb(30, 41, 59);
     pub const TITLEBAR_INACTIVE: Color = Color::rgb(15, 23, 42);
     pub const YELLOW: Color = Color::rgb(245, 158, 11);
+    pub const CYAN: Color = Color::rgb(6, 182, 212);
     pub const SHADOW: Color = Color::rgb(5, 5, 10);
     pub const ACCENT: Color = Color::rgb(99, 102, 241); // Indigo
 
@@ -115,6 +116,7 @@ impl Color {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IconType {
     Terminal,
     Files,
@@ -139,7 +141,7 @@ pub enum IconType {
 
 pub struct Renderer {
     fb: Framebuffer,
-    back_buffer: Vec<u32>,
+    pub back_buffer: Vec<u32>,
     damage: crate::ui::surface::DamageList,
 }
 
