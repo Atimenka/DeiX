@@ -29,10 +29,20 @@ impl DamageList {
         if self.full_redraw {
             return;
         }
+
+        // Проверяем возможность объединения с существующими прямоугольниками (coalescing)
+        for i in 0..self.count {
+            if self.rects[i].intersects(&rect) {
+                self.rects[i] = self.rects[i].union(&rect);
+                return;
+            }
+        }
+
         if self.count >= MAX_DAMAGE_RECTS {
             self.full_redraw = true;
             return;
         }
+
         self.rects[self.count] = rect;
         self.count += 1;
     }
