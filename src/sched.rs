@@ -47,7 +47,7 @@ use crate::spinlock::SpinLock;
 /// Размер стека задачи.
 const STACK_SIZE: usize = 64 * 1024;
 /// Максимум задач (статическая таблица — без аллокаций в обработчике IRQ).
-const MAX_TASKS: usize = 16;
+const MAX_TASKS: usize = 64;
 
 /// Состояние задачи.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
