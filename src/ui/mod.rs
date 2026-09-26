@@ -564,6 +564,7 @@ pub struct Desktop {
     pub should_exit: bool,
     pub pending_resolution: Option<(u32, u32)>,
     pub frame_counter: u64,
+    pub wallpaper_cache: WallpaperSurface,
 }
 
 impl Desktop {
@@ -582,6 +583,7 @@ impl Desktop {
             should_exit: false,
             pending_resolution: None,
             frame_counter: 0,
+            wallpaper_cache: WallpaperSurface::new(800, 600),
         }
     }
 

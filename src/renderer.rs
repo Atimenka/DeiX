@@ -140,7 +140,7 @@ pub enum IconType {
 pub struct Renderer {
     fb: Framebuffer,
     back_buffer: Vec<u32>,
-    damage_rect: Option<Rect>,
+    damage: crate::ui::surface::DamageList,
 }
 
 impl Renderer {
@@ -150,7 +150,7 @@ impl Renderer {
         Renderer {
             fb,
             back_buffer,
-            damage_rect: None,
+            damage: crate::ui::surface::DamageList::new(),
         }
     }
 
@@ -166,14 +166,11 @@ impl Renderer {
         if rect.w == 0 || rect.h == 0 {
             return;
         }
-        self.damage_rect = match self.damage_rect {
-            Some(d) => Some(d.union(&rect)),
-            None => Some(rect),
-        };
+        self.damage.add(rect);
     }
 
     pub fn clear_damage(&mut self) {
-        self.damage_rect = None;
+        self.damage.clear();
     }
 
     #[inline]
@@ -195,44 +192,44 @@ impl Renderer {
         self.back_buffer[idx] = color.alpha_blend(bg, alpha).0;
     }
 
-    /// Быстрый `memcpy` из RAM back buffer в MMIO Framebuffer.
+    /// Быстрый `memcpy` из RAM back buffer в MMIO Framebuffer только по списку повреждённых областей DamageList.
     pub fn present(&mut self) {
-        let (y0, y1, x0, x1) = match self.damage_rect {
-            Some(r) => {
+        if !self.damage.full_redraw && self.damage.count > 0 {
+            for i in 0..self.damage.count {
+                let r = self.damage.rects[i];
                 let y0 = r.y.max(0) as usize;
                 let y1 = ((r.y + r.h as i32).min(self.fb.height as i32)).max(0) as usize;
                 let x0 = r.x.max(0) as usize;
                 let x1 = ((r.x + r.w as i32).min(self.fb.width as i32)).max(0) as usize;
-                (y0, y1, x0, x1)
-            }
-            None => (0, self.fb.height as usize, 0, self.fb.width as usize),
-        };
 
-        if y0 >= y1 || x0 >= x1 {
-            self.damage_rect = None;
+                if y0 >= y1 || x0 >= x1 {
+                    continue;
+                }
+
+                for row in y0..y1 {
+                    let row_offset = row * self.fb.width as usize;
+                    let src = &self.back_buffer[row_offset + x0..row_offset + x1];
+                    let dst = (self.fb.addr + row * self.fb.pitch + x0 * 4) as *mut u32;
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len());
+                    }
+                }
+            }
+            self.damage.clear();
             return;
         }
 
-        let full_width = self.fb.width as usize == (x1 - x0);
-
-        for row in y0..y1 {
+        // Полное копирование кадра при смене видеорежима или полном перерисовывании
+        for row in 0..self.fb.height as usize {
             let row_offset = row * self.fb.width as usize;
-            if full_width {
-                let src = &self.back_buffer[row_offset..row_offset + self.fb.width as usize];
-                let dst = (self.fb.addr + row * self.fb.pitch) as *mut u32;
-                unsafe {
-                    core::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len());
-                }
-            } else {
-                let src = &self.back_buffer[row_offset + x0..row_offset + x1];
-                let dst = (self.fb.addr + row * self.fb.pitch + x0 * 4) as *mut u32;
-                unsafe {
-                    core::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len());
-                }
+            let src = &self.back_buffer[row_offset..row_offset + self.fb.width as usize];
+            let dst = (self.fb.addr + row * self.fb.pitch) as *mut u32;
+            unsafe {
+                core::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len());
             }
         }
 
-        self.damage_rect = None;
+        self.damage.clear();
     }
 
     pub fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) {
