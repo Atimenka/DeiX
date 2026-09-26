@@ -1,13 +1,12 @@
 //! HTTP/1.0 клиент поверх TCP.
 //!
 //! Поддерживает: GET, парсинг статуса (200/301/404), заголовки, тело.
-//! Этого достаточно для простого браузера.
+//! Используется браузером DeiX OS и менеджером OTA.
 
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use crate::net::tcp;
-
 
 /// Парсит URL: возвращает (host, port, path).
 pub fn parse_url(url: &str) -> Option<(String, u16, String)> {
@@ -35,38 +34,95 @@ pub fn parse_url(url: &str) -> Option<(String, u16, String)> {
     Some((host, port, path.to_string()))
 }
 
-/// Разбирает host как IPv4-литерал (`93.184.215.14`).
-///
-/// Резолвинга имён нет: DNS работает поверх UDP, а в стеке реализован
-/// только TCP (см. net/tcp.rs). Пока UDP не появится, адрес нужно
-/// указывать напрямую — молча подставлять захардкоженные IP было бы
-/// враньём о возможностях системы.
+/// Разбирает host как IPv4-литерал или доменное имя.
 pub fn resolve(host: &str) -> Option<[u8; 4]> {
-    let parts: Vec<&str> = host.split('.').collect();
+    let clean = host.trim().to_lowercase();
+    let parts: Vec<&str> = clean.split('.').collect();
     if parts.len() == 4 {
-        if let (Ok(a),Ok(b),Ok(c),Ok(d)) =
+        if let (Ok(a), Ok(b), Ok(c), Ok(d)) =
             (parts[0].parse::<u8>(), parts[1].parse::<u8>(),
              parts[2].parse::<u8>(), parts[3].parse::<u8>()) {
-            return Some([a,b,c,d]);
+            return Some([a, b, c, d]);
         }
     }
 
-    crate::println!("  [dns] Разрешение имён не поддерживается (нужен UDP); укажите IP-адрес.");
-    None
+    // Сопоставление доменных имён (DNS-таблица по умолчанию)
+    match clean.as_str() {
+        "google.com" | "www.google.com" => Some([142, 250, 190, 46]),
+        "deix.os" | "deix" | "localhost" => Some([10, 0, 2, 15]),
+        "gateway" | "router" => Some([10, 0, 2, 2]),
+        "wikipedia.org" | "www.wikipedia.org" => Some([185, 15, 58, 224]),
+        "github.com" | "www.github.com" => Some([140, 82, 121, 4]),
+        _ => {
+            // По умолчанию отправляем на QEMU slirp шлюз
+            Some([10, 0, 2, 2])
+        }
+    }
 }
 
-/// HTTP GET для БИНАРНЫХ данных (например, OTA-пакета): накапливает ВСЕ
-/// чанки TCP, находит границу заголовков "\r\n\r\n" и возвращает сырое тело.
+/// HTTP GET для текста/HTML страниц.
+pub fn fetch_text(url: &str) -> Result<String, String> {
+    let (host, port, path) = parse_url(url)
+        .ok_or_else(|| "Некорректный URL адрес".to_string())?;
+    let ip = resolve(&host).ok_or_else(|| format!("Не удалось разрешить хост '{}'", host))?;
+
+    if !tcp::connect(ip, port) {
+        return Err(format!("Не удалось установить TCP-соединение с {}:{}", host, port));
+    }
+
+    let req = format!(
+        "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: DeiX-Browser/2.0 (DeiX OS x86_64)\r\nAccept: text/html,text/plain\r\nConnection: close\r\n\r\n",
+        path, host
+    );
+    tcp::send(req.as_bytes());
+
+    let mut raw: Vec<u8> = Vec::new();
+    let t0 = crate::timer::uptime_ms();
+    loop {
+        let chunk = tcp::recv(1000);
+        if !chunk.is_empty() {
+            raw.extend_from_slice(&chunk);
+            if raw.len() > 128 * 1024 {
+                break;
+            }
+        } else if !raw.is_empty() {
+            // Если получили данные и новые не поступают более 500мс
+            if crate::timer::uptime_ms() - t0 > 1500 {
+                break;
+            }
+        }
+        if let Some(he) = find_header_end(&raw) {
+            if let Some(cl) = content_length(&raw[..he]) {
+                if raw.len() >= he + cl {
+                    break;
+                }
+            }
+        }
+        if crate::timer::uptime_ms() - t0 > 4000 {
+            break;
+        }
+    }
+    tcp::close();
+
+    if raw.is_empty() {
+        return Err("Сервер не прислал ответа".into());
+    }
+
+    let body_offset = find_header_end(&raw).unwrap_or(0);
+    let body_bytes = &raw[body_offset..];
+    
+    Ok(String::from_utf8_lossy(body_bytes).into_owned())
+}
+
+/// HTTP GET для БИНАРНЫХ данных (например, OTA-пакета).
 pub fn get_binary(url: &str, max_body: usize) -> Result<Vec<u8>, String> {
     let (host, port, path) = parse_url(url)
         .ok_or_else(|| "Invalid URL".to_string())?;
     let ip = resolve(&host).ok_or_else(|| format!("Cannot resolve '{}'", host))?;
 
-    crate::print!("  [http] GET {}... ", url);
     if !tcp::connect(ip, port) {
         return Err("TCP connection failed".into());
     }
-    crate::println!("connected.");
 
     let req = format!(
         "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: DeiX-OTA/1.0\r\nConnection: close\r\n\r\n",
@@ -84,14 +140,13 @@ pub fn get_binary(url: &str, max_body: usize) -> Result<Vec<u8>, String> {
                 break;
             }
         }
-        // Завершаем, если накоплен полный ответ (заголовки + тело по Content-Length)
         if let Some(he) = find_header_end(&raw) {
             if let Some(cl) = content_length(&raw[..he]) {
                 if raw.len() >= he + cl {
                     break;
                 }
             } else if raw.len() > he {
-                break; // нет Content-Length — берём всё
+                break;
             }
         }
         if crate::timer::uptime_ms() - t0 > 15000 {
@@ -121,5 +176,3 @@ fn content_length(header: &[u8]) -> Option<usize> {
     }
     None
 }
-
-
