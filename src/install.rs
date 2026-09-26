@@ -559,7 +559,6 @@ fn write_image_to(drive: Drive) -> Result<(), ()> {
 
     Ok(())
 }
-}
 
 /// Форматирует ext2-том /userdata (отдельный маленький том на P3).
 fn write_userdata_ext2(drive: Drive) {
