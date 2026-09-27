@@ -568,8 +568,6 @@ impl InitParser {
                                         let detail = format!("[{}] {}", rejection.kind_name(), rejection.detail());
                                         self.push_warning(line_no, raw_line, kind, detail);
                                     }
-                                        self.push_warning(line_no, raw_line, kind, detail);
-                                    }
                                 }
                             }
                             None => {
