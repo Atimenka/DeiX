@@ -45,10 +45,6 @@ impl BootStage {
             BootStage::Boot => "boot",
         }
     }
-
-    pub fn allows_userdata_rw(&self) -> bool {
-        true
-    }
 }
 
 /// Модификатор доступа к узлам дерева виртуальной файловой системы (VFS).
@@ -805,8 +801,9 @@ pub fn boot_report(script: &str) {
         false => {
             for warning in parser.warnings.iter() {
                 crate::println!(
-                    "    [WARN] строка {} | {} | {}",
+                    "    [WARN] строка {} ('{}') | {} | {}",
                     warning.line_no,
+                    warning.raw_line,
                     warning.kind.describe(),
                     warning.detail
                 );

@@ -1,6 +1,6 @@
 //! Отрисовка настроек персонализации и экрана
 
-use crate::renderer::{Color, Renderer};
+use crate::renderer::{Color, IconType, Renderer};
 use crate::ui::window::{RESOLUTION_PRESETS, Window};
 use crate::ui::theme::{UiTheme, ThemePreset};
 use alloc::format;
@@ -15,7 +15,8 @@ pub fn draw_theme_settings(
 ) {
     r.fill_rect_alpha(w.x, content_y, w.width, w.height, theme.window_bg, theme.opacity);
 
-    r.draw_text(w.x + 12, content_y + 8, "DESKTOP THEMES & COLOR PALETTE", theme.accent, None);
+    r.draw_icon(w.x + 12, content_y + 8, IconType::Settings, theme.accent);
+    r.draw_text(w.x + 32, content_y + 8, "DESKTOP THEMES & COLOR PALETTE", theme.accent, None);
 
     let themes = [
         ("Catppuccin", ThemePreset::DarkCatppuccin),
@@ -38,6 +39,9 @@ pub fn draw_theme_settings(
         let is_current = theme.preset == *preset;
         let bg = if is_current { theme.accent } else { theme.titlebar_inactive };
         r.fill_rounded_rect(sx, sy, 98, 56, 6, bg);
+        if is_current {
+            r.draw_icon(sx + 76, sy + 6, IconType::Check, Color::WHITE);
+        }
         let fg = if is_current { Color::WHITE } else { theme.text_primary };
         r.draw_text(sx + 8, sy + 20, name, fg, None);
         sx += 102;

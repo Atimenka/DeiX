@@ -36,6 +36,11 @@ pub fn evaluate(dst: &str, fs_type: &str, mode: MountMode, _stage: BootStage) ->
 
     match dst {
         "/userdata" => {
+            if mode == MountMode::ReadOnly {
+                return Err(VaultRejection::UserdataPolicy(format!(
+                    " /userdata не должен монтироваться ReadOnly"
+                )));
+            }
             if fs_type == "ext2" || fs_type == "ext4" {
                 Ok(())
             } else {

@@ -60,6 +60,12 @@ pub struct Framebuffer {
     pub pitch: usize, // байт на строку
 }
 
+impl Framebuffer {
+    pub fn bpp(&self) -> u16 {
+        self.bpp
+    }
+}
+
 /// Устанавливает видеорежим width x height x bpp с включённым линейным
 /// framebuffer. Физический адрес framebuffer читается из PCI BAR0
 /// устройства (как и требует спецификация — адрес не фиксирован).

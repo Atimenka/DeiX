@@ -498,7 +498,13 @@ window title=Calculator width=320 height=420 bg=0x1E1E2E
 }
 
 pub fn run_calculator_demo() {
-    let _app = DuilApp::new_calculator();
+    let app = DuilApp::new_calculator();
+    crate::renderer::with_renderer(|r| {
+        let w = r.width();
+        let h = r.height();
+        render_widget_tree(&app.root, &mut r.back_buffer, w, h);
+        r.present();
+    });
     crate::println!("  [duil] Запущено графическое приложение 'Calculator'");
 }
 
@@ -509,6 +515,12 @@ pub fn run_duil_app(path: &str) {
             layout_widget_tree(&mut root, 0, 0, 400, 300);
 
             crate::renderer::ensure_framebuffer();
+            crate::renderer::with_renderer(|r| {
+                let w = r.width();
+                let h = r.height();
+                render_widget_tree(&root, &mut r.back_buffer, w, h);
+                r.present();
+            });
             crate::println!("  [duil] Запущено приложение '{}'", path);
         }
     } else {

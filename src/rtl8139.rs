@@ -40,12 +40,14 @@ const TX_BUFFER_SIZE: usize = 1792; // максимум для одного де
 const NUM_TX_DESCRIPTORS: usize = 4;
 
 #[repr(align(4))]
-struct RxBuffer([u8; RX_BUFFER_SIZE]);
+struct RxBuffer {
+    bytes: [u8; RX_BUFFER_SIZE],
+}
 
 #[repr(align(4))]
 struct TxBuffer([u8; TX_BUFFER_SIZE]);
 
-static mut RX_BUFFER: RxBuffer = RxBuffer([0; RX_BUFFER_SIZE]);
+static mut RX_BUFFER: RxBuffer = RxBuffer { bytes: [0; RX_BUFFER_SIZE] };
 static mut TX_BUFFERS: [TxBuffer; NUM_TX_DESCRIPTORS] = [
     TxBuffer([0; TX_BUFFER_SIZE]),
     TxBuffer([0; TX_BUFFER_SIZE]),
@@ -115,7 +117,7 @@ pub fn init() -> bool {
         }
 
         // Настраиваем приёмный буфer.
-        let rx_phys_addr = core::ptr::addr_of!(RX_BUFFER) as u32;
+        let rx_phys_addr = unsafe { core::ptr::addr_of!(RX_BUFFER.bytes) } as u32;
         outl(io_base + REG_RBSTART, rx_phys_addr);
 
         // Разрешаем прерывания Transmit OK и Receive OK.
@@ -251,7 +253,7 @@ unsafe fn drain_rx_buffer(io_base: u16) {
         }
 
         let mut offset = STATE.lock().rx_offset;
-        let rx_buf = core::ptr::addr_of!(RX_BUFFER) as *const u8;
+        let rx_buf = unsafe { core::ptr::addr_of!(RX_BUFFER.bytes) } as *const u8;
 
         // Заголовок пакета: 2 байта статус + 2 байта длина (включая заголовок).
         let header_ptr = rx_buf.add(offset) as *const u16;

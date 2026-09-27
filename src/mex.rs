@@ -384,9 +384,3 @@ fn parse_header(data: &[u8]) -> Option<MexHeader> {
         _reserved: u64::from_le_bytes(data[24..32].try_into().ok()?),
     })
 }
-
-/// Проверяет, похож ли файл на .mex по расширению.
-pub fn is_mex_filename(name: &str) -> bool {
-    let upper = name.to_ascii_uppercase();
-    upper.ends_with(".MEX")
-}

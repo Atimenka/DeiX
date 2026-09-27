@@ -121,7 +121,15 @@ pub struct Superblock {
 
 impl Superblock {
     pub fn block_size(&self) -> usize {
-        1usize << self.blkszbits
+        if self.blkszbits == EROFS_BLOCK_BITS {
+            EROFS_BLOCK_SIZE
+        } else {
+            1usize << self.blkszbits
+        }
+    }
+
+    pub fn inos_and_blocks(&self) -> (u64, u32) {
+        (self.inos, self.blocks)
     }
 
     /// Смещение инода по его nid.
@@ -144,13 +152,15 @@ pub fn parse_superblock(img: &[u8]) -> Result<Superblock, ErofsError> {
     if !(9..=16).contains(&blkszbits) {
         return Err(ErofsError::BadBlockSize { bits: blkszbits });
     }
-    Ok(Superblock {
+    let res = Superblock {
         blkszbits,
         root_nid: rd_u16(sb, 14).ok_or(ErofsError::TooSmall)? as u64,
         inos: rd_u64(sb, 16).ok_or(ErofsError::TooSmall)?,
         blocks: rd_u32(sb, 36).ok_or(ErofsError::TooSmall)?,
         meta_blkaddr: rd_u32(sb, 40).ok_or(ErofsError::TooSmall)?,
-    })
+    };
+    let _ = res.inos_and_blocks();
+    Ok(res)
 }
 
 /// Инод EROFS (нужные нам поля; поддержаны compact и extended).

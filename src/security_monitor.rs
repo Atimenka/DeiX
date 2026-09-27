@@ -135,6 +135,10 @@ impl ProcessProfile {
         }
     }
 
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
     pub fn record(&mut self) {
         self.events_seen += 1;
     }
@@ -266,6 +270,7 @@ impl HeuristicAnalysisEngine {
             if let Some(profile) = self.profiles.get_mut(&event.pid) {
                 profile.terminated = true;
                 profile.last_risk_score = verdict.risk_score;
+                let _ = profile.pid();
             }
             true
         } else {

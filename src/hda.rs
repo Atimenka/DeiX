@@ -18,13 +18,8 @@ use alloc::vec::Vec;
 
 // ==================== Реестр смещений MMIO HDA ====================
 const REG_GCAP: usize = 0x00;       // Global Capabilities (u16)
-const REG_VMIN: usize = 0x02;       // Minor Version (u8)
-const REG_VMAJ: usize = 0x03;       // Major Version (u8)
 const REG_GCTL: usize = 0x08;       // Global Control (u32)
-const REG_WAKEEN: usize = 0x0C;     // Wake Enable (u16)
 const REG_STATESTS: usize = 0x0E;   // State Change Status (u16)
-const REG_INTCTL: usize = 0x20;     // Interrupt Control (u32)
-const REG_INTSTS: usize = 0x24;     // Interrupt Status (u32)
 
 // CORB (Command Outbound Ring Buffer)
 const REG_CORBLBASE: usize = 0x40;  // CORB Lower Base Address (u32)
@@ -32,7 +27,6 @@ const REG_CORBUBASE: usize = 0x44;  // CORB Upper Base Address (u32)
 const REG_CORBWP: usize = 0x48;     // CORB Write Pointer (u16)
 const REG_CORBRP: usize = 0x4A;     // CORB Read Pointer (u16)
 const REG_CORBCTL: usize = 0x4C;    // CORB Control (u8)
-const REG_CORBSTS: usize = 0x4D;    // CORB Status (u8)
 const REG_CORBSIZE: usize = 0x4E;   // CORB Size (u8)
 
 // RIRB (Response Inbound Ring Buffer)
@@ -51,13 +45,10 @@ const REG_ICS: usize = 0x68;         // Immediate Command Status (u16)
 
 // Смещения регистров внутри Stream Descriptor
 const SD_OFF_CTL0: usize = 0x00;    // Control 0 (u8: bit 0=SRST, bit 1=SRUN)
-const SD_OFF_CTL1: usize = 0x01;    // Control 1 (u8: interrupts)
-const SD_OFF_CTL2: usize = 0x02;    // Control 2 (u8: bits 7..4 = Stream Number)
 const SD_OFF_STS: usize = 0x03;     // Status (u8)
 const SD_OFF_LPIB: usize = 0x04;    // Link Position In Buffer (u32)
 const SD_OFF_CBL: usize = 0x08;     // Cyclic Buffer Length (u32)
 const SD_OFF_LVI: usize = 0x0C;     // Last Valid Index (u16)
-const SD_OFF_FIFOS: usize = 0x10;   // FIFO Size (u16)
 const SD_OFF_FMT: usize = 0x12;     // Format (u16)
 const SD_OFF_BDLPL: usize = 0x18;   // BDL Pointer Lower (u32)
 const SD_OFF_BDLPU: usize = 0x1C;   // BDL Pointer Upper (u32)
@@ -698,13 +689,13 @@ pub fn get_info() -> Option<String> {
              PCI Device: {:02X}:{:02X}.{} (Vendor 0x{:04X}, Device 0x{:04X})\n\
              MMIO Base:  0x{:X}\n\
              Global:     CRST={}, Codecs={:#X}, ISS={}, OSS={}\n\
-             Audio Path: DAC NID={}, Pin NID={}\n\
+             Audio Path: Codec 0x{:X}, DAC NID={}, Pin NID={}\n\
              DMA Stream: 48 kHz, 16-bit Stereo PCM (Output Stream 0)",
             c.pci_dev.bus, c.pci_dev.slot, c.pci_dev.function,
             c.pci_dev.vendor_id, c.pci_dev.device_id,
             c.mmio_base,
             gctl & 1, statests, iss, oss,
-            c.dac_nid, c.pin_nid
+            c.codec_addr, c.dac_nid, c.pin_nid
         )
     })
 }

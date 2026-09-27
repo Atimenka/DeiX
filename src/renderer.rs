@@ -86,6 +86,10 @@ impl Color {
     pub const SHADOW: Color = Color::rgb(5, 5, 10);
     pub const ACCENT: Color = Color::rgb(99, 102, 241); // Indigo
 
+    pub fn palette() -> [Color; 6] {
+        [Color::DARK_GRAY, Color::LIGHT_GRAY, Color::DESKTOP_BLUE, Color::TITLEBAR_ACTIVE, Color::TITLEBAR_INACTIVE, Color::ACCENT]
+    }
+
     pub fn lerp(self, other: Color, t: u8) -> Color {
         let t = t as i32;
         let (r1, g1, b1) = self.components();
@@ -231,7 +235,7 @@ impl Renderer {
             }
         }
 
-        self.damage.clear();
+        self.clear_damage();
     }
 
     pub fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) {

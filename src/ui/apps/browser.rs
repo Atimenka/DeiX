@@ -34,9 +34,13 @@ pub fn draw_browser(
 
     let nav_y = content_y + 26;
     r.fill_rect(w.x, nav_y, w.width, 28, theme.titlebar_active);
-    r.draw_icon(w.x + 8, nav_y + 6, IconType::Browser, theme.accent);
+    r.draw_icon(w.x + 8, nav_y + 6, IconType::ArrowLeft, theme.text_primary);
+    r.draw_icon(w.x + 28, nav_y + 6, IconType::ArrowRight, theme.text_primary);
+    r.draw_icon(w.x + 48, nav_y + 6, IconType::Reload, theme.text_primary);
+    r.draw_icon(w.x + 68, nav_y + 6, IconType::Home, theme.text_primary);
+    r.draw_icon(w.x + 88, nav_y + 6, IconType::Bookmark, theme.accent);
     let addr_str = format!("http://{}", address_input);
-    r.draw_text(w.x + 38, nav_y + 6, &addr_str, theme.text_primary, None);
+    r.draw_text(w.x + 108, nav_y + 6, &addr_str, theme.text_primary, None);
 
     let bk_y = nav_y + 28;
     r.fill_rect(w.x, bk_y, w.width, 20, theme.titlebar_inactive);

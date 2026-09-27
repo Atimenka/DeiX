@@ -233,6 +233,34 @@ impl Window {
         }
     }
 
+    pub fn new_file_editor(x: i32, y: i32, filename: &str, path: &str) -> Self {
+        Window {
+            title: format!("Editor - {}", filename),
+            x,
+            y,
+            width: 440,
+            height: 300,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 440, 300),
+            content: WindowContent::FileEditor {
+                filename: filename.to_string(),
+                full_path: path.to_string(),
+                partition: String::from("/userdata"),
+                lines: alloc::vec![String::from("DeiX Text Editor")],
+                cursor_row: 0,
+                cursor_col: 0,
+                scroll: 0,
+                modified: false,
+                read_only: false,
+                error: None,
+                status_msg: None,
+            },
+            surface: Surface::new(440, 300),
+            dirty: true,
+        }
+    }
+
     pub fn new_display_settings(x: i32, _y: i32, cur_h: u32) -> Self {
         let height = RESOLUTION_PRESETS.len() as u32 * 28 + 40;
         let y_pos = (cur_h as i32 - height as i32) / 2;
@@ -466,6 +494,7 @@ pub fn draw_window(
     is_focused: bool,
     is_dragging: bool,
 ) {
+    let _ = (w.dirty, w.surface.width);
     let ui_m = UiMetrics::fluent();
     let titlebar_h = ui_m.titlebar_height;
     let button_d = ui_m.button_diameter;
@@ -473,6 +502,11 @@ pub fn draw_window(
 
     if theme.enable_blur && !is_dragging {
         r.apply_blur_rect(w.x - 4, w.y - 4, w.width + 8, total_h + 8, 2);
+    }
+
+    r.draw_drop_shadow(w.x, w.y, w.width, total_h, 4);
+    if !is_focused {
+        r.shade_rect(w.x, w.y, w.width, total_h, 15);
     }
 
     r.fill_rounded_rect_alpha(w.x + 4, w.y + 4, w.width, total_h, theme.corner_radius, Color::SHADOW, 80);

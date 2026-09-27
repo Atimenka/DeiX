@@ -24,6 +24,29 @@ pub enum Color {
     White = 15,
 }
 
+impl Color {
+    pub fn from_index(idx: u8) -> Self {
+        match idx & 0x0F {
+            0 => Color::Black,
+            1 => Color::Blue,
+            2 => Color::Green,
+            3 => Color::Cyan,
+            4 => Color::Red,
+            5 => Color::Magenta,
+            6 => Color::Brown,
+            7 => Color::LightGray,
+            8 => Color::DarkGray,
+            9 => Color::LightBlue,
+            10 => Color::LightGreen,
+            11 => Color::LightCyan,
+            12 => Color::LightRed,
+            13 => Color::Pink,
+            14 => Color::Yellow,
+            _ => Color::White,
+        }
+    }
+}
+
 fn color_code(fg: Color, bg: Color) -> u8 {
     (bg as u8) << 4 | (fg as u8)
 }

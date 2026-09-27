@@ -478,6 +478,8 @@ pub fn selftest() {
 
     let slept = COUNTERS[3].load(Ordering::Relaxed);
     let all_ran = c.iter().all(|&x| x > 0) && slept == 4;
+    yield_now();
+    stop();
     if all_ran && switches > 0 {
         crate::println!("  [sched] САМОПРОВЕРКА ПРОЙДЕНА: все задачи выполнялись одновременно");
     } else {
@@ -489,7 +491,7 @@ pub fn selftest() {
 pub fn cmd_threads(arg: &str) {
     match arg.trim() {
         "list" => {
-            crate::println!("  Задачи планировщика:");
+            crate::println!("  Задачи планировщика (текущая: [{}]):", current_id());
             for (id, name, state) in list() {
                 crate::println!("    [{}] {:<14} {:?}", id, name, state);
             }

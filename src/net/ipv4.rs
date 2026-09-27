@@ -18,6 +18,10 @@ pub struct Ipv4Header {
 }
 
 impl Ipv4Header {
+    pub fn version(&self) -> u8 {
+        self.version_ihl >> 4
+    }
+
     pub fn parse(data: &[u8]) -> Option<Ipv4Header> {
         if data.len() < MIN_HEADER_LEN {
             return None;

@@ -1,5 +1,6 @@
 //! FS + DTI: system files visible but read-only for non-DTI.
 use crate::ext2;
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
@@ -16,6 +17,19 @@ pub struct FileMeta {
     pub name: String, pub is_dir: bool, pub size: u64,
     pub owner: String, pub group: String, pub perms: Permissions,
     pub system: bool, pub created_at: u64,
+}
+
+impl FileMeta {
+    pub fn format_entry(&self) -> String {
+        let kind = if self.is_dir { "d" } else { "f" };
+        let sys = if self.system { "sys" } else { "usr" };
+        let perm_str = match self.perms {
+            Permissions::RWX => "rwx",
+            Permissions::RW => "rw-",
+            _ => "r--",
+        };
+        format!("{}{} [{}] {:<8} {:<8} {:>8} B @{} {}", kind, perm_str, sys, self.owner, self.group, self.size, self.created_at, self.name)
+    }
 }
 
 static META_DB: crate::spinlock::SpinLock<BTreeMap<String, FileMeta>> = crate::spinlock::SpinLock::new(BTreeMap::new());
@@ -38,5 +52,9 @@ pub fn load_meta_db() {
 }
 
 pub fn list_dir() -> Vec<FileMeta> { META_DB.lock().values().cloned().collect() }
+
+pub fn list_meta_entries() -> Vec<String> {
+    list_dir().iter().map(|m| m.format_entry()).collect()
+}
 
 

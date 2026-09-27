@@ -13,6 +13,10 @@ pub struct EthernetHeader {
 }
 
 impl EthernetHeader {
+    pub fn is_broadcast(&self) -> bool {
+        self.dst_mac == BROADCAST_MAC
+    }
+
     pub fn parse(frame: &[u8]) -> Option<EthernetHeader> {
         if frame.len() < HEADER_LEN {
             return None;

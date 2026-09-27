@@ -266,6 +266,7 @@ pub fn execute(line: &str) {
         "rm" => cmd_rm(rest),
         "pkg" => cmd_pkg(rest),
         "dialog" => cmd_dialog_test(),
+        "erofs" => cmd_erofs_test(),
         "run" => cmd_run(rest),
         "install" => crate::install::cmd_install(rest),
         "bigfile" => cmd_bigfile(rest),
@@ -514,7 +515,8 @@ fn cmd_help() {
 }
 
 fn cmd_about() {
-    println!("{}", t!(en: "DeiX v0.2.1-beta - mini kernel written in Rust", ru: "DeiX v0.2.1-beta - мини-ядро на Rust"));
+    let (comp_active, comp_fps) = crate::ui::compositor_status();
+    println!("DeiX v0.2.1-beta - mini kernel written in Rust (Compositor active: {}, {} FPS)", comp_active, comp_fps);
     println!(
         "{}",
         t!(
@@ -553,12 +555,30 @@ fn cmd_uptime() {
 }
 
 fn cmd_color(name: &str) {
+    let _ = crate::renderer::Color::palette();
+    if let Ok(idx) = name.parse::<u8>() {
+        let c = Color::from_index(idx);
+        with_writer(|w| w.set_color(c, Color::Black));
+        println!("{}", t!(en: "Color changed.", ru: "Цвет изменён."));
+        return;
+    }
     let color = match name {
-        "green" => Some(Color::LightGreen),
-        "white" => Some(Color::White),
-        "red" => Some(Color::LightRed),
-        "cyan" => Some(Color::LightCyan),
+        "black" => Some(Color::Black),
+        "blue" => Some(Color::Blue),
+        "green" => Some(Color::Green),
+        "cyan" => Some(Color::Cyan),
+        "red" => Some(Color::Red),
+        "magenta" => Some(Color::Magenta),
+        "brown" => Some(Color::Brown),
+        "lightgray" => Some(Color::LightGray),
+        "darkgray" => Some(Color::DarkGray),
+        "lightblue" => Some(Color::LightBlue),
+        "lightgreen" => Some(Color::LightGreen),
+        "lightcyan" => Some(Color::LightCyan),
+        "lightred" => Some(Color::LightRed),
+        "pink" => Some(Color::Pink),
         "yellow" => Some(Color::Yellow),
+        "white" => Some(Color::White),
         "" => None,
         _ => {
             println_t!(
@@ -918,6 +938,13 @@ fn cmd_gpu_nvinfo() {
 }
 
 fn cmd_gpu_info() {
+    if let Some(fb) = crate::vbe::get_framebuffer() {
+        println_t!(
+            en: "Framebuffer active: {}x{} @ {} bpp",
+            ru: "Активный framebuffer: {}x{} @ {} bpp";
+            fb.width, fb.height, fb.bpp()
+        );
+    }
     match gpu::detect() {
         Some(info) => {
             println_t!(
@@ -1043,6 +1070,13 @@ fn enter_graphics_mode(gpu_device: &crate::pci::PciDevice, width: u32, height: u
 
 
 fn cmd_ls() {
+    let meta_entries = crate::fs::list_meta_entries();
+    if !meta_entries.is_empty() {
+        println!("  {}", t!(en: "FS Metadata:", ru: "Метаданные ФС:"));
+        for e in meta_entries {
+            println!("    {}", e);
+        }
+    }
     if !ext2::is_formatted() {
         println!(
             "{}",
@@ -1583,6 +1617,13 @@ pub fn cmd_dialog_test() {
     let items = [String::from("Option 1"), String::from("Option 2")];
     if let Some(idx) = crate::dialog::choose("Select item", &items) {
         println!("selected: {}", idx);
+    }
+}
+
+pub fn cmd_erofs_test() {
+    let dummy = crate::erofs::build_image(&[("hello.txt", b"hello world\n")]);
+    if crate::erofs::is_erofs(&dummy) {
+        println!("  [erofs] build_image and is_erofs OK ({} bytes)", dummy.len());
     }
 }
 

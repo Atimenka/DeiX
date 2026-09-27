@@ -76,8 +76,10 @@ static mut TSS: Tss = Tss::new();
 /// из Ring 3. Отдельный от основного, чтобы не зависеть от стека Ring 3.
 const KSTACK_SIZE: usize = 32 * 1024;
 #[repr(align(16))]
-struct KStack([u8; KSTACK_SIZE]);
-static mut KERNEL_STACK: KStack = KStack([0; KSTACK_SIZE]);
+struct KStack {
+    bytes: [u8; KSTACK_SIZE],
+}
+static mut KERNEL_STACK: KStack = KStack { bytes: [0; KSTACK_SIZE] };
 
 // ==================== GDT ====================
 
@@ -122,6 +124,7 @@ unsafe fn init_gdt() {
     let tss_high = (tss_addr >> 32) & 0xFFFF_FFFF;
 
     let gdt = &mut *(&raw mut GDT);
+    let _ = USER_CS;
     gdt[0] = 0;
     gdt[1] = segment(true, 0); // 0x08 kernel code
     gdt[2] = segment(false, 0); // 0x10 kernel data
@@ -373,7 +376,7 @@ pub fn init() {
         init_gdt();
 
         // Стек ядра для входов из Ring 3.
-        let kstack_top = (&raw const KERNEL_STACK as u64) + KSTACK_SIZE as u64;
+        let kstack_top = (core::ptr::addr_of!(KERNEL_STACK.bytes) as u64) + KSTACK_SIZE as u64;
         (*(&raw mut TSS)).rsp0 = kstack_top;
         (*(&raw mut CPU_LOCAL)).kernel_rsp = kstack_top;
 

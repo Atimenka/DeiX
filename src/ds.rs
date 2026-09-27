@@ -13,6 +13,16 @@ pub enum DsError {
     RecursionLimit,
 }
 
+impl DsError {
+    pub fn message(&self) -> String {
+        match self {
+            DsError::FileNotFound(f) => format!("файл не найден: {}", f),
+            DsError::ExecutionError(e) => format!("ошибка: {}", e),
+            DsError::RecursionLimit => "превышен лимит рекурсии".to_string(),
+        }
+    }
+}
+
 pub struct DsInterpreter {
     pub vars: BTreeMap<String, String>,
     pub functions: BTreeMap<String, Vec<String>>,
@@ -483,7 +493,7 @@ done
         path if !path.is_empty() => {
             match run_file(path) {
                 Ok(res) => crate::println!("  [ds] Скрипт '{}' завершён с кодом {}", path, res),
-                Err(e) => crate::println!("  [ds] Ошибка выполнения скрипта: {:?}", e),
+                Err(e) => crate::println!("  [ds] Ошибка выполнения скрипта: {}", e.message()),
             }
         }
         _ => {

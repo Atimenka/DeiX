@@ -364,7 +364,6 @@ irq_stub!(irq_stub_8, 8);
 irq_stub!(irq_stub_9, 9);
 irq_stub!(irq_stub_10, 10);
 irq_stub!(irq_stub_11, 11);
-irq_stub!(irq_stub_12, 12);
 irq_stub!(irq_stub_13, 13);
 irq_stub!(irq_stub_14, 14);
 irq_stub!(irq_stub_15, 15);
