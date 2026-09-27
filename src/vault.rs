@@ -56,15 +56,3 @@ pub fn evaluate(dst: &str, fs_type: &str, mode: MountMode, _stage: BootStage) ->
         _ => Ok(()),
     }
 }
-            // нарушение: образ раздела не может быть EROFS-неизменяемым.
-            _ => {
-                panic!(
-                    "SECURITY_VIOLATION: Hard-locked system partition reached with RW flags. Boot halted."
-                );
-            }
-        }
-    }
-    // ---- ИНЫЕ ТОЧКИ (пользовательские/виртуальные ФС) -------------------
-    _ => Ok(()),
-}
-}
