@@ -15,6 +15,7 @@
 
 use alloc::format;
 use alloc::string::String;
+use alloc::string::ToString;
 
 const BG: u32 = 0x1E2430;
 const BORDER: u32 = 0x3A4A5E;

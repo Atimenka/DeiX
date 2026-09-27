@@ -6,9 +6,10 @@
 
 
 use alloc::collections::BTreeMap;
-use alloc::string::String;
-use alloc::vec::Vec;
 use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 
 use crate::vault::{VaultRejection, evaluate as vault_evaluate};
 
@@ -560,17 +561,13 @@ impl InitParser {
                                     Err(rejection) => {
                                         // Команда отклонена политикой Vault
                                         // (предупреждение формируется здесь).
-                                        let (kind, detail): (ParseWarningKind, String) =
-                                            match rejection {
-                                                VaultRejection::UserdataPolicy(msg) => (
-                                                    ParseWarningKind::UserdataPolicyViolation,
-                                                    msg,
-                                                ),
-                                                VaultRejection::InvalidUserdataFs(msg) => (
-                                                    ParseWarningKind::InvalidUserdataFs,
-                                                    msg,
-                                                ),
-                                            };
+                                        let kind = match rejection {
+                                            VaultRejection::UserdataPolicy(_) => ParseWarningKind::UserdataPolicyViolation,
+                                            VaultRejection::InvalidUserdataFs(_) => ParseWarningKind::InvalidUserdataFs,
+                                        };
+                                        let detail = format!("[{}] {}", rejection.kind_name(), rejection.detail());
+                                        self.push_warning(line_no, raw_line, kind, detail);
+                                    }
                                         self.push_warning(line_no, raw_line, kind, detail);
                                     }
                                 }

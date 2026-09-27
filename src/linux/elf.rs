@@ -10,6 +10,7 @@
 
 use alloc::format;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 
 use super::{USER_IMAGE_BASE, USER_IMAGE_MAX, USER_STACK_BOTTOM, USER_STACK_TOP};

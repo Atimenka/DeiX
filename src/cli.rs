@@ -11,6 +11,7 @@ use crate::vga::Color;
 use crate::vgaglobal::with_writer;
 use crate::{ext2, gpu, keyboard, print, println, println_t, t, timer};
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::arch::asm;
 
@@ -264,6 +265,7 @@ pub fn execute(line: &str) {
         "write" => cmd_write(rest),
         "rm" => cmd_rm(rest),
         "pkg" => cmd_pkg(rest),
+        "dialog" => cmd_dialog_test(),
         "run" => cmd_run(rest),
         "install" => crate::install::cmd_install(rest),
         "bigfile" => cmd_bigfile(rest),
@@ -438,6 +440,8 @@ fn cmd_sound(rest: &str) {
                 }
             }
         }
+        Some("warn") => crate::sound::warn_triple(),
+        Some("alert") => crate::sound::ota_alert(),
         Some("beep") => {
             let hz: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(880);
             let ms: u64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(150);
@@ -1566,6 +1570,19 @@ pub fn cmd_poweroff() {
         loop {
             asm!("hlt");
         }
+    }
+}
+
+pub fn cmd_dialog_test() {
+    let ok = crate::dialog::confirm("Continue?");
+    println!("confirm: {}", ok);
+    let line = crate::dialog::prompt_line("Enter text");
+    println!("prompt_line: {}", line);
+    let masked = crate::dialog::prompt_masked("Enter password");
+    println!("prompt_masked length: {}", masked.len());
+    let items = [String::from("Option 1"), String::from("Option 2")];
+    if let Some(idx) = crate::dialog::choose("Select item", &items) {
+        println!("selected: {}", idx);
     }
 }
 

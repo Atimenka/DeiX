@@ -126,7 +126,7 @@ impl LockedAllocator {
         without_interrupts(|| {
             let mut alloc = self.inner.lock();
             if !alloc.initialized {
-                let heap_start = ptr::addr_of_mut!(HEAP_STORAGE.bytes) as usize;
+                let heap_start = unsafe { ptr::addr_of_mut!(HEAP_STORAGE.bytes) } as usize;
                 unsafe { alloc.init(heap_start, HEAP_SIZE) };
             }
         });

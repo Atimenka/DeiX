@@ -61,7 +61,7 @@ pub fn run_boot_chain() -> Result<String, String> {
 
 /// Загружает kernel.bin из /system/kernel/kernel.bin (EROFS).
 pub fn load_kernel() -> Result<String, String> {
-    let layout = crate::partition_map::lookup_layout("/system")
+    let layout = lookup_layout("/system")
         .ok_or_else(|| String::from("раздел /system не найден"))?;
     let image = read_partition_image(layout)?;
 

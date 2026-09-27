@@ -90,6 +90,9 @@ fn valid_component(s: &str) -> bool {
 
 /// Полный путь файла в профиле пользователя.
 pub fn physical_name(user: &str, area: Area, name: &str) -> Result<String, UserFsError> {
+    if user.len() > MAX_NAME || name.len() > MAX_NAME {
+        return Err(UserFsError::TooLong);
+    }
     if !valid_component(user) || !valid_component(name) {
         return Err(UserFsError::BadName);
     }

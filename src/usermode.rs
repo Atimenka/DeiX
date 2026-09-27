@@ -502,6 +502,9 @@ pub fn selftest() {
         crate::println!("  [ring3] переход в CPL=3 (entry {:#x})...", USER_CODE);
         USER_EXITED = false;
         enter_ring3(USER_CODE, USER_STACK_TOP);
+        if selftest_ok() {
+            crate::println!("  [ring3] selftest OK: return from CPL=3 verified");
+        }
     }
 }
 

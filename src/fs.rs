@@ -7,10 +7,8 @@ use alloc::collections::BTreeMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Permissions(pub u8);
 impl Permissions {
-    pub const R: Self = Permissions(4); pub const RW: Self = Permissions(6); pub const RWX: Self = Permissions(7);
-    pub fn as_octal(&self) -> u16 { self.0 as u16 }
-    pub fn can_read(&self, _o: bool) -> bool { self.0 & 4 != 0 }
-    pub fn can_write(&self, _o: bool) -> bool { self.0 & 2 != 0 }
+    pub const RW: Self = Permissions(6);
+    pub const RWX: Self = Permissions(7);
 }
 
 #[derive(Debug, Clone)]
@@ -18,10 +16,6 @@ pub struct FileMeta {
     pub name: String, pub is_dir: bool, pub size: u64,
     pub owner: String, pub group: String, pub perms: Permissions,
     pub system: bool, pub created_at: u64,
-}
-impl FileMeta {
-    pub fn new_file(n: &str, o: &str) -> Self { FileMeta{name:n.into(),is_dir:false,size:0,owner:o.into(),group:"users".into(),perms:Permissions::RW,system:false,created_at:crate::timer::uptime_ms()} }
-    pub fn new_dir(n: &str, o: &str) -> Self { FileMeta{name:n.into(),is_dir:true,size:0,owner:o.into(),group:"users".into(),perms:Permissions::RWX,system:false,created_at:crate::timer::uptime_ms()} }
 }
 
 static META_DB: crate::spinlock::SpinLock<BTreeMap<String, FileMeta>> = crate::spinlock::SpinLock::new(BTreeMap::new());

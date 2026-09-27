@@ -2,6 +2,7 @@
 
 use alloc::format;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

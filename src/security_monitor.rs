@@ -3,11 +3,10 @@
 // перехват ransomware-активности, инъекций кода в системные пути и высылка SIGKILL.
 // no_std-совместимо: только core/alloc (BTreeMap, String, Vec), вывод — crate::println!.
 
-#![allow(dead_code)]
-
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -314,10 +313,11 @@ pub fn boot_selfcheck() {
 
     // 2. Симулированная атака программы-вымогателя (высокая частота + высокая энтропия)
     let attack = SecurityEvent::new(666, "sys_write", "/userdata/private/data.bin", 450, 0.92);
+    let attack_analyzed = engine.analyze_event(&attack);
     let attack_flagged = engine.process_event(&attack);
-    if attack_flagged && !engine.kill_signals.is_empty() {
+    if attack_analyzed && attack_flagged && !engine.kill_signals.is_empty() {
         let sig = &engine.kill_signals[0];
-        crate::println!("  [secmon] Ransomware detected: SIGKILL -> PID {} (risk > 0.85)", sig.pid);
+        crate::println!("  [secmon] Ransomware detected: {}", sig.describe());
         crate::println!("  [secmon] Heuristic Security Monitor: ALL CHECKS PASSED");
     } else {
         crate::println!("  [secmon] ERROR: Ransomware attack was not intercepted!");

@@ -32,7 +32,7 @@ impl VaultRejection {
 
 /// ОЦЕНКА ПРАВИЛА VAULT ДЛЯ КОМАНДЫ МОНТИРОВАНИЯ.
 pub fn evaluate(dst: &str, fs_type: &str, mode: MountMode, _stage: BootStage) -> Result<(), VaultRejection> {
-    let is_system = dst == "/system";
+    let is_system = SYSTEM_PARTITIONS.contains(&dst);
 
     match dst {
         "/userdata" => {

@@ -20,6 +20,7 @@
 use crate::ext2;
 use crate::{print, println};
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 
 const KMOD_MAGIC: u32 = 0x444F_4D4B; // "KMOD" LE
@@ -41,7 +42,6 @@ pub struct LoadedModule {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ModuleStatus {
-    Loaded,
     Initialized,
     Failed,
 }
