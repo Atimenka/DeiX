@@ -19,7 +19,7 @@
 
 use crate::ext2;
 use crate::{print, println};
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 const KMOD_MAGIC: u32 = 0x444F_4D4B; // "KMOD" LE

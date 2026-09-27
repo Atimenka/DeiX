@@ -26,7 +26,7 @@
 use crate::crypto::sha256;
 use crate::ext2;
 use crate::rng;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 const USERS_DB_FILE: &str = "USERS.DB";

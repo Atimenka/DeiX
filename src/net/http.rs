@@ -4,7 +4,7 @@
 //! Используется браузером DeiX OS и менеджером OTA.
 
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 use crate::net::tcp;
 

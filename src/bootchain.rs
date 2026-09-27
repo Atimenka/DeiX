@@ -9,7 +9,7 @@
 
 
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -111,7 +111,7 @@ fn load_link(partition: &str, wanted: &[&str]) -> Result<ChainLink, String> {
 /// Загружает kernel.bin из /system/kernel/kernel.bin (EROFS).
 pub fn load_kernel() -> Result<String, String> {
     let layout = crate::partition_map::lookup_layout("/system")
-        .ok_or_else(|| "раздел /system не найден".to_string())?;
+        .ok_or_else(|| String::from("раздел /system не найден"))?;
     let image = read_partition_image(layout)?;
 
     let kernel_bin = erofs_extract(&image, "kernel/kernel.bin")

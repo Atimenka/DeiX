@@ -7,7 +7,7 @@ use crate::ui::metrics::UiMetrics;
 use crate::ui::surface::Surface;
 use crate::ui::theme::UiTheme;
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 pub const RESOLUTION_PRESETS: [(u32, u32); 5] = [

@@ -119,4 +119,4 @@ pub fn write_sectors(lba: u32, count: u8, data: &[u8]) -> Result<(), ()> {
 // Подстраховка от неиспользуемости ata-импорта (перехват делается в ata.rs,
 // но ссылка здесь держит модуль связанным).
 #[allow(unused_imports)]
-use crate::ata as _ata_ref;
+

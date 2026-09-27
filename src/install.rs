@@ -14,7 +14,7 @@
 
 
 use crate::ata::{self, Drive};
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::format;
 

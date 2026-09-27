@@ -10,7 +10,7 @@ use crate::rtl8139;
 use crate::vga::Color;
 use crate::vgaglobal::with_writer;
 use crate::{ext2, gpu, keyboard, print, println, println_t, t, timer};
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::arch::asm;
 

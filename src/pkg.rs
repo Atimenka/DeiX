@@ -14,7 +14,7 @@
 
 use crate::ext2;
 use crate::{println, println_t, t};
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 /// Имя служебного файла-реестра, в котором pkg хранит список

@@ -8,7 +8,7 @@
 // no_std-совместимо: alloc (String), потокобезопасно через SpinLock.
 
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use crate::spinlock::SpinLock;
 
 /// Сырые сектора crash-лога (свободная зона: stage2 < 1150, ext2 с 4096).

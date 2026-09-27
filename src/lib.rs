@@ -2,6 +2,8 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
+#![allow(dead_code)]
+#![allow(unused_imports)]
 
 extern crate alloc;
 
