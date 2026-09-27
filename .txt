@@ -1,837 +1,988 @@
-Посмотри текущую ветку `arena/01a0b7dc-deix` и исправь **все compiler warnings**, показанные в приложенном логе.
-
-Сейчас сборка заканчивается примерно на:
-
-`deix_kernel (lib) generated 109 warnings`
-
-Цель: после cleanup выполнить
-
-`cargo +nightly build --release`
-
-и получить **0 warnings**, без маскировки проблем через глобальный `#[allow(dead_code)]`.
-
-### Главное правило
-
-Не просто добавляй `#[allow(dead_code)]`.
-
-Для каждого warning реши одно из трёх:
-
-1. код больше не нужен → удалить;
-2. код нужен → реально использовать/подключить;
-3. код является сознательным public API/future scaffold → только локальный `#[allow(dead_code)]` с коротким объяснением, и только если удаление действительно ломает архитектуру.
-
-Приоритет — удаление мёртвого кода.
-
-### Что конкретно исправить
-
-#### `src/allocator.rs`
-
-Warning:
-
-```text
-field `0` is never read
-HeapStorage([u8; HEAP_SIZE])
-```
-
-Если `HeapStorage` нужен только как статический буфер, убери wrapper-struct и используй подходящий тип напрямую либо сделай так, чтобы поле реально использовалось.
-
-Не оставляй бессмысленный tuple-wrapper только ради старой реализации.
-
----
-
-#### `src/bootchain.rs`
-
-Сейчас не используются:
-
-```text
-erofs_list_files()
-describe()
-ChainLink
-load_link()
-show_partition_files()
-```
-
-Удалить их, если они не нужны после перехода на новую архитектуру.
-
-Оставить только реально необходимое для текущего boot flow:
-
-```text
-/system
-    ↓
-kernel/kernel.bin
-```
-
-То есть bootchain не должен содержать старый generic loader/diagnostic API без вызывающего кода.
-
----
-
-#### `src/dialog.rs`
-
-Неиспользуемы:
-
-```text
-BG
-BORDER
-TEXT
-ACCENT
-ERR
-draw_dialog()
-poll_key()
-confirm()
-prompt_line()
-prompt_masked()
-choose()
-```
-
-Проверить ссылки по проекту.
-
-Если `dialog.rs` больше не используется после удаления старых режимов/recovery UI — удалить **весь модуль** и `mod dialog;` из `lib.rs`.
-
-Не сохранять целый мёртвый UI subsystem только ради отсутствия warning.
-
----
-
-#### `src/dinit/mod.rs`
-
-В `DinitState` не используются:
-
-```text
-Suspended
-Stopped
-Faulted
-```
-
-Проверить реальные переходы состояния.
-
-Если они нигде не используются — оставить только состояния, реально существующие в текущей модели Dinit.
-
-Не уничтожать сам Dinit: он остаётся частью архитектуры Ring 0.
-
----
-
-#### `src/ds.rs`
-
-Warnings:
-
-```text
-DsError::FileNotFound(String)
-DsError::ExecutionError(String)
-DsError::SyntaxError(String)
-```
-
-`SyntaxError` не создаётся.
-
-Проверить обработку `FileNotFound` и `ExecutionError`.
-
-Если строка внутри ошибки реально нигде не читается — не таскать `String` просто для вида. Можно заменить payload на более подходящую структуру/unit variant, **но только если диагностика не потеряется**.
-
-`SyntaxError` удалить, если DSL больше не использует такой тип ошибки.
-
----
-
-#### `src/duil.rs`
-
-Не используются:
-
-```text
-WidgetKind::TextBox
-Widget.border_color
-draw_char_buf()
-draw_text_buf()
-fill_rect_buf()
-draw_rect_border_buf()
-render_widget_tree()
-hit_test_and_click()
-DuilApp.root
-```
-
-Это большой кусок старого/альтернативного UI-движка.
-
-Проверить, используется ли `duil` вообще в текущем desktop UI.
-
-Если современный UI уже живёт в:
-
-```text
-src/ui/*
-src/renderer.rs
-```
-
-а `duil.rs` больше не вызывается — удалить `duil.rs` полностью.
-
-Если часть реально нужна — удалить только старый неиспользуемый rendering path и оставить используемое.
-
----
-
-#### `src/erofs.rs`
-
-Не используются:
-
-```text
-EROFS_BLOCK_SIZE
-EROFS_BLOCK_BITS
-S_IFREG
-Superblock.inos
-Superblock.blocks
-wr_u16()
-wr_u32()
-wr_u64()
-align_up()
-write_inode()
-build_dir_blocks()
-build_image()
-is_erofs()
-```
-
-Очень важно:
-
-**не удаляй рабочий reader EROFS.**
-
-Текущая архитектура использует настоящий EROFS для `/system`.
-
-Но старый builder/debug/helper API, если он больше нигде не вызывается, удалить.
-
-Особенно проверить старые функции построения образов, потому что теперь `tools/make_deix_fs.py` строит EROFS самостоятельно.
-
----
-
-#### `src/fs.rs`
-
-Warnings показывают, что практически весь abstraction layer `Permissions/FileMeta/META_DB` используется слабо или вообще не используется:
-
-```text
-Permissions::R
-Permissions::RW
-Permissions::RWX
-Permissions::as_octal()
-Permissions::can_read()
-Permissions::can_write()
-FileMeta fields
-FileMeta::new_file()
-FileMeta::new_dir()
-list_dir()
-```
-
-Проверить реальные call sites.
-
-Если `fs.rs` остался от старой permission/meta-системы и фактически не участвует в текущем VFS/userfs/Dinit — удалить мёртвую часть или сам модуль.
-
-Не дублировать filesystem permission model там, где уже есть `ext2`, `userfs` и Dinit policy.
-
----
-
-#### `src/hal/mod.rs` и `src/hal/mmio.rs`
-
-Не используются:
-
-```text
-Device::config_write32()
-udelay()
-MmioRegion::write32()
-MmioRegion::write16()
-MmioRegion::read8()
-MmioRegion::write8()
-MmioRegion::modify32()
-MmioRegion::wait_for()
-```
-
-Проверить, нужен ли вообще этот HAL API текущим драйверам.
-
-Если это остаток от незавершённой HAL-архитектуры и реальные драйверы его не используют — удалить unused methods.
-
-Не удалять реально используемый HAL целиком.
-
----
-
-#### `src/hda.rs`
-
-Есть неиспользуемые register constants:
-
-```text
-REG_VMIN
-REG_VMAJ
-REG_WAKEEN
-REG_INTCTL
-REG_INTSTS
-REG_CORBSTS
-SD_OFF_CTL1
-SD_OFF_CTL2
-SD_OFF_FIFOS
-```
-
-И:
-
-```text
-HdaController.codec_addr
-```
-
-Удалить неиспользуемые константы/поля, если они действительно не участвуют в текущем HDA path.
-
-Сам HDA оставить.
-
----
-
-#### `src/init_parser.rs`
-
-Warning:
-
-```text
-BootStage::allows_userdata_rw()
-ParseWarning::raw_line
-```
-
-`allows_userdata_rw()` удалить.
-
-Для `raw_line`:
-
-если подробный исходный текст warning больше нигде не показывается — убрать поле;
-
-если диагностика должна его сохранять — реально использовать в `boot_report()`.
-
-Также убрать устаревшие формулировки типа:
-
-```text
-six stages
-ext4-only
-old boot stages
-```
-
-Текущая модель:
-
-```text
-EarlyBoot
-Boot
-```
-
-и `/userdata = ext2/ext4 RW`.
-
----
-
-#### `src/install.rs`
-
-Warning:
-
-```text
-build_ext2_volume()
-```
-
-Функция больше не используется.
-
-Удалить старый duplicate formatter.
-
-В установщике оставить одну реализацию форматирования `/userdata`.
-
-При этом не сломать текущую схему:
-
-```text
-/system   LBA 4096..12799   EROFS
-/userdata LBA 12800..18431  EXT2
-```
-
----
-
-#### `src/interrupts.rs`
-
-```text
-irq_stub_12
-```
-
-Проверить, почему IRQ12 не используется.
-
-Если mouse действительно работает через IRQ12 другим способом — удалить лишнюю stub-обвязку.
-
-Если stub обязателен для IDT/ABI, сделать так, чтобы он реально устанавливался/использовался, а не глушить warning.
-
----
-
-#### `src/mex.rs`
-
-```text
-is_mex_filename()
-```
-
-Удалить, если проверка расширения больше нигде не применяется.
-
-Сам MEX пока не удалять: он остаётся legacy/compat механизмом.
-
----
-
-#### `src/module.rs`
-
-Warnings:
-
-```text
-LoadedModule.version
-LoadedModule.load_addr
-LoadedModule.body_size
-LoadedModule.status
-ModuleStatus::Loaded
-get_loaded_modules()
-```
-
-Проверить API реестра модулей.
-
-Особенно важно не оставить декоративную систему `.kmod`, которая ничего реально не делает.
-
-Текущая архитектура должна быть согласована с новой FS:
-
-```text
-/system/kmod/*.kmod
-```
-
-а не чтением `.kmod` из `/userdata`.
-
-Если `get_loaded_modules()` нужен CLI — подключить его.
-
-Если не нужен — удалить.
-
-`ModuleStatus::Loaded` удалить, если переход идёт сразу в `Initialized/Failed`.
-
----
-
-#### `src/mouse.rs`
-
-Не читаются:
-
-```text
-MouseSnapshot.right_button
-MouseSnapshot.middle_button
-```
-
-Если кнопки реально поддерживаются — использовать их в обработке мыши.
-
-Если нет — убрать поля.
-
-Не хранить состояние, которое UI нигде не использует.
-
----
-
-#### `src/net/eth.rs`
-
-```text
-EthernetHeader.dst_mac
-```
-
-Проверить parser/use.
-
-Если destination MAC нужен для фильтрации/диагностики — использовать.
-
-Если нет — убрать поле.
-
----
-
-#### `src/net/http.rs`
-
-```text
-get_binary()
-```
-
-Если нигде не используется — удалить.
-
-Не оставлять generic HTTP API “на будущее”.
-
----
-
-#### `src/net/ipv4.rs`
-
-```text
-Ipv4Header.version_ihl
-```
-
-Если parser уже распаковывает version/IHL, но значение дальше не нужно — убрать хранение.
-
-Если нужна валидация IPv4 header — реально проверить через неё.
-
----
-
-#### `src/nouveau.rs`
-
-Не используются:
-
-```text
-NouveauInfo.device
-NouveauInfo.bar0_mmio
-```
-
-Проверить, является ли Nouveau driver реально используемым.
-
-Если эти значения не нужны — удалить поля.
-
-Сам драйвер удалять только если весь Nouveau path мёртвый.
-
----
-
-#### `src/renderer.rs`
-
-Не используются:
-
-```text
-Color::from_u32()
-Color::DARK_GRAY
-Color::LIGHT_GRAY
-Color::DESKTOP_BLUE
-Color::TITLEBAR_ACTIVE
-Color::TITLEBAR_INACTIVE
-Color::ACCENT
-```
-
-Плюс:
-
-```text
-IconType
-Settings
-Check
-Bookmark
-Home
-Reload
-ArrowLeft
-ArrowRight
-...
-```
-
-и:
-
-```text
-Renderer::clear_damage()
-Renderer::shade_rect()
-Renderer::draw_drop_shadow()
-```
-
-Не ломай существующий desktop UI.
-
-Но старый неиспользуемый набор цветов/иконок/эффектов удалить.
-
-Особенно не сохранять десятки constants “на будущее”.
-
----
-
-#### `src/rtl8139.rs`
-
-```text
-RxBuffer([u8; RX_BUFFER_SIZE])
-```
-
-Если wrapper никогда не читается как поле — заменить на обычный массив/подходящий тип либо реально обращаться к буферу.
-
----
-
-#### `src/sched.rs`
-
-Не используются:
-
-```text
-current_id()
-yield_now()
-stop()
-```
-
-Проверить scheduler.
-
-`yield_now()` может быть полезен архитектурно, но warning означает, что сейчас его никто не вызывает.
-
-Не добавлять искусственный вызов только ради warning.
-
-Если API пока не нужен — удалить.
-
----
-
-#### `src/sound.rs`
-
-Не используются:
-
-```text
-SCRATCH
-warn_triple()
-ota_alert()
-```
-
-`ota_alert()` особенно важно удалить: OTA в DeiX больше нет.
-
-Также убрать комментарии про OTA и `/super`.
-
-Оставить нормальные UI sounds из:
-
-```text
-/system/media/audio/ui/
-```
-
----
-
-#### `src/timer.rs`
-
-```text
-sleep_ms()
-```
-
-Удалить, если система использует другой механизм ожидания.
-
----
-
-#### `src/ui/mod.rs`
-
-Не используются:
-
-```text
-KernelGuiCompositorService
-COMPOSITOR_SERVICE
-compositor_status()
-```
-
-Проверить новую UI архитектуру.
-
-Если compositor теперь живёт непосредственно в `src/ui/*` и этот старый global service ничего не делает — удалить.
-
----
-
-#### `src/ui/metrics.rs`
-
-Unused:
-
-```text
-SPACE_1
-SPACE_2
-SPACE_4
-SPACE_5
-SPACE_7
-```
-
-Удалить действительно неиспользуемые spacing constants.
-
----
-
-#### `src/ui/surface.rs`
-
-Не используются:
-
-```text
-Surface.width
-Surface.height
-Surface.damage
-Surface::mark_dirty()
-Surface::clear_damage()
-```
-
-Здесь осторожно.
-
-Если Surface/Damage — уже часть текущей запланированной compositor architecture, либо начать реально использовать её в compositor, либо убрать dead API до тех пор, пока он не нужен.
-
-Не оставлять мёртвую систему dirty-rect только ради красивой архитектуры.
-
----
-
-#### `src/ui/window.rs`
-
-Не используются:
-
-```text
-WindowContent::FileEditor
-Window.surface
-Window.dirty
-```
-
-Проверить современный window renderer.
-
-Если surface/damage model реально ещё не подключена — убрать её из Window сейчас.
-
-`FileEditor` удалить, если соответствующего приложения/обработчика нет.
-
----
-
-#### `src/userfs.rs`
-
-```text
-UserFsError::TooLong
-```
-
-У тебя есть отдельная проверка максимальной длины имени, поэтому проверить mapping ошибок.
-
-Если `TooLong` никогда не возвращается — удалить variant либо начать возвращать его там, где действительно превышен `MAX_NAME`.
-
----
-
-#### `src/usermode.rs`
-
-Не используются:
-
-```text
-USER_CS
-KStack.0
-USER_CODE
-USER_STACK_TOP
-selftest()
-selftest_ok()
-user_program_start
-user_program_end
-```
-
-Это похоже на остатки старого Ring 3 self-test/demo.
-
-Новая модель уже должна развиваться через:
-
-```text
-Dinit
-Ring 3
-process isolation
-capabilities
-scheduler
-```
-
-Старые self-test/global symbols удалить, если они больше не нужны для boot.
-
-`KStack` при этом нельзя бездумно удалить, если он реально используется как storage.
-
----
-
-#### `src/vault.rs`
-
-Не используются:
-
-```text
-SYSTEM_PARTITIONS
-VaultRejection::UserdataPolicy
-VaultRejection::detail()
-VaultRejection::kind_name()
-```
-
-Упростить Vault до реально действующей политики:
-
-```text
-/system   = erofs + ro
-/userdata = ext2/ext4 + rw
-```
-
-Удалить obsolete rejection branches и методы.
-
-Не оставлять compatibility API без вызовов.
-
----
-
-#### `src/vbe.rs`
-
-```text
-Framebuffer.bpp
-```
-
-Либо использовать при вычислении framebuffer access, либо убрать поле.
-
----
-
-#### `src/vga.rs`
-
-Много неиспользуемых вариантов `Color`.
-
-Оставить только реально используемые цвета.
-
-Не удалять сам VGA driver.
-
----
-
-### Отдельно: убрать глобальное подавление dead code
-
-В `src/lib.rs` есть:
-
-```rust
-#![allow(dead_code)]
-```
-
-Это больше не должно использоваться как костыль.
-
-После удаления/подключения мёртвого кода убрать этот attribute.
-
-Также убрать локальные `#![allow(dead_code)]` из `dinit/mount.rs`, `dinit/namespace.rs` и других мест, где они были добавлены только чтобы скрыть старые warnings.
-
-После этого снова собрать проект и исправить уже реальные остаточные warnings.
-
-### Очень важно
-
-Не возвращать старую архитектуру ради устранения warning.
-
-Не возвращать:
-
-```text
-OTA
-A/B
-BCB
-Recovery
-Fastbootd
-DSM
-TPM
-/super
-/kernel_a
-/kernel_b
-/init_boot
-/vendor_boot
-```
-
-Текущая архитектура остаётся:
-
-```text
-MBR
- ↓
-stage2
- ↓
-/system   EROFS RO
-/userdata EXT2 RW
- ↓
-Dinit PID 1 Ring 0
- ↓
-Ring 3
-```
-
-`/system` содержит:
-
-```text
-/system/kernel/kernel.bin
-/system/kmod/*.kmod
-/system/lib/*.so
-/system/bin/*
-/system/services/*
-/system/media/audio/ui/*.dps
-/system/etc/*
-/system/share/*
-```
-
-### Финальная проверка
-
-После cleanup:
-
-```text
-cargo +nightly build --release
-```
-
-должно дать:
-
-```text
-0 warnings
-0 errors
-```
-
-Затем проверь:
-
-```text
-/system EROFS читается
-/system/kernel/kernel.bin находится
-/system/kmod работает из EROFS
-/userdata EXT2 работает
-Dinit стартует
-CLI стартует
-desktop UI стартует
-звук ищется в /system/media/audio/ui
-```
-
-В конце выведи краткий отчёт:
-
-```text
-Removed:
-- ...
-
-Refactored:
-- ...
-
-Kept intentionally:
-- ...
-
-Warnings before: 109
-Warnings after: 0
-```
-
-Не заменяй проблему `#[allow(dead_code)]`, искусственными вызовами функций или dummy references только ради зелёной сборки.
+❯ ./build.sh 
+==> [1/8] Ассемблируем stage2 (32-бит вход + long mode + ATA-ридер ядра)
+==> [1b/8] Линкуем stage2 (загрузчик, база 0x10000)
+    stage2.bin (загрузчик): 362 байт => 1 секторов
+    kernel.bin LBA: 3
+==> [1c/8] Собираем ramboot (RAM-диск: дочитывает весь образ в 0x2000000)
+    ramboot.bin: 512 байт => 1 секторов
+==> [2/8] Собираем MBR-загрузчик (NUM_SECTORS=stage2, KERNEL_SECTORS=2048)
+==> [2b/8] Собираем демонстрационные .mex-программы (tools/*.asm)
+Packed: /home/atimenka/Deix/build/hello.bin (216 bytes) -> /home/atimenka/Deix/build/hello.mex (v1.1)
+Packed: /home/atimenka/Deix/build/sysinfo.bin (530 bytes) -> /home/atimenka/Deix/build/sysinfo.mex (v1.1)
+Packed: /home/atimenka/Deix/build/netping.bin (433 bytes) -> /home/atimenka/Deix/build/netping.mex (v1.1)
+==> [2c/8] Собираем тестовую программу Linux (статический PIE)
+    linux_hello.elf: 5152 байт
+==> [2d/8] Готовим загрузочное лого (assets/logo.png -> DXLG+RLE)
+/home/atimenka/Deix/tools/make_logo.py:167: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+  idx = [nearest(p) for p in list(im.getdata())]
+/home/atimenka/Deix/build/logo.dxlg: 128x128, 5 цв., 2671 Б (2.6 КиБ)
+  сырой RGB был бы 48 КиБ — сжатие в 18 раз
+==> [2e/8] Конвертируем UI-звуки (assets/*.wav -> DPS 8 кГц, u8 моно)
+    assets/start.wav -> /home/atimenka/Deix/build/sounds/start.dps: 29576 сэмплов @ 8000 Гц (~3.7 с, 29588 байт)
+    assets/Error.wav -> /home/atimenka/Deix/build/sounds/error.dps: 14807 сэмплов @ 8000 Гц (~1.9 с, 14819 байт)
+    assets/low battery.wav -> /home/atimenka/Deix/build/sounds/lowbat.dps: 14807 сэмплов @ 8000 Гц (~1.9 с, 14819 байт)
+    assets/full battery.wav -> /home/atimenka/Deix/build/sounds/fullbat.dps: 14807 сэмплов @ 8000 Гц (~1.9 с, 14819 байт)
+    assets/usb connect.wav -> /home/atimenka/Deix/build/sounds/usbcon.dps: 14807 сэмплов @ 8000 Гц (~1.9 с, 14819 байт)
+    assets/usb unconnected.wav -> /home/atimenka/Deix/build/sounds/usbdisc.dps: 14807 сэмплов @ 8000 Гц (~1.9 с, 14819 байт)
+==> [3/8] Собираем ядро на Rust (nightly, build-std, target: x86_64-unknown-none)
+   Compiling deix_kernel v0.2.1 (/home/atimenka/Deix)
+error: expected item after attributes
+   --> src/ramdisk.rs:121:1
+    |
+121 | #[allow(unused_imports)]
+    | ^^^^^^^^^^^^^^^^^^^^^^^^ expected an item after this
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/adb.rs:39:59
+   |
+39 |             let cmd = parts.get(1).cloned().unwrap_or("").to_string();
+   |                                                           ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+17 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/adb.rs:48:60
+   |
+48 |             let name = parts.get(1).cloned().unwrap_or("").to_string();
+   |                                                            ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+17 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/adb.rs:49:60
+   |
+49 |             let data = parts.get(2).cloned().unwrap_or("").to_string();
+   |                                                            ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+17 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/adb.rs:60:60
+   |
+60 |             let name = parts.get(1).cloned().unwrap_or("").to_string();
+   |                                                            ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+17 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/adb.rs:74:59
+   |
+74 |             let pkg = parts.get(1).cloned().unwrap_or("").to_string();
+   |                                                           ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+17 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/adb.rs:82:60
+   |
+82 |             let mode = parts.get(1).cloned().unwrap_or("").to_string();
+   |                                                            ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+17 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/auth.rs:130:32
+    |
+130 |             username: username.to_string(),
+    |                                ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 26 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/auth.rs:218:28
+    |
+218 |         username: username.to_string(),
+    |                            ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 26 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/auth.rs:368:53
+    |
+368 |     core::str::from_utf8(&buf[..len]).unwrap_or("").to_string()
+    |                                                     ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 26 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/auth.rs:419:44
+    |
+419 |                     return username.trim().to_string();
+    |                                            ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 26 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/auth.rs:450:40
+    |
+450 |                 return username.trim().to_string();
+    |                                        ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 26 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/cli.rs:92:26
+   |
+92 |         history.push(cmd.to_string());
+   |                          ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+ 6 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+    --> src/cli.rs:1239:46
+     |
+1239 |         *CURRENT_USER.lock() = Some(username.to_string());
+     |                                              ^^^^^^^^^ method not found in `&str`
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+     |
+   6 + use crate::alloc::string::ToString;
+     |
+
+error[E0599]: no method named `to_string` found for enum `Cow<'_, str>` in the current scope
+    --> src/crashlog.rs:80:48
+     |
+  80 |     Some(String::from_utf8_lossy(&body[..end]).to_string())
+     |                                                ^^^^^^^^^ method not found in `Cow<'_, str>`
+     |
+    ::: /home/atimenka/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/string.rs:2952:8
+     |
+2952 |     fn to_string(&self) -> String;
+     |        --------- the method is available for `Cow<'_, str>` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+     |
+  11 + use crate::alloc::string::ToString;
+     |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+  --> src/dialog.rs:83:50
+   |
+83 |         let body: String = if s.is_empty() { " ".to_string() } else { s.clone() };
+   |                                                  ^^^^^^^^^ method not found in `&'static str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+16 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/dialog.rs:115:17
+    |
+115 |             " ".to_string()
+    |                 ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 16 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/ds.rs:154:38
+    |
+154 |                     let k = k.trim().to_string();
+    |                                      ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for type `i64` in the current scope
+    --> src/ds.rs:157:55
+     |
+ 157 |                         self.eval_arithmetic(&v[5..]).to_string()
+     |                                                       ^^^^^^^^^ method not found in `i64`
+     |
+    ::: /home/atimenka/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/string.rs:2952:8
+     |
+2952 |     fn to_string(&self) -> String;
+     |        --------- the method is available for `i64` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+     |
+   3 + use crate::alloc::string::ToString;
+     |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/ds.rs:159:27
+    |
+159 |                         v.to_string()
+    |                           ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/ds.rs:176:46
+    |
+176 |                         self.env.insert(name.to_string(), val.to_string());
+    |                                              ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/ds.rs:176:63
+    |
+176 |                         self.env.insert(name.to_string(), val.to_string());
+    |                                                               ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/ds.rs:270:47
+    |
+270 |                     self.vars.insert(var_name.to_string(), input);
+    |                                               ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/ds.rs:381:69
+    |
+381 |                 let cond = line.trim_start_matches("while ").trim().to_string();
+    |                                                                     ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/ds.rs:412:69
+    |
+412 |                 let fn_name = line.trim_start_matches("fn ").trim().to_string();
+    |                                                                     ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/ds.rs:422:35
+    |
+422 |                     body.push(cur.to_string());
+    |                                   ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/duil.rs:68:24
+   |
+68 |             text: text.to_string(),
+   |                        ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+ 3 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/duil.rs:95:49
+   |
+95 |             "text" | "label" => self.text = val.to_string(),
+   |                                                 ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+ 3 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/duil.rs:96:41
+   |
+96 |             "title" => self.title = val.to_string(),
+   |                                         ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+ 3 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/duil.rs:146:50
+    |
+146 |             "onclick" => self.onclick = Some(val.to_string()),
+    |                                                  ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/duil.rs:438:37
+    |
+438 |                 widget.text = token.to_string();
+    |                                     ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/init_parser.rs:37:57
+   |
+37 |             other => Err(ParseError::UnknownStage(other.to_string())),
+   |                                                         ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+ 8 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/init_parser.rs:68:61
+   |
+68 |             other => Err(ParseError::InvalidMountMode(other.to_string())),
+   |                                                             ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+ 8 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/init_parser.rs:195:71
+    |
+195 |                 "команда встречена до первого объявления стадии 'on'".to_string()
+    |                                                                       ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/init_parser.rs:224:72
+    |
+224 |             ParseError::EmptyCommand => "пустая команда (нет токенов)".to_string(),
+    |                                                                        ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/init_parser.rs:490:74
+    |
+490 |                     detail: "после 'on' ожидалось ровно одно имя стадии".to_string(),
+    |                                                                          ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/init_parser.rs:499:35
+    |
+499 |                     keyword: "on".to_string(),
+    |                                   ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/init_parser.rs:524:39
+    |
+524 | ...                   tokens[1].to_string(),
+    |                                 ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/init_parser.rs:525:39
+    |
+525 | ...                   tokens[2].to_string(),
+    |                                 ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/init_parser.rs:526:39
+    |
+526 | ...                   tokens[3].to_string(),
+    |                                 ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/init_parser.rs:535:34
+    |
+535 |                 keyword: "mount".to_string(),
+    |                                  ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/init_parser.rs:540:34
+    |
+540 |                 keyword: "mount".to_string(),
+    |                                  ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/init_parser.rs:641:36
+    |
+641 |                 keyword: "service".to_string(),
+    |                                    ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/init_parser.rs:646:36
+    |
+646 |                 keyword: "service".to_string(),
+    |                                    ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/init_parser.rs:654:87
+    |
+654 |                         4..=u8::MAX => Err(ParseError::InvalidExecutionRing(tokens[3].to_string())),
+    |                                                                                       ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/init_parser.rs:656:78
+    |
+656 |                     Err(_) => Err(ParseError::InvalidExecutionRing(tokens[3].to_string())),
+    |                                                                              ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/init_parser.rs:661:39
+    |
+661 | ...                   tokens[1].to_string(),
+    |                                 ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/init_parser.rs:662:39
+    |
+662 | ...                   tokens[2].to_string(),
+    |                                 ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/init_parser.rs:671:36
+    |
+671 |                 keyword: "service".to_string(),
+    |                                    ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/init_parser.rs:766:32
+    |
+766 |             raw_line: raw_line.to_string(),
+    |                                ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/install.rs:589:62
+    |
+589 |         test_user = parts.get(1).cloned().unwrap_or("user1").to_string();
+    |                                                              ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 16 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/install.rs:590:64
+    |
+590 |         test_pass = parts.get(2).cloned().unwrap_or("pass123").to_string();
+    |                                                                ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 16 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/install.rs:646:37
+    |
+646 |                 username = u.trim().to_string();
+    |                                     ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 16 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/linux/elf.rs:107:48
+    |
+107 |         return Err("файл меньше заголовка ELF".to_string());
+    |                                                ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/linux/elf.rs:116:58
+    |
+116 |         return Err("не 64-битный ELF (нужен ELFCLASS64)".to_string());
+    |                                                          ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/linux/elf.rs:119:39
+    |
+119 |         return Err("не little-endian".to_string());
+    |                                       ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/linux/elf.rs:155:61
+    |
+155 |         None => out.push("интерпретатор: нет (статический)".to_string()),
+    |                                                             ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/linux/elf.rs:235:57
+    |
+235 |             return Err("релокация указывает вне образа".to_string());
+    |                                                         ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/linux/elf.rs:252:18
+    |
+250 |             "динамический бинарник: нужен ld-linux-x86-64.so.2 и glibc, \
+251 |              пока поддерживаются только статические"
+252 |                 .to_string(),
+    |                  ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/linux/elf.rs:258:44
+    |
+258 |         return Err("нет сегментов PT_LOAD".to_string());
+    |                                            ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/linux/elf.rs:285:52
+    |
+285 |         _ => return Err("неподдерживаемый тип ELF".to_string()),
+    |                                                    ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/linux/elf.rs:296:71
+    |
+296 |             return Err("сегмент выходит за пределы области программы".to_string());
+    |                                                                       ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 11 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/module.rs:321:10
+    |
+318 |     let name = core::str::from_utf8(name_bytes)
+319 |         .unwrap_or("???")
+320 |         .trim_end_matches('\0')
+321 |         .to_string();
+    |          ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 20 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/module.rs:399:20
+    |
+399 |         name: name.to_string(),
+    |                    ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 20 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for type `str` in the current scope
+    --> src/net/http.rs:28:29
+     |
+  28 |         (host_part[..colon].to_string(), port)
+     |                             ^^^^^^^^^ method not found in `str`
+     |
+    ::: /home/atimenka/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/string.rs:2952:8
+     |
+2952 |     fn to_string(&self) -> String;
+     |        --------- the method is available for `str` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+     |
+   6 + use crate::alloc::string::ToString;
+     |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/net/http.rs:30:20
+   |
+30 |         (host_part.to_string(), 80u16)
+   |                    ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+ 6 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/net/http.rs:34:28
+   |
+34 |     Some((host, port, path.to_string()))
+   |                            ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+ 6 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+  --> src/net/http.rs:66:49
+   |
+66 |         .ok_or_else(|| "Некорректный URL адрес".to_string())?;
+   |                                                 ^^^^^^^^^ method not found in `&'static str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+ 6 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/net/http.rs:120:38
+    |
+120 |         .ok_or_else(|| "Invalid URL".to_string())?;
+    |                                      ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  6 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/pkg.rs:90:55
+   |
+90 |             Ok(text) => text.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect(),
+   |                                                       ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+15 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&'static str` in the current scope
+   --> src/pkg.rs:191:33
+    |
+191 |         installed.push(pkg.name.to_string());
+    |                                 ^^^^^^^^^ method not found in `&'static str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+ 15 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/security_monitor.rs:53:28
+   |
+53 |             action: action.to_string(),
+   |                            ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+ 8 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/security_monitor.rs:54:38
+   |
+54 |             target_path: target_path.to_string(),
+   |                                      ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+ 8 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/security_monitor.rs:111:28
+    |
+111 |             reason: reason.to_string(),
+    |                            ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/security_monitor.rs:161:36
+    |
+161 |             monitor_id: monitor_id.to_string(),
+    |                                    ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  8 + use crate::alloc::string::ToString;
+    |
+
+error[E0599]: no method named `to_string` found for type `str` in the current scope
+    --> src/syslog.rs:26:29
+     |
+  26 |         msg[..MAX_LINE_LEN].to_string()
+     |                             ^^^^^^^^^ method not found in `str`
+     |
+    ::: /home/atimenka/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/string.rs:2952:8
+     |
+2952 |     fn to_string(&self) -> String;
+     |        --------- the method is available for `str` here
+     |
+     = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+     |
+   8 + use crate::alloc::string::ToString;
+     |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+  --> src/syslog.rs:28:13
+   |
+28 |         msg.to_string()
+   |             ^^^^^^^^^ method not found in `&str`
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+   |
+ 8 + use crate::alloc::string::ToString;
+   |
+
+error[E0599]: no method named `to_string` found for reference `&str` in the current scope
+   --> src/ui/window.rs:301:19
+    |
+301 |         clean_url.to_string()
+    |                   ^^^^^^^^^ method not found in `&str`
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `ToString` which provides `to_string` is implemented but not in scope; perhaps you want to import it
+    |
+  3 + use crate::alloc::string::ToString;
+    |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `deix_kernel` (lib) due to 78 previous errors
+
+Deix on  arena/01a0b7dc-deix is 📦 v0.2.1 via 🐍 v3.14.7 via 🦀 v1.100.0-nightly took 3s 
+󰂄 0% ❯ a
