@@ -25,11 +25,11 @@ use alloc::format;
 /// Максимум секторов области ядра/загрузчика (до ext2-тома на LBA 4096).
 pub const KERNEL_AREA_SECTORS: u32 = 3500;
 
-/// Смещение ext2-тома /system на диске (то же, что ext2::FS_START_LBA).
-const FS_START_LBA: u32 = 4096;
-/// Размер тома /system в секторах.
-const FS_TOTAL_SECTORS: u32 = 8192;
-/// Размер тома /system в блоках (1024 байта = 2 сектора).
+/// Смещение ext2-тома /userdata на диске (то же, что ext2::FS_START_LBA).
+const FS_START_LBA: u32 = 12800;
+/// Размер тома /userdata в секторах.
+const FS_TOTAL_SECTORS: u32 = 5632;
+/// Размер тома /userdata в блоках (1024 байта = 2 сектора).
 const FS_TOTAL_BLOCKS: u32 = FS_TOTAL_SECTORS / 2;
 
 /// Карта разделов (2-partition scheme, совпадает с tools/make_deix_fs.py):
