@@ -165,8 +165,8 @@ impl Dinit {
         // 4. Разбор и применение декларативного init.deix сценария
         self.apply_init_script(INIT_DEIX_SCRIPT);
 
-        // 5. Переход по стадиям загрузки: InitBoot -> VendorBoot -> Boot
-        self.advance_stage(BootStage::VendorBoot);
+        // 5. Переход по стадиям загрузки: EarlyBoot -> Boot
+        self.advance_stage(BootStage::EarlyBoot);
         self.advance_stage(BootStage::Boot);
 
         // 6. Запуск служб стадии Boot

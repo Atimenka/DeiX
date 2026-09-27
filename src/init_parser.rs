@@ -49,16 +49,6 @@ impl BootStage {
         true
     }
 }
-        match self {
-            BootStage::Boot => true,
-            BootStage::Recovery => true,
-            BootStage::Fastbootd => true,
-            BootStage::Edl => true,
-            BootStage::InitBoot => false,
-            BootStage::VendorBoot => false,
-        }
-    }
-}
 
 /// Модификатор доступа к узлам дерева виртуальной файловой системы (VFS).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
