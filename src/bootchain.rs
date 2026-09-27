@@ -34,39 +34,10 @@ pub fn read_partition_image(layout: &PartitionLayout) -> Result<Vec<u8>, String>
     Ok(out)
 }
 
-/// Список файлов в EROFS-разделе: `(имя, размер)`.
-///
-/// Настоящий разбор EROFS v1 через `crate::erofs` (магия 0xE0F5E1E2):
-/// суперблок -> корневой инод -> записи каталога. Понимает и образы,
-/// созданные `mkfs.erofs` (раскладки FLAT_PLAIN и FLAT_INLINE).
-pub fn erofs_list_files(image: &[u8]) -> Result<Vec<(String, usize)>, String> {
-    crate::erofs::list_files(image).map_err(|e| e.message())
-}
-
 /// Извлекает файл из EROFS-раздела по имени.
 pub fn erofs_extract(image: &[u8], name: &str) -> Result<Vec<u8>, String> {
     crate::erofs::read_file(image, name)
         .map_err(|e| alloc::format!("файл '{}': {}", name, e.message()))
-}
-
-/// Краткое описание файла (первые байты как текст/hex).
-fn describe(data: &[u8]) -> String {
-    let mut s = String::new();
-    let n = data.len().min(24);
-    for b in &data[..n] {
-        if *b >= 0x20 && *b < 0x7F {
-            s.push(*b as char);
-        } else {
-            s.push('.');
-        }
-    }
-    s
-}
-
-/// Результат загрузки одного звена цепочки.
-struct ChainLink {
-    pub files: Vec<String>,
-    pub loaded: usize,
 }
 
 /// Проходит цепочку загрузки (normal): init_boot -> vendor_boot -> boot -> kernel.
@@ -88,26 +59,6 @@ pub fn run_boot_chain() -> Result<String, String> {
     Ok(out)
 }
 
-/// Загружает звено: читает раздел, извлекает указанные файлы.
-fn load_link(partition: &str, wanted: &[&str]) -> Result<ChainLink, String> {
-    let layout = lookup_layout(partition).ok_or_else(|| format!("нет раздела {}", partition))?;
-    let image = read_partition_image(layout)?;
-    let files = erofs_list_files(&image)?;
-    let mut found: Vec<String> = Vec::new();
-    let mut loaded = 0usize;
-    for (name, _size) in files.iter() {
-        if wanted.contains(&name.as_str()) {
-            let data = erofs_extract(&image, name)?;
-            loaded += data.len();
-            found.push(format!("{} ({})", name, describe(&data)));
-        }
-    }
-    if found.is_empty() {
-        return Err(format!("нет файлов из {:?} в {}", wanted, partition));
-    }
-    Ok(ChainLink { files: found, loaded })
-}
-
 /// Загружает kernel.bin из /system/kernel/kernel.bin (EROFS).
 pub fn load_kernel() -> Result<String, String> {
     let layout = crate::partition_map::lookup_layout("/system")
@@ -123,29 +74,4 @@ pub fn load_kernel() -> Result<String, String> {
     );
 
     Ok(summary)
-}
-
-/// Показывает файлы во всех разделах (диагностика).
-pub fn show_partition_files() {
-    crate::println!("  [bootchain] Содержимое разделов:");
-    for layout in crate::partition_map::PARTITION_LAYOUT.iter() {
-        if layout.fs != "erofs" {
-            continue;
-        }
-        match read_partition_image(layout) {
-            Ok(image) => match erofs_list_files(&image) {
-                Ok(files) => {
-                    if files.is_empty() {
-                        crate::println!("    {:<12} (пусто)", layout.name);
-                    } else {
-                        let names: Vec<String> =
-                            files.iter().map(|(n, s)| format!("{}({}Б)", n, s)).collect();
-                        crate::println!("    {:<12} {}", layout.name, names.join(", "));
-                    }
-                }
-                Err(_) => crate::println!("    {:<12} (не EROFS)", layout.name),
-            },
-            Err(_) => crate::println!("    {:<12} (не читается)", layout.name),
-        }
-    }
 }

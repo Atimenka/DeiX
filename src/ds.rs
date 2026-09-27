@@ -8,7 +8,6 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone)]
 pub enum DsError {
     FileNotFound(String),
-    SyntaxError(String),
     ExecutionError(String),
     RecursionLimit,
 }

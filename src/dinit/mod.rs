@@ -39,9 +39,6 @@ use crate::security_monitor::{HeuristicAnalysisEngine, SecurityEvent};
 pub enum DinitState {
     Initializing,
     Running,
-    Suspended,
-    Stopped,
-    Faulted,
 }
 
 impl DinitState {
@@ -49,9 +46,6 @@ impl DinitState {
         match self {
             DinitState::Initializing => "initializing",
             DinitState::Running => "running",
-            DinitState::Suspended => "suspended",
-            DinitState::Stopped => "stopped",
-            DinitState::Faulted => "faulted",
         }
     }
 }

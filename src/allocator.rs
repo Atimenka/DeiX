@@ -10,9 +10,13 @@ const HEAP_SIZE: usize = 16 * 1024 * 1024;
 static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(align(16))]
-struct HeapStorage([u8; HEAP_SIZE]);
+struct HeapStorage {
+    bytes: [u8; HEAP_SIZE],
+}
 
-static mut HEAP_STORAGE: HeapStorage = HeapStorage([0; HEAP_SIZE]);
+static mut HEAP_STORAGE: HeapStorage = HeapStorage {
+    bytes: [0; HEAP_SIZE],
+};
 
 struct FreeBlock {
     size: usize,
@@ -122,7 +126,7 @@ impl LockedAllocator {
         without_interrupts(|| {
             let mut alloc = self.inner.lock();
             if !alloc.initialized {
-                let heap_start = ptr::addr_of_mut!(HEAP_STORAGE) as usize;
+                let heap_start = ptr::addr_of_mut!(HEAP_STORAGE.bytes) as usize;
                 unsafe { alloc.init(heap_start, HEAP_SIZE) };
             }
         });

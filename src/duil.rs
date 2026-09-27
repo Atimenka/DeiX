@@ -16,7 +16,6 @@ pub enum WidgetKind {
     ProgressBar,
     CheckBox,
     Spacer,
-    TextBox,
     GroupBox,
     Slider,
     Badge,
@@ -455,25 +454,6 @@ pub fn parse_duil_markup(script: &str) -> Widget {
     }
 
     root
-}
-
-// ---------------- Обработка кликов и интерактивность ----------------
-
-pub fn hit_test_and_click(w: &mut Widget, cx: i32, cy: i32) -> Option<String> {
-    if cx >= w.x && cx <= (w.x + w.width as i32) && cy >= w.y && cy <= (w.y + w.height as i32) {
-        if w.kind == WidgetKind::CheckBox {
-            w.checked = !w.checked;
-        }
-        if let Some(ref action) = w.onclick {
-            return Some(action.clone());
-        }
-        for child in w.children.iter_mut() {
-            if let Some(act) = hit_test_and_click(child, cx, cy) {
-                return Some(act);
-            }
-        }
-    }
-    None
 }
 
 // ---------------- Приложение Калькулятор DUIL ----------------
