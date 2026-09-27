@@ -117,7 +117,7 @@ pub fn init() -> bool {
         }
 
         // Настраиваем приёмный буфer.
-        let rx_phys_addr = unsafe { core::ptr::addr_of!(RX_BUFFER.bytes) } as u32;
+        let rx_phys_addr = core::ptr::addr_of!(RX_BUFFER.bytes) as u32;
         outl(io_base + REG_RBSTART, rx_phys_addr);
 
         // Разрешаем прерывания Transmit OK и Receive OK.
@@ -253,7 +253,7 @@ unsafe fn drain_rx_buffer(io_base: u16) {
         }
 
         let mut offset = STATE.lock().rx_offset;
-        let rx_buf = unsafe { core::ptr::addr_of!(RX_BUFFER.bytes) } as *const u8;
+        let rx_buf = core::ptr::addr_of!(RX_BUFFER.bytes) as *const u8;
 
         // Заголовок пакета: 2 байта статус + 2 байта длина (включая заголовок).
         let header_ptr = rx_buf.add(offset) as *const u16;

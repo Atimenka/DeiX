@@ -52,12 +52,19 @@ pub fn is_available() -> bool {
     read_reg(VBE_DISPI_INDEX_ID) == VBE_DISPI_ID5
 }
 
+#[derive(Clone, Copy)]
 pub struct Framebuffer {
     pub addr: usize,
     pub width: u32,
     pub height: u32,
     pub bpp: u16,
     pub pitch: usize, // байт на строку
+}
+
+static LAST_FRAMEBUFFER: crate::spinlock::SpinLock<Option<Framebuffer>> = crate::spinlock::SpinLock::new(None);
+
+pub fn get_framebuffer() -> Option<Framebuffer> {
+    *LAST_FRAMEBUFFER.lock()
 }
 
 impl Framebuffer {
@@ -145,13 +152,15 @@ pub fn set_mode(gpu_device: &PciDevice, width: u32, height: u32, bpp: u16) -> Op
     let bytes_per_pixel = (bpp / 8) as usize;
     let pitch = width as usize * bytes_per_pixel;
 
-    Some(Framebuffer {
+    let fb = Framebuffer {
         addr: framebuffer_addr,
         width,
         height,
         bpp,
         pitch,
-    })
+    };
+    *LAST_FRAMEBUFFER.lock() = Some(fb);
+    Some(fb)
 }
 
 
@@ -194,6 +203,7 @@ const VGA_INSTAT_READ: u16 = 0x3DA;
 /// остаётся в графической развёртке предыдущего разрешения, и VGA text
 /// buffer (0xb8000) отображается на экране некорректно/искажённо.
 pub fn restore_text_mode() {
+    *LAST_FRAMEBUFFER.lock() = None;
     write_reg(VBE_DISPI_INDEX_ENABLE, VBE_DISPI_DISABLED);
 
     unsafe {
