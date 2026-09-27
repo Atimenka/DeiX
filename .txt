@@ -1,0 +1,912 @@
+warning: field `0` is never read
+  --> src/allocator.rs:13:20
+   |
+13 | struct HeapStorage([u8; HEAP_SIZE]);
+   |        ----------- ^^^^^^^^^^^^^^^
+   |        |
+   |        field in this struct
+   |
+   = help: consider removing this field
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `erofs_list_files` is never used
+  --> src/bootchain.rs:42:8
+   |
+42 | pub fn erofs_list_files(image: &[u8]) -> Result<Vec<(String, usize)>, String> {
+   |        ^^^^^^^^^^^^^^^^
+
+warning: function `describe` is never used
+  --> src/bootchain.rs:53:4
+   |
+53 | fn describe(data: &[u8]) -> String {
+   |    ^^^^^^^^
+
+warning: struct `ChainLink` is never constructed
+  --> src/bootchain.rs:67:8
+   |
+67 | struct ChainLink {
+   |        ^^^^^^^^^
+
+warning: function `load_link` is never used
+  --> src/bootchain.rs:92:4
+   |
+92 | fn load_link(partition: &str, wanted: &[&str]) -> Result<ChainLink, String> {
+   |    ^^^^^^^^^
+
+warning: function `show_partition_files` is never used
+   --> src/bootchain.rs:129:8
+    |
+129 | pub fn show_partition_files() {
+    |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `BG` is never used
+  --> src/dialog.rs:19:7
+   |
+19 | const BG: u32 = 0x1E2430;
+   |       ^^
+
+warning: constant `BORDER` is never used
+  --> src/dialog.rs:20:7
+   |
+20 | const BORDER: u32 = 0x3A4A5E;
+   |       ^^^^^^
+
+warning: constant `TEXT` is never used
+  --> src/dialog.rs:21:7
+   |
+21 | const TEXT: u32 = 0xE8F0F8;
+   |       ^^^^
+
+warning: constant `ACCENT` is never used
+  --> src/dialog.rs:22:7
+   |
+22 | const ACCENT: u32 = 0xFFD24A;
+   |       ^^^^^^
+
+warning: constant `ERR` is never used
+  --> src/dialog.rs:23:7
+   |
+23 | const ERR: u32 = 0xFF6B6B;
+   |       ^^^
+
+warning: function `draw_dialog` is never used
+  --> src/dialog.rs:26:4
+   |
+26 | fn draw_dialog(title: &str, body: &str, hint: &str, accent: u32) {
+   |    ^^^^^^^^^^^
+
+warning: function `poll_key` is never used
+  --> src/dialog.rs:50:4
+   |
+50 | fn poll_key() -> Option<u8> {
+   |    ^^^^^^^^
+
+warning: function `confirm` is never used
+  --> src/dialog.rs:58:8
+   |
+58 | pub fn confirm(title: &str) -> bool {
+   |        ^^^^^^^
+
+warning: function `prompt_line` is never used
+  --> src/dialog.rs:78:8
+   |
+78 | pub fn prompt_line(title: &str) -> String {
+   |        ^^^^^^^^^^^
+
+warning: function `prompt_masked` is never used
+   --> src/dialog.rs:108:8
+    |
+108 | pub fn prompt_masked(title: &str) -> String {
+    |        ^^^^^^^^^^^^^
+
+warning: function `choose` is never used
+   --> src/dialog.rs:144:8
+    |
+144 | pub fn choose(title: &str, items: &[String]) -> Option<usize> {
+    |        ^^^^^^
+
+warning: variants `Suspended`, `Stopped`, and `Faulted` are never constructed
+  --> src/dinit/mod.rs:42:5
+   |
+39 | pub enum DinitState {
+   |          ---------- variants in this enum
+...
+42 |     Suspended,
+   |     ^^^^^^^^^
+43 |     Stopped,
+   |     ^^^^^^^
+44 |     Faulted,
+   |     ^^^^^^^
+   |
+   = note: `DinitState` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `0` is never read
+  --> src/ds.rs:10:18
+   |
+10 |     FileNotFound(String),
+   |     ------------ ^^^^^^
+   |     |
+   |     field in this variant
+   |
+   = note: `DsError` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+10 -     FileNotFound(String),
+10 +     FileNotFound(()),
+   |
+
+warning: field `0` is never read
+  --> src/ds.rs:12:20
+   |
+12 |     ExecutionError(String),
+   |     -------------- ^^^^^^
+   |     |
+   |     field in this variant
+   |
+   = note: `DsError` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+12 -     ExecutionError(String),
+12 +     ExecutionError(()),
+   |
+
+warning: variant `SyntaxError` is never constructed
+  --> src/ds.rs:11:5
+   |
+ 9 | pub enum DsError {
+   |          ------- variant in this enum
+10 |     FileNotFound(String),
+11 |     SyntaxError(String),
+   |     ^^^^^^^^^^^
+   |
+   = note: `DsError` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: variant `TextBox` is never constructed
+  --> src/duil.rs:19:5
+   |
+ 8 | pub enum WidgetKind {
+   |          ---------- variant in this enum
+...
+19 |     TextBox,
+   |     ^^^^^^^
+   |
+   = note: `WidgetKind` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: field `border_color` is never read
+  --> src/duil.rs:40:9
+   |
+26 | pub struct Widget {
+   |            ------ field in this struct
+...
+40 |     pub border_color: u32,
+   |         ^^^^^^^^^^^^
+   |
+   = note: `Widget` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `draw_char_buf` is never used
+   --> src/duil.rs:154:4
+    |
+154 | fn draw_char_buf(buf: &mut [u32], buf_w: u32, buf_h: u32, x: i32, y: i32, ch: u8, color: u32) {
+    |    ^^^^^^^^^^^^^
+
+warning: function `draw_text_buf` is never used
+   --> src/duil.rs:175:4
+    |
+175 | fn draw_text_buf(buf: &mut [u32], buf_w: u32, buf_h: u32, x: i32, y: i32, text: &str, color: u32) {
+    |    ^^^^^^^^^^^^^
+
+warning: function `fill_rect_buf` is never used
+   --> src/duil.rs:183:4
+    |
+183 | fn fill_rect_buf(buf: &mut [u32], buf_w: u32, buf_h: u32, rx: i32, ry: i32, rw: u32, rh: u32, color: u32) {
+    |    ^^^^^^^^^^^^^
+
+warning: function `draw_rect_border_buf` is never used
+   --> src/duil.rs:196:4
+    |
+196 | fn draw_rect_border_buf(buf: &mut [u32], buf_w: u32, buf_h: u32, rx: i32, ry: i32, rw: u32, rh: u32, color: u32) {
+    |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `render_widget_tree` is never used
+   --> src/duil.rs:313:8
+    |
+313 | pub fn render_widget_tree(w: &Widget, buf: &mut [u32], buf_w: u32, buf_h: u32) {
+    |        ^^^^^^^^^^^^^^^^^^
+
+warning: function `hit_test_and_click` is never used
+   --> src/duil.rs:462:8
+    |
+462 | pub fn hit_test_and_click(w: &mut Widget, cx: i32, cy: i32) -> Option<String> {
+    |        ^^^^^^^^^^^^^^^^^^
+
+warning: field `root` is never read
+   --> src/duil.rs:482:9
+    |
+481 | pub struct DuilApp {
+    |            ------- field in this struct
+482 |     pub root: Widget,
+    |         ^^^^
+
+warning: constant `EROFS_BLOCK_SIZE` is never used
+  --> src/erofs.rs:42:11
+   |
+42 | pub const EROFS_BLOCK_SIZE: usize = 4096;
+   |           ^^^^^^^^^^^^^^^^
+
+warning: constant `EROFS_BLOCK_BITS` is never used
+  --> src/erofs.rs:43:11
+   |
+43 | pub const EROFS_BLOCK_BITS: u8 = 12;
+   |           ^^^^^^^^^^^^^^^^
+
+warning: constant `S_IFREG` is never used
+  --> src/erofs.rs:58:7
+   |
+58 | const S_IFREG: u16 = 0o100_000;
+   |       ^^^^^^^
+
+warning: fields `inos` and `blocks` are never read
+   --> src/erofs.rs:117:9
+    |
+114 | pub struct Superblock {
+    |            ---------- fields in this struct
+...
+117 |     pub inos: u64,
+    |         ^^^^
+118 |     pub blocks: u32,
+    |         ^^^^^^
+    |
+    = note: `Superblock` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `wr_u16` is never used
+   --> src/erofs.rs:411:4
+    |
+411 | fn wr_u16(b: &mut [u8], o: usize, v: u16) {
+    |    ^^^^^^
+
+warning: function `wr_u32` is never used
+   --> src/erofs.rs:414:4
+    |
+414 | fn wr_u32(b: &mut [u8], o: usize, v: u32) {
+    |    ^^^^^^
+
+warning: function `wr_u64` is never used
+   --> src/erofs.rs:417:4
+    |
+417 | fn wr_u64(b: &mut [u8], o: usize, v: u64) {
+    |    ^^^^^^
+
+warning: function `align_up` is never used
+   --> src/erofs.rs:421:4
+    |
+421 | fn align_up(v: usize, a: usize) -> usize {
+    |    ^^^^^^^^
+
+warning: function `write_inode` is never used
+   --> src/erofs.rs:427:4
+    |
+427 | fn write_inode(
+    |    ^^^^^^^^^^^
+
+warning: function `build_dir_blocks` is never used
+   --> src/erofs.rs:451:4
+    |
+451 | fn build_dir_blocks(entries: &[(String, u64, u8)]) -> Vec<u8> {
+    |    ^^^^^^^^^^^^^^^^
+
+warning: function `build_image` is never used
+   --> src/erofs.rs:493:8
+    |
+493 | pub fn build_image(files: &[(&str, &[u8])]) -> Vec<u8> {
+    |        ^^^^^^^^^^^
+
+warning: function `is_erofs` is never used
+   --> src/erofs.rs:615:8
+    |
+615 | pub fn is_erofs(img: &[u8]) -> bool {
+    |        ^^^^^^^^
+
+warning: associated items `R`, `RW`, `RWX`, `as_octal`, `can_read`, and `can_write` are never used
+  --> src/fs.rs:10:15
+   |
+ 9 | impl Permissions {
+   | ---------------- associated items in this implementation
+10 |     pub const R: Self = Permissions(4); pub const RW: Self = Permissions(6); pub const RWX: Self = Permissions(7);
+   |               ^                                   ^^                                   ^^^
+11 |     pub fn as_octal(&self) -> u16 { self.0 as u16 }
+   |            ^^^^^^^^
+12 |     pub fn can_read(&self, _o: bool) -> bool { self.0 & 4 != 0 }
+   |            ^^^^^^^^
+13 |     pub fn can_write(&self, _o: bool) -> bool { self.0 & 2 != 0 }
+   |            ^^^^^^^^^
+
+warning: multiple fields are never read
+  --> src/fs.rs:18:9
+   |
+17 | pub struct FileMeta {
+   |            -------- fields in this struct
+18 |     pub name: String, pub is_dir: bool, pub size: u64,
+   |         ^^^^              ^^^^^^            ^^^^
+19 |     pub owner: String, pub group: String, pub perms: Permissions,
+   |         ^^^^^              ^^^^^              ^^^^^
+20 |     pub system: bool, pub created_at: u64,
+   |         ^^^^^^            ^^^^^^^^^^
+   |
+   = note: `FileMeta` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: associated functions `new_file` and `new_dir` are never used
+  --> src/fs.rs:23:12
+   |
+22 | impl FileMeta {
+   | ------------- associated functions in this implementation
+23 |     pub fn new_file(n: &str, o: &str) -> Self { FileMeta{name:n.into(),is_dir:false,size:0,owner:o.into(),group:"users".into(),perms:Permission...
+   |            ^^^^^^^^
+24 |     pub fn new_dir(n: &str, o: &str) -> Self { FileMeta{name:n.into(),is_dir:true,size:0,owner:o.into(),group:"users".into(),perms:Permissions:...
+   |            ^^^^^^^
+
+warning: function `list_dir` is never used
+  --> src/fs.rs:46:8
+   |
+46 | pub fn list_dir() -> Vec<FileMeta> { META_DB.lock().values().cloned().collect() }
+   |        ^^^^^^^^
+
+warning: method `config_write32` is never used
+  --> src/hal/mod.rs:58:12
+   |
+41 | impl Device {
+   | ----------- method in this implementation
+...
+58 |     pub fn config_write32(&self, offset: u8, value: u32) {
+   |            ^^^^^^^^^^^^^^
+
+warning: function `udelay` is never used
+   --> src/hal/mod.rs:143:8
+    |
+143 | pub fn udelay(usec: u64) {
+    |        ^^^^^^
+
+warning: methods `write32`, `write16`, `read8`, `write8`, `modify32`, and `wait_for` are never used
+   --> src/hal/mmio.rs:55:12
+    |
+ 22 | impl MmioRegion {
+    | --------------- methods in this implementation
+...
+ 55 |     pub fn write32(&self, offset: u64, value: u32) -> bool {
+    |            ^^^^^^^
+...
+ 70 |     pub fn write16(&self, offset: u64, value: u16) -> bool {
+    |            ^^^^^^^
+...
+ 78 |     pub fn read8(&self, offset: u64) -> Option<u8> {
+    |            ^^^^^
+...
+ 85 |     pub fn write8(&self, offset: u64, value: u8) -> bool {
+    |            ^^^^^^
+...
+ 96 |     pub fn modify32(&self, offset: u64, mask: u32, value: u32) -> bool {
+    |            ^^^^^^^^
+...
+108 |     pub fn wait_for(&self, offset: u64, mask: u32, expected: u32, timeout_us: u64) -> bool {
+    |            ^^^^^^^^
+
+warning: constant `REG_VMIN` is never used
+  --> src/hda.rs:21:7
+   |
+21 | const REG_VMIN: usize = 0x02;       // Minor Version (u8)
+   |       ^^^^^^^^
+
+warning: constant `REG_VMAJ` is never used
+  --> src/hda.rs:22:7
+   |
+22 | const REG_VMAJ: usize = 0x03;       // Major Version (u8)
+   |       ^^^^^^^^
+
+warning: constant `REG_WAKEEN` is never used
+  --> src/hda.rs:24:7
+   |
+24 | const REG_WAKEEN: usize = 0x0C;     // Wake Enable (u16)
+   |       ^^^^^^^^^^
+
+warning: constant `REG_INTCTL` is never used
+  --> src/hda.rs:26:7
+   |
+26 | const REG_INTCTL: usize = 0x20;     // Interrupt Control (u32)
+   |       ^^^^^^^^^^
+
+warning: constant `REG_INTSTS` is never used
+  --> src/hda.rs:27:7
+   |
+27 | const REG_INTSTS: usize = 0x24;     // Interrupt Status (u32)
+   |       ^^^^^^^^^^
+
+warning: constant `REG_CORBSTS` is never used
+  --> src/hda.rs:35:7
+   |
+35 | const REG_CORBSTS: usize = 0x4D;    // CORB Status (u8)
+   |       ^^^^^^^^^^^
+
+warning: constant `SD_OFF_CTL1` is never used
+  --> src/hda.rs:54:7
+   |
+54 | const SD_OFF_CTL1: usize = 0x01;    // Control 1 (u8: interrupts)
+   |       ^^^^^^^^^^^
+
+warning: constant `SD_OFF_CTL2` is never used
+  --> src/hda.rs:55:7
+   |
+55 | const SD_OFF_CTL2: usize = 0x02;    // Control 2 (u8: bits 7..4 = Stream Number)
+   |       ^^^^^^^^^^^
+
+warning: constant `SD_OFF_FIFOS` is never used
+  --> src/hda.rs:60:7
+   |
+60 | const SD_OFF_FIFOS: usize = 0x10;   // FIFO Size (u16)
+   |       ^^^^^^^^^^^^
+
+warning: field `codec_addr` is never read
+   --> src/hda.rs:113:5
+    |
+106 | pub struct HdaController {
+    |            ------------- field in this struct
+...
+113 |     codec_addr: u8,
+    |     ^^^^^^^^^^
+
+warning: method `allows_userdata_rw` is never used
+  --> src/init_parser.rs:48:12
+   |
+32 | impl BootStage {
+   | -------------- method in this implementation
+...
+48 |     pub fn allows_userdata_rw(&self) -> bool {
+   |            ^^^^^^^^^^^^^^^^^^
+
+warning: field `raw_line` is never read
+   --> src/init_parser.rs:279:9
+    |
+277 | pub struct ParseWarning {
+    |            ------------ field in this struct
+278 |     pub line_no: usize,
+279 |     pub raw_line: String,
+    |         ^^^^^^^^
+    |
+    = note: `ParseWarning` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `build_ext2_volume` is never used
+   --> src/install.rs:238:4
+    |
+238 | fn build_ext2_volume(drive: Drive) {
+    |    ^^^^^^^^^^^^^^^^^
+
+warning: function `irq_stub_12` is never used
+   --> src/interrupts.rs:367:11
+    |
+367 | irq_stub!(irq_stub_12, 12);
+    |           ^^^^^^^^^^^
+    |
+    = note: this warning originates in the macro `irq_stub` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: function `is_mex_filename` is never used
+   --> src/mex.rs:389:8
+    |
+389 | pub fn is_mex_filename(name: &str) -> bool {
+    |        ^^^^^^^^^^^^^^^
+
+warning: fields `version`, `load_addr`, `body_size`, and `status` are never read
+  --> src/module.rs:36:9
+   |
+34 | pub struct LoadedModule {
+   |            ------------ fields in this struct
+35 |     pub name: String,
+36 |     pub version: (u16, u16),
+   |         ^^^^^^^
+37 |     pub load_addr: usize,
+   |         ^^^^^^^^^
+38 |     pub body_size: usize,
+   |         ^^^^^^^^^
+39 |     pub status: ModuleStatus,
+   |         ^^^^^^
+   |
+   = note: `LoadedModule` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: variant `Loaded` is never constructed
+  --> src/module.rs:44:5
+   |
+43 | pub enum ModuleStatus {
+   |          ------------ variant in this enum
+44 |     Loaded,
+   |     ^^^^^^
+   |
+   = note: `ModuleStatus` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: function `get_loaded_modules` is never used
+   --> src/module.rs:385:8
+    |
+385 | pub fn get_loaded_modules() -> Vec<LoadedModule> {
+    |        ^^^^^^^^^^^^^^^^^^
+
+warning: fields `right_button` and `middle_button` are never read
+   --> src/mouse.rs:227:9
+    |
+223 | pub struct MouseSnapshot {
+    |            ------------- fields in this struct
+...
+227 |     pub right_button: bool,
+    |         ^^^^^^^^^^^^
+228 |     pub middle_button: bool,
+    |         ^^^^^^^^^^^^^
+    |
+    = note: `MouseSnapshot` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: field `dst_mac` is never read
+  --> src/net/eth.rs:10:9
+   |
+ 9 | pub struct EthernetHeader {
+   |            -------------- field in this struct
+10 |     pub dst_mac: [u8; 6],
+   |         ^^^^^^^
+
+warning: function `get_binary` is never used
+   --> src/net/http.rs:118:8
+    |
+118 | pub fn get_binary(url: &str, max_body: usize) -> Result<Vec<u8>, String> {
+    |        ^^^^^^^^^^
+
+warning: field `version_ihl` is never read
+  --> src/net/ipv4.rs:12:9
+   |
+11 | pub struct Ipv4Header {
+   |            ---------- field in this struct
+12 |     pub version_ihl: u8,
+   |         ^^^^^^^^^^^
+
+warning: fields `device` and `bar0_mmio` are never read
+   --> src/nouveau.rs:106:9
+    |
+105 | pub struct NouveauInfo {
+    |            ----------- fields in this struct
+106 |     pub device: pci::PciDevice,
+    |         ^^^^^^
+...
+109 |     pub bar0_mmio: u32,
+    |         ^^^^^^^^^
+
+warning: multiple associated items are never used
+  --> src/renderer.rs:69:18
+   |
+64 | impl Color {
+   | ---------- associated items in this implementation
+...
+69 |     pub const fn from_u32(raw: u32) -> Color {
+   |                  ^^^^^^^^
+...
+79 |     pub const DARK_GRAY: Color = Color::rgb(30, 41, 59);
+   |               ^^^^^^^^^
+80 |     pub const LIGHT_GRAY: Color = Color::rgb(226, 232, 240);
+   |               ^^^^^^^^^^
+81 |     pub const DESKTOP_BLUE: Color = Color::rgb(15, 23, 42);
+   |               ^^^^^^^^^^^^
+82 |     pub const TITLEBAR_ACTIVE: Color = Color::rgb(30, 41, 59);
+   |               ^^^^^^^^^^^^^^^
+83 |     pub const TITLEBAR_INACTIVE: Color = Color::rgb(15, 23, 42);
+   |               ^^^^^^^^^^^^^^^^^
+...
+87 |     pub const ACCENT: Color = Color::rgb(99, 102, 241); // Indigo
+   |               ^^^^^^
+
+warning: multiple variants are never constructed
+   --> src/renderer.rs:128:5
+    |
+120 | pub enum IconType {
+    |          -------- variants in this enum
+...
+128 |     Settings,
+    |     ^^^^^^^^
+129 |     Check,
+    |     ^^^^^
+...
+135 |     Bookmark,
+    |     ^^^^^^^^
+136 |     Home,
+    |     ^^^^
+137 |     Reload,
+    |     ^^^^^^
+138 |     ArrowLeft,
+    |     ^^^^^^^^^
+139 |     ArrowRight,
+    |     ^^^^^^^^^^
+    |
+    = note: `IconType` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: methods `clear_damage`, `shade_rect`, and `draw_drop_shadow` are never used
+   --> src/renderer.rs:174:12
+    |
+148 | impl Renderer {
+    | ------------- methods in this implementation
+...
+174 |     pub fn clear_damage(&mut self) {
+    |            ^^^^^^^^^^^^
+...
+330 |     pub fn shade_rect(&mut self, x: i32, y: i32, w: u32, h: u32, strength: u8) {
+    |            ^^^^^^^^^^
+...
+384 |     pub fn draw_drop_shadow(&mut self, x: i32, y: i32, w: u32, h: u32, radius: u32) {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: field `0` is never read
+  --> src/rtl8139.rs:43:17
+   |
+43 | struct RxBuffer([u8; RX_BUFFER_SIZE]);
+   |        -------- ^^^^^^^^^^^^^^^^^^^^
+   |        |
+   |        field in this struct
+   |
+   = help: consider removing this field
+
+warning: function `current_id` is never used
+   --> src/sched.rs:106:8
+    |
+106 | pub fn current_id() -> usize {
+    |        ^^^^^^^^^^
+
+warning: function `yield_now` is never used
+   --> src/sched.rs:353:8
+    |
+353 | pub fn yield_now() {
+    |        ^^^^^^^^^
+
+warning: function `stop` is never used
+   --> src/sched.rs:368:8
+    |
+368 | pub fn stop() {
+    |        ^^^^
+
+warning: constant `SCRATCH` is never used
+  --> src/sound.rs:42:7
+   |
+42 | const SCRATCH: u16 = 0x80;
+   |       ^^^^^^^
+
+warning: function `warn_triple` is never used
+  --> src/sound.rs:99:8
+   |
+99 | pub fn warn_triple() {
+   |        ^^^^^^^^^^^
+
+warning: function `ota_alert` is never used
+   --> src/sound.rs:107:8
+    |
+107 | pub fn ota_alert() {
+    |        ^^^^^^^^^
+
+warning: function `sleep_ms` is never used
+  --> src/timer.rs:46:8
+   |
+46 | pub fn sleep_ms(ms: u64) {
+   |        ^^^^^^^^
+
+warning: struct `KernelGuiCompositorService` is never constructed
+  --> src/ui/mod.rs:26:12
+   |
+26 | pub struct KernelGuiCompositorService {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: static `COMPOSITOR_SERVICE` is never used
+  --> src/ui/mod.rs:31:8
+   |
+31 | static COMPOSITOR_SERVICE: crate::spinlock::SpinLock<KernelGuiCompositorService> =
+   |        ^^^^^^^^^^^^^^^^^^
+
+warning: function `compositor_status` is never used
+  --> src/ui/mod.rs:37:8
+   |
+37 | pub fn compositor_status() -> (bool, u32) {
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: constant `SPACE_1` is never used
+ --> src/ui/metrics.rs:3:11
+  |
+3 | pub const SPACE_1: i32 = 4;
+  |           ^^^^^^^
+
+warning: constant `SPACE_2` is never used
+ --> src/ui/metrics.rs:4:11
+  |
+4 | pub const SPACE_2: i32 = 8;
+  |           ^^^^^^^
+
+warning: constant `SPACE_4` is never used
+ --> src/ui/metrics.rs:6:11
+  |
+6 | pub const SPACE_4: i32 = 16;
+  |           ^^^^^^^
+
+warning: constant `SPACE_5` is never used
+ --> src/ui/metrics.rs:7:11
+  |
+7 | pub const SPACE_5: i32 = 24;
+  |           ^^^^^^^
+
+warning: constant `SPACE_7` is never used
+ --> src/ui/metrics.rs:9:11
+  |
+9 | pub const SPACE_7: i32 = 48;
+  |           ^^^^^^^
+
+warning: fields `width`, `height`, and `damage` are never read
+  --> src/ui/surface.rs:58:9
+   |
+57 | pub struct Surface {
+   |            ------- fields in this struct
+58 |     pub width: u32,
+   |         ^^^^^
+59 |     pub height: u32,
+   |         ^^^^^^
+60 |     pub damage: DamageList,
+   |         ^^^^^^
+   |
+   = note: `Surface` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: methods `mark_dirty` and `clear_damage` are never used
+  --> src/ui/surface.rs:74:12
+   |
+63 | impl Surface {
+   | ------------ methods in this implementation
+...
+74 |     pub fn mark_dirty(&mut self, rect: Rect) {
+   |            ^^^^^^^^^^
+...
+78 |     pub fn clear_damage(&mut self) {
+   |            ^^^^^^^^^^^^
+
+warning: variant `FileEditor` is never constructed
+  --> src/ui/window.rs:50:5
+   |
+36 | pub enum WindowContent {
+   |          ------------- variant in this enum
+...
+50 |     FileEditor {
+   |     ^^^^^^^^^^
+
+warning: fields `surface` and `dirty` are never read
+  --> src/ui/window.rs:92:9
+   |
+82 | pub struct Window {
+   |            ------ fields in this struct
+...
+92 |     pub surface: Surface,
+   |         ^^^^^^^
+93 |     pub dirty: bool,
+   |         ^^^^^
+
+warning: variant `TooLong` is never constructed
+  --> src/userfs.rs:61:5
+   |
+57 | pub enum UserFsError {
+   |          ----------- variant in this enum
+...
+61 |     TooLong,
+   |     ^^^^^^^
+   |
+   = note: `UserFsError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: constant `USER_CS` is never used
+  --> src/usermode.rs:34:11
+   |
+34 | pub const USER_CS: u16 = 0x20 | 3; // 0x23
+   |           ^^^^^^^
+
+warning: field `0` is never read
+  --> src/usermode.rs:79:15
+   |
+79 | struct KStack([u8; KSTACK_SIZE]);
+   |        ------ ^^^^^^^^^^^^^^^^^
+   |        |
+   |        field in this struct
+   |
+   = help: consider removing this field
+
+warning: constant `USER_CODE` is never used
+   --> src/usermode.rs:278:7
+    |
+278 | const USER_CODE: u64 = USER_BASE + 0x1000;
+    |       ^^^^^^^^^
+
+warning: constant `USER_STACK_TOP` is never used
+   --> src/usermode.rs:279:7
+    |
+279 | const USER_STACK_TOP: u64 = USER_BASE + 0x8000;
+    |       ^^^^^^^^^^^^^^
+
+warning: function `selftest` is never used
+   --> src/usermode.rs:493:8
+    |
+493 | pub fn selftest() {
+    |        ^^^^^^^^
+
+warning: function `selftest_ok` is never used
+   --> src/usermode.rs:526:8
+    |
+526 | pub fn selftest_ok() -> bool {
+    |        ^^^^^^^^^^^
+
+warning: static `user_program_start` is never used
+   --> src/usermode.rs:262:12
+    |
+262 |     static user_program_start: u8;
+    |            ^^^^^^^^^^^^^^^^^^
+
+warning: static `user_program_end` is never used
+   --> src/usermode.rs:263:12
+    |
+263 |     static user_program_end: u8;
+    |            ^^^^^^^^^^^^^^^^
+
+warning: constant `SYSTEM_PARTITIONS` is never used
+ --> src/vault.rs:9:11
+  |
+9 | pub const SYSTEM_PARTITIONS: [&str; 1] = ["/system"];
+  |           ^^^^^^^^^^^^^^^^^
+
+warning: variant `UserdataPolicy` is never constructed
+  --> src/vault.rs:13:5
+   |
+12 | pub enum VaultRejection {
+   |          -------------- variant in this enum
+13 |     UserdataPolicy(String),
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: `VaultRejection` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: methods `detail` and `kind_name` are never used
+  --> src/vault.rs:18:12
+   |
+17 | impl VaultRejection {
+   | ------------------- methods in this implementation
+18 |     pub fn detail(&self) -> String {
+   |            ^^^^^^
+...
+25 |     pub fn kind_name(&self) -> &'static str {
+   |            ^^^^^^^^^
+
+warning: field `bpp` is never read
+  --> src/vbe.rs:59:9
+   |
+55 | pub struct Framebuffer {
+   |            ----------- field in this struct
+...
+59 |     pub bpp: u16,
+   |         ^^^
+
+warning: multiple variants are never constructed
+  --> src/vga.rs:10:5
+   |
+ 8 | pub enum Color {
+   |          ----- variants in this enum
+ 9 |     Black = 0,
+10 |     Blue = 1,
+   |     ^^^^
+11 |     Green = 2,
+   |     ^^^^^
+12 |     Cyan = 3,
+   |     ^^^^
+13 |     Red = 4,
+   |     ^^^
+14 |     Magenta = 5,
+   |     ^^^^^^^
+15 |     Brown = 6,
+   |     ^^^^^
+16 |     LightGray = 7,
+   |     ^^^^^^^^^
+17 |     DarkGray = 8,
+   |     ^^^^^^^^
+18 |     LightBlue = 9,
+   |     ^^^^^^^^^
+...
+22 |     Pink = 13,
+   |     ^^^^
+   |
+   = note: `Color` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: `deix_kernel` (lib) generated 109 warnin
+ исправь
