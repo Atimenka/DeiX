@@ -91,22 +91,6 @@ pub const PARTITION_LAYOUT: [PartitionLayout; 2] = [
     PartitionLayout { name: "/userdata",   start_lba: 12800, sectors: 5632, fs: "ext2",  flashable: true },
 ];
 
-pub fn active_kernel_layout() -> &'static PartitionLayout {
-    lookup_layout("/system").unwrap()
-}
-
-pub fn kernel_layout_for_slot(_slot: u8) -> &'static PartitionLayout {
-    lookup_layout("/system").unwrap()
-}
-
-pub fn active_boot_layout() -> &'static PartitionLayout {
-    lookup_layout("/system").unwrap()
-}
-
-pub fn inactive_kernel_layout() -> &'static PartitionLayout {
-    lookup_layout("/system").unwrap()
-}
-
 pub const BOOTLOADER_LBA: u32 = 1;
 pub const BOOTLOADER_SECTORS: u32 = 2048;
 

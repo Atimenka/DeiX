@@ -3,10 +3,9 @@
 test_all_subsystems.py — Комплексное функциональное тестирование компонентов DeiX OS.
 
 Проверяет:
-1. Валидность карты разделов диска (/system, /TPM, /userdata, /kernel_a, /kernel_b и т.д.)
-2. Инструментарий шифрования, файловой системы и OTA (deix_ota.py, set_boot_mode.py)
-3. Кросс-компилятор C/C++ MEX v1.2 (mexcc.cpp, mexcc.py, mex.ld, mex_pack.py)
-4. Компиляцию тестового C++ приложения (tools/calc.cpp -> .mex)
+1. Валидность карты разделов диска (/system EROFS RO + /userdata EXT2 RW)
+2. Кросс-компилятор C/C++ MEX v1.2 (mexcc.cpp, mexcc.py, mex.ld, mex_pack.py)
+3. Компиляцию тестового C++ приложения (tools/calc.cpp -> .mex)
 """
 
 import os
@@ -28,19 +27,8 @@ def test_partition_map():
         sys.exit(1)
     log("   -> Карта разделов синхронизирована и верна.")
 
-def test_ota_and_boot_tools():
-    log("2. Тестирование утилит выбора режима загрузки (BCB)...")
-    mode_cmd = [sys.executable, os.path.join(ROOT_DIR, "tools", "set_boot_mode.py"), "--help"]
-    
-    res = subprocess.run(mode_cmd, capture_output=True, text=True)
-    if "BCB" not in res.stdout:
-        print("ОШИБКА: set_boot_mode.py не вернул справочную инфо!", file=sys.stderr)
-        sys.exit(1)
-        
-    log("   -> Утилиты управления BCB функционируют корректно.")
-
 def test_mexcc_compilation():
-    log("3. Тестирование C/C++ MEX Cross-Compiler v1.2...")
+    log("2. Тестирование C/C++ MEX Cross-Compiler v1.2...")
     mexcc_src = os.path.join(ROOT_DIR, "tools", "mexcc.cpp")
     calc_src = os.path.join(ROOT_DIR, "tools", "calc.cpp")
     out_bin = "/tmp/mexcc_driver"

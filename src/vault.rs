@@ -8,96 +8,54 @@ use alloc::format;
 /// Список системных EROFS-разделов ядра.
 pub const SYSTEM_PARTITIONS: [&str; 1] = ["/system"];
 
-
-/// Отказ политики, НЕ являющийся терминальным: нарушение правил /userdata.
-/// Парсер превращает его в предупреждение (ParseWarning) и продолжает разбор.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultRejection {
-/// rw-монтирование /userdata вне разрешённых стадий.
-UserdataPolicy(String),
-/// Файловая система /userdata отличается от ext4.
-NonExt4Userdata(String),
+    UserdataPolicy(String),
+    NonExt4Userdata(String),
 }
 
 impl VaultRejection {
-/// Детальное описание причины отказа (для журнала ядра).
-pub fn detail(&self) -> String {
-    match self {
-        VaultRejection::UserdataPolicy(msg) => msg.clone(),
-        VaultRejection::NonExt4Userdata(msg) => msg.clone(),
+    pub fn detail(&self) -> String {
+        match self {
+            VaultRejection::UserdataPolicy(msg) => msg.clone(),
+            VaultRejection::NonExt4Userdata(msg) => msg.clone(),
+        }
     }
-}
 
-/// Короткое имя категории (для лога).
-pub fn kind_name(&self) -> &'static str {
-    match self {
-        VaultRejection::UserdataPolicy(_) => "userdata-policy-violation",
-        VaultRejection::NonExt4Userdata(_) => "non-ext4-userdata",
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            VaultRejection::UserdataPolicy(_) => "userdata-policy-violation",
+            VaultRejection::NonExt4Userdata(_) => "non-ext2-ext4-userdata",
+        }
     }
-}
 }
 
 /// ОЦЕНКА ПРАВИЛА VAULT ДЛЯ КОМАНДЫ МОНТИРОВАНИЯ.
-///
-/// Возвращает:
-/// * `Ok(())` — команда допущена политикой к исполнению.
-/// * `Err(VaultRejection)` — политика /userdata нарушена (предупреждение).
-/// * `panic!` — терминальное нарушение системного раздела (правила 1-2).
-///
-/// Проверка построена на развёрнутых match-выражениях (отдельные ветки для
-/// каждого критического пути, драйвера и режима) — исключается обход логики
-/// через манипуляции с условиями (требование ТЗ).
-pub fn evaluate(dst: &str, fs_type: &str, mode: MountMode, stage: BootStage) -> Result<(), VaultRejection> {
-// Шаг 1: идентификация точки монтирования развёрнутым match.
-let is_system: bool = dst == "/system";
+pub fn evaluate(dst: &str, fs_type: &str, mode: MountMode, _stage: BootStage) -> Result<(), VaultRejection> {
+    let is_system = dst == "/system";
 
-match dst {
-    // ---- ПОЛЬЗОВАТЕЛЬСКИЙ РАЗДЕЛ /userdata ------------------------------
-    "/userdata" => {
-        match fs_type {
-            "ext4" => {
-                match mode {
-                    MountMode::ReadOnly => Ok(()),
-                    MountMode::ReadWrite => {
-                        match stage.allows_userdata_rw() {
-                            true => Ok(()),
-                            false => Err(VaultRejection::UserdataPolicy(format!(
-                                "rw-монтирование /userdata на стадии '{}' вне разрешённых (Boot/Recovery)",
-                                stage.as_token()
-                            ))),
-                        }
-                    }
-                }
+    match dst {
+        "/userdata" => {
+            if fs_type == "ext2" || fs_type == "ext4" {
+                Ok(())
+            } else {
+                Err(VaultRejection::NonExt4Userdata(format!(
+                    "файловая система '{}' для /userdata отличается от ext2/ext4",
+                    fs_type
+                )))
             }
-            // Иной драйвер для userdata — нарушение политики.
-            _ => Err(VaultRejection::NonExt4Userdata(format!(
-                "файловая система '{}' для /userdata отличается от ext4",
-                fs_type
-            ))),
         }
-    }
-    // ---- СИСТЕМНЫЕ РАЗДЕЛЫ ----------------------------------------------
-    other if is_system => {
-        let _: &str = other;
-        match fs_type {
-            "erofs" => {
-                match mode {
-                    MountMode::ReadOnly => Ok(()),
-                    MountMode::ReadWrite => {
-                        match stage.is_flash_authorized() {
-                            true => Ok(()),
-                            false => {
-                                // ТЕРМИНАЛЬНАЯ БЛОКИРОВКА: rw системного
-                                // раздела вне прошивочного контекста.
-                                panic!(
-                                    "SECURITY_VIOLATION: Hard-locked system partition reached with RW flags. Boot halted."
-                                );
-                            }
-                        }
-                    }
-                }
+        other if is_system => {
+            let _: &str = other;
+            if fs_type == "erofs" && mode == MountMode::ReadOnly {
+                Ok(())
+            } else {
+                panic!("SECURITY_VIOLATION: /system is EROFS ReadOnly!");
             }
-            // Системный раздел через не-erofs драйвер — терминальное
+        }
+        _ => Ok(()),
+    }
+}
             // нарушение: образ раздела не может быть EROFS-неизменяемым.
             _ => {
                 panic!(

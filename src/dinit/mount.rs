@@ -1,10 +1,8 @@
 //! Диспетчер точек монтирования и файловых систем в Dinit (PID 1)
 //!
 //! Интегрирован с KERNEL SECURITY VAULT (src/vault.rs):
-//! - Защита системных разделов (/kernel, /init_boot, /boot, /vendor_boot, /super, /system, /recovery)
-//!   от монтирования в режиме RW вне контекста прошивки (Fastbootd, EDL, Recovery).
-//! - Абсолютная изоляция раздела /TPM от монтирования любыми пользователями.
-//! - Контроль прав /userdata (ext4/ext2).
+//! - Защита системного раздела /system (EROFS RO).
+//! - Контроль прав пользовательского раздела /userdata (EXT2/EXT4 RW).
 
 #![allow(dead_code)]
 

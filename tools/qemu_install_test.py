@@ -24,7 +24,7 @@ def drive_size(path):
 
 def main():
     print('=== DeiX install test (slave) ===')
-    # свежий заводской загрузочный образ (сброс BCB/маркера шифрования)
+    # свежий заводской загрузочный образ
     import subprocess as sp
     r = sp.run(['python3', 'tools/make_deix_fs.py', IMG], capture_output=True)
     if r.returncode != 0:

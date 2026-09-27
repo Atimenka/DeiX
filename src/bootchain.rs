@@ -1,17 +1,10 @@
-// ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0). Интеграция в существующий код
-// bootchain — ПОЛНАЯ ЦЕПОЧКА ЗАГРУЗКИ ЧЕРЕЗ ВСЕ РАЗДЕЛЫ (не пустышки!).
+// ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0).
+// bootchain — ЗАГРУЗКА ЯДРА И СИСТЕМНЫХ КОМПОНЕНТОВ
 //
-// Порядок (как в Android/bootloader-цепочках):
-//   1) MBR (boot_sector) + stage2            — первый загрузчик;
-//   2) /init_boot  -> bootloader.bin         — загрузчик второго уровня;
-//   3) /vendor_boot-> vendor.bin             — прошивка вендора (HAL);
-//   4) /boot       -> fastbootd.bin, recovery.bin — загрузочные образы режимов;
-//   5) /kernel     -> kernel.tar.gz          — НАСТОЯЩИЙ gzip: kernel.bin +
-//                                              библиотеки (libdeix_*.so).
-// Ядро при старте (normal) проходит эту цепочку: каждый раздел ЧИТАЕТСЯ,
-// его файлы извлекаются и верифицируются. Файлы EROFS-разделов лежат в
-// таблице после суперблока: u32 count, затем (name[32] + u32 offset + u32 size),
-// данные — после таблицы.
+// Порядок загрузки:
+//   1) MBR (boot_sector) + stage2
+//   2) /system (EROFS) -> /system/kernel/kernel.bin
+//   3) Dinit (PID 1)
 // no_std-совместимо: alloc (Vec, String), вывод — crate::println!.
 
 
@@ -117,7 +110,8 @@ fn load_link(partition: &str, wanted: &[&str]) -> Result<ChainLink, String> {
 
 /// Загружает kernel.bin из /system/kernel/kernel.bin (EROFS).
 pub fn load_kernel() -> Result<String, String> {
-    let layout = crate::partition_map::active_kernel_layout();
+    let layout = crate::partition_map::lookup_layout("/system")
+        .ok_or_else(|| "раздел /system не найден".to_string())?;
     let image = read_partition_image(layout)?;
 
     let kernel_bin = erofs_extract(&image, "kernel/kernel.bin")

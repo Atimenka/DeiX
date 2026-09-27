@@ -1,11 +1,10 @@
 //! Централизованная авторизация и матрица доступа к файлам и ресурсам
 //!
 //! Обеспечивает выполнение ключевых правил безопасности DeiX OS:
-//! 1. Защита TPM: раздел /TPM и ключ шифрования закрыты АБСОЛЮТНО для всех (включая UID 0).
-//! 2. Защита системных путей: системные разделы (/kernel, /system, /init_boot, /boot)
-//!    доступны только на чтение/исполнение и не могут быть модифицированы из Ring 3.
-//! 3. Изоляция пользовательских каталогов: пользователь имеет полный доступ
-//!    только к своему домашнему каталогу (/users/<username>) и временным файлам (/tmp).
+//! 1. Защита системных путей: системный раздел /system (EROFS RO)
+//!    доступен только на чтение/исполнение и не может быть модифицирован.
+//! 2. Изоляция пользовательских каталогов: пользователь имеет полный доступ
+//!    к своего каталогу в /userdata.
 
 #![allow(dead_code)]
 
@@ -80,16 +79,10 @@ pub fn check_permission(
         return Err(AccessError::InvalidPath);
     }
 
-    // 2. ЗАЩИТА СИСТЕМНЫХ РАЗДЕЛОВ:
-    // /kernel, /init_boot, /system, /boot, /vendor_boot защищены от модификации
+    // 1. ЗАЩИТА СИСТЕМНОГО РАЗДЕЛА:
+    // /system защищён от модификации (EROFS RO)
     if op.is_modifying() {
-        if path.starts_with("/kernel")
-            || path.starts_with("/init_boot")
-            || path.starts_with("/system")
-            || path.starts_with("/boot")
-            || path.starts_with("/vendor_boot")
-            || path.starts_with("/super")
-        {
+        if path.starts_with("/system") {
             return Err(AccessError::ReadOnlyFilesystem);
         }
     }

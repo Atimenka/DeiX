@@ -21,10 +21,8 @@ pub const RANSOMWARE_WRITE_FREQUENCY_THRESHOLD: u64 = 150;
 pub const RANSOMWARE_ENTROPY_THRESHOLD: f32 = 0.75;
 
 /// Префиксы системных путей, запретных для модификации из Ring 3.
-pub const SYSTEM_TARGET_PREFIXES: [&str; 4] = [
-    "/kernel",
+pub const SYSTEM_TARGET_PREFIXES: [&str; 2] = [
     "/system",
-    "/init_boot",
     "/dev/block/by-name",
 ];
 

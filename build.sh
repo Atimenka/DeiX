@@ -176,7 +176,7 @@ if [ "$STAGE2_SECTORS2" -ne "$STAGE2_SECTORS" ]; then
 fi
 echo "    stage2.bin (финальный): $(stat -c%s "$BUILD/stage2.bin") байт, kernel LBA=$KERNEL_LBA"
 
-echo "==> [6b/8] Сверяем карту разделов (partition_map, make_deix_fs, deix_ota)"
+echo "==> [6b/8] Сверяем карту разделов (partition_map, make_deix_fs)"
 python3 tools/check_partition_map.py
 
 echo "==> [7/8] Склеиваем итоговый образ диска"
@@ -219,8 +219,6 @@ if size < min_size:
 PYEOF
 
 echo "==> [7b/8] Форматируем разделы: MBR + ext2 + НАСТОЯЩИЙ EROFS"
-# Без этого шага системные разделы (/dsm, /init_boot, /kernel_a, ...)
-# оставались нулями, и bootchain честно останавливал загрузку.
 # make_deix_fs.py пишет реальную MBR-разметку, ext2-том и EROFS-образы
 # (магия 0xE0F5E1E2, проходят fsck.erofs).
 python3 tools/make_deix_fs.py "$DISK_IMG"

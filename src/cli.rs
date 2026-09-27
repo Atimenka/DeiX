@@ -283,6 +283,7 @@ pub fn execute(line: &str) {
             }
         }
         "reboot" => cmd_reboot(),
+        "poweroff" | "shutdown" => cmd_poweroff(),
         "halt" => cmd_halt(),
         "duil" => crate::duil::cmd_duil(rest),
         "ds" => crate::ds::cmd_ds(rest),
@@ -501,8 +502,9 @@ fn cmd_help() {
     println!("  ds [script.dxs|-i|-c]   - {}", t!(en: "DeiX Script interpreter and REPL shell", ru: "интерпретатор скриптов DeiX Script и REPL"));
 
     println!("  taskmgr                 - {}", t!(en: "system task manager and process list", ru: "диспетчер задач и процессов"));
-    println!("  reboot                  - {}", t!(en: "reboot (via keyboard controller)", ru: "перезагрузка (через контроллер клавиатуры)"));
-    println!("  halt                    - {}", t!(en: "halt the CPU (cli; hlt)", ru: "остановить процессор (cli; hlt)"));
+    println!("  reboot                  - {}", t!(en: "reboot system", ru: "перезагрузка системы"));
+    println!("  poweroff / shutdown     - {}", t!(en: "power off system (ACPI / QEMU)", ru: "выключение системы (ACPI / QEMU)"));
+    println!("  halt                    - {}", t!(en: "halt CPU low-level (cli; hlt)", ru: "остановить процессор (cli; hlt)"));
     println!();
     println!("{}", t!(en: "Up/Down arrows browse command history.", ru: "Стрелки вверх/вниз - навигация по истории команд."));
 }
@@ -1547,6 +1549,20 @@ pub fn cmd_reboot() {
         crate::port::outb(0xCF9, 0x06);
 
         // 3) Если и это не помогло — бесконечный hlt (машина уже в пути).
+        loop {
+            asm!("hlt");
+        }
+    }
+}
+
+pub fn cmd_poweroff() {
+    println!("{}", t!(en: "Powering off system...", ru: "Выключение системы..."));
+    crate::crypto_storage::lock();
+    unsafe {
+        crate::port::outw(0x604, 0x2000);
+        crate::port::outw(0xB004, 0x2000);
+        crate::port::outw(0x4004, 0x3400);
+        asm!("cli");
         loop {
             asm!("hlt");
         }

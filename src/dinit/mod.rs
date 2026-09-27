@@ -81,7 +81,7 @@ impl Dinit {
         Self {
             pid: 1,
             state: DinitState::Initializing,
-            stage: BootStage::InitBoot,
+            stage: BootStage::Boot,
             namespace: ns,
             services: BTreeMap::new(),
             mounts: BTreeMap::new(),
@@ -113,10 +113,8 @@ impl Dinit {
         );
 
         // 2. Регистрация точек монтирования по умолчанию
-        self.mount_internal("/dev/block/by-name/kernel", "/kernel", "erofs", true, now);
-        self.mount_internal("/dev/block/by-name/init_boot", "/init_boot", "erofs", true, now);
-        self.mount_internal("/dev/block/by-name/super", "/system", "erofs", true, now);
-        self.mount_internal("/dev/block/by-name/userdata", "/userdata", "ext4", false, now);
+        self.mount_internal("/dev/block/by-name/system", "/system", "erofs", true, now);
+        self.mount_internal("/dev/block/by-name/userdata", "/userdata", "ext2", false, now);
         self.mount_internal("devfs", "/dev", "devfs", false, now);
         self.mount_internal("procfs", "/proc", "procfs", true, now);
 

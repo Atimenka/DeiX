@@ -43,51 +43,35 @@ Disk
 
 ### ⚡ Оптимизация скорости загрузки
 - `Ramboot`: Размер портативного блока INT 13h увеличен до 127 секторов (сокращение вызовов BIOS и смен режимов в 2 раза, ускорение считывания на ~40%).
-- `Bootchain`: Zero-copy чтение EROFS-разделов прямо в целевые срезы памяти без промежуточных аллокаций.
-- `Inflate`: Пакетное декодирование битпотока DEFLATE для быстрой распаковки `kernel.tar.gz`.
+- `Bootchain`: Direct-load чтение EROFS-файлов `/system/kernel/kernel.bin` прямо в память без промежуточной распаковки.
 
 ### 🧪 Набор сквозных тестов (`tools/test_all_subsystems.py`)
-- Автоматизированный скрипт тестирования карты разделов, флагов BCB, OTA-пакетов и кросс-компиляции C++ приложений.
+- Автоматизированный скрипт тестирования карты разделов и кросс-компиляции C++ приложений.
 
 ---
 
 ## ⚡ Базовые возможности ядра
 
 - **🦀 Pure Rust `#![no_std]`**, старт в long mode: `boot_sector` (MBR) → `stage2` (32-бит → long mode) → `kernel.bin` @ 0x100000.
-- **🛡 Dinit (PID 1, Ring 0)** — супервизор служб, точек монтирования, системных стадий и аудита.
+- **🛡 Dinit (PID 1, Ring 0)** — супервизор служб, точек монтирования и аудита.
 - **🚨 Security Monitor** — эвристический детектор угроз (ransomware, code-injection) с ликвидацией (SIGKILL).
 - **🔊 Intel HDA + PC Speaker** — DMA 48 кГц / 16-бит стерео воспроизведение + ШИМ PC Speaker.
-- **🖼️ DXLG & VBE** — сжатый 5-цветный логотип, VBE 32bpp графика, кириллический шрифт.
+- **🖼️ DXLG & VBE** — VBE 32bpp графика, кириллический шрифт.
 - **🛡 Ring 3 + syscall/sysret** — аппаратная изоляция (GDT + TSS).
 - **🧵 Вытесняющая многозадачность** — планировщик с переключением по прерыванию IRQ0 PIT (`threads list/test`).
-- **🔁 kexec** — запуск нового ядра из `/kernel_a|b` без перезагрузки BIOS (`kexec check/a/b`).
-- **📦 A/B-слоты + OTA** — разделы `/kernel_a|b`, `/boot_a|b`, активный слот в BCB; команды `ota check/fetch/apply/rollback`.
-- **🧾 Настоящий EROFS** (магия `0xE0F5E1E2`, валидируется `fsck.erofs`) на всех системных разделах.
-- **🔒 Верифицированная загрузка (AVB)** — проверка целостности VBMETA.
-- **🥽 Режимы BCB**: **DSM** (аварийный COM1-прошивальщик), **fastbootd** (графический прошивальщик), **recovery** (TWRP-подобное меню).
+- **🧾 Настоящий EROFS** (магия `0xE0F5E1E2`, валидируется `fsck.erofs`) на системном разделе `/system`.
 - **🐧 Совместимость с Linux** — загрузчик ELF64 + слой системных вызовов Linux ABI (`src/linux/`).
 - **🌐 Сеть** — RTL8139 + ARP + IPv4 + ICMP + TCP + HTTP (`ifconfig`, `ping`).
 - **📦 MEX-приложения** — собственный формат бинарников DeiX (`run`, `pkg`, `mexcc`).
 
 ---
 
-## 🗂️ Карта разделов (10 МиБ, 13 разделов)
+## 🗂️ Карта разделов
 
 | Раздел | LBA | Секторов | ФС | Назначение |
 |---|---|---|---|---|
-| `/system` | 4096 | 8192 | ext2 rw | рабочий том ядра (USERS.DB, AUTOSTART.CFG, профили) |
-| `/TPM` | 12288 | 512 | скрытый 0xDA | аппаратно изолированный маркер TPM (`DEIXTPM1`) |
-| `/userdata` | 12800 | 512 | ext2/ext4 rw | пользовательские данные и пакеты Ring 3 |
-| `/kernel_a` | 13313 | 1279 | EROFS ro | слот A: `kernel.tar.gz` (GZIP + USTAR) |
-| `/kernel_b` | 14593 | 1279 | EROFS ro | слот B |
-| `/init_boot` | 15873 | 255 | EROFS ro | сценарий `init.deix`, `bootloader.bin` |
-| `/vendor_boot` | 16129 | 255 | EROFS ro | `vendor.bin` (HAL, прошивки) |
-| `/boot_a` | 16385 | 255 | EROFS ro | слот A ядра ОС |
-| `/boot_b` | 16641 | 255 | EROFS ro | слот B ядра ОС |
-| `/super` | 16897 | 255 | EROFS ro | системный образ + **UI-звуки (`*.dps`)** |
-| `/dsm` | 17153 | 255 | EROFS ro | аварийный модуль DSM |
-| `/recovery` | 17409 | 255 | EROFS ro | среда восстановления TWRP |
-| `/OTA` | 17664 | 2816 | ext2 | хранилище скачанных OTA-пакетов |
+| `/system` | 4096 | 8704 | EROFS ro | Системный раздел (ядро `kernel.bin`, библиотеки, модули `.kmod`, службы) |
+| `/userdata` | 12800 | 5632 | ext2/ext4 rw | Пользовательские данные, программы, приложения Ring 3 |
 
 ---
 
@@ -97,11 +81,9 @@ Disk
 help about echo clear uptime color cpuid mem lang
 ifconfig arp ping gpu [info|nvinfo|mode] sound [list|play|beep|mode|hda]
 dinit [status|services|mounts|users|audit|security|stage|reload]
-duil [run|calc] ds [script.dxs|-i|-c] avb [status|verify|lock|unlock]
-tpm [status|dump|pcr] taskmgr ls cat write rm pkg run install bigfile
+duil [run|calc] ds [script.dxs|-i|-c] taskmgr ls cat write rm pkg run install bigfile
 useradd passwd whoami users encrypt crypt nvidia hal microcode logo linux profile lock
-threads kexec crash bugreport dmesg crashlog
-reboot [normal|recovery|fastbootd|dsm] bcb ota adb dev root halt
+threads crash bugreport dmesg crashlog adb dev root reboot poweroff shutdown halt
 ```
 
 ---

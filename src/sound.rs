@@ -211,14 +211,16 @@ fn resolve_alias<'a>(name: &'a str) -> &'a str {
     }
 }
 
-/// Читает весь /super с диска и достаёт из его EROFS файл `name`.
+/// Читает звуковой файл DPS из EROFS-раздела /system (/system/media/audio/ui/).
 fn load_dps(name: &str) -> Result<Vec<u8>, &'static str> {
-    let layout = crate::partition_map::lookup_layout("/super")
-        .ok_or("sound: в карте разделов нет /super")?;
+    let layout = crate::partition_map::lookup_layout("/system")
+        .ok_or("sound: в карте разделов нет /system")?;
     let image = crate::bootchain::read_partition_image(layout)
-        .map_err(|_| "sound: не удалось прочитать /super с диска")?;
-    crate::erofs::read_file(&image, name)
-        .map_err(|_| "sound: звука нет в образе (пересоберите: build.sh [2e/8])")
+        .map_err(|_| "sound: не удалось прочитать /system с диска")?;
+    let path = alloc::format!("media/audio/ui/{}", name);
+    crate::erofs::read_file(&image, &path)
+        .or_else(|_| crate::erofs::read_file(&image, name))
+        .map_err(|_| "sound: звук не найден в /system/media/audio/ui/")
 }
 
 /// Разбирает заголовок DPS1; возвращает (частота, сэмплы).
@@ -346,14 +348,13 @@ pub fn play_speaker_named(name: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Список файлов, реально присутствующих в EROFS /super (для `sound list`,
-/// чтобы CLI мог отметить недоступные эффекты в старых образах).
+/// Список файлов, реально присутствующих в EROFS /system.
 pub fn media_files() -> Result<Vec<String>, &'static str> {
-    let layout = crate::partition_map::lookup_layout("/super")
-        .ok_or("sound: в карте разделов нет /super")?;
+    let layout = crate::partition_map::lookup_layout("/system")
+        .ok_or("sound: в карте разделов нет /system")?;
     let image = crate::bootchain::read_partition_image(layout)
-        .map_err(|_| "sound: не удалось прочитать /super с диска")?;
+        .map_err(|_| "sound: не удалось прочитать /system с диска")?;
     crate::erofs::list_files(&image)
         .map(|v| v.into_iter().map(|(n, _)| n).collect())
-        .map_err(|_| "sound: /super не EROFS")
+        .map_err(|_| "sound: /system не EROFS")
 }
