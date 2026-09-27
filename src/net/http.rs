@@ -118,3 +118,14 @@ pub fn fetch_text(url: &str) -> Result<String, String> {
 fn find_header_end(raw: &[u8]) -> Option<usize> {
     raw.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
 }
+
+fn content_length(header: &[u8]) -> Option<usize> {
+    let text = core::str::from_utf8(header).ok()?;
+    for line in text.lines() {
+        let l = line.to_ascii_lowercase();
+        if let Some(v) = l.strip_prefix("content-length:") {
+            return v.trim().parse().ok();
+        }
+    }
+    None
+}
