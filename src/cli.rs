@@ -289,6 +289,7 @@ pub fn execute(line: &str) {
         "poweroff" | "shutdown" => cmd_poweroff(),
         "halt" => cmd_halt(),
         "duil" => crate::duil::cmd_duil(rest),
+        "cli" => cmd_cli(rest),
         "ds" => crate::ds::cmd_ds(rest),
 
         "taskmgr" => crate::sched::cmd_threads(rest),
@@ -881,6 +882,11 @@ fn cmd_gpu_nvinfo() {
 
     let nv = crate::nouveau::detect(info.device);
 
+    println_t!(
+        en: "NVIDIA PCI device {:02x}:{:02x}.{}, BAR0 MMIO {:#010x}",
+        ru: "PCI устройство NVIDIA {:02x}:{:02x}.{}, BAR0 MMIO {:#010x}";
+        nv.device.bus, nv.device.slot, nv.device.function, nv.bar0_mmio
+    );
     println_t!(
         en: "NVIDIA chipset ID: {:#04x} (read from NV_PMC_BOOT_0, an open/documented register)",
         ru: "ID чипа NVIDIA: {:#04x} (прочитан из NV_PMC_BOOT_0, открытого/задокументированного регистра)";
@@ -1636,6 +1642,153 @@ pub fn cmd_halt() {
         asm!("cli");
         loop {
             asm!("hlt");
+        }
+    }
+}
+
+pub const VALID_COMMANDS: &[&str] = &[
+    "help", "about", "echo", "clear", "uptime", "color", "cpuid", "mem", "lang",
+    "ifconfig", "arp", "ping", "threads", "crypt", "dinit", "hal", "gpu", "sound",
+    "ls", "cat", "write", "rm", "pkg", "dialog", "erofs", "run", "install",
+    "bigfile", "useradd", "passwd", "whoami", "users", "encrypt", "crash",
+    "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",
+    "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "adb", "dev", "profile"
+];
+
+pub fn is_valid_command(name: &str) -> bool {
+    let first = name.trim().split_whitespace().next().unwrap_or("");
+    if first.is_empty() {
+        return true;
+    }
+    VALID_COMMANDS.contains(&first)
+}
+
+fn cmd_cli(rest: &str) {
+    match rest.trim() {
+        "new" | "duil" => run_duil_terminal(),
+        "legacy" | "text" | "old" => println!("{}", t!(en: "Already in legacy text CLI.", ru: "Уже в классическом CLI.")),
+        _ => {
+            println!("  cli new | duil    - {}", t!(en: "switch to DUIL syntax-highlighting terminal", ru: "переключиться в DUIL терминал с подсветкой синтаксиса"));
+            println!("  cli legacy | text - {}", t!(en: "standard text CLI", ru: "классический текстовый CLI"));
+        }
+    }
+}
+
+pub fn run_duil_terminal() {
+    println!();
+    println!("{}", t!(
+        en: "=== DeiX DUIL Interactive Terminal v2.0 ===",
+        ru: "=== Интерактивный терминал DeiX DUIL v2.0 ==="
+    ));
+    println!("{}", t!(
+        en: "Syntax highlighting enabled (Green = Valid command, Red = Unknown command).",
+        ru: "Подсветка синтаксиса включена (Зелёный = Верная команда, Красный = Неизвестная)."
+    ));
+    println!("{}", t!(
+        en: "Type 'cli legacy' or 'exit' to return to standard text CLI.",
+        ru: "Введи 'cli legacy' или 'exit' для возврата в классический CLI."
+    ));
+
+    let mut line_buf = [0u8; MAX_LINE];
+    let mut len = 0usize;
+    let mut history: Vec<String> = Vec::new();
+    let mut history_cursor: Option<usize> = None;
+
+    let print_duil_prompt = |input: &str| {
+        with_writer(|w| w.set_color(Color::LightCyan, Color::Black));
+        print!("deix [DUIL]> ");
+        let first_word = input.trim_start().split_whitespace().next().unwrap_or("");
+        if first_word.is_empty() {
+            with_writer(|w| w.set_color(Color::White, Color::Black));
+            print!("{}", input);
+        } else if is_valid_command(first_word) {
+            with_writer(|w| w.set_color(Color::LightGreen, Color::Black));
+            print!("{}", first_word);
+            with_writer(|w| w.set_color(Color::White, Color::Black));
+            if input.len() > first_word.len() {
+                print!("{}", &input[first_word.len()..]);
+            }
+        } else {
+            with_writer(|w| w.set_color(Color::LightRed, Color::Black));
+            print!("{}", input);
+            with_writer(|w| w.set_color(Color::White, Color::Black));
+        }
+    };
+
+    print_duil_prompt("");
+
+    loop {
+        let c: u8 = if crate::serial::is_data_ready() {
+            crate::serial::read_byte()
+        } else {
+            match keyboard::try_read_char() {
+                Some(c) => c,
+                None => continue,
+            }
+        };
+
+        match c {
+            b'\n' => {
+                print!("\n");
+                with_writer(|w| w.set_color(Color::White, Color::Black));
+                let cmd = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+                let trimmed = cmd.trim();
+                if trimmed == "exit" || trimmed == "cli legacy" || trimmed == "cli text" {
+                    println!("{}", t!(en: "Returning to legacy CLI...", ru: "Возврат в классический CLI..."));
+                    break;
+                }
+                if !trimmed.is_empty() {
+                    push_history(&mut history, cmd);
+                }
+                execute(cmd);
+                len = 0;
+                history_cursor = None;
+                print_duil_prompt("");
+            }
+            0x08 => {
+                if len > 0 {
+                    len -= 1;
+                    print!("\u{8}");
+                    let current = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+                    print!("\r");
+                    print_duil_prompt(current);
+                }
+            }
+            b'\t' => {
+                let current = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+                let first = current.trim_start();
+                if !first.is_empty() {
+                    if let Some(&match_cmd) = VALID_COMMANDS.iter().find(|&&cmd| cmd.starts_with(first)) {
+                        let bytes = match_cmd.as_bytes();
+                        let copy_len = bytes.len().min(MAX_LINE);
+                        line_buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
+                        len = copy_len;
+                        print!("\r");
+                        print_duil_prompt(match_cmd);
+                    }
+                }
+            }
+            keyboard::ARROW_UP => {
+                navigate_history(&history, &mut history_cursor, &mut line_buf, &mut len, -1);
+                let current = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+                print!("\r");
+                print_duil_prompt(current);
+            }
+            keyboard::ARROW_DOWN => {
+                navigate_history(&history, &mut history_cursor, &mut line_buf, &mut len, 1);
+                let current = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+                print!("\r");
+                print_duil_prompt(current);
+            }
+            byte => {
+                if len < MAX_LINE {
+                    line_buf[len] = byte;
+                    len += 1;
+                    let current = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+                    print!("\r");
+                    print_duil_prompt(current);
+                }
+            }
         }
     }
 }

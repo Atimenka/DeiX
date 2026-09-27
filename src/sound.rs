@@ -36,10 +36,6 @@ pub fn get_sound_mode() -> SoundMode {
 const PIT_CMD: u16 = 0x43;
 const PIT_CH2: u16 = 0x42;
 const SPEAKER: u16 = 0x61;
-/// Порт 0x80 — запись в него исторически используется как короткая
-/// (~0.5–1 мкс) задержка шины ISA: нужна для ШИМ-воспроизведения, где
-/// микросекундный таймер ядра (timer::uptime_ms) слишком грубый.
-const SCRATCH: u16 = 0x80;
 
 /// Включает PC speaker (бит 1 порта 0x61).
 fn speaker_on() {

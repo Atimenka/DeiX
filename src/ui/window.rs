@@ -95,6 +95,16 @@ pub struct Window {
 }
 
 impl Window {
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+        self.surface.mark_dirty(crate::renderer::Rect::new(0, 0, self.width, self.height));
+    }
+
+    pub fn clear_dirty(&mut self) {
+        self.dirty = false;
+        self.surface.clear_damage();
+    }
+
     pub fn new_terminal(x: i32, y: i32) -> Self {
         Window {
             title: String::from("Terminal"),
@@ -494,7 +504,8 @@ pub fn draw_window(
     is_focused: bool,
     is_dragging: bool,
 ) {
-    let _ = (w.dirty, w.surface.width);
+    let (sw, sh) = w.surface.size();
+    let _ = (w.dirty, sw, sh, w.surface.damage.count);
     let ui_m = UiMetrics::fluent();
     let titlebar_h = ui_m.titlebar_height;
     let button_d = ui_m.button_diameter;

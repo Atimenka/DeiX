@@ -56,6 +56,7 @@ pub fn on_ethernet_frame(frame: &[u8]) {
         Some(h) => h,
         None => return,
     };
+    let _ = (header.is_broadcast(), header.dst_mac);
 
     let payload = &frame[eth::HEADER_LEN..];
 

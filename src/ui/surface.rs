@@ -71,6 +71,10 @@ impl Surface {
         }
     }
 
+    pub fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
     pub fn mark_dirty(&mut self, rect: Rect) {
         self.damage.add(rect);
     }

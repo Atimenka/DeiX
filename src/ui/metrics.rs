@@ -1,12 +1,7 @@
 //! Система метрик, отступов и сетки дизайна DeiX Fluent (Design Tokens)
 
-pub const SPACE_1: i32 = 4;
-pub const SPACE_2: i32 = 8;
 pub const SPACE_3: i32 = 12;
-pub const SPACE_4: i32 = 16;
-pub const SPACE_5: i32 = 24;
 pub const SPACE_6: i32 = 32;
-pub const SPACE_7: i32 = 48;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiMetrics {

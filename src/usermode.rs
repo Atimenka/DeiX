@@ -408,6 +408,7 @@ pub fn init() {
         }
     }
     crate::println!("  [usermode] GDT (user CS/DS) + TSS + syscall MSR: OK");
+    selftest();
 }
 
 unsafe fn wrmsr(msr: u32, val: u64) {

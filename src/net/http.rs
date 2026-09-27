@@ -115,65 +115,6 @@ pub fn fetch_text(url: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(body_bytes).into_owned())
 }
 
-/// HTTP GET для БИНАРНЫХ данных (например, OTA-пакета).
-pub fn get_binary(url: &str, max_body: usize) -> Result<Vec<u8>, String> {
-    let (host, port, path) = parse_url(url)
-        .ok_or_else(|| "Invalid URL".to_string())?;
-    let ip = resolve(&host).ok_or_else(|| format!("Cannot resolve '{}'", host))?;
-
-    if !tcp::connect(ip, port) {
-        return Err("TCP connection failed".into());
-    }
-
-    let req = format!(
-        "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: DeiX-OTA/1.0\r\nConnection: close\r\n\r\n",
-        path, host
-    );
-    tcp::send(req.as_bytes());
-
-    let mut raw: Vec<u8> = Vec::new();
-    let t0 = crate::timer::uptime_ms();
-    loop {
-        let chunk = tcp::recv(2000);
-        if !chunk.is_empty() {
-            raw.extend_from_slice(&chunk);
-            if raw.len() > max_body + 8192 {
-                break;
-            }
-        }
-        if let Some(he) = find_header_end(&raw) {
-            if let Some(cl) = content_length(&raw[..he]) {
-                if raw.len() >= he + cl {
-                    break;
-                }
-            } else if raw.len() > he {
-                break;
-            }
-        }
-        if crate::timer::uptime_ms() - t0 > 15000 {
-            break;
-        }
-    }
-    tcp::close();
-
-    if raw.is_empty() {
-        return Err("No response".into());
-    }
-    let he = find_header_end(&raw).ok_or("No header terminator")?;
-    Ok(raw[he..].to_vec())
-}
-
 fn find_header_end(raw: &[u8]) -> Option<usize> {
     raw.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
-}
-
-fn content_length(header: &[u8]) -> Option<usize> {
-    let text = core::str::from_utf8(header).ok()?;
-    for line in text.lines() {
-        let l = line.to_ascii_lowercase();
-        if let Some(v) = l.strip_prefix("content-length:") {
-            return v.trim().parse().ok();
-        }
-    }
-    None
 }

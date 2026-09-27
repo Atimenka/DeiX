@@ -51,8 +51,8 @@ impl Ipv4Header {
 
 pub fn handle_packet(data: &[u8]) {
     let header = match Ipv4Header::parse(data) {
-        Some(h) => h,
-        None => return,
+        Some(h) if h.version() == 4 => h,
+        _ => return,
     };
 
     let my_ip = crate::net::my_ip();
