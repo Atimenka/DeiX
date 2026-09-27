@@ -2,11 +2,10 @@
 //! акрилового размытия (Acrylic Blur), подсветки синтаксиса и настройки цветов.
 
 use crate::renderer::{Color, Renderer};
+use crate::spinlock::SpinLock;
 use crate::ui::theme::UiTheme;
 use crate::ui::window::Window;
-use alloc::format;
 use alloc::string::String;
-use spin::Mutex;
 
 #[derive(Clone, Copy, Debug)]
 pub struct TerminalConfig {
@@ -35,7 +34,7 @@ impl Default for TerminalConfig {
     }
 }
 
-pub static TERMINAL_CONFIG: Mutex<TerminalConfig> = Mutex::new(TerminalConfig {
+pub static TERMINAL_CONFIG: SpinLock<TerminalConfig> = SpinLock::new(TerminalConfig {
     bg_color: Color::rgb(30, 30, 46),
     opacity: 190,
     blur_enabled: true,

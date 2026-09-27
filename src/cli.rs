@@ -1702,9 +1702,9 @@ pub fn run_duil_terminal() {
     let mut len = 0usize;
     let mut history: Vec<String> = Vec::new();
     let mut history_cursor: Option<usize> = None;
-    let mut prev_printed_len = 0usize;
+    let prev_printed_len = core::sync::atomic::AtomicUsize::new(0);
 
-    let mut print_duil_prompt = |input: &str| {
+    let print_duil_prompt = |input: &str| {
         print!("\r");
         with_writer(|w| w.set_color(Color::LightCyan, Color::Black));
         print!("deix [DUIL]> ");
@@ -1726,8 +1726,9 @@ pub fn run_duil_terminal() {
         }
 
         let cur_len = 13 + input.len();
-        if prev_printed_len > cur_len {
-            let diff = prev_printed_len - cur_len;
+        let prev = prev_printed_len.swap(cur_len, core::sync::atomic::Ordering::Relaxed);
+        if prev > cur_len {
+            let diff = prev - cur_len;
             for _ in 0..diff {
                 print!(" ");
             }
@@ -1735,7 +1736,6 @@ pub fn run_duil_terminal() {
                 print!("\x08");
             }
         }
-        prev_printed_len = cur_len;
     };
 
     print_duil_prompt("");
@@ -1766,7 +1766,7 @@ pub fn run_duil_terminal() {
                 execute(cmd);
                 len = 0;
                 history_cursor = None;
-                prev_printed_len = 0;
+                prev_printed_len.store(0, core::sync::atomic::Ordering::Relaxed);
                 print_duil_prompt("");
             }
             0x08 => {
