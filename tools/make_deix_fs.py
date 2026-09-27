@@ -1,55 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""DeiX OS — образ диска на ЗАВОДСКИХ настройках с ПОЛНОЙ MBR-разметкой.
+"""DeiX OS — образ диска на ЗАВОДСКИХ настройках с чистой MBR-разметкой.
 
-Полная карта разделов DeiX в MBR-таблице (классический MBR = 4 первичных,
-поэтому: 3 первичных + расширенный раздел с 6 логическими):
+Карта разделов DeiX в MBR-таблице (2-partition scheme):
 
-  P1 0x83 bootable  LBA 4096  .. 6143  (2048 сект)  /kernel     (EROFS)
-  P2 0x83           LBA 6144  .. 8191  (2048 сект)  /init_boot  (EROFS)
-  P3 0x83           LBA 8192  .. 10239 (2048 сект)  /boot       (EROFS)
-  E 0x05 (extended) LBA 10240 .. 12799 (2560 сект)  контейнер логических
-    L5 0x83  /vendor_boot  10240..11263 (1024)      (EROFS)
-    L6 0x83  /super        11264..12287 (1024)      (EROFS, контейнер system/vendor/product)
-    L7 0x83  /system       12288..12543 (256)       (EROFS, логический в /super)
-    L8 0x83  /recovery     12544..12799 (256)       (EROFS, TWRP/OrangeFox)
-    L9 0x83  /userdata     13312..15359 (2048)      (ext4, Ring 3)
-    L10 0xDA /TPM          15360..15871 (512)       (скрытый, стереть невозможно)
+  P1 0x83 bootable  LBA 4096  .. 12799 (8704 сект)  /system    (EROFS RO)
+  P2 0x83           LBA 12800 .. 18431 (5632 сект)  /userdata  (EXT2 RW)
 
-Итого 10 разделов: /kernel /init_boot /boot /vendor_boot /super /system
-/recovery /userdata /TPM (+ расширенный контейнер).
+/system содержит структуру каталогов:
+  - kernel/kernel.bin
+  - kmod/*.kmod
+  - lib/*.so
+  - etc/init.deix
+  - services/dinit.cfg
+  - media/audio/ui/*.dps
 
-ПРИМЕЧАНИЕ по адресам: первичный /kernel на LBA 4096 (совпадает с
-FS_START_LBA ядра = ext2-том в образе build.sh). Логические разделы
-размещаются в области расширенного раздела (LBA 10240..), а /userdata и
-/TPM — в хвосте диска (LBA 13312..) — там достаточно места в образе 12800
-секторов? НЕТ: образ 12800 секторов (до LBA 12799). Поэтому /userdata и
-/TPM вынесены ЗА пределы расширенного раздела... но MBR требует, чтобы
-логические разделы лежали ВНУТРИ extended. Решение: расширенный раздел
-покрывает LBA 10240..12799 (2560 сект), а /userdata и /TPM размещены как
-ПЕРВИЧНЫЕ... но первичных уже 3 занято.
-
-ПРАВИЛЬНОЕ РЕШЕНИЕ: образ расширяется до 16384 секторов (8 МиБ), и полная
-карта размещается так (все логические ВНУТРИ extended):
-
-  P1 0x83 boot  /kernel       LBA 4096..6143   (2048)   EROFS
-  P2 0x83       /init_boot    LBA 6144..8191   (2048)   EROFS
-  P3 0x83       /boot         LBA 8192..10239  (2048)   EROFS
-  E  0x05       extended      LBA 10240..16383 (6144)   контейнер
-    L4  /vendor_boot 10240..11263  (1024) EROFS
-    L5  /super       11264..12287  (1024) EROFS
-    L6  /system      12288..12543  (256)  EROFS (внутри /super)
-    L7  /recovery    12544..12799  (256)  EROFS
-    L8  /userdata    12800..14847  (2048) ext4 (Ring 3)
-    L9  /TPM         14848..15359  (512)  скрытый (0xDA)
-    (остаток extended 15360..16383 — свободен)
-
-Ядро читает ФС по фиксированному LBA 4096 (ext2-том build.sh) — P1
-совпадает с ним; остальные разделы — карта для внешних инструментов и
-будущей работы с ними (логические тома поверх).
-
-Формат ext2-тома на P1 (пустой — заводская первая настройка) — байт-в-байт
-по src/ext2.rs.
+/userdata содержит файловую систему EXT2 для пользовательских данных и приложений.
 """
 import os
 import struct
@@ -577,7 +543,9 @@ def init_all_partitions(img, kernel_bin='build/kernel.bin'):
                 for _f in sorted(_os.listdir(snd_dir)):
                     if _f.endswith(".dps"):
                         with open(_os.path.join(snd_dir, _f), "rb") as _fh:
-                            system_files[f"media/{_f}"] = _fh.read()
+                            data = _fh.read()
+                            system_files[f"media/audio/ui/{_f}"] = data
+                            system_files[f"media/{_f}"] = data
             write_erofs_image(img, start, secs, name, system_files)
 
 

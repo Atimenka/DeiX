@@ -11,21 +11,21 @@ pub const SYSTEM_PARTITIONS: [&str; 1] = ["/system"];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultRejection {
     UserdataPolicy(String),
-    NonExt4Userdata(String),
+    InvalidUserdataFs(String),
 }
 
 impl VaultRejection {
     pub fn detail(&self) -> String {
         match self {
             VaultRejection::UserdataPolicy(msg) => msg.clone(),
-            VaultRejection::NonExt4Userdata(msg) => msg.clone(),
+            VaultRejection::InvalidUserdataFs(msg) => msg.clone(),
         }
     }
 
     pub fn kind_name(&self) -> &'static str {
         match self {
             VaultRejection::UserdataPolicy(_) => "userdata-policy-violation",
-            VaultRejection::NonExt4Userdata(_) => "non-ext2-ext4-userdata",
+            VaultRejection::InvalidUserdataFs(_) => "invalid-userdata-fs",
         }
     }
 }
@@ -39,7 +39,7 @@ pub fn evaluate(dst: &str, fs_type: &str, mode: MountMode, _stage: BootStage) ->
             if fs_type == "ext2" || fs_type == "ext4" {
                 Ok(())
             } else {
-                Err(VaultRejection::NonExt4Userdata(format!(
+                Err(VaultRejection::InvalidUserdataFs(format!(
                     "файловая система '{}' для /userdata отличается от ext2/ext4",
                     fs_type
                 )))

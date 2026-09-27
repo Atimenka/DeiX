@@ -1,20 +1,16 @@
-// ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0). Интеграция в существующий код
-// adb — ИНТЕРФЕЙС ОТЛАДКИ В СТИЛЕ ADB (Android Debug Bridge) для DeiX OS.
+// ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0).
+// adb — ИНТЕРФЕЙС ОТЛАДКИ (DeiX Debug Bridge) для DeiX OS.
 //
-// Предоставляет команды для управления устройством с хост-машины через
-// последовательный порт COM1 (в реальном ядре — через USB/сеть):
+// Предоставляет команды для управления устройством с хост-машины через COM1/терминал:
 //   adb devices                — список подключённых устройств
 //   adb shell <command>        — выполнить команду в CLI DeiX
-//   adb push <name> <data>     — записать файл на устройство (в /system-том)
+//   adb push <name> <data>     — записать файл на устройство (в /userdata-том)
 //   adb pull <name>            — прочитать файл с устройства
 //   adb reboot                 — перезагрузка
-//   adb reboot recovery        — перезагрузка в рекавери (TWRP/OrangeFox)
-//   adb reboot fastbootd       — перезагрузка в прошивальщик (fastbootd)
-//   adb install <pkg>          — установить пакет (через pacman)
-//   adb ota <payload>          — отправить OTA-пакет
+//   adb install <pkg>          — установить пакет
 //   adb dev <on|off>           — включить/выключить dev-режим
 //
-// Ввод команд — с COM1 (headless) или клавиатуры (GUI); вывод — в консоль.
+// Ввод команд — с COM1 (headless) или клавиатуры; вывод — в консоль.
 // no_std-совместимо: alloc (String, Vec), вывод — crate::println!.
 
 

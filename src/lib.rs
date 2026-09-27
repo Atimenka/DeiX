@@ -2,7 +2,6 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
-#![allow(dead_code)]
 
 extern crate alloc;
 
@@ -78,10 +77,9 @@ use core::panic::PanicInfo;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    // Полный отладчик ошибок (как Android tombstone): сообщение паники
-    // уходит в serial, в кольцевой журнал (dmesg) и в crash-лог на диск
-    // (CRASHLOG.TXT на /system-томе), чтобы «Произошла ошибка» можно было
-    // посмотреть после перезагрузки (команда `crashlog`, recovery).
+    // Отладчик ошибок: сообщение паники уходит в serial, в кольцевой журнал (dmesg)
+    // и в crash-лог на диск, чтобы его можно было посмотреть после перезагрузки
+    // (команда `crashlog`).
     let msg = alloc::format!("[PANIC] {}", info);
     crate::serial_println!("{}", msg);
     crate::syslog::log_line(&msg);

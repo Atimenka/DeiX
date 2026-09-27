@@ -121,42 +121,42 @@ impl Dinit {
         // 3. Регистрация стандартных системных служб DeiX OS
         self.register_core_service(
             "pid1_core",
-            "/bin/pid1_core",
+            "/system/services/pid1_core",
             0,
             RestartPolicy::Always,
             true,
         );
         self.register_core_service(
             "security_monitor",
-            "/bin/security_monitor",
+            "/system/services/security_monitor",
             3,
             RestartPolicy::Always,
             true,
         );
         self.register_core_service(
             "net_daemon",
-            "/bin/net_daemon",
+            "/system/services/net_daemon",
             3,
             RestartPolicy::UnlessStopped,
             false,
         );
         self.register_core_service(
             "vfs_flusher",
-            "/bin/vfs_flusher",
+            "/system/services/vfs_flusher",
             0,
             RestartPolicy::Always,
             false,
         );
         self.register_core_service(
             "auth_broker",
-            "/bin/auth_broker",
+            "/system/services/auth_broker",
             0,
             RestartPolicy::Always,
             true,
         );
         self.register_core_service(
             "syslogd",
-            "/bin/syslogd",
+            "/system/services/syslogd",
             0,
             RestartPolicy::Always,
             false,
@@ -634,7 +634,7 @@ pub fn cmd_dinit(line: &str) {
                 }
             } else {
                 crate::println!("  Текущая стадия: {}", dinit.stage.as_token());
-                crate::println!("  Допустимые: init_boot, vendor_boot, boot, recovery, fastbootd, edl");
+                crate::println!("  Допустимые: early_boot, boot");
             }
         }
 

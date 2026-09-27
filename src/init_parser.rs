@@ -247,7 +247,7 @@ pub enum ParseWarningKind {
     MissingStageContext,
     TooManyStageCommands,
     UserdataPolicyViolation,
-    NonExt4Userdata,
+    InvalidUserdataFs,
 }
 
 impl ParseWarningKind {
@@ -267,7 +267,7 @@ impl ParseWarningKind {
             ParseWarningKind::UserdataPolicyViolation => {
                 "rw-монтирование /userdata вне разрешённых стадий"
             }
-            ParseWarningKind::NonExt4Userdata => "файловая система /userdata отличается от ext4",
+            ParseWarningKind::InvalidUserdataFs => "файловая система /userdata отличается от ext2/ext4",
         }
     }
 }
@@ -566,8 +566,8 @@ impl InitParser {
                                                     ParseWarningKind::UserdataPolicyViolation,
                                                     msg,
                                                 ),
-                                                VaultRejection::NonExt4Userdata(msg) => (
-                                                    ParseWarningKind::NonExt4Userdata,
+                                                VaultRejection::InvalidUserdataFs(msg) => (
+                                                    ParseWarningKind::InvalidUserdataFs,
                                                     msg,
                                                 ),
                                             };

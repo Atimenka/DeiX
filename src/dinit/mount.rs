@@ -112,8 +112,8 @@ impl MountCmd {
             Err(VaultRejection::UserdataPolicy(_)) => {
                 Err("SECURITY_WARNING: Userdata RW attempted in invalid stage")
             }
-            Err(VaultRejection::NonExt4Userdata(_)) => {
-                Err("SECURITY_WARNING: Userdata requested non-ext4 filesystem")
+            Err(VaultRejection::InvalidUserdataFs(_)) => {
+                Err("SECURITY_WARNING: Userdata requested non-ext2/ext4 filesystem")
             }
         }
     }

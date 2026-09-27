@@ -233,11 +233,6 @@ fn build_kernel_api() -> KernelApi {
 }
 
 pub fn load_boot_modules() {
-    if !ext2::is_formatted() {
-        println!("  [module] ext2 not formatted yet — skipping module loading.");
-        return;
-    }
-
     for &name in BOOT_MODULES {
         match load_module(name) {
             Ok(()) => {}
@@ -265,11 +260,23 @@ pub enum ModuleError {
     TooLarge,
 }
 
+fn read_kmod_data(filename: &str) -> Result<Vec<u8>, ModuleError> {
+    if let Some(layout) = crate::partition_map::lookup_layout("/system") {
+        if let Ok(image) = crate::bootchain::read_partition_image(layout) {
+            let path = alloc::format!("kmod/{}", filename.to_lowercase());
+            if let Ok(data) = crate::erofs::read_file(&image, &path) {
+                return Ok(data);
+            }
+            if let Ok(data) = crate::erofs::read_file(&image, filename) {
+                return Ok(data);
+            }
+        }
+    }
+    ext2::read_file(filename).map_err(|_| ModuleError::NotFound)
+}
+
 fn load_module(filename: &str) -> Result<(), ModuleError> {
-    let data = ext2::read_file(filename).map_err(|e| match e {
-        ext2::Ext2Error::FileNotFound | ext2::Ext2Error::NotFormatted => ModuleError::NotFound,
-        _ => ModuleError::NotFound,
-    })?;
+    let data = read_kmod_data(filename)?;
 
     if data.len() < KMOD_HEADER_SIZE {
         return Err(ModuleError::BadFormat);
