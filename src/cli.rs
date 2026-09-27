@@ -556,14 +556,23 @@ fn cmd_uptime() {
 }
 
 fn cmd_color(name: &str) {
+    let name_trimmed = name.trim();
+    let sub = name_trimmed.split_whitespace().next().unwrap_or("");
+    if matches!(
+        sub,
+        "opacity" | "alpha" | "transparency" | "blur" | "bg" | "background" | "valid" | "invalid" | "text" | "preset" | "reset"
+    ) || sub.starts_with("0x") || sub.starts_with('#') {
+        crate::ui::apps::terminal::cmd_terminal_color(name_trimmed);
+        return;
+    }
     let _ = crate::renderer::Color::palette();
-    if let Ok(idx) = name.parse::<u8>() {
+    if let Ok(idx) = name_trimmed.parse::<u8>() {
         let c = Color::from_index(idx);
         with_writer(|w| w.set_color(c, Color::Black));
         println!("{}", t!(en: "Color changed.", ru: "Цвет изменён."));
         return;
     }
-    let color = match name {
+    let color = match name_trimmed {
         "black" => Some(Color::Black),
         "blue" => Some(Color::Blue),
         "green" => Some(Color::Green),
@@ -582,11 +591,7 @@ fn cmd_color(name: &str) {
         "white" => Some(Color::White),
         "" => None,
         _ => {
-            println_t!(
-                en: "Unknown color '{}'. Available: green, white, red, cyan, yellow",
-                ru: "Неизвестный цвет '{}'. Доступно: green, white, red, cyan, yellow";
-                name
-            );
+            crate::ui::apps::terminal::cmd_terminal_color(name_trimmed);
             return;
         }
     };
@@ -1685,6 +1690,10 @@ pub fn run_duil_terminal() {
         ru: "Подсветка синтаксиса включена (Зелёный = Верная команда, Красный = Неизвестная)."
     ));
     println!("{}", t!(
+        en: "Type 'color opacity|blur|bg|preset' to customize colors and transparency.",
+        ru: "Введи 'color opacity|blur|bg|preset' для настройки цветов и прозрачности."
+    ));
+    println!("{}", t!(
         en: "Type 'cli legacy' or 'exit' to return to standard text CLI.",
         ru: "Введи 'cli legacy' или 'exit' для возврата в классический CLI."
     ));
@@ -1693,8 +1702,10 @@ pub fn run_duil_terminal() {
     let mut len = 0usize;
     let mut history: Vec<String> = Vec::new();
     let mut history_cursor: Option<usize> = None;
+    let mut prev_printed_len = 0usize;
 
-    let print_duil_prompt = |input: &str| {
+    let mut print_duil_prompt = |input: &str| {
+        print!("\r");
         with_writer(|w| w.set_color(Color::LightCyan, Color::Black));
         print!("deix [DUIL]> ");
         let first_word = input.trim_start().split_whitespace().next().unwrap_or("");
@@ -1713,6 +1724,18 @@ pub fn run_duil_terminal() {
             print!("{}", input);
             with_writer(|w| w.set_color(Color::White, Color::Black));
         }
+
+        let cur_len = 13 + input.len();
+        if prev_printed_len > cur_len {
+            let diff = prev_printed_len - cur_len;
+            for _ in 0..diff {
+                print!(" ");
+            }
+            for _ in 0..diff {
+                print!("\x08");
+            }
+        }
+        prev_printed_len = cur_len;
     };
 
     print_duil_prompt("");
@@ -1743,14 +1766,13 @@ pub fn run_duil_terminal() {
                 execute(cmd);
                 len = 0;
                 history_cursor = None;
+                prev_printed_len = 0;
                 print_duil_prompt("");
             }
             0x08 => {
                 if len > 0 {
                     len -= 1;
-                    print!("\u{8}");
                     let current = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
-                    print!("\r");
                     print_duil_prompt(current);
                 }
             }
@@ -1763,7 +1785,6 @@ pub fn run_duil_terminal() {
                         let copy_len = bytes.len().min(MAX_LINE);
                         line_buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
                         len = copy_len;
-                        print!("\r");
                         print_duil_prompt(match_cmd);
                     }
                 }
@@ -1771,13 +1792,11 @@ pub fn run_duil_terminal() {
             keyboard::ARROW_UP => {
                 navigate_history(&history, &mut history_cursor, &mut line_buf, &mut len, -1);
                 let current = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
-                print!("\r");
                 print_duil_prompt(current);
             }
             keyboard::ARROW_DOWN => {
                 navigate_history(&history, &mut history_cursor, &mut line_buf, &mut len, 1);
                 let current = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
-                print!("\r");
                 print_duil_prompt(current);
             }
             byte => {
@@ -1785,7 +1804,6 @@ pub fn run_duil_terminal() {
                     line_buf[len] = byte;
                     len += 1;
                     let current = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
-                    print!("\r");
                     print_duil_prompt(current);
                 }
             }
