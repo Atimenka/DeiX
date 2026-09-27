@@ -1,0 +1,837 @@
+Посмотри текущую ветку `arena/01a0b7dc-deix` и исправь **все compiler warnings**, показанные в приложенном логе.
+
+Сейчас сборка заканчивается примерно на:
+
+`deix_kernel (lib) generated 109 warnings`
+
+Цель: после cleanup выполнить
+
+`cargo +nightly build --release`
+
+и получить **0 warnings**, без маскировки проблем через глобальный `#[allow(dead_code)]`.
+
+### Главное правило
+
+Не просто добавляй `#[allow(dead_code)]`.
+
+Для каждого warning реши одно из трёх:
+
+1. код больше не нужен → удалить;
+2. код нужен → реально использовать/подключить;
+3. код является сознательным public API/future scaffold → только локальный `#[allow(dead_code)]` с коротким объяснением, и только если удаление действительно ломает архитектуру.
+
+Приоритет — удаление мёртвого кода.
+
+### Что конкретно исправить
+
+#### `src/allocator.rs`
+
+Warning:
+
+```text
+field `0` is never read
+HeapStorage([u8; HEAP_SIZE])
+```
+
+Если `HeapStorage` нужен только как статический буфер, убери wrapper-struct и используй подходящий тип напрямую либо сделай так, чтобы поле реально использовалось.
+
+Не оставляй бессмысленный tuple-wrapper только ради старой реализации.
+
+---
+
+#### `src/bootchain.rs`
+
+Сейчас не используются:
+
+```text
+erofs_list_files()
+describe()
+ChainLink
+load_link()
+show_partition_files()
+```
+
+Удалить их, если они не нужны после перехода на новую архитектуру.
+
+Оставить только реально необходимое для текущего boot flow:
+
+```text
+/system
+    ↓
+kernel/kernel.bin
+```
+
+То есть bootchain не должен содержать старый generic loader/diagnostic API без вызывающего кода.
+
+---
+
+#### `src/dialog.rs`
+
+Неиспользуемы:
+
+```text
+BG
+BORDER
+TEXT
+ACCENT
+ERR
+draw_dialog()
+poll_key()
+confirm()
+prompt_line()
+prompt_masked()
+choose()
+```
+
+Проверить ссылки по проекту.
+
+Если `dialog.rs` больше не используется после удаления старых режимов/recovery UI — удалить **весь модуль** и `mod dialog;` из `lib.rs`.
+
+Не сохранять целый мёртвый UI subsystem только ради отсутствия warning.
+
+---
+
+#### `src/dinit/mod.rs`
+
+В `DinitState` не используются:
+
+```text
+Suspended
+Stopped
+Faulted
+```
+
+Проверить реальные переходы состояния.
+
+Если они нигде не используются — оставить только состояния, реально существующие в текущей модели Dinit.
+
+Не уничтожать сам Dinit: он остаётся частью архитектуры Ring 0.
+
+---
+
+#### `src/ds.rs`
+
+Warnings:
+
+```text
+DsError::FileNotFound(String)
+DsError::ExecutionError(String)
+DsError::SyntaxError(String)
+```
+
+`SyntaxError` не создаётся.
+
+Проверить обработку `FileNotFound` и `ExecutionError`.
+
+Если строка внутри ошибки реально нигде не читается — не таскать `String` просто для вида. Можно заменить payload на более подходящую структуру/unit variant, **но только если диагностика не потеряется**.
+
+`SyntaxError` удалить, если DSL больше не использует такой тип ошибки.
+
+---
+
+#### `src/duil.rs`
+
+Не используются:
+
+```text
+WidgetKind::TextBox
+Widget.border_color
+draw_char_buf()
+draw_text_buf()
+fill_rect_buf()
+draw_rect_border_buf()
+render_widget_tree()
+hit_test_and_click()
+DuilApp.root
+```
+
+Это большой кусок старого/альтернативного UI-движка.
+
+Проверить, используется ли `duil` вообще в текущем desktop UI.
+
+Если современный UI уже живёт в:
+
+```text
+src/ui/*
+src/renderer.rs
+```
+
+а `duil.rs` больше не вызывается — удалить `duil.rs` полностью.
+
+Если часть реально нужна — удалить только старый неиспользуемый rendering path и оставить используемое.
+
+---
+
+#### `src/erofs.rs`
+
+Не используются:
+
+```text
+EROFS_BLOCK_SIZE
+EROFS_BLOCK_BITS
+S_IFREG
+Superblock.inos
+Superblock.blocks
+wr_u16()
+wr_u32()
+wr_u64()
+align_up()
+write_inode()
+build_dir_blocks()
+build_image()
+is_erofs()
+```
+
+Очень важно:
+
+**не удаляй рабочий reader EROFS.**
+
+Текущая архитектура использует настоящий EROFS для `/system`.
+
+Но старый builder/debug/helper API, если он больше нигде не вызывается, удалить.
+
+Особенно проверить старые функции построения образов, потому что теперь `tools/make_deix_fs.py` строит EROFS самостоятельно.
+
+---
+
+#### `src/fs.rs`
+
+Warnings показывают, что практически весь abstraction layer `Permissions/FileMeta/META_DB` используется слабо или вообще не используется:
+
+```text
+Permissions::R
+Permissions::RW
+Permissions::RWX
+Permissions::as_octal()
+Permissions::can_read()
+Permissions::can_write()
+FileMeta fields
+FileMeta::new_file()
+FileMeta::new_dir()
+list_dir()
+```
+
+Проверить реальные call sites.
+
+Если `fs.rs` остался от старой permission/meta-системы и фактически не участвует в текущем VFS/userfs/Dinit — удалить мёртвую часть или сам модуль.
+
+Не дублировать filesystem permission model там, где уже есть `ext2`, `userfs` и Dinit policy.
+
+---
+
+#### `src/hal/mod.rs` и `src/hal/mmio.rs`
+
+Не используются:
+
+```text
+Device::config_write32()
+udelay()
+MmioRegion::write32()
+MmioRegion::write16()
+MmioRegion::read8()
+MmioRegion::write8()
+MmioRegion::modify32()
+MmioRegion::wait_for()
+```
+
+Проверить, нужен ли вообще этот HAL API текущим драйверам.
+
+Если это остаток от незавершённой HAL-архитектуры и реальные драйверы его не используют — удалить unused methods.
+
+Не удалять реально используемый HAL целиком.
+
+---
+
+#### `src/hda.rs`
+
+Есть неиспользуемые register constants:
+
+```text
+REG_VMIN
+REG_VMAJ
+REG_WAKEEN
+REG_INTCTL
+REG_INTSTS
+REG_CORBSTS
+SD_OFF_CTL1
+SD_OFF_CTL2
+SD_OFF_FIFOS
+```
+
+И:
+
+```text
+HdaController.codec_addr
+```
+
+Удалить неиспользуемые константы/поля, если они действительно не участвуют в текущем HDA path.
+
+Сам HDA оставить.
+
+---
+
+#### `src/init_parser.rs`
+
+Warning:
+
+```text
+BootStage::allows_userdata_rw()
+ParseWarning::raw_line
+```
+
+`allows_userdata_rw()` удалить.
+
+Для `raw_line`:
+
+если подробный исходный текст warning больше нигде не показывается — убрать поле;
+
+если диагностика должна его сохранять — реально использовать в `boot_report()`.
+
+Также убрать устаревшие формулировки типа:
+
+```text
+six stages
+ext4-only
+old boot stages
+```
+
+Текущая модель:
+
+```text
+EarlyBoot
+Boot
+```
+
+и `/userdata = ext2/ext4 RW`.
+
+---
+
+#### `src/install.rs`
+
+Warning:
+
+```text
+build_ext2_volume()
+```
+
+Функция больше не используется.
+
+Удалить старый duplicate formatter.
+
+В установщике оставить одну реализацию форматирования `/userdata`.
+
+При этом не сломать текущую схему:
+
+```text
+/system   LBA 4096..12799   EROFS
+/userdata LBA 12800..18431  EXT2
+```
+
+---
+
+#### `src/interrupts.rs`
+
+```text
+irq_stub_12
+```
+
+Проверить, почему IRQ12 не используется.
+
+Если mouse действительно работает через IRQ12 другим способом — удалить лишнюю stub-обвязку.
+
+Если stub обязателен для IDT/ABI, сделать так, чтобы он реально устанавливался/использовался, а не глушить warning.
+
+---
+
+#### `src/mex.rs`
+
+```text
+is_mex_filename()
+```
+
+Удалить, если проверка расширения больше нигде не применяется.
+
+Сам MEX пока не удалять: он остаётся legacy/compat механизмом.
+
+---
+
+#### `src/module.rs`
+
+Warnings:
+
+```text
+LoadedModule.version
+LoadedModule.load_addr
+LoadedModule.body_size
+LoadedModule.status
+ModuleStatus::Loaded
+get_loaded_modules()
+```
+
+Проверить API реестра модулей.
+
+Особенно важно не оставить декоративную систему `.kmod`, которая ничего реально не делает.
+
+Текущая архитектура должна быть согласована с новой FS:
+
+```text
+/system/kmod/*.kmod
+```
+
+а не чтением `.kmod` из `/userdata`.
+
+Если `get_loaded_modules()` нужен CLI — подключить его.
+
+Если не нужен — удалить.
+
+`ModuleStatus::Loaded` удалить, если переход идёт сразу в `Initialized/Failed`.
+
+---
+
+#### `src/mouse.rs`
+
+Не читаются:
+
+```text
+MouseSnapshot.right_button
+MouseSnapshot.middle_button
+```
+
+Если кнопки реально поддерживаются — использовать их в обработке мыши.
+
+Если нет — убрать поля.
+
+Не хранить состояние, которое UI нигде не использует.
+
+---
+
+#### `src/net/eth.rs`
+
+```text
+EthernetHeader.dst_mac
+```
+
+Проверить parser/use.
+
+Если destination MAC нужен для фильтрации/диагностики — использовать.
+
+Если нет — убрать поле.
+
+---
+
+#### `src/net/http.rs`
+
+```text
+get_binary()
+```
+
+Если нигде не используется — удалить.
+
+Не оставлять generic HTTP API “на будущее”.
+
+---
+
+#### `src/net/ipv4.rs`
+
+```text
+Ipv4Header.version_ihl
+```
+
+Если parser уже распаковывает version/IHL, но значение дальше не нужно — убрать хранение.
+
+Если нужна валидация IPv4 header — реально проверить через неё.
+
+---
+
+#### `src/nouveau.rs`
+
+Не используются:
+
+```text
+NouveauInfo.device
+NouveauInfo.bar0_mmio
+```
+
+Проверить, является ли Nouveau driver реально используемым.
+
+Если эти значения не нужны — удалить поля.
+
+Сам драйвер удалять только если весь Nouveau path мёртвый.
+
+---
+
+#### `src/renderer.rs`
+
+Не используются:
+
+```text
+Color::from_u32()
+Color::DARK_GRAY
+Color::LIGHT_GRAY
+Color::DESKTOP_BLUE
+Color::TITLEBAR_ACTIVE
+Color::TITLEBAR_INACTIVE
+Color::ACCENT
+```
+
+Плюс:
+
+```text
+IconType
+Settings
+Check
+Bookmark
+Home
+Reload
+ArrowLeft
+ArrowRight
+...
+```
+
+и:
+
+```text
+Renderer::clear_damage()
+Renderer::shade_rect()
+Renderer::draw_drop_shadow()
+```
+
+Не ломай существующий desktop UI.
+
+Но старый неиспользуемый набор цветов/иконок/эффектов удалить.
+
+Особенно не сохранять десятки constants “на будущее”.
+
+---
+
+#### `src/rtl8139.rs`
+
+```text
+RxBuffer([u8; RX_BUFFER_SIZE])
+```
+
+Если wrapper никогда не читается как поле — заменить на обычный массив/подходящий тип либо реально обращаться к буферу.
+
+---
+
+#### `src/sched.rs`
+
+Не используются:
+
+```text
+current_id()
+yield_now()
+stop()
+```
+
+Проверить scheduler.
+
+`yield_now()` может быть полезен архитектурно, но warning означает, что сейчас его никто не вызывает.
+
+Не добавлять искусственный вызов только ради warning.
+
+Если API пока не нужен — удалить.
+
+---
+
+#### `src/sound.rs`
+
+Не используются:
+
+```text
+SCRATCH
+warn_triple()
+ota_alert()
+```
+
+`ota_alert()` особенно важно удалить: OTA в DeiX больше нет.
+
+Также убрать комментарии про OTA и `/super`.
+
+Оставить нормальные UI sounds из:
+
+```text
+/system/media/audio/ui/
+```
+
+---
+
+#### `src/timer.rs`
+
+```text
+sleep_ms()
+```
+
+Удалить, если система использует другой механизм ожидания.
+
+---
+
+#### `src/ui/mod.rs`
+
+Не используются:
+
+```text
+KernelGuiCompositorService
+COMPOSITOR_SERVICE
+compositor_status()
+```
+
+Проверить новую UI архитектуру.
+
+Если compositor теперь живёт непосредственно в `src/ui/*` и этот старый global service ничего не делает — удалить.
+
+---
+
+#### `src/ui/metrics.rs`
+
+Unused:
+
+```text
+SPACE_1
+SPACE_2
+SPACE_4
+SPACE_5
+SPACE_7
+```
+
+Удалить действительно неиспользуемые spacing constants.
+
+---
+
+#### `src/ui/surface.rs`
+
+Не используются:
+
+```text
+Surface.width
+Surface.height
+Surface.damage
+Surface::mark_dirty()
+Surface::clear_damage()
+```
+
+Здесь осторожно.
+
+Если Surface/Damage — уже часть текущей запланированной compositor architecture, либо начать реально использовать её в compositor, либо убрать dead API до тех пор, пока он не нужен.
+
+Не оставлять мёртвую систему dirty-rect только ради красивой архитектуры.
+
+---
+
+#### `src/ui/window.rs`
+
+Не используются:
+
+```text
+WindowContent::FileEditor
+Window.surface
+Window.dirty
+```
+
+Проверить современный window renderer.
+
+Если surface/damage model реально ещё не подключена — убрать её из Window сейчас.
+
+`FileEditor` удалить, если соответствующего приложения/обработчика нет.
+
+---
+
+#### `src/userfs.rs`
+
+```text
+UserFsError::TooLong
+```
+
+У тебя есть отдельная проверка максимальной длины имени, поэтому проверить mapping ошибок.
+
+Если `TooLong` никогда не возвращается — удалить variant либо начать возвращать его там, где действительно превышен `MAX_NAME`.
+
+---
+
+#### `src/usermode.rs`
+
+Не используются:
+
+```text
+USER_CS
+KStack.0
+USER_CODE
+USER_STACK_TOP
+selftest()
+selftest_ok()
+user_program_start
+user_program_end
+```
+
+Это похоже на остатки старого Ring 3 self-test/demo.
+
+Новая модель уже должна развиваться через:
+
+```text
+Dinit
+Ring 3
+process isolation
+capabilities
+scheduler
+```
+
+Старые self-test/global symbols удалить, если они больше не нужны для boot.
+
+`KStack` при этом нельзя бездумно удалить, если он реально используется как storage.
+
+---
+
+#### `src/vault.rs`
+
+Не используются:
+
+```text
+SYSTEM_PARTITIONS
+VaultRejection::UserdataPolicy
+VaultRejection::detail()
+VaultRejection::kind_name()
+```
+
+Упростить Vault до реально действующей политики:
+
+```text
+/system   = erofs + ro
+/userdata = ext2/ext4 + rw
+```
+
+Удалить obsolete rejection branches и методы.
+
+Не оставлять compatibility API без вызовов.
+
+---
+
+#### `src/vbe.rs`
+
+```text
+Framebuffer.bpp
+```
+
+Либо использовать при вычислении framebuffer access, либо убрать поле.
+
+---
+
+#### `src/vga.rs`
+
+Много неиспользуемых вариантов `Color`.
+
+Оставить только реально используемые цвета.
+
+Не удалять сам VGA driver.
+
+---
+
+### Отдельно: убрать глобальное подавление dead code
+
+В `src/lib.rs` есть:
+
+```rust
+#![allow(dead_code)]
+```
+
+Это больше не должно использоваться как костыль.
+
+После удаления/подключения мёртвого кода убрать этот attribute.
+
+Также убрать локальные `#![allow(dead_code)]` из `dinit/mount.rs`, `dinit/namespace.rs` и других мест, где они были добавлены только чтобы скрыть старые warnings.
+
+После этого снова собрать проект и исправить уже реальные остаточные warnings.
+
+### Очень важно
+
+Не возвращать старую архитектуру ради устранения warning.
+
+Не возвращать:
+
+```text
+OTA
+A/B
+BCB
+Recovery
+Fastbootd
+DSM
+TPM
+/super
+/kernel_a
+/kernel_b
+/init_boot
+/vendor_boot
+```
+
+Текущая архитектура остаётся:
+
+```text
+MBR
+ ↓
+stage2
+ ↓
+/system   EROFS RO
+/userdata EXT2 RW
+ ↓
+Dinit PID 1 Ring 0
+ ↓
+Ring 3
+```
+
+`/system` содержит:
+
+```text
+/system/kernel/kernel.bin
+/system/kmod/*.kmod
+/system/lib/*.so
+/system/bin/*
+/system/services/*
+/system/media/audio/ui/*.dps
+/system/etc/*
+/system/share/*
+```
+
+### Финальная проверка
+
+После cleanup:
+
+```text
+cargo +nightly build --release
+```
+
+должно дать:
+
+```text
+0 warnings
+0 errors
+```
+
+Затем проверь:
+
+```text
+/system EROFS читается
+/system/kernel/kernel.bin находится
+/system/kmod работает из EROFS
+/userdata EXT2 работает
+Dinit стартует
+CLI стартует
+desktop UI стартует
+звук ищется в /system/media/audio/ui
+```
+
+В конце выведи краткий отчёт:
+
+```text
+Removed:
+- ...
+
+Refactored:
+- ...
+
+Kept intentionally:
+- ...
+
+Warnings before: 109
+Warnings after: 0
+```
+
+Не заменяй проблему `#[allow(dead_code)]`, искусственными вызовами функций или dummy references только ради зелёной сборки.
