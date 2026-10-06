@@ -40,10 +40,10 @@ pub fn erofs_extract(image: &[u8], name: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| alloc::format!("файл '{}': {}", name, e.message()))
 }
 
-/// Проходит цепочку загрузки (normal): init_boot -> vendor_boot -> boot -> kernel.
+/// Проверяет цепочку загрузки системного раздела: суперблок EROFS,
+/// каталоги /system и файл ядра /system/kernel/kernel.bin.
 /// Возвращает Ok(сводка) или Err(причина). Вызывается из kernel_main ПОСЛЕ
-/// инициализации ATA/heap, ДО экрана входа. Для fastbootd/recovery режимов
-/// вызывается отдельно (см. load_mode_image).
+/// инициализации ATA/heap, ДО экрана входа.
 pub fn run_boot_chain() -> Result<String, String> {
     let mut out = String::new();
     out.push_str("  [bootchain] Цепочка загрузки системного раздела /system (EROFS):\n");
