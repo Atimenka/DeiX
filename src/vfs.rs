@@ -72,7 +72,6 @@ pub struct DirEnt {
 /// Метаданные объекта.
 #[derive(Debug, Clone)]
 pub struct Stat {
-    pub path: String,
     pub is_dir: bool,
     pub size: u64,
     /// `true`, если объект лежит на разделе только для чтения.
@@ -238,7 +237,6 @@ pub fn stat(path: &str) -> Result<Stat, VfsError> {
             if rest.is_empty() {
                 return crate::erofs::parse_superblock(&img)
                     .map(|_| Stat {
-                        path: String::from(MOUNT_SYSTEM),
                         is_dir: true,
                         size: 0,
                         read_only: true,
@@ -250,7 +248,6 @@ pub fn stat(path: &str) -> Result<Stat, VfsError> {
             }
             match crate::erofs::stat(&img, &rest) {
                 Ok(ino) => Ok(Stat {
-                    path: String::from(path),
                     is_dir: ino.is_dir(),
                     size: ino.size,
                     read_only: true,
@@ -268,7 +265,6 @@ pub fn stat(path: &str) -> Result<Stat, VfsError> {
             // Корень тома — сам каталог, у него нет записи в родителе.
             if rest.is_empty() {
                 return Ok(Stat {
-                    path: String::from(MOUNT_USERDATA),
                     is_dir: true,
                     size: 0,
                     read_only: false,
@@ -285,7 +281,6 @@ pub fn stat(path: &str) -> Result<Stat, VfsError> {
                 .into_iter()
                 .find(|e| e.name == leaf)
                 .map(|e| Stat {
-                    path: String::from(path),
                     is_dir: e.is_directory,
                     size: e.size as u64,
                     read_only: false,
@@ -299,6 +294,11 @@ pub fn stat(path: &str) -> Result<Stat, VfsError> {
 /// Содержимое каталога.
 pub fn readdir(path: &str) -> Result<Vec<DirEnt>, VfsError> {
     let (mount, rest) = split_mount(path)?;
+    // Корень тома — всегда каталог; для остальных путей сначала
+    // проверяем тип, чтобы листинг файла давал внятную ошибку.
+    if !rest.is_empty() && !stat(path)?.is_dir {
+        return Err(VfsError::NotDir { path: String::from(path) });
+    }
     match mount {
         MOUNT_SYSTEM => {
             let img = system_image()?;

@@ -30,8 +30,6 @@ use crate::spinlock::SpinLock;
 const MAX_PROCS: usize = 32;
 /// Максимум открытых дескрипторов на процесс.
 const MAX_FDS: usize = 16;
-/// Максимум нитей на процесс.
-const MAX_THREADS: usize = 8;
 
 // ==================== Состояния и возможности ====================
 
@@ -44,8 +42,6 @@ pub enum ProcessState {
     Created,
     /// Исполняется (задача есть в планировщике).
     Running,
-    /// Ждёт события или ввода-вывода.
-    Blocked,
     /// Завершён и ещё не пожнат родителем.
     Zombie,
     /// Завершён и освобождён.
@@ -58,7 +54,6 @@ impl ProcessState {
             ProcessState::Empty => "empty",
             ProcessState::Created => "created",
             ProcessState::Running => "running",
-            ProcessState::Blocked => "blocked",
             ProcessState::Zombie => "zombie",
             ProcessState::Reaped => "reaped",
         }
@@ -66,7 +61,7 @@ impl ProcessState {
 
     /// Занимает ли процесс слот таблицы.
     pub fn occupies_slot(self) -> bool {
-        matches!(self, ProcessState::Created | ProcessState::Running | ProcessState::Blocked)
+        matches!(self, ProcessState::Created | ProcessState::Running)
     }
 }
 
@@ -95,37 +90,29 @@ pub mod cap {
         | GRAPHICS
         | MANAGE_SERVICES
         | INSTALL;
-    /// Набор для обычного пользовательского приложения.
-    pub const USER_APP: u64 = WRITE_USERDATA | NETWORK | AUDIO | GRAPHICS;
 }
 
 // ==================== Адресное пространство ====================
 
-/// Адресное пространство процесса: где размещены код, стек и куча.
+/// Адресное пространство процесса: куда размещается его образ.
 ///
 /// Одна область на процесс — без этого два процесса затрут друг друга,
-/// потому что загрузчики пишут по фиксированным адресам.
+/// потому что загрузчики пишут по фиксированным адресам. Программа
+/// исполняется на стеке своей задачи планировщика; отдельные поля под
+/// пользовательский стек и кучу появятся вместе с их реализацией.
 #[derive(Debug, Clone, Copy)]
 pub struct AddressSpace {
     pub image_base: u64,
     pub image_size: u64,
-    pub stack_base: u64,
-    pub stack_size: u64,
-    pub heap_base: u64,
-    pub heap_size: u64,
 }
 
 /// Размер образа пользовательского процесса.
 pub const AS_IMAGE_SIZE: u64 = 2 * 1024 * 1024;
-/// Размер стека пользовательского процесса.
-pub const AS_STACK_SIZE: u64 = 64 * 1024;
-/// Размер кучи пользовательского процесса.
-pub const AS_HEAP_SIZE: u64 = 256 * 1024;
 /// Начало области, откуда нарезаются адресные пространства.
 /// Выше кучи ядра (0x100000 + 16 МиБ), выше RAM-диска (0x2000000..0x2A00000)
 /// и выше фиксированной области MEX (0x3000000..0x3400000).
 const AS_AREA_START: u64 = 0x0400_0000;
-/// Шаг нарезки: образ (2 МиБ) + стек + куча с запасом на выравнивание.
+/// Шаг нарезки: образ (2 МиБ) плюс запас на выравнивание.
 const AS_SLOT_STRIDE: u64 = 3 * 1024 * 1024;
 
 /// Нарезает адресное пространство для слота `index`.
@@ -134,31 +121,16 @@ fn address_space_for(index: usize) -> AddressSpace {
     AddressSpace {
         image_base: base,
         image_size: AS_IMAGE_SIZE,
-        stack_base: base + AS_IMAGE_SIZE,
-        stack_size: AS_STACK_SIZE,
-        heap_base: base + AS_IMAGE_SIZE + AS_STACK_SIZE,
-        heap_size: AS_HEAP_SIZE,
     }
 }
 
 // ==================== Файловые дескрипторы ====================
 
-/// Тип открытого дескриптора.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FdKind {
-    File,
-    Dir,
-    Console,
-    Null,
-}
-
-/// Открытый дескриптор.
+/// Открытый дескриптор. Чтение/запись через дескриптор со смещением
+/// не реализованы, поэтому дескриптор хранит только путь и режим.
 #[derive(Debug, Clone)]
 pub struct Fd {
-    pub kind: FdKind,
     pub path: String,
-    /// Смещение для последовательного чтения.
-    pub pos: usize,
     pub read_only: bool,
 }
 
@@ -187,10 +159,6 @@ impl FdTable {
 
     pub fn get(&self, num: usize) -> Option<&Fd> {
         self.slots.get(num).and_then(|s| s.as_ref())
-    }
-
-    pub fn get_mut(&mut self, num: usize) -> Option<&mut Fd> {
-        self.slots.get_mut(num).and_then(|s| s.as_mut())
     }
 
     pub fn close(&mut self, num: usize) -> bool {
@@ -224,8 +192,6 @@ pub struct Process {
     pub fds: FdTable,
     /// Слот планировщика для основной нити.
     pub sched_id: Option<usize>,
-    /// Слоты планировщика дополнительных нитей.
-    pub threads: [Option<usize>; MAX_THREADS],
     pub exit_code: Option<i32>,
     pub started_at_ms: u64,
     /// Путь к образу, из которого процесс запущен.
@@ -249,25 +215,15 @@ impl Process {
             aspace: AddressSpace {
                 image_base: 0,
                 image_size: 0,
-                stack_base: 0,
-                stack_size: 0,
-                heap_base: 0,
-                heap_size: 0,
             },
             fds: FdTable::new(),
             sched_id: None,
-            threads: [None; MAX_THREADS],
             exit_code: None,
             started_at_ms: 0,
             image_path: String::new(),
             last_error_code: 0,
             last_error: String::new(),
         }
-    }
-
-    /// Есть ли у процесса указанная возможность.
-    pub fn has_cap(&self, bit: u64) -> bool {
-        self.caps & bit == bit
     }
 
     /// Разрешает путь относительно `cwd` в абсолютный путь VFS.
@@ -357,15 +313,11 @@ pub fn spawn(req: &SpawnRequest) -> Result<u32, ProcessError> {
         let mut table = PROCS.lock();
         if let Some(p) = table.get_mut(index) {
             let _ = p.fds.alloc(Fd {
-                kind: FdKind::Console,
                 path: String::from("/dev/console"),
-                pos: 0,
                 read_only: true,
             });
             let _ = p.fds.alloc(Fd {
-                kind: FdKind::Console,
                 path: String::from("/dev/console"),
-                pos: 0,
                 read_only: false,
             });
         }
@@ -709,9 +661,7 @@ pub fn open(pid: u32, path: &str, write: bool) -> Result<usize, ProcessError> {
     }
 
     let fd = Fd {
-        kind: if st.is_dir { FdKind::Dir } else { FdKind::File },
         path: abs,
-        pos: 0,
         read_only: !write,
     };
 
@@ -777,17 +727,24 @@ pub fn cmd_ps() {
         crate::println!("  Процессов нет.");
         return;
     }
-    crate::println!("  PID   UID   PPID  STATE     FDS  NAME");
+    let now = crate::timer::uptime_ms();
+    crate::println!("  PID   UID   PPID  STATE     FDS  CAPS  ВОЗР(с)  NAME");
     for p in procs.iter() {
+        let age_s = now.saturating_sub(p.started_at_ms) / 1000;
         crate::println!(
-            "  {:<5} {:<5} {:<5} {:<9} {:<4} {}",
+            "  {:<5} {:<5} {:<5} {:<9} {:<4} {:<#5x} {:<8} {}",
             p.pid,
             p.uid,
             p.parent,
             p.state.as_str(),
             p.open_fds,
+            p.caps,
+            age_s,
             p.name
         );
+        if !p.cwd.is_empty() && p.cwd != "/" {
+            crate::println!("        каталог: {}", p.cwd);
+        }
         if p.last_error_code != 0 {
             crate::println!(
                 "        последняя ошибка: {} {}",

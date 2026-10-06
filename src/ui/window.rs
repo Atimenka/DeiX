@@ -4,7 +4,6 @@ use crate::ext2;
 use crate::renderer::{Color, Renderer};
 use crate::ui::apps;
 use crate::ui::metrics::UiMetrics;
-use crate::ui::surface::Surface;
 use crate::ui::theme::UiTheme;
 use alloc::format;
 use alloc::string::String;
@@ -51,7 +50,6 @@ pub enum WindowContent {
     FileEditor {
         filename: String,
         full_path: String,
-        partition: String,
         lines: Vec<String>,
         cursor_row: usize,
         cursor_col: usize,
@@ -96,21 +94,9 @@ pub struct Window {
     pub maximized: bool,
     pub restore_geometry: (i32, i32, u32, u32),
     pub content: WindowContent,
-    pub surface: Surface,
-    pub dirty: bool,
 }
 
 impl Window {
-    pub fn mark_dirty(&mut self) {
-        self.dirty = true;
-        self.surface.mark_dirty(crate::renderer::Rect::new(0, 0, self.width, self.height));
-    }
-
-    pub fn clear_dirty(&mut self) {
-        self.dirty = false;
-        self.surface.clear_damage();
-    }
-
     pub fn new_terminal(x: i32, y: i32) -> Self {
         Window {
             title: String::from("Terminal"),
@@ -128,8 +114,6 @@ impl Window {
                 ],
                 current_line: String::new(),
             },
-            surface: Surface::new(380, 240),
-            dirty: true,
         }
     }
 
@@ -155,8 +139,6 @@ impl Window {
                 error,
                 status_msg: None,
             },
-            surface: Surface::new(520, 340),
-            dirty: true,
         }
     }
 
@@ -190,8 +172,6 @@ impl Window {
                 ],
                 status_msg: Some(String::from("Connected to Internet gateway.")),
             },
-            surface: Surface::new(560, 360),
-            dirty: true,
         }
     }
 
@@ -209,8 +189,6 @@ impl Window {
                 selected_pid: None,
                 status_msg: Some(String::from("System monitor active.")),
             },
-            surface: Surface::new(500, 320),
-            dirty: true,
         }
     }
 
@@ -228,8 +206,6 @@ impl Window {
                 volume_level: 80,
                 brightness_level: 100,
             },
-            surface: Surface::new(480, 320),
-            dirty: true,
         }
     }
 
@@ -247,8 +223,6 @@ impl Window {
                 selected: None,
                 scroll: 0,
             },
-            surface: Surface::new(520, 360),
-            dirty: true,
         }
     }
 
@@ -263,12 +237,25 @@ impl Window {
             maximized: false,
             restore_geometry: (x, y, 380, 220),
             content: WindowContent::About,
-            surface: Surface::new(380, 220),
-            dirty: true,
         }
     }
 
-    pub fn new_file_editor(x: i32, y: i32, filename: &str, path: &str) -> Self {
+    /// Открывает редактор, читая файл через VFS. Ошибка чтения не рисует
+    /// пустой документ как настоящий: редактор открывается только для
+    /// чтения и показывает причину в строке состояния.
+    pub fn new_file_editor(x: i32, y: i32, filename: &str, path: &str, read_only: bool) -> Self {
+        let (lines, error, read_only) = match crate::vfs::read_file(path) {
+            Ok(data) => {
+                let text = String::from_utf8_lossy(&data);
+                let mut lines: Vec<String> =
+                    text.lines().map(String::from).collect();
+                if lines.is_empty() {
+                    lines.push(String::new());
+                }
+                (lines, None, read_only)
+            }
+            Err(e) => (alloc::vec![String::new()], Some(e.message()), true),
+        };
         Window {
             title: format!("Editor - {}", filename),
             x,
@@ -281,18 +268,19 @@ impl Window {
             content: WindowContent::FileEditor {
                 filename: filename.to_string(),
                 full_path: path.to_string(),
-                partition: String::from("/userdata"),
-                lines: alloc::vec![String::from("DeiX Text Editor")],
+                lines,
                 cursor_row: 0,
                 cursor_col: 0,
                 scroll: 0,
                 modified: false,
-                read_only: false,
-                error: None,
-                status_msg: None,
+                read_only,
+                error,
+                status_msg: if read_only {
+                    Some(String::from("только чтение"))
+                } else {
+                    Some(String::from("сохранение при закрытии окна"))
+                },
             },
-            surface: Surface::new(440, 300),
-            dirty: true,
         }
     }
 
@@ -309,8 +297,6 @@ impl Window {
             maximized: false,
             restore_geometry: (x, y_pos.max(20), 240, height),
             content: WindowContent::DisplaySettings,
-            surface: Surface::new(240, height),
-            dirty: true,
         }
     }
 }
@@ -506,8 +492,6 @@ pub fn draw_window(
     is_focused: bool,
     is_dragging: bool,
 ) {
-    let (sw, sh) = w.surface.size();
-    let _ = (w.dirty, sw, sh, w.surface.damage.count);
     let ui_m = UiMetrics::fluent();
     let titlebar_h = ui_m.titlebar_height;
     let button_d = ui_m.button_diameter;
@@ -582,7 +566,6 @@ pub fn draw_window(
         WindowContent::FileEditor {
             filename,
             full_path: _,
-            partition: _,
             lines,
             cursor_row,
             cursor_col,

@@ -1,4 +1,4 @@
-//! Двумерная Surface буферизация окон и оверлеев с поддержкой Damage Region
+//! Общий DamageList компоновщика и поверхность обоев рабочего стола
 
 use crate::renderer::Rect;
 use alloc::vec;
@@ -50,37 +50,6 @@ impl DamageList {
     pub fn clear(&mut self) {
         self.count = 0;
         self.full_redraw = false;
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Surface {
-    pub width: u32,
-    pub height: u32,
-    pub damage: DamageList,
-}
-
-impl Surface {
-    pub fn new(width: u32, height: u32) -> Self {
-        let mut damage = DamageList::new();
-        damage.add(Rect::new(0, 0, width, height));
-        Surface {
-            width,
-            height,
-            damage,
-        }
-    }
-
-    pub fn size(&self) -> (u32, u32) {
-        (self.width, self.height)
-    }
-
-    pub fn mark_dirty(&mut self, rect: Rect) {
-        self.damage.add(rect);
-    }
-
-    pub fn clear_damage(&mut self) {
-        self.damage.clear();
     }
 }
 

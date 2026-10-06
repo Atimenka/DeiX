@@ -102,7 +102,6 @@ impl<T> IrqSpinLock<T> {
     }
 
     pub fn lock(&self) -> IrqSpinLockGuard<'_, T> {
-        const IF_BIT: u64 = 1 << 9;
         let saved_flags: u64;
         unsafe {
             core::arch::asm!(

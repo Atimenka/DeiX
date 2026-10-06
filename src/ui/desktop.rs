@@ -177,6 +177,26 @@ impl Desktop {
 
     pub fn close_window(&mut self, idx: usize) {
         if idx < self.windows.len() {
+            // Редактор сохраняет изменённый файл при закрытии: клавиатура
+            // не передаёт Ctrl-сочетания, поэтому отдельной горячей
+            // клавиши сохранения нет.
+            if let WindowContent::FileEditor {
+                full_path,
+                lines,
+                modified: true,
+                read_only: false,
+                ..
+            } = &self.windows[idx].content
+            {
+                let mut data = lines.join("\n");
+                data.push('\n');
+                if let Err(e) = crate::vfs::write_file(full_path, data.as_bytes()) {
+                    crate::diag::error(
+                        crate::diag::ErrorCode::new(crate::diag::Subsystem::Vfs, 10),
+                        &format!("редактор, сохранение {}: {}", full_path, e.message()),
+                    );
+                }
+            }
             self.windows.remove(idx);
             self.dirty = true;
             if self.windows.is_empty() {
@@ -481,6 +501,16 @@ impl Desktop {
                                         *cursor_row += 1;
                                     }
                                 }
+                                keyboard::ARROW_LEFT => {
+                                    *cursor_col = cursor_col.saturating_sub(1);
+                                }
+                                keyboard::ARROW_RIGHT => {
+                                    if let Some(line) = lines.get(*cursor_row) {
+                                        if *cursor_col < line.len() {
+                                            *cursor_col += 1;
+                                        }
+                                    }
+                                }
                                 0x08 => {
                                     if !*read_only && *cursor_col > 0 {
                                         if let Some(line) = lines.get_mut(*cursor_row) {
@@ -627,6 +657,11 @@ impl Desktop {
         if rel_y < 0 {
             return;
         }
+
+        // Запрос на открытие редактора: окно нельзя добавить, пока
+        // `win` держит заём на список окон, поэтому арм кладёт параметры
+        // сюда, а push происходит после match.
+        let mut open_editor: Option<(i32, i32, String, String, bool)> = None;
 
         match &mut win.content {
             WindowContent::TaskManager {
@@ -820,7 +855,22 @@ impl Desktop {
                 if rel_y >= item_start_y {
                     let idx = ((rel_y - item_start_y) / 22) as usize;
                     if idx < entries.len() {
-                        *selected_idx = Some(idx);
+                        // Повторный клик по уже выбранному файлу открывает его
+                        // в редакторе. /system смонтирован только для чтения.
+                        if *selected_idx == Some(idx) && !entries[idx].is_dir {
+                            let name = entries[idx].name.clone();
+                            let base = current_partition.trim_end_matches('/');
+                            let dir = current_path.trim_matches('/');
+                            let full = if dir.is_empty() {
+                                format!("{}/{}", base, name)
+                            } else {
+                                format!("{}/{}/{}", base, dir, name)
+                            };
+                            let read_only = current_partition != "/userdata";
+                            open_editor = Some((win.x + 28, win.y + 28, name, full, read_only));
+                        } else {
+                            *selected_idx = Some(idx);
+                        }
                         self.dirty = true;
                     }
                 }
@@ -880,6 +930,13 @@ impl Desktop {
                 }
             }
             _ => {}
+        }
+
+        if let Some((x, y, name, full, read_only)) = open_editor {
+            self.windows
+                .push(Window::new_file_editor(x, y, &name, &full, read_only));
+            self.focused_window = Some(self.windows.len() - 1);
+            self.dirty = true;
         }
     }
 

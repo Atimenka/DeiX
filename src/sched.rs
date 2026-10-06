@@ -438,8 +438,6 @@ pub struct TaskInfo {
     pub runtime_ticks: u64,
     /// PID процесса-владельца, 0 — задача ядра.
     pub pid: u32,
-    /// Размер стека задачи в байтах.
-    pub stack_bytes: usize,
 }
 
 /// Список задач со снимком их состояния.
@@ -455,7 +453,6 @@ pub fn list() -> Vec<TaskInfo> {
                     state: t.state,
                     runtime_ticks: t.runtime_ticks,
                     pid: t.pid,
-                    stack_bytes: STACK_SIZE,
                 });
             }
         }

@@ -280,6 +280,7 @@ fn build_report(code: ErrorCode, message: &str, ctx: &PanicContext) -> Report {
 
     r.section("MEMORY");
     let heap = crate::allocator::stats();
+    r.dec("heap_total_bytes: ", heap.total as u64);
     r.dec("heap_used_bytes: ", heap.used as u64);
     r.dec("heap_free_bytes: ", heap.free as u64);
 
@@ -619,11 +620,11 @@ pub fn previous_failure_code() -> ErrorCode {
 }
 
 /// Краткое описание предыдущего сбоя для диалога при загрузке.
+/// Полный текст отчёта читается отдельно через `load_raw_report`.
 pub struct PreviousFailure {
     pub code: ErrorCode,
     pub kind: &'static str,
     pub module: alloc::string::String,
-    pub report: alloc::string::String,
 }
 
 /// Собирает сведения о предыдущем сбое.
@@ -656,7 +657,6 @@ pub fn previous_failure() -> Option<PreviousFailure> {
         code,
         kind: code::summary_of(code),
         module,
-        report,
     })
 }
 
