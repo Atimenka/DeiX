@@ -69,6 +69,8 @@ pub enum ErofsError {
     BadBlockSize { bits: u8 },
     /// Структура образа повреждена (ссылка за пределы).
     Corrupt,
+    /// Путь или имя не найдено в образе.
+    NotFound,
 }
 
 impl ErofsError {
@@ -84,6 +86,7 @@ impl ErofsError {
                 alloc::format!("EROFS: неподдерживаемый blkszbits={}", bits)
             }
             ErofsError::Corrupt => "EROFS: повреждённая структура".into(),
+            ErofsError::NotFound => "EROFS: файл или каталог не найден".into(),
         }
     }
 }
@@ -414,6 +417,57 @@ pub fn read_file(img: &[u8], path: &str) -> Result<Vec<u8>, ErofsError> {
     let sb = parse_superblock(img)?;
     let ino = lookup_path(img, path).or_else(|_| lookup(img, path))?;
     inode_data(img, &sb, &ino)
+}
+
+/// Запись списка каталога: имя, признак каталога, размер в байтах.
+#[derive(Debug, Clone)]
+pub struct DirListing {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+/// Возвращает nid каталога по пути. Пустой путь и "/" дают корень.
+fn resolve_dir_nid(img: &[u8], sb: &Superblock, path: &str) -> Result<u64, ErofsError> {
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let mut nid = sb.root_nid;
+    for part in parts {
+        let entries = read_dir(img, sb, nid)?;
+        let next = entries
+            .into_iter()
+            .find(|e| e.name == part && e.file_type == EROFS_FT_DIR)
+            .ok_or(ErofsError::NotFound)?;
+        nid = next.nid;
+    }
+    Ok(nid)
+}
+
+/// Содержимое каталога по пути. Служебные "." и ".." отбрасываются.
+pub fn list_dir(img: &[u8], path: &str) -> Result<Vec<DirListing>, ErofsError> {
+    let sb = parse_superblock(img)?;
+    let nid = resolve_dir_nid(img, &sb, path)?;
+    let mut out: Vec<DirListing> = Vec::new();
+    for e in read_dir(img, &sb, nid)? {
+        if e.name == "." || e.name == ".." {
+            continue;
+        }
+        let is_dir = e.file_type == EROFS_FT_DIR;
+        let size = match read_inode(img, &sb, e.nid) {
+            Ok(ino) => ino.size,
+            Err(_) => 0,
+        };
+        out.push(DirListing {
+            name: e.name,
+            is_dir,
+            size,
+        });
+    }
+    Ok(out)
+}
+
+/// Проверяет существование пути (файла или каталога) и возвращает инод.
+pub fn stat(img: &[u8], path: &str) -> Result<Inode, ErofsError> {
+    lookup_path(img, path)
 }
 
 // ==================== ЗАПИСЬ (mkfs) ====================

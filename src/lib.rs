@@ -53,6 +53,7 @@ mod partition_map;
 mod pci;
 mod pkg;
 mod port;
+mod process;
 mod renderer;
 mod rng;
 mod rtl8139;
@@ -71,6 +72,7 @@ mod vault;
 mod vbe;
 mod vga;
 mod vgaglobal;
+mod vfs;
 mod vmmouse;
 
 use core::panic::PanicInfo;

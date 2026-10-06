@@ -17,6 +17,8 @@
 //! фиксированному физическому адресу и вызываются как обычная функция
 //! с указателем на таблицу системных функций ядра (MexApi) в RDI.
 
+use alloc::string::String;
+
 use crate::{ext2, keyboard, println, println_t, t, timer};
 
 const MEX_MAGIC: u32 = 0x3158_454D; // "MEX1" little-endian
@@ -114,6 +116,19 @@ extern "C" fn api_uptime_ms() -> u64 {
     timer::uptime_ms()
 }
 
+/// Приводит путь, пришедший от программы, к абсолютному пути VFS.
+///
+/// Исторически MEX-программы работали с именами файлов в корне ext2-тома.
+/// VFS таких путей не понимает — ему нужна точка монтирования, поэтому
+/// относительные имена относятся к `/userdata`.
+fn resolve_program_path(name: &str) -> alloc::string::String {
+    let name = name.trim();
+    if name.starts_with('/') {
+        return alloc::string::String::from(name);
+    }
+    alloc::format!("/userdata/{}", name)
+}
+
 extern "C" fn api_read_file(name_ptr: *const u8, name_len: usize, out_ptr: *mut u8, out_cap: usize) -> i64 {
     if name_ptr.is_null() || name_len == 0 || name_len > 64 {
         return -1;
@@ -123,7 +138,27 @@ extern "C" fn api_read_file(name_ptr: *const u8, name_len: usize, out_ptr: *mut 
         Ok(s) => s,
         Err(_) => return -1,
     };
-    match ext2::read_file(name) {
+    // Файловый доступ программы идёт через VFS, а не напрямую в ext2:
+    // только так путь попадает в единую точку монтирования и проверки прав.
+    // Если программа исполняется как процесс — чтение идёт через её own
+    // таблицу дескрипторов, иначе (запуск из CLI) — напрямую через VFS.
+    let path = resolve_program_path(name);
+    let opened = match crate::process::current_pid() {
+        Some(pid) => crate::process::open(pid, &path, false).and_then(|fd| {
+            crate::process::read_fd(pid, fd).map(|d| (fd, d))
+        }),
+        None => Err(crate::process::ProcessError::NotFound(0)),
+    };
+    let result = match opened {
+        Ok((fd, data)) => {
+            if let Some(pid) = crate::process::current_pid() {
+                let _ = crate::process::close(pid, fd);
+            }
+            Ok(data)
+        }
+        Err(_) => crate::vfs::read_file(&path),
+    };
+    match result {
         Ok(data) => {
             if data.len() > out_cap || out_ptr.is_null() {
                 return -1;
@@ -152,9 +187,23 @@ extern "C" fn api_write_file(name_ptr: *const u8, name_len: usize, data_ptr: *co
         return -1;
     }
 
-    match ext2::write_file(name, data) {
+    let path = resolve_program_path(name);
+    // Запись идёт через таблицу дескрипторов процесса, если программа
+    // исполняется как процесс: только там проверяется возможность записи.
+    let written = match crate::process::current_pid() {
+        Some(pid) => crate::process::open(pid, &path, true).and_then(|fd| {
+            let r = crate::process::write_fd(pid, fd, data);
+            let _ = crate::process::close(pid, fd);
+            r
+        }),
+        None => Err(crate::process::ProcessError::NotFound(0)),
+    };
+    match written {
         Ok(()) => 0,
-        Err(_) => -1,
+        Err(_) => match crate::vfs::write_file(&path, data) {
+            Ok(()) => 0,
+            Err(_) => -1,
+        },
     }
 }
 
@@ -222,7 +271,8 @@ extern "C" fn api_arp_resolve(ip_ptr: *const u8, ip_len: usize, mac_out: *mut u8
 
 // ==================== API construction ====================
 
-fn build_api() -> MexApi {
+/// Строит таблицу системных вызовов, передаваемую программе в RDI.
+pub fn build_api() -> MexApi {
     MexApi {
         // v1.0
         print: api_print,
@@ -383,4 +433,81 @@ fn parse_header(data: &[u8]) -> Option<MexHeader> {
         bss_size: u32::from_le_bytes(data[20..24].try_into().ok()?),
         _reserved: u64::from_le_bytes(data[24..32].try_into().ok()?),
     })
+}
+
+// ==================== Загрузка в адресное пространство процесса ====================
+
+/// Адрес, по которому линкуются `.mex`-программы (см. tools/mex.ld).
+/// Образы формата MEX не позиционно-независимы: тело нельзя разместить
+/// по другой базе без перелинковки, поэтому менеджер процессов обязан
+/// выделять под MEX именно эту область.
+pub fn load_address() -> u64 {
+    MEX_LOAD_ADDR as u64
+}
+
+/// Проверяет сигнатуру образа MEX.
+pub fn is_mex_image(data: &[u8]) -> bool {
+    parse_header(data).is_some()
+}
+
+/// Размещает образ MEX в памяти и возвращает адрес точки входа.
+///
+/// `base` обязана совпадать с [`load_address`]: сегменты `.mex`
+/// слинкованы на этот адрес, и загрузка по другому сместит все
+/// абсолютные ссылки в коде.
+pub fn load_into(data: &[u8], base: u64, capacity: u64) -> Result<u64, String> {
+    if base != MEX_LOAD_ADDR as u64 {
+        return Err(alloc::format!(
+            "MEX слинкован на {:#x}, загрузка по {:#x} невозможна (образ не PIC)",
+            MEX_LOAD_ADDR,
+            base
+        ));
+    }
+
+    let header = parse_header(data).ok_or_else(|| String::from("неверная сигнатура MEX"))?;
+    if header.version_major != 1 {
+        return Err(alloc::format!(
+            "неподдерживаемая версия MEX {}.{}",
+            header.version_major,
+            header.version_minor
+        ));
+    }
+
+    let header_size = header.header_size as usize;
+    if header_size < MEX_HEADER_SIZE_V1 || header_size > data.len() {
+        return Err(String::from("повреждённый заголовок MEX"));
+    }
+
+    let body_size = header.body_size as usize;
+    let bss_size = header.bss_size as usize;
+    let total_size = body_size.saturating_add(bss_size);
+
+    if total_size == 0 || total_size > MEX_MAX_SIZE {
+        return Err(String::from("образ MEX пуст или больше 4 МиБ"));
+    }
+    if total_size as u64 > capacity {
+        return Err(alloc::format!(
+            "образ MEX ({} Б) не помещается в адресное пространство ({} Б)",
+            total_size,
+            capacity
+        ));
+    }
+    if header_size + body_size > data.len() {
+        return Err(String::from("тело MEX обрезано"));
+    }
+    if (header.entry_offset as usize) >= body_size {
+        return Err(String::from("точка входа MEX вне тела"));
+    }
+
+    unsafe {
+        let dst = MEX_LOAD_ADDR as *mut u8;
+        core::ptr::write_bytes(dst, 0, total_size);
+        core::ptr::copy_nonoverlapping(
+            data[header_size..header_size + body_size].as_ptr(),
+            dst,
+            body_size,
+        );
+    }
+
+    Ok(MEX_LOAD_ADDR as u64 + header.entry_offset as u64)
 }

@@ -13,7 +13,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
-use super::{USER_IMAGE_BASE, USER_IMAGE_MAX, USER_STACK_BOTTOM, USER_STACK_TOP};
+use super::{USER_IMAGE_BASE, USER_IMAGE_MAX, USER_STACK_SIZE};
 
 const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
 const ELFCLASS64: u8 = 2;
@@ -241,8 +241,25 @@ fn apply_relocations(img: &[u8], phdrs: &[Phdr], base: u64) -> Result<usize, Str
     Ok(applied)
 }
 
-/// Загружает программу в память и готовит стек.
+/// Загружает программу в глобальную область Ring 3 и готовит стек.
 pub fn load(img: &[u8]) -> Result<Loaded, String> {
+    let loaded = load_into(img, USER_IMAGE_BASE, USER_IMAGE_MAX)?;
+    Ok(Loaded {
+        entry: loaded.entry,
+        stack_top: loaded.stack_top,
+        segments: loaded.segments,
+    })
+}
+
+/// Размещает PIE-образ по произвольной базе `base` и возвращает точку
+/// входа. Используется менеджером процессов: у каждого процесса своё
+/// адресное пространство, а не одна глобальная область.
+///
+/// Работает только с PIE (`ET_DYN`): у таких образов все абсолютные
+/// ссылки исправляются релокациями `R_X86_64_RELATIVE`, поэтому базу
+/// можно выбрать. Не-PIE (`ET_EXEC`) слинкован на конкретный адрес и
+/// перемещению не подлежит.
+pub fn load_into(img: &[u8], base: u64, capacity: u64) -> Result<Loaded, String> {
     let (e_type, entry) = check_header(img)?;
     let phdrs = parse_phdrs(img)?;
 
@@ -263,22 +280,19 @@ pub fn load(img: &[u8]) -> Result<Loaded, String> {
     let max_vaddr = loads.iter().map(|p| p.p_vaddr + p.p_memsz).max().unwrap();
     let span = max_vaddr - min_vaddr;
 
-    if span > USER_IMAGE_MAX {
+    if span > capacity {
         return Err(format!(
-            "образ {} КиБ больше лимита {} КиБ",
+            "образ {} КиБ больше области процесса {} КиБ",
             span / 1024,
-            USER_IMAGE_MAX / 1024
+            capacity / 1024
         ));
     }
 
-    // База размещения: PIE двигаем на USER_IMAGE_BASE, EXEC обязан
-    // лечь по своему адресу — а он у Linux-бинарников 0x400000, где
-    // находится куча ядра.
     let base = match e_type {
-        ET_DYN => USER_IMAGE_BASE.wrapping_sub(min_vaddr),
+        ET_DYN => base.wrapping_sub(min_vaddr),
         ET_EXEC => {
             return Err(format!(
-                "статический не-PIE: слинкован по {:#x}, там куча ядра. \
+                "статический не-PIE: слинкован по {:#x} и не перемещаем. \
                  Пересоберите с -static-pie",
                 min_vaddr
             ))
@@ -286,15 +300,17 @@ pub fn load(img: &[u8]) -> Result<Loaded, String> {
         _ => return Err("неподдерживаемый тип ELF".to_string()),
     };
 
+    let area_end = base + capacity;
+
     // Очищаем область и раскладываем сегменты.
     unsafe {
-        core::ptr::write_bytes(USER_IMAGE_BASE as *mut u8, 0, USER_IMAGE_MAX as usize);
+        core::ptr::write_bytes(base as *mut u8, 0, capacity as usize);
     }
 
     for p in loads.iter() {
         let dst = base + p.p_vaddr;
-        if dst < USER_IMAGE_BASE || dst + p.p_memsz > USER_IMAGE_BASE + USER_IMAGE_MAX {
-            return Err("сегмент выходит за пределы области программы".to_string());
+        if dst < base || dst + p.p_memsz > area_end {
+            return Err("сегмент выходит за пределы области процесса".to_string());
         }
         let src = img
             .get(p.p_offset as usize..(p.p_offset + p.p_filesz) as usize)
@@ -310,14 +326,15 @@ pub fn load(img: &[u8]) -> Result<Loaded, String> {
         crate::println!("  [linux] применено релокаций: {}", relocs);
     }
 
-    // Стек: минимальный System V ABI — argc=0, argv[0]=NULL, envp=NULL,
-    // auxv=AT_NULL. Многие программы читают это сразу на входе.
-    let stack_top = USER_STACK_TOP & !0xF;
+    // Стек кладётся сразу за образом: у процесса своя область, и
+    // глобальный USER_STACK_TOP ему не принадлежит.
+    let stack_bottom = area_end - USER_STACK_SIZE;
+    let stack_top = area_end & !0xF;
     unsafe {
         core::ptr::write_bytes(
-            USER_STACK_BOTTOM as *mut u8,
+            stack_bottom as *mut u8,
             0,
-            (stack_top - USER_STACK_BOTTOM) as usize,
+            (stack_top - stack_bottom) as usize,
         );
         let sp = (stack_top - 64) as *mut u64;
         core::ptr::write(sp, 0); // argc = 0
@@ -326,7 +343,6 @@ pub fn load(img: &[u8]) -> Result<Loaded, String> {
         core::ptr::write(sp.add(3), 0); // auxv: AT_NULL
         core::ptr::write(sp.add(4), 0);
     }
-
 
     Ok(Loaded {
         entry: base + entry,
