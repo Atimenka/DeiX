@@ -18,7 +18,7 @@ pub fn cmd_log(arg: &str) {
         "" => print_records(ring::snapshot(DEFAULT_LIMIT)),
         "list" => {
             println!("  Файлы журналов в {}:", persist::LOG_DIR);
-            for (path, desc) in persist::KNOWN_FILES {
+            for &(path, desc) in persist::KNOWN_FILES {
                 let size = crate::vfs::stat(path).map(|s| s.size).unwrap_or(0);
                 println!("    {:<28} {:>7} Б  {}", path, size, desc);
             }

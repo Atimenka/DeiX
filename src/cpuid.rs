@@ -9,7 +9,7 @@ use core::arch::asm;
 /// Читает лист CPUID.
 ///
 /// `rbx` зарезервирован LLVM, поэтому регистр сохраняется на стек вручную.
-fn leaf(eax: u32) -> [u32; 4] {
+fn leaf(mut eax: u32) -> [u32; 4] {
     let (ebx, ecx, edx): (u32, u32, u32);
     unsafe {
         asm!(
@@ -18,10 +18,13 @@ fn leaf(eax: u32) -> [u32; 4] {
             "mov {ebx:e}, ebx",
             "pop rbx",
             ebx = out(reg) ebx,
-            inout("eax") eax => _,
+            // Выход EAX обязан попасть обратно в переменную: лист 0 и
+            // 0x80000000 возвращают в EAX максимальный номер листа,
+            // и отбрасывание выхода делало brand_string() всегда пустым.
+            inout("eax") eax,
             out("ecx") ecx,
             out("edx") edx,
-            options(nostack)
+            // push/pop трогают стек — nostack здесь было бы ложью компилятору.
         );
     }
     [eax, ebx, ecx, edx]

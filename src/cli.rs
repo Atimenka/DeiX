@@ -760,13 +760,10 @@ fn cmd_ifconfig(arg: &str) {
     println!("TX:      {} пакетов, {} байт", txp, txb);
     let drops = rtl8139::rx_drops();
     if drops > 0 {
-        println!(
-            "{}",
-            t!(
-                en: "RX drops: {} (ring overflow — worker did not keep up)",
-                ru: "Потери RX: {} (переполнение кольца — рабочий поток не успевал)";
-                drops
-            )
+        println_t!(
+            en: "RX drops: {} (ring overflow — worker did not keep up)",
+            ru: "Потери RX: {} (переполнение кольца — рабочий поток не успевал)";
+            drops
         );
     } else {
         println!("RX drops: 0");

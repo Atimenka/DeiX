@@ -137,23 +137,31 @@ impl ErrorCode {
 
     /// Форматирует код в `DX-MEM-0003` без обращения к куче.
     /// Возвращает длину записанного фрагмента.
+    ///
+    /// Длина тега переменная (`MEM`, но `DISK`), поэтому байты тега
+    /// копируются целиком, а не по фиксированным трём позициям.
     pub fn write_to(self, out: &mut [u8]) -> usize {
-        let tag = self.subsystem().tag();
+        let tag = self.subsystem().tag().as_bytes();
         let num = self.number();
-        let d = [
-            b'D',
-            b'X',
-            b'-',
-            tag.as_bytes()[0],
-            tag.as_bytes()[1],
-            tag.as_bytes()[2],
-            b'-',
-            b'0' + ((num / 1000) % 10) as u8,
-            b'0' + ((num / 100) % 10) as u8,
-            b'0' + ((num / 10) % 10) as u8,
-            b'0' + (num % 10) as u8,
-        ];
-        let n = d.len().min(out.len());
+
+        let mut d = [0u8; 16];
+        let mut n = 0;
+        for &b in b"DX-" {
+            d[n] = b;
+            n += 1;
+        }
+        for &b in tag {
+            d[n] = b;
+            n += 1;
+        }
+        d[n] = b'-';
+        n += 1;
+        for div in [1000u16, 100, 10, 1] {
+            d[n] = b'0' + ((num / div) % 10) as u8;
+            n += 1;
+        }
+
+        let n = n.min(out.len());
         out[..n].copy_from_slice(&d[..n]);
         n
     }
