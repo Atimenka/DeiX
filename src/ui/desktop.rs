@@ -87,8 +87,6 @@ pub struct Desktop {
 
 impl Desktop {
     pub fn new() -> Self {
-        crate::module::register_builtin_module("GFX.KMOD", (1, 0), 65536);
-
         Desktop {
             windows: Vec::new(),
             focused_window: None,
@@ -885,6 +883,14 @@ impl Desktop {
             if keyboard::try_read_escape() {
                 self.should_exit = true;
             }
+
+            // Сетевой рабочий поток: ISR карты только складывает кадры
+            // в кольцо, разбор стеком идёт здесь, вне прерывания.
+            crate::rtl8139::poll_deferred();
+
+            // Квант супервизора: детект упавших служб и политика
+            // перезапуска. Без этого вызова RestartPolicy не работает.
+            crate::dinit::tick();
 
             self.handle_input(r, screen_w, screen_h);
 

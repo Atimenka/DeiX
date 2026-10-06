@@ -129,7 +129,7 @@ pub fn draw_control_center(r: &mut Renderer, theme: &UiTheme, screen_w: i32, scr
     r.draw_text(cc_x + 36, cc_y + 70, "Audio: 80% [HDA]", theme.text_primary, None);
 
     r.draw_icon(cc_x + 12, cc_y + 96, IconType::Theme, Color::YELLOW);
-    r.draw_text(cc_x + 36, cc_y + 96, "GFX.KMOD Active", theme.text_primary, None);
+    r.draw_text(cc_x + 36, cc_y + 96, "Compositor: built-in", theme.text_primary, None);
 
     r.fill_rounded_rect(cc_x + 12, cc_y + 124, (cc_w - 24) as u32, 24, 4, theme.titlebar_active);
     r.draw_text(cc_x + 32, cc_y + 128, "System Running", Color::GREEN, None);

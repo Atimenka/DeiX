@@ -21,7 +21,7 @@ pub fn draw_files(
     r.fill_rect_alpha(w.x, content_y, w.width, w.height, theme.window_bg, theme.opacity);
 
     r.fill_rect(w.x, content_y, 110, w.height, theme.titlebar_inactive);
-    let partitions = ["/userdata", "/system", "/kernel"];
+    let partitions = ["/userdata", "/system"];
     let mut py = content_y + 8;
     for p in partitions.iter() {
         let is_sel = current_partition == *p;

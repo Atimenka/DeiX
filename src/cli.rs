@@ -263,6 +263,7 @@ pub fn execute(line: &str) {
         "ls" => cmd_ls(),
         "cat" => cmd_cat(rest),
         "write" => cmd_write(rest),
+        "mkdir" => cmd_mkdir(rest),
         "rm" => cmd_rm(rest),
         "pkg" => cmd_pkg(rest),
         "dialog" => cmd_dialog_test(),
@@ -293,6 +294,10 @@ pub fn execute(line: &str) {
         "ds" => crate::ds::cmd_ds(rest),
 
         "taskmgr" => crate::sched::cmd_threads(rest),
+        "ps" => crate::process::cmd_ps(),
+        "kill" => crate::process::cmd_kill(rest),
+        "lsmod" => cmd_lsmod(),
+        "kmod" => cmd_kmod(rest),
         "adb" => crate::adb::cmd_adb(rest),
         "adb-repl" => crate::adb::adb_repl(),
         "dev" => {
@@ -755,6 +760,24 @@ fn cmd_ifconfig(arg: &str) {
     );
     println!("IP:      {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
     println!("Gateway: {}.{}.{}.{}", gw[0], gw[1], gw[2], gw[3]);
+
+    // Реальные счётчики драйвера, а не «оценка нагрузки».
+    let (rxp, rxb, txp, txb) = rtl8139::traffic_counters();
+    println!("RX:      {} пакетов, {} байт", rxp, rxb);
+    println!("TX:      {} пакетов, {} байт", txp, txb);
+    let drops = rtl8139::rx_drops();
+    if drops > 0 {
+        println!(
+            "{}",
+            t!(
+                en: "RX drops: {} (ring overflow — worker did not keep up)",
+                ru: "Потери RX: {} (переполнение кольца — рабочий поток не успевал)";
+                drops
+            )
+        );
+    } else {
+        println!("RX drops: 0");
+    }
 }
 
 fn cmd_arp() {
@@ -1468,15 +1491,113 @@ fn cmd_encrypt(arg: &str) {
 
 fn cmd_rm(name: &str) {
     if name.is_empty() {
-        println!("{}", t!(en: "Usage: rm <filename>", ru: "Использование: rm <имя_файла>"));
+        println!("{}", t!(en: "Usage: rm <path>", ru: "Использование: rm <путь>"));
         return;
     }
-    match ext2::delete_file(name) {
-        Ok(()) => println_t!(en: "Deleted '{}'.", ru: "Удалено '{}'."; name),
-        Err(ext2::Ext2Error::FileNotFound) => {
+    let path = resolve_user_path(name);
+    match crate::vfs::remove(&path) {
+        Ok(()) => println_t!(en: "Deleted '{}'.", ru: "Удалено '{}'."; path),
+        Err(crate::vfs::VfsError::NotFound { .. }) => {
             println!("{}", t!(en: "File not found.", ru: "Файл не найден."))
         }
-        Err(_) => println!("{}", t!(en: "Failed to delete file.", ru: "Не удалось удалить файл.")),
+        Err(e) => println!("{}", e.message()),
+    }
+}
+
+/// Приводит путь к абсолютному пути VFS. Относительные имена считаются
+/// от `/userdata` — единственного раздела, доступного на запись.
+fn resolve_user_path(name: &str) -> String {
+    let name = name.trim();
+    if name.starts_with('/') {
+        return String::from(name);
+    }
+    alloc::format!("/userdata/{}", name)
+}
+
+fn cmd_mkdir(name: &str) {
+    if name.is_empty() {
+        println!("{}", t!(en: "Usage: mkdir <path>", ru: "Использование: mkdir <путь>"));
+        return;
+    }
+    let path = resolve_user_path(name);
+    match crate::vfs::mkdir(&path) {
+        Ok(()) => println_t!(en: "Created '{}'.", ru: "Создано '{}'."; path),
+        Err(e) => println!("{}", e.message()),
+    }
+}
+
+/// `lsmod` — реально загруженные модули ядра.
+///
+/// Показывает только то, что действительно прошло загрузчик `.kmod`.
+/// Встроенные подсистемы ядра сюда не попадают: они не являются
+/// загруженными модулями, и выдавать их за таковые нельзя.
+fn cmd_lsmod() {
+    let mods = crate::module::get_loaded_modules();
+    if mods.is_empty() {
+        println!(
+            "{}",
+            t!(
+                en: "No kernel modules loaded (none found on /system).",
+                ru: "Модули ядра не загружены (на /system ничего не найдено)."
+            )
+        );
+        return;
+    }
+    println!("  NAME        VER    ADDR       SIZE");
+    for m in mods.iter() {
+        println!(
+            "  {:<11} {}.{}   {:#010x} {:>7} B",
+            m.name,
+            m.version.0,
+            m.version.1,
+            m.load_addr,
+            m.body_size
+        );
+    }
+    println!("  Всего: {}", mods.len());
+}
+
+/// `kmod load <path>` — загрузить модуль вручную.
+fn cmd_kmod(arg: &str) {
+    let mut parts = arg.splitn(2, ' ');
+    let action = parts.next().unwrap_or("").trim();
+    let rest = parts.next().unwrap_or("").trim();
+    match action {
+        "" | "help" => println!(
+            "{}",
+            t!(
+                en: "Usage: kmod load <path> | lsmod",
+                ru: "Использование: kmod load <путь> | lsmod"
+            )
+        ),
+        "load" => {
+            if rest.is_empty() {
+                println!("{}", t!(en: "Usage: kmod load <path>", ru: "Использование: kmod load <путь>"));
+                return;
+            }
+            match crate::module::load_module(rest) {
+                Ok(()) => println_t!(en: "Module '{}' loaded.", ru: "Модуль '{}' загружен."; rest),
+                Err(e) => println!("{}", module_error_str(e)),
+            }
+        }
+        "list" => cmd_lsmod(),
+        _ => println!(
+            "{}",
+            t!(
+                en: "Unknown action. Available: load, list",
+                ru: "Неизвестное действие. Доступно: load, list"
+            )
+        ),
+    }
+}
+
+fn module_error_str(e: crate::module::ModuleError) -> String {
+    use crate::module::ModuleError as E;
+    match e {
+        E::NotFound => String::from("модуль не найден"),
+        E::BadFormat => String::from("неверный формат .kmod"),
+        E::InitFailed(code) => alloc::format!("init() вернул код {}", code),
+        E::TooLarge => String::from("модуль слишком большой"),
     }
 }
 
@@ -1654,10 +1775,11 @@ pub fn cmd_halt() {
 pub const VALID_COMMANDS: &[&str] = &[
     "help", "about", "echo", "clear", "uptime", "color", "cpuid", "mem", "lang",
     "ifconfig", "arp", "ping", "threads", "crypt", "dinit", "hal", "gpu", "sound",
-    "ls", "cat", "write", "rm", "pkg", "dialog", "erofs", "run", "install",
+    "ls", "cat", "write", "mkdir", "rm", "pkg", "dialog", "erofs", "run", "install",
     "bigfile", "useradd", "passwd", "whoami", "users", "encrypt", "crash",
     "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",
-    "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "adb", "dev", "profile"
+    "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "adb", "dev", "profile",
+    "ps", "kill"
 ];
 
 pub fn is_valid_command(name: &str) -> bool {

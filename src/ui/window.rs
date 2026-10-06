@@ -317,7 +317,7 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::from("Round-robin context switching via PIT 100Hz interrupt."),
             String::new(),
             String::from("### 2. Kernel Module GUI Compositor"),
-            String::from("GFX.KMOD driver manages window layers, VBE double buffer & FPS."),
+            String::from("Built-in compositor manages window layers, VBE double buffer & FPS."),
             String::new(),
             String::from("### 3. Network Stack"),
             String::from("RTL8139 Ethernet -> ARP / IPv4 -> TCP -> HTTP/1.0 Web Client."),
@@ -342,40 +342,21 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
 
     match crate::net::http::fetch_text(&full_url) {
         Ok(html) => parse_html_to_browser_lines(&full_url, &html),
-        Err(_err) => {
-            if clean_url.contains("google.com") || clean_url.contains("google") {
-                alloc::vec![
-                    String::from("# Google Search"),
-                    String::from("Search the World Wide Web with DeiX Browser"),
-                    String::new(),
-                    String::from("[ Search Box: google.com/search?q=... ]"),
-                    String::new(),
-                    String::from("## Trending Searches:"),
-                    String::from("1. DeiX OS 0.2.1 Release Notes"),
-                    String::from("2. Rust Kernel Development"),
-                    String::from("3. x86_64 Preemptive Multitasking"),
-                    String::new(),
-                    String::from("## Quick Links:"),
-                    String::from("* [google.com/imghp] Google Images"),
-                    String::from("* [google.com/maps] Google Maps"),
-                    String::from("* [news.google.com] Google News"),
-                    String::new(),
-                    String::from("Status: HTTP 200 OK | TCP Socket Connected"),
-                ]
-            } else {
-                alloc::vec![
-                    format!("# Web Site: {}", full_url),
-                    String::from("Status: Connected to Remote HTTP Endpoint"),
-                    String::new(),
-                    format!("Host: {}", clean_url),
-                    String::from("Protocol: HTTP/1.0 over TCP/IP"),
-                    String::new(),
-                    String::from("## Content Preview:"),
-                    String::from("Welcome to the remote web page! Page loaded successfully."),
-                    String::from("All HTML headers and body content parsed via DeiX Web Engine."),
-                ]
-            }
-        }
+        // Показываем настоящую причину сбоя из net::http. Подменять её
+        // «успешной» страницей нельзя: иначе сеть не диагностируется.
+        Err(err) => alloc::vec![
+            format!("# Не удалось загрузить {}", full_url),
+            String::new(),
+            format!("Ошибка: {}", err),
+            String::new(),
+            String::from("Возможные причины:"),
+            String::from("* сетевая карта не инициализирована (нет eth0)"),
+            String::from("* не разрешается имя хоста (нет DNS)"),
+            String::from("* хост недоступен или порт закрыт"),
+            String::from("* сервер не ответил за отведённое время"),
+            String::new(),
+            String::from("Проверьте: `net info`, `ping <ip>`, `eth`."),
+        ],
     }
 }
 
@@ -475,24 +456,20 @@ pub fn load_partition_entries(partition: &str, path: &str) -> (Vec<FileViewEntry
                 Err(_) => (Vec::new(), Some(String::from("Failed to list directory"))),
             }
         }
-        "/system" => {
-            let items = alloc::vec![
-                FileViewEntry { name: String::from("BIN"), is_dir: true, size: 0 },
-                FileViewEntry { name: String::from("LIB"), is_dir: true, size: 0 },
-                FileViewEntry { name: String::from("SYSTEM.CFG"), is_dir: false, size: 1024 },
-                FileViewEntry { name: String::from("DINIT.CONF"), is_dir: false, size: 2048 },
-            ];
-            (items, None)
-        }
-        "/kernel" => {
-            let items = alloc::vec![
-                FileViewEntry { name: String::from("STAGE2.BIN"), is_dir: false, size: 524288 },
-                FileViewEntry { name: String::from("NET.KMOD"), is_dir: false, size: 32768 },
-                FileViewEntry { name: String::from("CRYPTO.KMOD"), is_dir: false, size: 24576 },
-                FileViewEntry { name: String::from("GFX.KMOD"), is_dir: false, size: 65536 },
-            ];
-            (items, None)
-        }
+        "/system" => match crate::vfs::readdir("/system") {
+            Ok(entries) => {
+                let mut items = Vec::new();
+                for e in entries {
+                    items.push(FileViewEntry {
+                        name: e.name,
+                        is_dir: e.is_dir,
+                        size: e.size,
+                    });
+                }
+                (items, None)
+            }
+            Err(e) => (Vec::new(), Some(format!("/system: {}", e))),
+        },
         _ => (Vec::new(), Some(String::from("Unknown partition"))),
     }
 }

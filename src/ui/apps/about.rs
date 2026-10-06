@@ -20,7 +20,7 @@ pub fn draw_about(
 
     r.draw_text(w.x + 16, content_y + 72, "Architecture: x86_64 Long Mode (64-bit)", theme.text_secondary, None);
     r.draw_text(w.x + 16, content_y + 92, "Kernel: Custom Rust No-Std Microkernel", theme.text_secondary, None);
-    r.draw_text(w.x + 16, content_y + 112, "Compositor: GFX.KMOD VBE Double Buffer", theme.text_secondary, None);
+    r.draw_text(w.x + 16, content_y + 112, "Compositor: built-in VBE double buffer (no external KMOD)", theme.text_secondary, None);
     r.draw_text(w.x + 16, content_y + 132, "GUI Design: DeiX Fluent System", theme.text_secondary, None);
 
     r.draw_text(w.x + 16, content_y + 160, "Copyright (c) 2026 DeiX OS Team", Color::GRAY, None);
