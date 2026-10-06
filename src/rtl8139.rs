@@ -77,6 +77,119 @@ impl Rtl8139State {
 
 static STATE: SpinLock<Rtl8139State> = SpinLock::new(Rtl8139State::new());
 
+// ==================== Отложенная обработка RX ====================
+//
+// Обработчик прерывания карты обязан вернуться как можно быстрее и не
+// имеет права аллоцировать: куча защищена локом, который может держать
+// прерванный код, а разбор Ethernet/IP/TCP — это сотни инструкций на
+// пакет. Поэтому ISR только копирует кадр в заранее выделенное кольцо,
+// а весь стек работает потом, из `poll_deferred`.
+
+/// Число слотов приёмного кольца.
+const RX_RING_SLOTS: usize = 16;
+/// Максимальный размер кадра в слоте.
+const RX_RING_FRAME: usize = 1600;
+
+struct RxRing {
+    slots: [[u8; RX_RING_FRAME]; RX_RING_SLOTS],
+    lens: [usize; RX_RING_SLOTS],
+    /// Куда пишет ISR.
+    head: usize,
+    /// Откуда читает рабочий поток.
+    tail: usize,
+    /// Сколько кадров сейчас в кольце.
+    count: usize,
+    /// Кадры, потерянные из-за переполнения кольца.
+    drops: u64,
+}
+
+impl RxRing {
+    const fn new() -> Self {
+        RxRing {
+            slots: [[0; RX_RING_FRAME]; RX_RING_SLOTS],
+            lens: [0; RX_RING_SLOTS],
+            head: 0,
+            tail: 0,
+            count: 0,
+            drops: 0,
+        }
+    }
+}
+
+/// Кольцо защищено `IrqSpinLock`: его одновременно трогают ISR карты и
+/// рабочий поток, а на одном CPU это ровно тот случай, когда обычный
+/// спинлок даёт мёртвую петлю.
+static RX_RING: crate::spinlock::IrqSpinLock<RxRing> = crate::spinlock::IrqSpinLock::new(RxRing::new());
+
+/// Кладёт кадр в приёмное кольцо. Вызывается из ISR, без аллокаций.
+/// Возвращает `false`, если кольцо заполнено и кадр потерян.
+fn rx_ring_push(frame: &[u8]) -> bool {
+    let mut ring = RX_RING.lock();
+    if ring.count >= RX_RING_SLOTS {
+        ring.drops += 1;
+        return false;
+    }
+    let len = frame.len().min(RX_RING_FRAME);
+    ring.slots[ring.head][..len].copy_from_slice(&frame[..len]);
+    ring.lens[ring.head] = len;
+    ring.head = (ring.head + 1) % RX_RING_SLOTS;
+    ring.count += 1;
+    true
+}
+
+/// Забирает следующий кадр из кольца. Вызывается из рабочего потока.
+fn rx_ring_pop() -> Option<(usize, usize)> {
+    let mut ring = RX_RING.lock();
+    if ring.count == 0 {
+        return None;
+    }
+    let slot = ring.tail;
+    let len = ring.lens[slot];
+    ring.tail = (ring.tail + 1) % RX_RING_SLOTS;
+    ring.count -= 1;
+    Some((slot, len))
+}
+
+/// Сколько кадров потеряно из-за переполнения приёмного кольца.
+pub fn rx_drops() -> u64 {
+    RX_RING.lock().drops
+}
+
+/// Разбирает накопившиеся в кольце кадры сетевым стеком.
+///
+/// Вызывается из основного цикла и из `tcp::poll_rx`, то есть вне
+/// контекста прерывания — здесь уже можно аллоцировать.
+pub fn poll_deferred() {
+    while let Some((slot, len)) = rx_ring_pop() {
+        // Копируем кадр из слота, чтобы не держать блокировку кольца
+        // на время разбора стеком.
+        let mut buf = [0u8; RX_RING_FRAME];
+        {
+            let ring = RX_RING.lock();
+            buf[..len].copy_from_slice(&ring.slots[slot][..len]);
+        }
+        crate::net::on_ethernet_frame(&buf[..len]);
+    }
+}
+
+/// Счётчики трафика. Обновляются атомарно: RX растёт в контексте
+/// прерывания, поэтому блокировку здесь брать нельзя.
+static RX_PACKETS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static RX_BYTES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static TX_PACKETS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static TX_BYTES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Накопленный трафик: `(rx_packets, rx_bytes, tx_packets, tx_bytes)`.
+pub fn traffic_counters() -> (u64, u64, u64, u64) {
+    use core::sync::atomic::Ordering;
+    (
+        RX_PACKETS.load(Ordering::Relaxed),
+        RX_BYTES.load(Ordering::Relaxed),
+        TX_PACKETS.load(Ordering::Relaxed),
+        TX_BYTES.load(Ordering::Relaxed),
+    )
+}
+
 /// Пытается найти RTL8139 на шине PCI и проинициализировать её. Возвращает
 /// true, если карта найдена и готова к работе (тогда можно слать/принимать
 /// пакеты), false — если карты нет (например, QEMU запущен без `-net nic`).
@@ -198,6 +311,9 @@ pub fn send_frame(data: &[u8]) -> bool {
             outl(tsd, size);
         }
 
+        TX_PACKETS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        TX_BYTES.fetch_add(data.len() as u64, core::sync::atomic::Ordering::Relaxed);
+
         true
     })
 }
@@ -242,7 +358,10 @@ pub fn poll_rx() {
         if !st.initialized { return; }
         st.io_base
     };
+    // Сначала выгребаем кадры из карты в кольцо, потом разбираем их
+    // сетевым стеком уже вне контекста прерывания.
     unsafe { drain_rx_buffer(io_base); }
+    poll_deferred();
 }
 
 unsafe fn drain_rx_buffer(io_base: u16) {
@@ -272,6 +391,9 @@ unsafe fn drain_rx_buffer(io_base: u16) {
         let data_start = offset + 4;
         let data_len = packet_len - 4;
 
+        RX_PACKETS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        RX_BYTES.fetch_add(data_len as u64, core::sync::atomic::Ordering::Relaxed);
+
         // Копируем во временный стековый буфер, потому что данные в
         // кольцевом буфере физически могут "переворачиваться" через конец.
         let mut frame_buf = [0u8; 1600];
@@ -280,7 +402,9 @@ unsafe fn drain_rx_buffer(io_base: u16) {
             frame_buf[i] = *rx_buf.add(src_offset);
         }
 
-        crate::net::on_ethernet_frame(&frame_buf[..data_len]);
+        // Только постановка в кольцо: разбор Ethernet/IP/TCP делает
+        // poll_deferred уже вне контекста прерывания.
+        rx_ring_push(&frame_buf[..data_len]);
 
         // Сдвигаем offset на размер пакета + заголовок, выравнивая по 4 байта
         // (так требует спецификация RTL8139).

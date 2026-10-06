@@ -21,6 +21,20 @@
 //! Live-диск.
 
 use crate::port::{inb, insw, outb, outsw};
+use core::sync::atomic::{AtomicU64, Ordering};
+
+/// Накопленный дисковой I/O в секторах. Считается только успешные
+/// операции: счётчик увеличивается после завершения передачи данных.
+static SECTORS_READ: AtomicU64 = AtomicU64::new(0);
+static SECTORS_WRITTEN: AtomicU64 = AtomicU64::new(0);
+
+/// Накопленный дисковой I/O: `(прочитано секторов, записано секторов)`.
+pub fn io_counters() -> (u64, u64) {
+    (
+        SECTORS_READ.load(Ordering::Relaxed),
+        SECTORS_WRITTEN.load(Ordering::Relaxed),
+    )
+}
 
 const DATA_PORT: u16 = 0x1F0;
 const ERROR_PORT: u16 = 0x1F1;
@@ -133,6 +147,7 @@ pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -
         }
     }
 
+    SECTORS_READ.fetch_add(sectors as u64, Ordering::Relaxed);
     Ok(())
 }
 
@@ -180,6 +195,7 @@ pub fn write_sectors_to(drive: Drive, lba: u32, count: u8, data: &[u8]) -> Resul
     }
     wait_bsy_clear();
 
+    SECTORS_WRITTEN.fetch_add(sectors as u64, Ordering::Relaxed);
     Ok(())
 }
 

@@ -18,38 +18,33 @@ pub fn dinit_init() {
     super::init();
 }
 
-/// Периодический квант супервизора
-pub fn dinit_tick() {
-    super::tick();
-}
-
 /// Запуск службы по имени
-pub fn dinit_start_service(name: &str) -> Result<u32, &'static str> {
+pub fn dinit_start_service(name: &str) -> Result<u32, String> {
     let mut lock = DINIT.lock();
     if let Some(dinit) = lock.as_mut() {
         dinit.start_service(name)
     } else {
-        Err("Dinit не инициализирован")
+        Err(String::from("Dinit не инициализирован"))
     }
 }
 
 /// Остановка службы по имени
-pub fn dinit_stop_service(name: &str) -> Result<(), &'static str> {
+pub fn dinit_stop_service(name: &str) -> Result<(), String> {
     let mut lock = DINIT.lock();
     if let Some(dinit) = lock.as_mut() {
         dinit.stop_service(name)
     } else {
-        Err("Dinit не инициализирован")
+        Err(String::from("Dinit не инициализирован"))
     }
 }
 
 /// Перезапуск службы по имени
-pub fn dinit_restart_service(name: &str) -> Result<u32, &'static str> {
+pub fn dinit_restart_service(name: &str) -> Result<u32, String> {
     let mut lock = DINIT.lock();
     if let Some(dinit) = lock.as_mut() {
         dinit.restart_service(name)
     } else {
-        Err("Dinit не инициализирован")
+        Err(String::from("Dinit не инициализирован"))
     }
 }
 

@@ -275,7 +275,8 @@ fn read_kmod_data(filename: &str) -> Result<Vec<u8>, ModuleError> {
     ext2::read_file(filename).map_err(|_| ModuleError::NotFound)
 }
 
-fn load_module(filename: &str) -> Result<(), ModuleError> {
+/// Загружает один `.kmod` с диска и инициализирует его.
+pub fn load_module(filename: &str) -> Result<(), ModuleError> {
     let data = read_kmod_data(filename)?;
 
     if data.len() < KMOD_HEADER_SIZE {
@@ -386,20 +387,4 @@ pub fn get_loaded_modules() -> Vec<LoadedModule> {
     LOADED_MODULES.lock().clone()
 }
 
-/// Регистрирует встроенный модуль ядра (например, GFX.KMOD Compositor).
-pub fn register_builtin_module(name: &str, version: (u16, u16), size: usize) {
-    let mut modules = LOADED_MODULES.lock();
-    for m in modules.iter() {
-        if m.name == name {
-            return;
-        }
-    }
-    let addr = KMOD_LOAD_BASE + modules.len() * KMOD_MAX_SIZE;
-    modules.push(LoadedModule {
-        name: name.to_string(),
-        version,
-        load_addr: addr,
-        body_size: size,
-        status: ModuleStatus::Initialized,
-    });
-}
+

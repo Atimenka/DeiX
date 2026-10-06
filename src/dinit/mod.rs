@@ -63,7 +63,6 @@ pub struct Dinit {
     pub security: HeuristicAnalysisEngine,
     pub start_time: u64,
     pub supervisor_ticks: u64,
-    pub next_pid: u32,
 }
 
 impl Dinit {
@@ -84,7 +83,6 @@ impl Dinit {
             security: sec,
             start_time: crate::timer::uptime_ms(),
             supervisor_ticks: 0,
-            next_pid: 2,
         }
     }
 
@@ -252,27 +250,27 @@ impl Dinit {
         crate::serial_println!("[dinit] Фаза загрузки изменена на: {}", new_stage.as_token());
     }
 
-    /// Запуск всех служб, отмеченных для автозапуска
+    /// Запуск всех служб, отмеченных для автозапуска.
+    ///
+    /// Служба, образ которой не найден или не загрузился, остаётся
+    /// остановленной и печатает причину — статус Running ей не ставится.
     pub fn autostart_services(&mut self) {
-        let now = crate::timer::uptime_ms();
         let names: Vec<String> = self.services.keys().cloned().collect();
         for name in names {
-            if let Some(desc) = self.services.get_mut(&name) {
-                if desc.auto_start && desc.status == ServiceStatus::Stopped {
-                    let pid = self.next_pid;
-                    self.next_pid += 1;
-                    desc.mark_started(pid, None, now);
-                    self.namespace.attach_process(pid);
-                    self.audit.record(
-                        now,
-                        pid,
-                        0,
-                        AuditOp::ServiceSpawn,
-                        &desc.name,
-                        AuditResult::Allowed,
-                        "Автозапуск системной службы",
-                    );
-                    crate::serial_println!("[dinit] Служба '{}' запущена с PID {}", desc.name, pid);
+            let wanted = self
+                .services
+                .get(&name)
+                .map(|d| d.auto_start && d.status == ServiceStatus::Stopped)
+                .unwrap_or(false);
+            if !wanted {
+                continue;
+            }
+            match self.spawn_service(&name, "Автозапуск системной службы") {
+                Ok((pid, _)) => {
+                    crate::serial_println!("[dinit] Служба '{}' запущена с PID {}", name, pid);
+                }
+                Err(e) => {
+                    crate::serial_println!("[dinit] Служба '{}' НЕ запущена: {}", name, e);
                 }
             }
         }
@@ -292,21 +290,13 @@ impl Dinit {
         }
 
         for name in to_restart {
-            let pid = self.next_pid;
-            self.next_pid += 1;
-            if let Some(desc) = self.services.get_mut(&name) {
-                desc.mark_started(pid, None, now);
-                self.namespace.attach_process(pid);
-                self.audit.record(
-                    now,
-                    pid,
-                    0,
-                    AuditOp::ServiceRestart,
-                    &desc.name,
-                    AuditResult::Allowed,
-                    "Автоматический перезапуск службы по политике супервизора",
-                );
-                crate::serial_println!("[dinit] Служба '{}' перезапущена (новый PID {})", desc.name, pid);
+            match self.spawn_service(&name, "Автоматический перезапуск службы по политике супервизора") {
+                Ok((pid, _)) => {
+                    crate::serial_println!("[dinit] Служба '{}' перезапущена (новый PID {})", name, pid);
+                }
+                Err(e) => {
+                    crate::serial_println!("[dinit] Служба '{}' НЕ перезапущена: {}", name, e);
+                }
             }
         }
 
@@ -392,16 +382,56 @@ impl Dinit {
         res
     }
 
-    /// Запуск службы по имени
-    pub fn start_service(&mut self, name: &str) -> Result<u32, &'static str> {
+    /// Реальный запуск бинарника службы.
+    ///
+    /// Создаёт процесс в менеджере процессов, загружает его образ и
+    /// создаёт задачу планировщика, привязанную к PID. Служба, образ
+    /// которой отсутствует или не загрузился, запущенной НЕ считается:
+    /// раньше здесь просто выдавался номер из счётчика, и Dinit рапортовал
+    /// о запуске того, чего не существует.
+    ///
+    /// Возвращает `(pid, task_id)` при успехе.
+    fn spawn_service(&mut self, name: &str, reason: &str) -> Result<(u32, Option<usize>), String> {
         let now = crate::timer::uptime_ms();
-        let desc = self.services.get_mut(name).ok_or("Служба не найдена")?;
-        if desc.status.is_active() {
-            return Err("Служба уже запущена");
+
+        let binary_path = {
+            let desc = self.services.get(name).ok_or_else(|| String::from("Служба не найдена"))?;
+            desc.binary_path.clone()
+        };
+
+        if binary_path.is_empty() {
+            return Err(String::from("у службы не задан путь к бинарнику"));
         }
-        let pid = self.next_pid;
-        self.next_pid += 1;
-        desc.mark_started(pid, None, now);
+        if !crate::vfs::exists(&binary_path) {
+            return Err(alloc::format!("образ службы не найден: {}", binary_path));
+        }
+
+        let req = crate::process::SpawnRequest {
+            name: String::from(name),
+            // Службы Dinit исполняются от имени супервизора (UID 0).
+            uid: 0,
+            parent: self.pid,
+            caps: crate::process::cap::SYSTEM,
+            cwd: String::from("/userdata"),
+            image_path: binary_path,
+        };
+
+        let pid = crate::process::spawn(&req).map_err(|e| e.message())?;
+
+        match crate::process::exec(pid) {
+            Ok(()) => {}
+            Err(e) => {
+                let _ = crate::process::kill(pid, -1);
+                let _ = crate::process::reap(pid);
+                return Err(alloc::format!("образ не запущен: {}", e.message()));
+            }
+        }
+
+        let task_id = crate::process::info(pid).ok().and_then(|i| i.sched_id);
+
+        if let Some(desc) = self.services.get_mut(name) {
+            desc.mark_started(pid, task_id, now);
+        }
         self.namespace.attach_process(pid);
         self.audit.record(
             now,
@@ -410,20 +440,37 @@ impl Dinit {
             AuditOp::ServiceSpawn,
             name,
             AuditResult::Allowed,
-            "Ручной запуск службы",
+            reason,
         );
+        Ok((pid, task_id))
+    }
+
+    /// Запуск службы по имени
+    pub fn start_service(&mut self, name: &str) -> Result<u32, String> {
+        {
+            let desc = self.services.get(name).ok_or_else(|| String::from("Служба не найдена"))?;
+            if desc.status.is_active() {
+                return Err(String::from("Служба уже запущена"));
+            }
+        }
+        let (pid, _) = self.spawn_service(name, "Ручной запуск службы")?;
         Ok(pid)
     }
 
     /// Остановка службы по имени
-    pub fn stop_service(&mut self, name: &str) -> Result<(), &'static str> {
+    pub fn stop_service(&mut self, name: &str) -> Result<(), String> {
         let now = crate::timer::uptime_ms();
-        let desc = self.services.get_mut(name).ok_or("Служба не найдена")?;
+        let desc = self
+            .services
+            .get_mut(name)
+            .ok_or_else(|| String::from("Служба не найдена"))?;
         let old_pid = desc.pid;
         desc.mark_stopped();
         if let Some(p) = old_pid {
             self.namespace.detach_process(p);
-            crate::sched::terminate(p as usize);
+            // Снимаем и процесс, и его задачу планировщика.
+            let _ = crate::process::kill(p, 0);
+            let _ = crate::process::reap(p);
         }
         self.audit.record(
             now,
@@ -438,7 +485,7 @@ impl Dinit {
     }
 
     /// Перезапуск службы по имени
-    pub fn restart_service(&mut self, name: &str) -> Result<u32, &'static str> {
+    pub fn restart_service(&mut self, name: &str) -> Result<u32, String> {
         self.stop_service(name)?;
         self.start_service(name)
     }

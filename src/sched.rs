@@ -71,6 +71,13 @@ struct Task {
     /// Владение стеком: держим Box, чтобы память не освободилась.
     _stack: Option<Box<[u8]>>,
     name: String,
+    /// Сколько тиков PIT эта задача реально провела на процессоре.
+    /// Увеличивается в `schedule_from_irq`, то есть учитывается именно
+    /// время исполнения, а не время существования задачи.
+    runtime_ticks: u64,
+    /// PID процесса-владельца (см. `crate::process`), если задача
+    /// создана менеджером процессов. 0 — задача ядра без процесса.
+    pid: u32,
 }
 
 impl Task {
@@ -80,6 +87,8 @@ impl Task {
             rsp: 0,
             _stack: None,
             name: String::new(),
+            runtime_ticks: 0,
+            pid: 0,
         }
     }
 }
@@ -94,6 +103,8 @@ static CURRENT: AtomicUsize = AtomicUsize::new(0);
 static SCHED_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Счётчик переключений — для доказательства, что они реально идут.
 static SWITCHES: AtomicUsize = AtomicUsize::new(0);
+/// Всего тиков PIT, учтённых планировщиком. Знаменатель для доли CPU.
+static TICKS_TOTAL: AtomicUsize = AtomicUsize::new(0);
 /// Защита операций spawn/join (в обычном коде, не в прерывании).
 static TABLE_LOCK: SpinLock<()> = SpinLock::new(());
 
@@ -186,6 +197,9 @@ extern "C" fn schedule_from_irq(rsp: u64) -> u64 {
         // Сохраняем стек прерванной задачи.
         if tasks[cur].state != State::Empty {
             tasks[cur].rsp = rsp;
+            // Один тик PIT прошёл, пока эта задача была на процессоре.
+            tasks[cur].runtime_ticks = tasks[cur].runtime_ticks.wrapping_add(1);
+            TICKS_TOTAL.fetch_add(1, Ordering::Relaxed);
         }
 
         // Будим тех, чей срок сна вышел.
@@ -231,8 +245,11 @@ extern "C" fn task_entry(func: extern "C" fn()) -> ! {
 
 /// Завершает текущую задачу и отдаёт управление другой. Не возвращается.
 pub fn exit_current() -> ! {
+    let cur = CURRENT.load(Ordering::Relaxed);
+    // Сообщаем менеджеру процессов, что нить умерла — иначе процесс
+    // остался бы помеченным как исполняющийся навсегда.
+    crate::process::notify_exit(cur, 0);
     unsafe {
-        let cur = CURRENT.load(Ordering::Relaxed);
         (*(&raw mut TASKS))[cur].state = State::Finished;
     }
     // Ждём, пока таймер нас вытеснит.
@@ -307,8 +324,14 @@ fn build_initial_frame(stack_top: u64, entry: u64, arg: u64) -> u64 {
     }
 }
 
-/// Создаёт задачу. Возвращает её идентификатор.
+/// Создаёт задачу ядра без привязки к процессу. Возвращает её идентификатор.
 pub fn spawn(name: &str, func: extern "C" fn()) -> Option<usize> {
+    spawn_pid(name, func, 0)
+}
+
+/// Создаёт задачу, привязанную к процессу `pid` (0 — задача ядра).
+/// Возвращает идентификатор задачи (индекс слота планировщика).
+pub fn spawn_pid(name: &str, func: extern "C" fn(), pid: u32) -> Option<usize> {
     let _g = TABLE_LOCK.lock();
     unsafe {
         let tasks = &mut *(&raw mut TASKS);
@@ -326,6 +349,8 @@ pub fn spawn(name: &str, func: extern "C" fn()) -> Option<usize> {
             t.rsp = rsp;
             t._stack = Some(stack);
             t.name = String::from(name);
+            t.runtime_ticks = 0;
+            t.pid = pid;
             // Помечаем готовой в последнюю очередь: до этого момента
             // планировщик не должен на неё переключиться.
             core::sync::atomic::compiler_fence(Ordering::SeqCst);
@@ -383,18 +408,53 @@ pub fn join(id: usize) {
     }
 }
 
-/// Список задач: `(id, имя, состояние)`.
-pub fn list() -> Vec<(usize, String, State)> {
+/// Снимок состояния задачи для отчётов (CLI `threads`, Task Manager).
+#[derive(Clone, Debug)]
+pub struct TaskInfo {
+    pub id: usize,
+    pub name: String,
+    pub state: State,
+    /// Тики PIT, проведённые задачей на процессоре.
+    pub runtime_ticks: u64,
+    /// PID процесса-владельца, 0 — задача ядра.
+    pub pid: u32,
+    /// Размер стека задачи в байтах.
+    pub stack_bytes: usize,
+}
+
+/// Список задач со снимком их состояния.
+pub fn list() -> Vec<TaskInfo> {
     let _g = TABLE_LOCK.lock();
     let mut out = Vec::new();
     unsafe {
         for (i, t) in (*(&raw const TASKS)).iter().enumerate() {
             if t.state != State::Empty {
-                out.push((i, t.name.clone(), t.state));
+                out.push(TaskInfo {
+                    id: i,
+                    name: t.name.clone(),
+                    state: t.state,
+                    runtime_ticks: t.runtime_ticks,
+                    pid: t.pid,
+                    stack_bytes: STACK_SIZE,
+                });
             }
         }
     }
     out
+}
+
+/// Всего тиков PIT, учтённых планировщиком с момента старта.
+pub fn ticks_total() -> usize {
+    TICKS_TOTAL.load(Ordering::Relaxed)
+}
+/// Человекочитаемое имя состояния задачи.
+pub fn state_str(state: State) -> &'static str {
+    match state {
+        State::Empty => "empty",
+        State::Ready => "running",
+        State::Sleeping(_) => "sleeping",
+        State::Finished => "finished",
+    }
 }
 
 // ==================== Демонстрация и проверка ====================
@@ -492,10 +552,18 @@ pub fn cmd_threads(arg: &str) {
     match arg.trim() {
         "list" => {
             crate::println!("  Задачи планировщика (текущая: [{}]):", current_id());
-            for (id, name, state) in list() {
-                crate::println!("    [{}] {:<14} {:?}", id, name, state);
+            for t in list() {
+                crate::println!(
+                    "    [{}] {:<14} {:<18} pid={:<4} cpu={} тик",
+                    t.id,
+                    t.name,
+                    state_str(t.state),
+                    t.pid,
+                    t.runtime_ticks
+                );
             }
             crate::println!("  Переключений контекста всего: {}", switch_count());
+            crate::println!("  Тиков PIT учтено: {}", ticks_total());
         }
         "" | "test" => selftest(),
         _ => crate::println!("threads [list|test] — вытесняющая многозадачность"),
