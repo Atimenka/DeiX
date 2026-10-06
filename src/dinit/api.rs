@@ -6,6 +6,7 @@
 
 #![allow(dead_code)]
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use super::authorize::{FileOp, AccessError};
 use super::audit::AuditEntry;

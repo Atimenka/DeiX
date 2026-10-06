@@ -488,12 +488,12 @@ pub fn load_partition_entries(partition: &str, path: &str) -> (Vec<FileViewEntry
                     items.push(FileViewEntry {
                         name: e.name,
                         is_dir: e.is_dir,
-                        size: e.size,
+                        size: e.size.min(u32::MAX as u64) as u32,
                     });
                 }
                 (items, None)
             }
-            Err(e) => (Vec::new(), Some(format!("/system: {}", e))),
+            Err(e) => (Vec::new(), Some(format!("/system: {}", e.message()))),
         },
         _ => (Vec::new(), Some(String::from("Unknown partition"))),
     }

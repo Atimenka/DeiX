@@ -473,7 +473,7 @@ pub fn exec(pid: u32) -> Result<(), ProcessError> {
                 );
                 ProcessError::BadImage(e)
             })?;
-        (e, ImageKind::Elf)
+        (e.entry, ImageKind::Elf)
     };
 
     *LAUNCH.lock() = Some((pid, entry, kind));

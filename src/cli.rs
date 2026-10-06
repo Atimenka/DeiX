@@ -1573,7 +1573,7 @@ fn cmd_kmod(arg: &str) {
             }
             match crate::module::load_module(rest) {
                 Ok(()) => println_t!(en: "Module '{}' loaded.", ru: "Модуль '{}' загружен."; rest),
-                Err(e) => println!("{}", module_error_str(e)),
+                Err(e) => println!("{}", module_error_str(&e)),
             }
         }
         "list" => cmd_lsmod(),
@@ -1587,7 +1587,7 @@ fn cmd_kmod(arg: &str) {
     }
 }
 
-fn module_error_str(e: crate::module::ModuleError) -> String {
+fn module_error_str(e: &crate::module::ModuleError) -> String {
     use crate::module::ModuleError as E;
     match e {
         E::NotFound => String::from("модуль не найден"),

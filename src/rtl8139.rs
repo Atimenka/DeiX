@@ -130,9 +130,10 @@ fn rx_ring_push(frame: &[u8]) -> bool {
         return false;
     }
     let len = frame.len().min(RX_RING_FRAME);
-    ring.slots[ring.head][..len].copy_from_slice(&frame[..len]);
-    ring.lens[ring.head] = len;
-    ring.head = (ring.head + 1) % RX_RING_SLOTS;
+    let head = ring.head;
+    ring.slots[head][..len].copy_from_slice(&frame[..len]);
+    ring.lens[head] = len;
+    ring.head = (head + 1) % RX_RING_SLOTS;
     ring.count += 1;
     true
 }
