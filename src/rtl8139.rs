@@ -170,6 +170,23 @@ pub fn poll_deferred() {
         }
         crate::net::on_ethernet_frame(&buf[..len]);
     }
+
+    // Переполнения кольца фиксирует ISR (там журналировать нельзя —
+    // форматирование и куча в прерывании запрещены), а регистрируем мы их
+    // здесь, по дельте счётчика. Повторы схлопывает агрегация журнала.
+    static LOGGED_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let drops = rx_drops();
+    let logged = LOGGED_DROPS.swap(drops, core::sync::atomic::Ordering::Relaxed);
+    if drops > logged {
+        crate::diag::warn(
+            crate::diag::ErrorCode::new(crate::diag::Subsystem::Net, 7),
+            &alloc::format!(
+                "RTL8139: кольцо приёма переполнено, потеряно кадров: +{} (всего {})",
+                drops - logged,
+                drops
+            ),
+        );
+    }
 }
 
 /// Счётчики трафика. Обновляются атомарно: RX растёт в контексте

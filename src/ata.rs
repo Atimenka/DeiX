@@ -124,6 +124,10 @@ pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -
     }
 
     if !wait_bsy_clear() {
+        crate::diag::error(
+            crate::diag::ErrorCode::new(crate::diag::Subsystem::Disk, 4),
+            &alloc::format!("ATA: BSY не снят перед чтением LBA {}", lba),
+        );
         return Err(());
     }
 
@@ -140,7 +144,13 @@ pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -
 
     let sectors = if count == 0 { 256 } else { count as usize };
     for i in 0..sectors {
-        wait_drq_or_err()?;
+        if wait_drq_or_err().is_err() {
+            crate::diag::error(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Disk, 2),
+                &alloc::format!("ATA: ошибка чтения LBA {} (сектор {} из {})", lba, i + 1, sectors),
+            );
+            return Err(());
+        }
         let offset = i * SECTOR_SIZE;
         unsafe {
             insw(DATA_PORT, &mut buffer[offset..offset + SECTOR_SIZE]);
@@ -168,6 +178,10 @@ pub fn write_sectors_to(drive: Drive, lba: u32, count: u8, data: &[u8]) -> Resul
     }
 
     if !wait_bsy_clear() {
+        crate::diag::error(
+            crate::diag::ErrorCode::new(crate::diag::Subsystem::Disk, 4),
+            &alloc::format!("ATA: BSY не снят перед записью LBA {}", lba),
+        );
         return Err(());
     }
 
@@ -183,7 +197,13 @@ pub fn write_sectors_to(drive: Drive, lba: u32, count: u8, data: &[u8]) -> Resul
 
     let sectors = if count == 0 { 256 } else { count as usize };
     for i in 0..sectors {
-        wait_drq_or_err()?;
+        if wait_drq_or_err().is_err() {
+            crate::diag::error(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Disk, 3),
+                &alloc::format!("ATA: ошибка записи LBA {} (сектор {} из {})", lba, i + 1, sectors),
+            );
+            return Err(());
+        }
         let offset = i * SECTOR_SIZE;
         unsafe {
             outsw(DATA_PORT, &data[offset..offset + SECTOR_SIZE]);

@@ -1,17 +1,14 @@
-// ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0).
-// bugreport — ПОЛНЫЙ ОТЛАДЧИК ОШИБОК.
-// Собирает единый диагностический отчёт: версия ОС, аптайм, память,
-// состояние dev-режима/Verified Boot/шифрования, карта разделов,
-// список пользователей, последние строки журнала ядра (dmesg) и
-// crash-лог (tombstone). Отчёт выводится на экран, уходит в serial и
-// сохраняется на /userdata-том (BUGREPORT.TXT).
-// no_std-совместимо: alloc (String, Vec), вывод — crate::println!.
+//! Сводный диагностический отчёт (`bugreport`) и алиасы `dmesg`/`crashlog`.
+//!
+//! Источник данных — единая система диагностики `crate::diag`: кольцевой
+//! буфер событий, реестр кодов DX-* и отчёты об отказе. Собственного
+//! хранилища у этого модуля нет.
 
 use alloc::format;
 use alloc::string::String;
 
-/// Имя файла отчёта на /userdata-томе (ext2 P2).
-pub const BUGREPORT_FILE: &str = "BUGREPORT.TXT";
+/// Путь файла отчёта на пользовательском разделе.
+pub const BUGREPORT_FILE: &str = "/userdata/BUGREPORT.TXT";
 
 /// Собирает полный диагностический отчёт в одну строку.
 pub fn collect_report() -> String {
@@ -22,14 +19,37 @@ pub fn collect_report() -> String {
 
     // --- SYSTEM ---
     out.push_str("\n[SYSTEM]\n");
-    out.push_str(&format!("  OS: DeiX v0.2.1-beta (x86_64, no_std, Safe Rust)\n"));
+    out.push_str(&format!("  OS: DeiX v{} ({})\n", crate::KERNEL_VERSION, crate::BUILD_ID));
+    out.push_str(&format!("  cpu: {}\n", crate::cpuid::describe()));
     out.push_str(&format!("  uptime: {} ms\n", crate::timer::uptime_ms()));
+    out.push_str(&format!("  rtc: {}\n", crate::rtc::now().as_string()));
     let dev = crate::devmode::sudo_allowed();
     out.push_str(&format!("  dev-mode: {}\n", if dev { "ON (bootloader unlocked, ORANGE)" } else { "OFF (bootloader locked, GREEN)" }));
     let enc = crate::crypto_storage::is_encryption_enabled();
     out.push_str(&format!("  disk encryption: {}\n", if enc { "XTS-AES-256 enabled (DEIXCRYP marker)" } else { "disabled (factory)" }));
 
-    // --- USERS ---
+    // --- DIAGNOSTICS ---
+    let s = crate::diag::summary();
+    out.push_str("\n[DIAGNOSTICS]\n");
+    out.push_str(&format!("  boot session: #{}\n", s.boot_session));
+    out.push_str(&format!(
+        "  events: {} total, {} buffered, {} dropped\n",
+        s.total_events, s.buffered, s.dropped
+    ));
+    for sev in crate::diag::Severity::ALL {
+        let n = s.by_severity[sev.level() as usize];
+        if n > 0 {
+            out.push_str(&format!("  {:<8} {}\n", sev.tag(), n));
+        }
+    }
+
+    // --- MOUNTS ---
+    out.push_str("\n[MOUNTS]\n");
+    for line in crate::vfs::describe_mounts() {
+        out.push_str(&format!("  {}\n", line));
+    }
+
+    // --- ACCOUNTS ---
     out.push_str("\n[ACCOUNTS]\n");
     match crate::auth::list_usernames() {
         Ok(names) => {
@@ -63,39 +83,27 @@ pub fn collect_report() -> String {
         crate::partition_map::BOOTLOADER_SECTORS,
     ));
 
-    // --- LOGS (последние строки журнала ядра) ---
-    out.push_str("\n[DMESG] (last 60 lines)\n");
-    let lines = crate::syslog::last_lines(60);
-    for line in lines.iter() {
+    // --- EVENT LOG ---
+    out.push_str("\n[EVENT LOG] (last 60 records)\n");
+    for record in crate::diag::ring::snapshot(60) {
         out.push_str("  ");
-        out.push_str(line);
+        out.push_str(&crate::diag::format_human(&record));
         out.push('\n');
     }
 
-    // --- CRASH LOG ---
-    out.push_str("\n[CRASH]\n");
-    let cur = crate::crashlog::current_crash();
-    match cur {
+    // --- CRASH REPORT ---
+    out.push_str("\n[CRASH REPORT]\n");
+    match crate::diag::panic::load_raw_report() {
         Some(text) => {
-            out.push_str("  current session crash:\n");
-            for l in text.lines() {
-                out.push_str("    ");
-                out.push_str(l);
-                out.push('\n');
-            }
-        }
-        None => out.push_str("  current session: no panic\n"),
-    }
-    match crate::crashlog::load_disk_crash() {
-        Some(text) => {
-            out.push_str("  disk crashlog (CRASHLOG.TXT):\n");
+            out.push_str("  сохранённый отчёт об отказе (первые 20 строк):\n");
             for l in text.lines().take(20) {
                 out.push_str("    ");
                 out.push_str(l);
                 out.push('\n');
             }
+            out.push_str("  полный текст: panic last\n");
         }
-        None => out.push_str("  disk crashlog: none\n"),
+        None => out.push_str("  отчётов об отказе нет\n"),
     }
 
     out.push_str("\n========================================================\n");
@@ -103,49 +111,37 @@ pub fn collect_report() -> String {
     out
 }
 
-/// Сохраняет отчёт на /system-том (BUGREPORT.TXT) — если ext2 доступен.
+/// Сохраняет отчёт на пользовательский раздел.
 pub fn save_report_to_disk(report: &str) -> Result<(), ()> {
-    crate::ext2::write_file(BUGREPORT_FILE, report.as_bytes()).map_err(|_| ())
+    crate::vfs::write_file(BUGREPORT_FILE, report.as_bytes()).map_err(|_| ())
 }
 
 /// Полный цикл: собрать, напечатать (экран + serial), сохранить на диск.
 pub fn cmd_bugreport() {
     let report = collect_report();
     crate::println!("{}", report);
+    crate::serial_println!("{}", report);
     match save_report_to_disk(&report) {
-        Ok(()) => crate::println!("  [debugger] Отчёт сохранён: {} на /system-томе.", BUGREPORT_FILE),
+        Ok(()) => crate::println!("  [debugger] Отчёт сохранён: {}.", BUGREPORT_FILE),
         Err(_) => crate::println!("  [debugger] Не удалось сохранить {} (том недоступен).", BUGREPORT_FILE),
     }
 }
 
-/// Показывает кольцевой журнал ядра (dmesg).
+/// `dmesg` — журнал ядра (алиас `log` для привычности).
 pub fn cmd_dmesg() {
-    let lines = crate::syslog::snapshot();
-    crate::println!("[dmesg] строк в журнале: {}", lines.len());
-    for line in lines.iter() {
-        crate::println!("{}", line);
+    let records = crate::diag::ring::all();
+    crate::println!("[dmesg] записей в буфере: {}", records.len());
+    for record in &records {
+        crate::println!("{}", crate::diag::format_human(record));
     }
 }
 
-/// Показывает crash-лог (текущая сессия + диск).
+/// `crashlog` — алиас `panic last`.
 pub fn cmd_crashlog() {
-    match crate::crashlog::current_crash() {
-        Some(text) => crate::println!("[crashlog] (память):\n{}", text),
-        None => crate::println!("[crashlog] паники в текущей сессии не было."),
-    }
-    match crate::crashlog::load_disk_crash() {
-        Some(text) => {
-            crate::println!("[crashlog] (диск CRASHLOG.TXT):");
-            crate::println!("{}", text);
-            crate::println!("[crashlog] для удаления: 'crashlog clear'");
-        }
-        None => crate::println!("[crashlog] на диске crash-лога нет."),
-    }
+    crate::diag::cli::cmd_panic("last");
 }
 
-/// Удаляет crash-лог с диска.
+/// `crashlog clear` — алиас `panic clear`.
 pub fn cmd_crashlog_clear() {
-    crate::crashlog::clear_disk_crash();
-    crate::crashlog::clear_current_crash();
-    crate::println!("[crashlog] очищен.");
+    crate::diag::cli::cmd_panic("clear");
 }

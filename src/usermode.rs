@@ -218,6 +218,28 @@ unsafe fn make_user_accessible(addr: u64) {
     asm!("invlpg [{}]", in(reg) addr, options(nostack, preserves_flags));
 }
 
+/// Делает диапазон адресов доступным из Ring 3.
+///
+/// Открыта для загрузчика MEX: его образ, стек и shim-страница лежат в
+/// фиксированной области, которую загрузчик отобразил без бита USER.
+/// После правки битов TLB сбрасывается перезагрузкой CR3 — иначе процессор
+/// продолжит использовать закешированные записи без USER и Ring 3 получит
+/// #PF на первой же инструкции.
+///
+/// # Safety
+/// Меняет активные таблицы страниц. Диапазон обязан быть уже отображён.
+pub unsafe fn make_region_user(start: u64, end: u64) {
+    const HUGE_PAGE: u64 = 2 * 1024 * 1024;
+    let mut addr = start & !(HUGE_PAGE - 1);
+    while addr < end {
+        make_user_accessible(addr);
+        addr += HUGE_PAGE;
+    }
+    let cr3: u64;
+    asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
+    asm!("mov cr3, {}", in(reg) cr3, options(nostack, preserves_flags));
+}
+
 // ==================== Код пользователя ====================
 
 // Программа, исполняемая в Ring 3. Пишется на ассемблере и копируется
@@ -302,9 +324,13 @@ global_asm!(
     "  push r14",
     "  push r15",
     // Перекладываем регистры соглашения syscall в соглашение System V C:
-    //   syscall: nr=rax, a1=rdi, a2=rsi, a3=rdx
-    //   C ABI:   arg1=rdi, arg2=rsi, arg3=rdx, arg4=rcx
+    //   syscall: nr=rax, a1=rdi, a2=rsi, a3=rdx, a4=r10, a5=r8
+    //            (4-й аргумент приходит в r10: rcx затирается самой
+    //             инструкцией syscall, и библиотечные стабы кладут его в r10)
+    //   C ABI:   arg1=rdi, arg2=rsi, arg3=rdx, arg4=rcx, arg5=r8, arg6=r9
     // Порядок важен, иначе значения затрут друг друга.
+    "  mov r9, r8",
+    "  mov r8, r10",
     "  mov rcx, rdx",
     "  mov rdx, rsi",
     "  mov rsi, rdi",
@@ -342,9 +368,35 @@ static mut RETURN_RSP: u64 = 0;
 /// Код возврата последней запущенной программы.
 static mut EXIT_CODE: i64 = 0;
 
+/// Исполняется ли сейчас программа в Ring 3 (между `enter_ring3` и выходом).
+pub fn user_program_active() -> bool {
+    unsafe { core::ptr::read_volatile(&raw const RETURN_RSP) != 0 }
+}
+
+/// Аварийно завершает программу Ring 3 из обработчика исключения.
+///
+/// Делает то же, что syscall `exit`: восстанавливает стек ядра, сохранённый
+/// `enter_ring3`, и возвращает управление коду, запустившему программу.
+/// Кадр исключения при этом отбрасывается — возвращаться в упавшую
+/// инструкцию бессмысленно.
+///
+/// # Safety
+/// Вызывать можно только когда `user_program_active()` — иначе RETURN_RSP
+/// не указывает на живой стек.
+pub unsafe fn abort_user_program(code: i64) -> ! {
+    EXIT_CODE = code;
+    USER_EXITED = true;
+    asm!("mov rsp, {rsp}", "jmp {rip}",
+        rsp = in(reg) RETURN_RSP,
+        rip = in(reg) (ring3_return as *const () as u64),
+        options(noreturn));
+}
+
 /// Диспетчер системных вызовов. Номера — как в Linux x86-64, чтобы
 /// поведение было предсказуемым: 1=write, 39=getpid, 60=exit, 40=uptime.
-extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
+/// Диапазон 0x4D58_xxxx («MX») зарезервирован под MEX API: его вызывают
+/// стабы, которые ядро кладёт в shim-страницу MEX-программы.
+extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     match nr {
         1000 => {
             crate::println!(
@@ -362,8 +414,11 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
                     options(noreturn));
             }
         }
+        n if n & 0xFFFF_0000 == crate::mex::MEX_SYSCALL_BASE => {
+            crate::mex::ring3_dispatch((n & 0xFFFF) as usize, a1, a2, a3, a4)
+        }
         // Остальное — прослойка Linux (src/linux/syscall.rs).
-        _ => crate::linux::syscall::dispatch(nr, a1, a2, a3, 0, 0),
+        _ => crate::linux::syscall::dispatch(nr, a1, a2, a3, a4, a5),
     }
 }
 
@@ -466,6 +521,40 @@ unsafe fn enter_ring3(entry: u64, stack: u64) {
     );
 }
 
+/// Как `enter_ring3`, но перед `sysretq` кладёт `arg` в RDI —
+/// первый аргумент System V ABI для точки входа программы.
+///
+/// # Safety
+/// Те же требования, что у `enter_ring3`.
+#[inline(never)]
+unsafe fn enter_ring3_arg(entry: u64, stack: u64, arg: u64) {
+    asm!(
+        "lea rax, [rip + 4f]",
+        "push rax",
+        "push rbx",
+        "push rbp",
+        "push r12",
+        "push r13",
+        "push r14",
+        "push r15",
+        "mov [{ret_rsp}], rsp",
+        "swapgs",
+        "mov r11, {rflags}",
+        "mov rcx, {entry}",
+        "mov rdi, {arg}",
+        "mov rsp, {stack}",
+        "sysretq",
+        "4:",
+        ret_rsp = in(reg) &raw mut RETURN_RSP,
+        rflags = const 0x0202u64,
+        entry = in(reg) entry,
+        arg = in(reg) arg,
+        stack = in(reg) stack,
+        out("rax") _,
+        clobber_abi("sysv64"),
+    );
+}
+
 // Точка возврата из Ring 3: стек восстановлен обработчиком exit,
 // снимаем сохранённые регистры и возвращаемся по адресу с вершины стека.
 global_asm!(
@@ -526,6 +615,21 @@ pub unsafe fn run_user_program(entry: u64, stack: u64) -> i64 {
     EXIT_CODE = 0;
     USER_EXITED = false;
     enter_ring3(entry, stack);
+    EXIT_CODE
+}
+
+/// Запускает программу в Ring 3, передав ей аргумент в RDI.
+///
+/// Нужен MEX-программам: их точка входа принимает указатель на таблицу
+/// MexApi первым аргументом System V ABI.
+///
+/// # Safety
+/// Как у `run_user_program`; `arg` должен указывать в память, доступную
+/// из Ring 3, иначе первое же обращение программы к таблице даст #PF.
+pub unsafe fn run_user_program_arg(entry: u64, stack: u64, arg: u64) -> i64 {
+    EXIT_CODE = 0;
+    USER_EXITED = false;
+    enter_ring3_arg(entry, stack, arg);
     EXIT_CODE
 }
 

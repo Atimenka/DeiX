@@ -118,6 +118,26 @@ pub fn current_id() -> usize {
     CURRENT.load(Ordering::Relaxed)
 }
 
+/// Имя текущей задачи — для отчёта об отказе.
+///
+/// Не берёт `TABLE_LOCK`: вызывается из обработчика паники, где блокировка
+/// может быть уже захвачена упавшим кодом. Чтение имени без блокировки даёт
+/// в худшем случае устаревшую строку, что для отчёта приемлемо.
+pub fn current_task_name() -> Option<String> {
+    let cur = current_id();
+    if cur >= MAX_TASKS {
+        return None;
+    }
+    unsafe {
+        let task = &(*(&raw const TASKS))[cur];
+        if task.state == State::Empty {
+            None
+        } else {
+            Some(task.name.clone())
+        }
+    }
+}
+
 // ==================== Заглушка IRQ0 ====================
 
 // Naked-обработчик таймера. Порядок push'ей ОБЯЗАН совпадать с порядком

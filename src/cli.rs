@@ -19,6 +19,9 @@ const MAX_LINE: usize = 120;
 const MAX_HISTORY: usize = 32;
 
 pub fn run() -> ! {
+    // Фаза загрузки закончена: система диагностики перестаёт дублировать
+    // события на консоль — дальше журнал смотрят командами log/error.
+    crate::diag::log::finish_boot();
     println!();
     println!("{}", t!(
         en: "Welcome to DeiX CLI! Type 'help' for the command list.",
@@ -57,6 +60,10 @@ pub fn run() -> ! {
                     push_history(&mut history, cmd);
                 }
                 execute(cmd);
+                // Отложенная запись журналов: события, накопленные командой,
+                // уходят в /userdata/log. Дёшево: при пустом буфере выходит
+                // сразу по счётчику.
+                crate::diag::persist::flush();
                 len = 0;
                 history_cursor = None;
                 prompt();
@@ -298,6 +305,10 @@ pub fn execute(line: &str) {
         "kill" => crate::process::cmd_kill(rest),
         "lsmod" => cmd_lsmod(),
         "kmod" => cmd_kmod(rest),
+        "log" => crate::diag::cli::cmd_log(rest),
+        "error" => crate::diag::cli::cmd_error(rest),
+        "panic" => crate::diag::cli::cmd_panic(rest),
+        "diagnostics" => crate::diag::cli::cmd_diagnostics(rest),
         "adb" => crate::adb::cmd_adb(rest),
         "adb-repl" => crate::adb::adb_repl(),
         "dev" => {
@@ -319,10 +330,10 @@ pub fn execute(line: &str) {
         "threads" => crate::sched::cmd_threads(rest),
         "su" | "sudo" | "root" => {
             if crate::devmode::sudo_allowed() {
-                // Dev-режим: sudo доступен (гарантия OTA снята).
+                // Dev-режим: sudo доступен, гарантии целостности сняты.
                 println!("{}", t!(
-                    en: "SUDO: root shell in dev-mode. OTA guarantee is VOID.",
-                    ru: "SUDO: root-оболочка в dev-режиме. OTA-гарантия НЕ действует."
+                    en: "SUDO: root shell in dev-mode. System integrity guarantees are VOID.",
+                    ru: "SUDO: root-оболочка в dev-режиме. Гарантии целостности системы НЕ действуют."
                 ));
             } else {
                 println!("{}", t!(
@@ -448,7 +459,7 @@ fn cmd_sound(rest: &str) {
             }
         }
         Some("warn") => crate::sound::warn_triple(),
-        Some("alert") => crate::sound::ota_alert(),
+        Some("alert") => crate::sound::alert(),
         Some("beep") => {
             let hz: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(880);
             let ms: u64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(150);
@@ -513,6 +524,10 @@ fn cmd_help() {
     println!("  ds [script.dxs|-i|-c]   - {}", t!(en: "DeiX Script interpreter and REPL shell", ru: "интерпретатор скриптов DeiX Script и REPL"));
 
     println!("  taskmgr                 - {}", t!(en: "system task manager and process list", ru: "диспетчер задач и процессов"));
+    println!("  log [errors|boot|...]   - {}", t!(en: "system event log", ru: "журнал событий системы"));
+    println!("  error [show DX-...]     - {}", t!(en: "error list and code cards", ru: "список ошибок и карточки кодов"));
+    println!("  panic [last|clear]      - {}", t!(en: "last kernel panic report", ru: "последний отчёт об отказе ядра"));
+    println!("  diagnostics [mode on]   - {}", t!(en: "diagnostic summary / verbose mode", ru: "сводка диагностики / подробный режим"));
     println!("  reboot                  - {}", t!(en: "reboot system", ru: "перезагрузка системы"));
     println!("  poweroff / shutdown     - {}", t!(en: "power off system (ACPI / QEMU)", ru: "выключение системы (ACPI / QEMU)"));
     println!("  halt                    - {}", t!(en: "halt CPU low-level (cli; hlt)", ru: "остановить процессор (cli; hlt)"));
@@ -613,30 +628,8 @@ fn cmd_color(name: &str) {
 }
 
 fn cmd_cpuid() {
-    // rbx зарезервирован LLVM для внутренних нужд и не может быть указан
-    // напрямую как выходной операнд inline asm, поэтому сохраняем/
-    // восстанавливаем его вручную через стек.
-    let (ebx, edx, ecx): (u32, u32, u32);
-    unsafe {
-        asm!(
-            "mov eax, 0",
-            "push rbx",
-            "cpuid",
-            "mov {ebx_out:e}, ebx",
-            "pop rbx",
-            ebx_out = out(reg) ebx,
-            out("edx") edx,
-            out("ecx") ecx,
-            out("eax") _,
-            options(nostack)
-        );
-    }
-    let mut vendor = [0u8; 12];
-    vendor[0..4].copy_from_slice(&ebx.to_le_bytes());
-    vendor[4..8].copy_from_slice(&edx.to_le_bytes());
-    vendor[8..12].copy_from_slice(&ecx.to_le_bytes());
-    let vendor_str = core::str::from_utf8(&vendor).unwrap_or("????????????");
-    println!("CPU vendor: {}", vendor_str);
+    println!("CPU vendor: {}", crate::cpuid::vendor_string());
+    println!("CPU: {}", crate::cpuid::describe());
 }
 
 fn cmd_mem(arg: &str) {
@@ -1543,15 +1536,21 @@ fn cmd_lsmod() {
         );
         return;
     }
-    println!("  NAME        VER    ADDR       SIZE");
+    println!("  NAME        VER    ADDR       SIZE      STATUS");
     for m in mods.iter() {
+        let status = match m.status {
+            crate::module::ModuleStatus::Initialized => "работает",
+            crate::module::ModuleStatus::Failed => "сбой init()",
+            crate::module::ModuleStatus::Quarantined => "в карантине",
+        };
         println!(
-            "  {:<11} {}.{}   {:#010x} {:>7} B",
+            "  {:<11} {}.{}   {:#010x} {:>7} B {}",
             m.name,
             m.version.0,
             m.version.1,
             m.load_addr,
-            m.body_size
+            m.body_size,
+            status
         );
     }
     println!("  Всего: {}", mods.len());
@@ -1779,7 +1778,7 @@ pub const VALID_COMMANDS: &[&str] = &[
     "bigfile", "useradd", "passwd", "whoami", "users", "encrypt", "crash",
     "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",
     "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "adb", "dev", "profile",
-    "ps", "kill"
+    "ps", "kill", "log", "error", "panic", "diagnostics"
 ];
 
 pub fn is_valid_command(name: &str) -> bool {

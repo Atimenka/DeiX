@@ -42,8 +42,13 @@ pub struct LoadedModule {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ModuleStatus {
+    /// Модуль загружен и init() вернул 0.
     Initialized,
+    /// init() вернул ошибку — модуль в памяти, но не работает.
     Failed,
+    /// Модуль изолирован после сбоя во время работы: его сервисы
+    /// отключены, ядро продолжает работу без него.
+    Quarantined,
 }
 
 #[repr(C)]
@@ -233,20 +238,69 @@ fn build_kernel_api() -> KernelApi {
 }
 
 pub fn load_boot_modules() {
+    use crate::diag::{self, ErrorCode, Subsystem};
+
+    // Карантин по итогам прошлой сессии: если отказ ядра произошёл внутри
+    // региона модуля (RIP из отчёта попал в его диапазон), модуль не
+    // загружается повторно. Порядок BOOT_MODULES фиксирован, поэтому
+    // адреса регионов воспроизводятся между загрузками.
+    let crashed_module = crate::diag::panic::previous_failure()
+        .map(|p| p.module)
+        .filter(|m| m != "ядро");
+
     for &name in BOOT_MODULES {
+        if let Some(bad) = crashed_module.as_deref() {
+            if name.eq_ignore_ascii_case(bad)
+                || name.to_lowercase().trim_end_matches(".kmod") == bad.to_lowercase()
+            {
+                diag::critical_with(
+                    ErrorCode::new(Subsystem::Kmod, 5),
+                    crate::diag::Action::QuarantineModule,
+                    &alloc::format!(
+                        "KMOD: {} в карантине — прошлая сессия упала внутри его кода",
+                        name
+                    ),
+                );
+                LOADED_MODULES.lock().push(LoadedModule {
+                    name: String::from(name),
+                    version: (0, 0),
+                    load_addr: 0,
+                    body_size: 0,
+                    status: ModuleStatus::Quarantined,
+                });
+                continue;
+            }
+        }
         match load_module(name) {
-            Ok(()) => {}
+            Ok(()) => {
+                diag::info(diag::NONE, &alloc::format!("KMOD: {} загружен", name));
+            }
             Err(ModuleError::NotFound) => {
-                println!("  [module] {} not found on disk (skipped — system will work without it).", name);
+                // Отсутствие необязательного модуля — не ошибка: система
+                // заявлена работоспособной и без него.
+                diag::notice(
+                    diag::NONE,
+                    &alloc::format!("KMOD: {} отсутствует в /system/kmod — пропущен", name),
+                );
             }
             Err(ModuleError::BadFormat) => {
-                println!("  [module] {} has invalid format — skipped.", name);
+                diag::error(
+                    ErrorCode::new(Subsystem::Kmod, 2),
+                    &alloc::format!("KMOD: {} имеет повреждённый заголовок", name),
+                );
             }
             Err(ModuleError::InitFailed(code)) => {
-                println!("  [module] {} init() returned error code {}.", name, code);
+                diag::error_with(
+                    ErrorCode::new(Subsystem::Kmod, 4),
+                    crate::diag::Action::QuarantineModule,
+                    &alloc::format!("KMOD: {} init() вернул код {}", name, code),
+                );
             }
             Err(ModuleError::TooLarge) => {
-                println!("  [module] {} is too large — skipped.", name);
+                diag::error(
+                    ErrorCode::new(Subsystem::Kmod, 3),
+                    &alloc::format!("KMOD: {} превышает предел {} МиБ", name, KMOD_MAX_SIZE / 1024 / 1024),
+                );
             }
         }
     }
@@ -261,6 +315,12 @@ pub enum ModuleError {
 }
 
 fn read_kmod_data(filename: &str) -> Result<Vec<u8>, ModuleError> {
+    if crate::diag::passes(crate::diag::Severity::Debug) {
+        crate::diag::debug(
+            crate::diag::NONE,
+            &alloc::format!("KMOD: поиск {} в /system/kmod", filename),
+        );
+    }
     if let Some(layout) = crate::partition_map::lookup_layout("/system") {
         if let Ok(image) = crate::bootchain::read_partition_image(layout) {
             let path = alloc::format!("kmod/{}", filename.to_lowercase());
@@ -386,5 +446,6 @@ pub fn reset_loaded_modules() {
 pub fn get_loaded_modules() -> Vec<LoadedModule> {
     LOADED_MODULES.lock().clone()
 }
+
 
 

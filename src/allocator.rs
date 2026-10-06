@@ -170,6 +170,27 @@ pub fn init() {
     ALLOCATOR.init();
 }
 
+/// Статистика кучи для отчётов.
+pub struct HeapStats {
+    /// Всего байт доступно куче.
+    pub total: usize,
+    /// Сколько байт выдано.
+    pub used: usize,
+    /// Сколько байт свободно.
+    pub free: usize,
+}
+
+/// Текущее состояние кучи.
+pub fn stats() -> HeapStats {
+    let total = total_heap_bytes();
+    let used = allocated_heap_bytes();
+    HeapStats {
+        total,
+        used,
+        free: total.saturating_sub(used),
+    }
+}
+
 pub fn total_heap_bytes() -> usize {
     HEAP_SIZE
 }

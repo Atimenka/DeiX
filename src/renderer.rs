@@ -648,6 +648,24 @@ pub fn with_renderer_ret<F: FnOnce(&mut Renderer) -> R, R>(f: F) -> Option<R> {
     without_interrupts(|| ACTIVE_RENDERER.lock().as_mut().map(f))
 }
 
+/// Как `with_renderer`, но не ждёт занятый рендерер.
+///
+/// Для обработчиков сбоев: исключение может прийти, пока блокировку держит
+/// прерванная задача композитора, и обычный `lock()` в этом месте завис бы
+/// навсегда. Возвращает `false`, если рендерер был занят.
+pub fn try_with_renderer<F: FnOnce(&mut Renderer)>(f: F) -> bool {
+    without_interrupts(|| match ACTIVE_RENDERER.try_lock() {
+        Some(mut guard) => match guard.as_mut() {
+            Some(r) => {
+                f(r);
+                true
+            }
+            None => false,
+        },
+        None => false,
+    })
+}
+
 pub fn with_renderer<F: FnOnce(&mut Renderer)>(f: F) {
     without_interrupts(|| {
         if let Some(r) = ACTIVE_RENDERER.lock().as_mut() {

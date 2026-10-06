@@ -281,7 +281,50 @@ impl Dinit {
         self.supervisor_ticks += 1;
         let now = crate::timer::uptime_ms();
 
-        // 1. Проверка состояния и перезапуск упавших служб
+        // 0. Обнаружение падений: служба числится Running, а её процесс
+        //    уже мёртв или исчез из таблицы. Это и есть heartbeat
+        //    супервизора — без него RestartPolicy не на что реагировать.
+        for (name, desc) in self.services.iter_mut() {
+            if desc.status != ServiceStatus::Running {
+                continue;
+            }
+            let Some(pid) = desc.pid else { continue };
+            let dead = match crate::process::info(pid) {
+                Ok(info) => {
+                    info.state == crate::process::ProcessState::Zombie
+                        || info.state == crate::process::ProcessState::Reaped
+                }
+                Err(_) => true,
+            };
+            if !dead {
+                continue;
+            }
+            let exit_code = crate::process::info(pid).ok().and_then(|i| i.exit_code).unwrap_or(-1);
+            let will_restart = desc.mark_crashed(exit_code, now);
+            let _ = crate::process::reap(pid);
+
+            if will_restart {
+                crate::diag::error_with(
+                    crate::diag::ErrorCode::new(crate::diag::Subsystem::Dinit, 2),
+                    crate::diag::Action::Retry,
+                    &alloc::format!(
+                        "служба {} (pid {}) завершилась аварийно (код {}), перезапуск через {} мс",
+                        name, pid, exit_code, desc.restart_backoff_ms
+                    ),
+                );
+            } else {
+                crate::diag::critical_with(
+                    crate::diag::ErrorCode::new(crate::diag::Subsystem::Dinit, 6),
+                    crate::diag::Action::DegradeSubsystem,
+                    &alloc::format!(
+                        "служба {} падала {} раз — перезапуски прекращены",
+                        name, desc.crash_count
+                    ),
+                );
+            }
+        }
+
+        // 1. Перезапуск служб, у которых подошёл backoff
         let mut to_restart = Vec::new();
         for (name, desc) in self.services.iter() {
             if desc.status == ServiceStatus::Restarting && desc.can_restart(now) {
@@ -292,16 +335,27 @@ impl Dinit {
         for name in to_restart {
             match self.spawn_service(&name, "Автоматический перезапуск службы по политике супервизора") {
                 Ok((pid, _)) => {
-                    crate::serial_println!("[dinit] Служба '{}' перезапущена (новый PID {})", name, pid);
+                    crate::diag::notice(
+                        crate::diag::NONE,
+                        &alloc::format!("dinit: служба {} перезапущена (новый PID {})", name, pid),
+                    );
                 }
                 Err(e) => {
-                    crate::serial_println!("[dinit] Служба '{}' НЕ перезапущена: {}", name, e);
+                    crate::diag::error(
+                        crate::diag::ErrorCode::new(crate::diag::Subsystem::Dinit, 1),
+                        &alloc::format!("dinit: служба {} не перезапущена: {}", name, e),
+                    );
                 }
             }
         }
 
         // 2. Обработка очереди сигналов ликвидации от Security Monitor
         while let Some(kill) = self.security.kill_signals.pop() {
+            crate::diag::critical_with(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Security, 5),
+                crate::diag::Action::TerminateProcess,
+                &alloc::format!("security: ликвидация pid {} — {}", kill.pid, kill.reason),
+            );
             crate::serial_println!("[dinit:security] ИСПОЛНЕНИЕ: {}", kill.describe());
             self.audit.record(
                 now,

@@ -177,6 +177,10 @@ pub fn cmd_install(name: &str) {
                 filename, content.len()
             ),
             Err(_) => {
+                crate::diag::error(
+                    crate::diag::ErrorCode::new(crate::diag::Subsystem::Pkg, 6),
+                    &alloc::format!("pkg: установка {} прервана — не записан {}", pkg.name, filename),
+                );
                 println_t!(
                     en: "Failed to write '{}' — installation aborted.",
                     ru: "Не удалось записать '{}' — установка прервана.";
@@ -191,6 +195,10 @@ pub fn cmd_install(name: &str) {
     if !installed.iter().any(|n| n.eq_ignore_ascii_case(pkg.name)) {
         installed.push(pkg.name.to_string());
         if write_registry(&installed).is_err() {
+            crate::diag::error(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Pkg, 8),
+                &alloc::format!("pkg: реестр пакетов не обновлён после установки {}", pkg.name),
+            );
             println!(
                 "{}",
                 t!(

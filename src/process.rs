@@ -230,6 +230,10 @@ pub struct Process {
     pub started_at_ms: u64,
     /// Путь к образу, из которого процесс запущен.
     pub image_path: String,
+    /// Код последней ошибки процесса (значение `diag::ErrorCode`), 0 — ошибок не было.
+    pub last_error_code: u32,
+    /// Описание последней ошибки процесса.
+    pub last_error: String,
 }
 
 impl Process {
@@ -256,6 +260,8 @@ impl Process {
             exit_code: None,
             started_at_ms: 0,
             image_path: String::new(),
+            last_error_code: 0,
+            last_error: String::new(),
         }
     }
 
@@ -399,12 +405,10 @@ extern "C" fn launch_trampoline() {
     let code: i32 = unsafe {
         match kind {
             ImageKind::Mex => {
-                // MEX-программа получает указатель на таблицу API в RDI;
-                // вызвать её как fn() означало бы передать мусор.
-                let api = crate::mex::build_api();
-                let f: extern "C" fn(*const crate::mex::MexApi) -> i64 =
-                    core::mem::transmute(entry as usize);
-                f(&api as *const crate::mex::MexApi) as i32
+                // Ring 3: таблица MexApi указывает на стабы в shim-странице,
+                // каждый вызов API — syscall. Падение программы завершает
+                // процесс, а не ядро.
+                crate::mex::run_ring3(entry) as i32
             }
             ImageKind::Elf => {
                 let f: extern "C" fn() -> i64 = core::mem::transmute(entry as usize);
@@ -451,12 +455,24 @@ pub fn exec(pid: u32) -> Result<(), ProcessError> {
             )));
         }
         let e = crate::mex::load_into(&img, crate::mex::load_address(), MEX_IMAGE_SIZE)
-            .map_err(ProcessError::BadImage)?;
+            .map_err(|e| {
+                crate::diag::error(
+                    crate::diag::ErrorCode::new(crate::diag::Subsystem::Elf, 6),
+                    &format!("MEX {}: {}", path, e),
+                );
+                ProcessError::BadImage(e)
+            })?;
         *guard = Some(pid);
         (e, ImageKind::Mex)
     } else {
         let e = crate::linux::elf::load_into(&img, aspace.image_base, aspace.image_size)
-            .map_err(ProcessError::BadImage)?;
+            .map_err(|e| {
+                crate::diag::error(
+                    crate::diag::ErrorCode::new(crate::diag::Subsystem::Elf, 5),
+                    &format!("ELF {}: {}", path, e),
+                );
+                ProcessError::BadImage(e)
+            })?;
         (e, ImageKind::Elf)
     };
 
@@ -568,6 +584,10 @@ pub struct ProcInfo {
     pub sched_id: Option<usize>,
     pub exit_code: Option<i32>,
     pub started_at_ms: u64,
+    /// Код последней ошибки (значение `diag::ErrorCode`), 0 — ошибок не было.
+    pub last_error_code: u32,
+    /// Описание последней ошибки.
+    pub last_error: String,
 }
 
 /// Список живых и завершённых, но не пожнатых процессов.
@@ -588,6 +608,8 @@ pub fn list() -> Vec<ProcInfo> {
             sched_id: p.sched_id,
             exit_code: p.exit_code,
             started_at_ms: p.started_at_ms,
+            last_error_code: p.last_error_code,
+            last_error: p.last_error.clone(),
         })
         .collect()
 }
@@ -611,6 +633,8 @@ pub fn info(pid: u32) -> Result<ProcInfo, ProcessError> {
         sched_id: p.sched_id,
         exit_code: p.exit_code,
         started_at_ms: p.started_at_ms,
+        last_error_code: p.last_error_code,
+        last_error: p.last_error.clone(),
     })
 }
 
@@ -624,6 +648,36 @@ pub fn current_pid() -> Option<u32> {
         .iter()
         .find(|p| p.sched_id == Some(sid) && p.state.occupies_slot())
         .map(|p| p.pid)
+}
+
+/// Имя процесса по PID.
+///
+/// Через `try_lock`: вызывается из обработчиков исключений и из отчёта об
+/// отказе, где обычный `lock()` на занятой таблице означал бы зависание
+/// внутри обработчика сбоя.
+pub fn name_of(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    let table = PROCS.try_lock()?;
+    table
+        .iter()
+        .find(|p| p.pid == pid && p.state != ProcessState::Empty)
+        .map(|p| p.name.clone())
+}
+
+/// Записывает последнюю ошибку процесса.
+///
+/// Её показывают Диспетчер задач и карточка процесса в Центре ошибок.
+/// Через `try_lock` по той же причине, что и `name_of`.
+pub fn record_crash(pid: u32, code: crate::diag::ErrorCode, detail: &str) {
+    let Some(mut table) = PROCS.try_lock() else {
+        return;
+    };
+    if let Some(p) = table.iter_mut().find(|p| p.pid == pid && p.state != ProcessState::Empty) {
+        p.last_error_code = code.0;
+        p.last_error = String::from(detail);
+    }
 }
 // ==================== Файловые операции процесса ====================
 
@@ -734,6 +788,13 @@ pub fn cmd_ps() {
             p.open_fds,
             p.name
         );
+        if p.last_error_code != 0 {
+            crate::println!(
+                "        последняя ошибка: {} {}",
+                crate::diag::ErrorCode(p.last_error_code).as_string(),
+                p.last_error
+            );
+        }
     }
     crate::println!("  Всего: {}", procs.len());
 }

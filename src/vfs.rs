@@ -139,6 +139,15 @@ fn normalize(rest: &str) -> String {
 
 /// Читает файл целиком.
 pub fn read_file(path: &str) -> Result<Vec<u8>, VfsError> {
+    // TRACE отбрасывается ещё до форматирования строки, если
+    // диагностический режим выключен — обычный путь чтения не платит
+    // за журналирование ничем, кроме одной атомарной загрузки.
+    // Обращения к /userdata/log не трассируются: сброс журнала на диск
+    // сам ходит через VFS, и трассировка этих обращений порождала бы
+    // новые события при каждой записи журнала — без ограничения.
+    if crate::diag::passes(crate::diag::Severity::Trace) && !path.starts_with("/userdata/log") {
+        crate::diag::trace(crate::diag::NONE, &format!("VFS: read {}", path));
+    }
     let (mount, rest) = split_mount(path)?;
     match mount {
         MOUNT_SYSTEM => {
@@ -166,6 +175,12 @@ pub fn read_file(path: &str) -> Result<Vec<u8>, VfsError> {
 
 /// Пишет файл. На `/system` всегда отказывает.
 pub fn write_file(path: &str, data: &[u8]) -> Result<(), VfsError> {
+    if crate::diag::passes(crate::diag::Severity::Trace) && !path.starts_with("/userdata/log") {
+        crate::diag::trace(
+            crate::diag::NONE,
+            &format!("VFS: write {} ({} Б)", path, data.len()),
+        );
+    }
     let (mount, rest) = split_mount(path)?;
     match mount {
         MOUNT_SYSTEM => Err(VfsError::ReadOnly { path: String::from(path) }),
@@ -316,6 +331,33 @@ pub fn readdir(path: &str) -> Result<Vec<DirEnt>, VfsError> {
 }
 
 /// Проверяет существование пути.
+/// Текущее состояние точек монтирования — для отчётов и `diagnostics`.
+///
+/// Не загружает образ `/system` и не берёт блокировки безусловно: функция
+/// вызывается в том числе из отчёта об отказе, где зависание на блокировке
+/// недопустимо, а чтение 8 МиБ с диска бессмысленно.
+pub fn describe_mounts() -> Vec<String> {
+    let mut out = Vec::new();
+
+    let system = match SYSTEM_IMAGE.try_lock() {
+        Some(guard) => match guard.as_ref() {
+            Some(img) => format!("{} ro erofs ({} КиБ в кеше)", MOUNT_SYSTEM, img.len() / 1024),
+            None => format!("{} ro erofs (образ ещё не читался)", MOUNT_SYSTEM),
+        },
+        None => format!("{} ro erofs (кеш занят)", MOUNT_SYSTEM),
+    };
+    out.push(system);
+
+    let userdata = if crate::ext2::is_formatted() {
+        format!("{} rw ext2", MOUNT_USERDATA)
+    } else {
+        format!("{} НЕ ОТФОРМАТИРОВАН", MOUNT_USERDATA)
+    };
+    out.push(userdata);
+
+    out
+}
+
 pub fn exists(path: &str) -> bool {
     stat(path).is_ok()
 }
@@ -342,11 +384,43 @@ fn split_parent(rest: &str) -> (String, String) {
 
 fn ext2_cause(e: crate::ext2::Ext2Error) -> String {
     use crate::ext2::Ext2Error as E;
+    // Инфраструктурные сбои EXT2 регистрируются в журнале; «не найдено» и
+    // прочие ожидаемые исходы операций — нет, иначе каждый промах поиска
+    // файла станет строкой в error.log.
     match e {
-        E::DiskError => String::from("ошибка диска"),
-        E::NotFormatted => String::from("раздел не отформатирован"),
+        E::DiskError => {
+            // Ошибка диска почти всегда вторична к только что
+            // зарегистрированному отказу ATA — связываем записи в цепочку
+            // «первопричина → вторичный сбой».
+            let now = crate::timer::uptime_ms();
+            let cause =
+                crate::diag::ring::find_recent_error(crate::diag::Subsystem::Disk, 2_000, now);
+            let code = crate::diag::ErrorCode::new(crate::diag::Subsystem::Ext2, 6);
+            match cause {
+                Some(id) => {
+                    crate::diag::caused_by(id, code, "EXT2: ошибка диска при обращении к /userdata");
+                }
+                None => {
+                    crate::diag::error(code, "EXT2: ошибка диска при обращении к /userdata");
+                }
+            }
+            String::from("ошибка диска")
+        }
+        E::NotFormatted => {
+            crate::diag::warn(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Ext2, 1),
+                "EXT2: /userdata не отформатирован",
+            );
+            String::from("раздел не отформатирован")
+        }
+        E::NoSpace => {
+            crate::diag::error(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Ext2, 9),
+                "EXT2: на /userdata закончились свободные блоки",
+            );
+            String::from("нет места")
+        }
         E::FileNotFound => String::from("не найдено"),
-        E::NoSpace => String::from("нет места"),
         E::InvalidName => String::from("недопустимое имя"),
         E::FileTooLarge => String::from("файл слишком большой"),
         E::DirectoryFull => String::from("каталог полон"),

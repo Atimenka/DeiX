@@ -16,10 +16,11 @@ mod bootchain;
 mod bugreport;
 mod cli;
 mod cp866;
-mod crashlog;
+mod cpuid;
 mod crypto;
 mod crypto_storage;
 mod devmode;
+mod diag;
 mod dialog;
 mod dinit;
 mod ds;
@@ -56,12 +57,12 @@ mod port;
 mod process;
 mod renderer;
 mod rng;
+mod rtc;
 mod rtl8139;
 mod sched;
 mod security_monitor;
 mod serial;
 mod sound;
-mod syslog;
 mod spinlock;
 mod sync;
 mod timer;
@@ -77,18 +78,22 @@ mod vmmouse;
 
 use core::panic::PanicInfo;
 
+/// Версия ядра. Единственный источник — остальные места берут её отсюда,
+/// чтобы в отчёте об отказе и в `about` не расходились версии.
+pub const KERNEL_VERSION: &str = "0.2.1-beta";
+
+/// Идентификатор сборки: архитектура и режим компиляции.
+pub const BUILD_ID: &str = "x86_64-unknown-deix (no_std, release)";
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    // Отладчик ошибок: сообщение паники уходит в serial, в кольцевой журнал (dmesg)
-    // и в crash-лог на диск, чтобы его можно было посмотреть после перезагрузки
-    // (команда `crashlog`).
-    let msg = alloc::format!("[PANIC] {}", info);
-    crate::serial_println!("{}", msg);
-    crate::syslog::log_line(&msg);
-    crate::crashlog::record_crash(&msg);
-    loop {
-        unsafe { core::arch::asm!("hlt") };
-    }
+    // Отказ ядра обрабатывает система диагностики: она регистрирует событие
+    // в кольцевом буфере, собирает отчёт в статический буфер (куча может быть
+    // тем, что повреждено), пишет его сырыми секторами и рисует экран.
+    //
+    // Паник-хендлер вызывается и в ситуациях, когда diag ещё не готов
+    // (отказ до его инициализации), поэтому есть запасной путь в serial.
+    crate::diag::panic::rust_panic(info)
 }
 
 /// Точка входа, которую вызывает наш ассемблерный загрузчик
@@ -155,6 +160,12 @@ pub extern "C" fn kernel_main() -> ! {
     println!("Heap allocator (16 MiB): OK");
     crate::serial_println!("[deix] I: heap ok");
 
+    // Система диагностики: с этого момента каждое существенное событие
+    // регистрируется в кольцевом буфере и уходит в serial. Постоянное
+    // хранилище подключается позже (diag::storage_ready), когда /userdata
+    // доступен — буфер до тех пор ничего не теряет.
+    diag::init();
+
     println!("PS/2 keyboard: OK (handled via IRQ1)");
 
     mouse::init(800, 600);
@@ -166,7 +177,8 @@ pub extern "C" fn kernel_main() -> ! {
         println!("ATA disk: not detected");
     }
 
-    if rtl8139::init() {
+    let net_ok = rtl8139::init();
+    if net_ok {
         println!(
             "Network: IP {}.{}.{}.{} (type 'ifconfig' for details)",
             net::my_ip()[0], net::my_ip()[1], net::my_ip()[2], net::my_ip()[3]
@@ -176,7 +188,9 @@ pub extern "C" fn kernel_main() -> ! {
     }
 
 
-    match gpu::detect() {
+    let gpu_info = gpu::detect();
+    let gpu_ok = gpu_info.is_some();
+    match gpu_info {
         Some(info) => {
             println!(
                 "GPU: {} detected (device ID {:#06x}). Type 'gpu info' for details.",
@@ -187,7 +201,8 @@ pub extern "C" fn kernel_main() -> ! {
         None => println!("GPU: no display controller found on PCI bus"),
     }
 
-    if hda::init() {
+    let audio_ok = hda::init();
+    if audio_ok {
         println!("Audio: Intel High Definition Audio (HDA) ready");
     } else {
         println!("Audio: PC Speaker (run QEMU with '-device intel-hda -device hda-duplex' for HDA)");
@@ -265,14 +280,14 @@ pub extern "C" fn kernel_main() -> ! {
     // (например, строкой "gpu mode 800x600" можно было увести систему
     // в графику и не увидеть логин вовсе). Это дыра в безопасности.
 
-    // Отладчик ошибок: если предыдущий сеанс завершился паникой (crash-лог
-    // на диске, LBA 2048), сообщаем об этом при загрузке — как Android
-    // показывает уведомление о сбое. Полный дамп: 'crashlog'.
-    if crate::crashlog::has_disk_crash() {
-        crate::println!("  [debugger] ⚠ В прошлом сеансе произошла ошибка (crash-лог на диске).");
-        crate::println!("  [debugger] Посмотреть дамп: 'crashlog' | стереть: 'crashlog clear'.");
-        crate::serial_println!("[debugger] предыдущий сеанс завершился паникой (crash-лог на диске)");
-    }
+    // Контрольный список загрузки: каждая строка — реальная проверка
+    // подсистемы, сбой регистрируется в журнале со своим кодом DX-*.
+    diag::boot::screen(net_ok, audio_ok, gpu_ok);
+
+    // Если прошлая сессия завершилась отказом ядра (дамп в сырых секторах,
+    // LBA 2048), сообщаем об этом до входа. Плановая перезагрузка дампа
+    // не оставляет и диалога не вызывает.
+    diag::cli::announce_previous_failure();
 
     bootlogo::set_status("system ready");
 
@@ -302,6 +317,11 @@ pub extern "C" fn kernel_main() -> ! {
     if let Err(e) = userfs::init_profile(&username) {
         crate::println!("  [userfs] профиль не создан: {}", e.message());
     }
+
+    // /userdata доступен (и расшифрован, если включено шифрование) —
+    // подключаем постоянные журналы и сбрасываем в них всё, что накопил
+    // кольцевой буфер с начала загрузки. События до этой точки не теряются.
+    diag::storage_ready();
 
     // Базовый AUTOSTART.CFG (с gpu mode) — создаём при первом входе.
     autostart::ensure_default();
@@ -333,9 +353,8 @@ pub fn reset_all_globals() {
     crate::module::reset_loaded_modules();
     crate::fs::reset_fs_state();
     crate::renderer::reset_renderer();
-    crate::crashlog::clear_current_crash();
-    crate::crashlog::clear_disk_crash();
-    crate::syslog::clear();
+    crate::diag::ring::clear();
+    crate::diag::panic::clear_previous_failure();
     crate::crypto_storage::lock();
     crate::linux::syscall::reset_stats();
     *crate::dinit::DINIT.lock() = None;

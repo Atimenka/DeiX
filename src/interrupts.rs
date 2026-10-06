@@ -270,15 +270,37 @@ extern "x86-interrupt" fn unhandled_with_code(_frame: InterruptStackFrame, _code
 
 /// Machine Check (вектор 18) — процессор сообщает об аппаратной
 /// ошибке. Прерывание abort-класса: возврата из него нет.
-extern "x86-interrupt" fn machine_check_handler(_frame: InterruptStackFrame) -> ! {
-    crate::serial_println!("[EXCEPTION] Machine Check");
-    loop {
-        unsafe { core::arch::asm!("hlt") };
+extern "x86-interrupt" fn machine_check_handler(frame: InterruptStackFrame) -> ! {
+    let ctx = crate::diag::panic::PanicContext::from_frame(&frame, 18, 0);
+    crate::diag::panic::kernel_panic(
+        crate::diag::panic::code_for_vector(18),
+        "Machine Check: процессор сообщил об аппаратной ошибке",
+        &ctx,
+    )
+}
+
+/// Общая развилка исключений.
+///
+/// Исключение из Ring 3 — авария приложения: процесс останавливается,
+/// событие регистрируется, ядро продолжает работу. Исключение из Ring 0 —
+/// отказ ядра: сохраняется отчёт и система останавливается.
+fn dispatch_fault(frame: &InterruptStackFrame, vector: u8, error_code: u64) -> ! {
+    let ctx = crate::diag::panic::PanicContext::from_frame(frame, vector, error_code);
+    if ctx.from_user() {
+        crate::diag::panic::user_fault(&ctx)
+    } else {
+        crate::diag::panic::kernel_panic(
+            crate::diag::panic::code_for_vector(vector),
+            crate::diag::panic::vector_name(vector),
+            &ctx,
+        )
     }
 }
 
 extern "x86-interrupt" fn divide_by_zero_handler(frame: InterruptStackFrame) {
-    println!("[EXCEPTION] Division by zero at {:#x}", frame.instruction_pointer);
+    // Возврат из #DE повторяет ту же инструкцию деления — это бесконечный
+    // цикл исключений, поэтому возврата нет ни для ядра, ни для Ring 3.
+    dispatch_fault(&frame, 0, 0);
 }
 
 extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {
@@ -286,40 +308,29 @@ extern "x86-interrupt" fn breakpoint_handler(frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn invalid_opcode_handler(frame: InterruptStackFrame) {
-    println!("[EXCEPTION] Invalid opcode at {:#x}", frame.instruction_pointer);
-    halt_loop();
+    dispatch_fault(&frame, 6, 0);
 }
 
 extern "x86-interrupt" fn double_fault_handler(frame: InterruptStackFrame, _error_code: u64) -> ! {
-    println!("[FATAL] Double fault at {:#x}", frame.instruction_pointer);
-    halt_loop();
+    // Double Fault всегда отказ ядра: он означает, что упал сам
+    // обработчик исключения, независимо от того, что его вызвало.
+    let ctx = crate::diag::panic::PanicContext::from_frame(&frame, 8, 0);
+    crate::diag::panic::kernel_panic(
+        crate::diag::panic::code_for_vector(8),
+        "Double fault: исключение внутри обработчика исключения",
+        &ctx,
+    )
 }
 
 extern "x86-interrupt" fn general_protection_fault_handler(
     frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    println!(
-        "[EXCEPTION] General protection fault (code {:#x}) at {:#x}",
-        error_code, frame.instruction_pointer
-    );
-    halt_loop();
+    dispatch_fault(&frame, 13, error_code);
 }
 
 extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, error_code: u64) {
-    let cr2: u64;
-    unsafe { asm!("mov {}, cr2", out(reg) cr2) };
-    println!(
-        "[EXCEPTION] Page fault accessing {:#x} (code {:#x}) at {:#x}",
-        cr2, error_code, frame.instruction_pointer
-    );
-    halt_loop();
-}
-
-fn halt_loop() -> ! {
-    loop {
-        unsafe { asm!("hlt") };
-    }
+    dispatch_fault(&frame, 14, error_code);
 }
 
 // ---------------- обработчики аппаратных прерываний ----------------
