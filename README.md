@@ -18,10 +18,73 @@ Disk
 └── /userdata     EXT2/4 RW (users, configs, packages)
 ```
 
+```text
+                    DeiX OS
+                       │
+                ┌──────┴──────┐
+                │   Kernel    │
+                └──────┬──────┘
+                       │
+       ┌───────────────┼────────────────┐
+       │               │                │
+     Memory          Scheduler         VFS
+       │               │                │
+       └───────────────┼────────────────┘
+                       │
+                  Process Manager
+                       │
+          ┌────────────┼────────────┐
+          │            │            │
+        Dinit        Syscalls     Loaders
+                                      │
+                                 ┌────┴────┐
+                               ELF        MEX
+```
+
 - **Неизменяемое ядро и подсистемы (`/system`)**: системный раздел монтируется в режиме Read-Only с проверкой целостности.
 - **Пользовательские данные (`/userdata`)**: база пользователей (`/userdata/users.db`), пользовательские файлы и конфигурации.
 - **Графический композитор DeiX Fluent**: событийно-управляемый рендеринг, кеширование поверхностей, трекинг повреждений и адаптивный UI.
 - **Декларативный GUI фреймворк DUIL & DeiX Script**: компактные инструменты описания графического интерфейса и скриптового управления.
+
+### 🗂️ VFS — единая файловая система (`src/vfs.rs`)
+
+Все подсистемы ядра ходят за файлами через VFS, а не в драйверы разделов
+напрямую. Это одна точка монтирования, одна точка проверки прав и один набор
+кодов ошибок.
+
+```text
+VFS
+├── /system    → EROFS, только чтение
+└── /userdata  → EXT2,  чтение/запись
+```
+
+API: `read_file` / `write_file` / `mkdir` / `remove` / `stat` / `readdir` /
+`exists`. Запись на `/system` возвращает `ReadOnly`, не доходя до диска. Образ
+`/system` читается с диска один раз и кешируется в куче.
+
+### 🧬 Менеджер процессов (`src/process.rs`)
+
+Единая структура для всего, что исполняется:
+
+```text
+Process
+ ├── PID / UID / parent
+ ├── AddressSpace (образ, стек, куча)
+ ├── таблица файловых дескрипторов + cwd
+ ├── capabilities
+ └── слот планировщика
+```
+
+`spawn()` создаёт запись процесса, `exec()` загружает образ и создаёт задачу
+планировщика, привязанную к PID. Завершение нити возвращается обратно через
+`notify_exit`, поэтому мёртвая нить не оставляет процесс в состоянии Running.
+
+**Ограничение формата MEX.** `tools/mex.ld` линкует `.mex` на фиксированный
+адрес `0x03000000`, и образ не является позиционно-независимым. Поэтому MEX
+загружается строго по адресу линковки, а одновременное исполнение нескольких
+MEX-процессов запрещено (`MEX_IN_USE`) — изоляция по адресным пространствам
+для этого формата появится только вместе с PIC-сборкой или настоящим
+постраничным отображением.
 
 ### 📜 Скриптовый язык DeiX Script (`src/ds.rs`)
 - Полноценный интерпретатор с ветвлениями `if`/`else`/`fi`, циклами `while`/`done` и функциями `fn`/`end`.
@@ -32,14 +95,20 @@ Disk
 - В заголовок `tools/include/deix/mex.h` добавлены базовые функции памяти (`memset`, `memcpy`, `memmove`, `memcmp`) с атрибутом `weak` для сборки C/C++ программ без `glibc`.
 - Драйвер `mexcc.cpp` поддерживает каскадный поиск ресурсов `locate_resource()` (`mex.ld`, `mex_pack.py`, `include/`).
 
-### 🏛️ Модульные системные библиотеки (`kernel.tar.gz` и `/system`)
-- Выделение системных библиотек в архиве ядра и EROFS `/system`:
-  - `libdeix_core.so` — ядро, многозадачность, память.
-  - `libdeix_net.so` — сетевой стек и RTL8139.
-  - `libdeix_gfx.so` — 2D-рендерер и VBE.
-  - `libdeix_sys.so` — супервизор Dinit и Security Monitor.
-  - `libdeix_gui.so` — UI-фреймворк DUIL.
-  - `libdeix_ds.so` — интерпретатор DeiX Script.
+### 🏛️ Содержимое системного раздела `/system` (EROFS, только чтение)
+- `kernel/kernel.bin` — образ ядра.
+- `etc/init.deix` — скрипт инициализации.
+- `services/dinit.cfg` — конфигурация служб Dinit.
+- `media/audio/ui/*.dps` — звуковые ресурсы оболочки.
+
+В образ кладутся только настоящие файлы. Заглушки `libdeix_*.so` и
+`kmod/*.kmod` не создаются: `module.rs` ожидает у `.kmod` валидный заголовок
+и исполняемое тело, поэтому placeholder-байты загрузились бы только как
+повреждённый модуль. Модуля, которого нет, в образе нет.
+
+Модули ядра (`.kmod`) — отдельный механизм: они загружаются с диска через
+`module.rs` и видны в `lsmod`. Встроенные подсистемы ядра загруженными
+модулями не являются и в этот список не попадают.
 
 ### ⚡ Оптимизация скорости загрузки
 - `Ramboot`: Размер портативного блока INT 13h увеличен до 127 секторов (сокращение вызовов BIOS и смен режимов в 2 раза, ускорение считывания на ~40%).
@@ -81,9 +150,10 @@ Disk
 help about echo clear uptime color cpuid mem lang
 ifconfig arp ping gpu [info|nvinfo|mode] sound [list|play|beep|mode|hda]
 dinit [status|services|mounts|users|audit|security|stage|reload]
-duil [run|calc] ds [script.dxs|-i|-c] taskmgr ls cat write rm pkg run install bigfile
+duil [run|calc] ds [script.dxs|-i|-c] taskmgr ls cat write mkdir rm pkg run install bigfile
 useradd passwd whoami users encrypt crypt nvidia hal microcode logo linux profile lock
 threads crash bugreport dmesg crashlog adb dev root reboot poweroff shutdown halt
+ps kill kmod [load|list] lsmod
 ```
 
 ---
@@ -127,10 +197,10 @@ qemu-system-x86_64 -drive file=build/deix_disk.img,format=raw,if=ide \
 
 ```bash
 python3 tools/test_all_subsystems.py    # сквозной тест всех подсистем и тулчейна
-python3 tools/check_partition_map.py    # проверка синхронизации 13 разделов
+python3 tools/check_partition_map.py    # проверка синхронизации карты разделов (2 раздела)
 python3 tools/make_logo.py assets/logo.png build/logo.dxlg 128
 python3 tools/wav2dps.py assets/start.wav build/sounds/start.dps 8000
-python3 tools/qemu_mode_test.py os      # сквозной QEMU-тест
+python3 tools/make_deix_fs.py build/deix_disk.img   # сборка заводского образа
 ```
 
 ---
