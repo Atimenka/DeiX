@@ -72,6 +72,12 @@ pub enum WindowContent {
         selected_pid: Option<usize>,
         status_msg: Option<String>,
     },
+    ErrorCenter {
+        /// Индекс выбранной записи в списке `error_center::visible_records`.
+        selected: Option<usize>,
+        /// Прокрутка списка (индекс первой видимой записи).
+        scroll: usize,
+    },
     ThemeSettings {
         volume_level: u8,
         brightness_level: u8,
@@ -223,6 +229,25 @@ impl Window {
                 brightness_level: 100,
             },
             surface: Surface::new(480, 320),
+            dirty: true,
+        }
+    }
+
+    pub fn new_error_center(x: i32, y: i32) -> Self {
+        Window {
+            title: String::from("Error Center"),
+            x,
+            y,
+            width: 520,
+            height: 360,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 520, 360),
+            content: WindowContent::ErrorCenter {
+                selected: None,
+                scroll: 0,
+            },
+            surface: Surface::new(520, 360),
             dirty: true,
         }
     }
@@ -627,6 +652,9 @@ pub fn draw_window(
                 *brightness_level,
                 content_y,
             );
+        }
+        WindowContent::ErrorCenter { selected, scroll } => {
+            apps::draw_error_center(r, theme, w, *selected, *scroll, content_y);
         }
         WindowContent::About => {
             apps::draw_about(r, theme, w, content_y);

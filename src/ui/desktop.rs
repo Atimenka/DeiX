@@ -140,6 +140,15 @@ impl Desktop {
         self.dirty = true;
     }
 
+    pub fn open_error_center(&mut self, screen_w: i32, screen_h: i32) {
+        let x = (screen_w - 520) / 2;
+        let y = (screen_h - 360) / 2;
+        self.windows.push(Window::new_error_center(x, y));
+        self.focused_window = Some(self.windows.len() - 1);
+        self.start_menu_open = false;
+        self.dirty = true;
+    }
+
     pub fn open_theme_settings(&mut self, screen_w: i32, screen_h: i32) {
         let x = (screen_w - 480) / 2;
         let y = (screen_h - 320) / 2;
@@ -542,6 +551,7 @@ impl Desktop {
                 StartMenuAction::OpenFiles => self.open_files(screen_w, screen_h),
                 StartMenuAction::OpenBrowser => self.open_browser(screen_w, screen_h),
                 StartMenuAction::OpenTaskManager => self.open_task_manager(screen_w, screen_h),
+                StartMenuAction::OpenErrorCenter => self.open_error_center(screen_w, screen_h),
                 StartMenuAction::OpenThemeSettings => self.open_theme_settings(screen_w, screen_h),
                 StartMenuAction::OpenAbout => self.open_about(screen_w, screen_h),
                 StartMenuAction::OpenDisplaySettings => self.open_display_settings(screen_w, screen_h),
@@ -623,11 +633,15 @@ impl Desktop {
                 selected_pid,
                 status_msg,
             } => {
-                let ty_start = 56;
-                if rel_y >= ty_start && rel_y <= ty_start + 120 {
-                    let pid_click = (rel_y - ty_start) / 20;
-                    if pid_click >= 0 && pid_click < 7 {
-                        *selected_pid = Some(pid_click as usize);
+                // Таблица задач: строки начинаются на 90 px ниже контента
+                // (заголовок + метрики + шапка таблицы), шаг 20 px —
+                // ровно так их кладёт draw_task_manager.
+                let rows_start = 90;
+                let tasks = crate::sched::list();
+                if rel_y >= rows_start {
+                    let row = ((rel_y - rows_start) / 20) as usize;
+                    if let Some(t) = tasks.get(row) {
+                        *selected_pid = Some(t.id);
                         self.dirty = true;
                     }
                 }
@@ -638,16 +652,60 @@ impl Desktop {
                     && rel_y <= win.height as i32 - 8
                 {
                     self.dirty = true;
-                    if let Some(pid) = *selected_pid {
-                        if pid == 0 || pid == 1 || pid == 2 {
-                            *status_msg = Some(format!("PID {} is SYSTEM PROTECTED!", pid));
-                        } else {
-                            *status_msg = Some(format!("Task PID {} terminated successfully.", pid));
-                            *selected_pid = None;
+                    match *selected_pid {
+                        Some(task_id) => {
+                            match tasks.iter().find(|t| t.id == task_id) {
+                                Some(t) if t.pid == 0 => {
+                                    // Задача ядра: у неё нет процесса,
+                                    // завершать её из UI запрещено.
+                                    *status_msg = Some(format!(
+                                        "'{}' — задача ядра, завершение запрещено.",
+                                        t.name
+                                    ));
+                                }
+                                Some(t) => match crate::process::kill(t.pid, -9) {
+                                    Ok(()) => {
+                                        *status_msg =
+                                            Some(format!("Процесс {} (pid {}) завершён.", t.name, t.pid));
+                                        *selected_pid = None;
+                                    }
+                                    Err(e) => {
+                                        *status_msg = Some(e.message());
+                                    }
+                                },
+                                None => {
+                                    *status_msg = Some(String::from("Задача уже завершилась."));
+                                    *selected_pid = None;
+                                }
+                            }
                         }
-                    } else {
-                        *status_msg = Some(String::from("Select a process to kill."));
+                        None => {
+                            *status_msg = Some(String::from("Выберите процесс для завершения."));
+                        }
                     }
+                }
+            }
+            WindowContent::ErrorCenter { selected, scroll } => {
+                use crate::ui::apps::error_center::{LIST_ROWS, LIST_START, ROW_H};
+                let records = crate::ui::apps::error_center::visible_records();
+                if rel_y >= LIST_START {
+                    let row = ((rel_y - LIST_START) / (ROW_H + 2)) as usize;
+                    if row < LIST_ROWS {
+                        let idx = *scroll + row;
+                        if idx < records.len() {
+                            *selected = Some(idx);
+                            self.dirty = true;
+                        }
+                    }
+                }
+                // Шапка списка листает: левая половина — вверх, правая — вниз.
+                if rel_y >= LIST_START - 22 && rel_y < LIST_START {
+                    if rel_x < win.width as i32 / 2 {
+                        *scroll = scroll.saturating_sub(LIST_ROWS);
+                    } else if *scroll + LIST_ROWS < records.len() {
+                        *scroll += LIST_ROWS;
+                    }
+                    self.dirty = true;
                 }
             }
             WindowContent::ThemeSettings { .. } => {
@@ -891,6 +949,7 @@ impl Desktop {
             // Квант супервизора: детект упавших служб и политика
             // перезапуска. Без этого вызова RestartPolicy не работает.
             crate::dinit::tick();
+            crate::diag::persist::flush();
 
             self.handle_input(r, screen_w, screen_h);
 
@@ -914,8 +973,22 @@ impl Desktop {
 }
 
 pub fn run_desktop_session(mut on_resolution_change: impl FnMut(u32, u32) -> bool) {
+    // В графическом режиме печать ядра на текстовую консоль бессмысленна
+    // и вредна — события остаются в журнале и видны в Error Center.
+    crate::diag::log::finish_boot();
+
     let mut desktop = Desktop::new();
     let mut preserve_windows = false;
+
+    // Если прошлая сессия завершилась отказом ядра, Error Center
+    // открывается сразу: пользователь должен узнать о сбое, даже если
+    // пропустил текстовое уведомление при загрузке.
+    if crate::diag::panic::has_previous_failure() {
+        crate::renderer::with_renderer(|r| {
+            let (w, h) = (r.width() as i32, r.height() as i32);
+            desktop.open_error_center(w, h);
+        });
+    }
 
     loop {
         let exit = crate::renderer::with_renderer_long(|r| desktop.run_event_loop(r, preserve_windows));

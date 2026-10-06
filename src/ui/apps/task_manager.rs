@@ -83,7 +83,7 @@ pub fn draw_task_manager(
     theme: &UiTheme,
     w: &Window,
     selected_pid: Option<usize>,
-    _status_msg: Option<&String>,
+    status_msg: Option<&String>,
     content_y: i32,
 ) {
     r.fill_rect_alpha(w.x, content_y, w.width, w.height, theme.window_bg, theme.opacity);
@@ -171,6 +171,11 @@ pub fn draw_task_manager(
         ticks_total
     );
     r.draw_text(w.x + 12, content_y + w.height as i32 - 34, &footer, theme.text_secondary, None);
+
+    // Результат последнего действия (например, завершения процесса).
+    if let Some(msg) = status_msg {
+        r.draw_text(w.x + 12, content_y + w.height as i32 - 16, msg, theme.accent, None);
+    }
 
     r.fill_rounded_rect(w.x + w.width as i32 - 110, content_y + w.height as i32 - 32, 100, 24, 4, Color::RED);
     r.draw_text(w.x + w.width as i32 - 100, content_y + w.height as i32 - 28, "Kill Task", Color::WHITE, None);
