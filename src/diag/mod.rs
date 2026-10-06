@@ -61,10 +61,17 @@ pub fn init() {
 /// сброшены на диск первым же `persist::flush()`.
 pub fn storage_ready() {
     persist::init();
+    crate::serial_println!("[diag] persist init done ({} ms)", crate::timer::uptime_ms());
     let session = persist::next_boot_session();
+    crate::serial_println!("[diag] boot session #{} ({} ms)", session, crate::timer::uptime_ms());
     ring::set_boot_session(session);
     info(NONE, &alloc::format!("журналы на диске готовы (сессия загрузки #{})", session));
-    persist::flush();
+    let written = persist::flush();
+    crate::serial_println!(
+        "[diag] первый сброс журналов: {} строк ({} ms)",
+        written,
+        crate::timer::uptime_ms()
+    );
 }
 
 // ==================== Точки входа ====================

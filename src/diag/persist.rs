@@ -143,16 +143,32 @@ pub fn flush() -> usize {
         return 0;
     }
 
-    let mut written = 0usize;
     let mut max_ts = upto;
 
+    // Строки группируются по файлам: append переписывает файл целиком,
+    // поэтому пишем каждый журнал один раз за вызов, а не на каждую
+    // запись. Первый сброс после загрузки содержит десятки записей —
+    // без группировки он превращался в десятки полных перезаписей
+    // каждого файла на медленном PIO-диске.
+    let mut batches: Vec<(&'static str, String, usize)> = Vec::new();
     for record in fresh {
         max_ts = max_ts.max(record.timestamp_ms);
         let line = format_line(record);
         for file in destinations(record) {
-            if append(file, line.as_bytes()).is_ok() {
-                written += 1;
+            match batches.iter_mut().find(|b| b.0 == file) {
+                Some(b) => {
+                    b.1.push_str(&line);
+                    b.2 += 1;
+                }
+                None => batches.push((file, line.clone(), 1)),
             }
+        }
+    }
+
+    let mut written = 0usize;
+    for (file, data, count) in batches {
+        if append(file, data.as_bytes()).is_ok() {
+            written += count;
         }
     }
 

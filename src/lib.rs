@@ -322,13 +322,16 @@ pub extern "C" fn kernel_main() -> ! {
     // подключаем постоянные журналы и сбрасываем в них всё, что накопил
     // кольцевой буфер с начала загрузки. События до этой точки не теряются.
     diag::storage_ready();
+    crate::serial_println!("[deix] J: storage_ready done ({} ms)", timer::uptime_ms());
 
     // Базовый AUTOSTART.CFG (с gpu mode) — создаём при первом входе.
     autostart::ensure_default();
+    crate::serial_println!("[deix] K: autostart ensure_default done ({} ms)", timer::uptime_ms());
 
     // Автозапуск ТОЛЬКО после успешного входа: команды выполняются от
     // имени вошедшего пользователя, а не анонимно до аутентификации.
     autostart::run();
+    crate::serial_println!("[deix] L: autostart run done ({} ms)", timer::uptime_ms());
 
     // UI-звуки (PC speaker, src/sound.rs; файлы *.dps в EROFS /super —
     // если в образе их нет, просто играем в тишине, как раньше).
@@ -338,6 +341,7 @@ pub extern "C" fn kernel_main() -> ! {
         let _ = sound::play_ui(sound::UiSound::UsbConnect);
     }
     let _ = sound::play_ui(sound::UiSound::Startup);
+    crate::serial_println!("[deix] M: startup sound done ({} ms)", timer::uptime_ms());
 
     cli::run();
 }

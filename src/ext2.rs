@@ -207,12 +207,6 @@ pub fn is_formatted() -> bool {
 
 // ---------------- битовые карты ----------------
 
-fn bitmap_get(block: u32, bit: u32) -> Result<bool, Ext2Error> {
-    let buf = read_block(block)?;
-    let byte = buf[(bit / 8) as usize];
-    Ok((byte >> (bit % 8)) & 1 != 0)
-}
-
 fn bitmap_set(block: u32, bit: u32, value: bool) -> Result<(), Ext2Error> {
     let mut buf = read_block(block)?;
     let idx = (bit / 8) as usize;
@@ -253,9 +247,19 @@ fn adjust_free_inodes(delta: i32) -> Result<(), Ext2Error> {
 }
 
 fn alloc_block() -> Result<u32, Ext2Error> {
+    // Битовая карта читается ОДИН раз и сканируется в памяти.
+    // Прежний вариант вызывал bitmap_get на каждый бит — то есть
+    // перечитывал (и расшифровывал при включённом XTS) блок карты с
+    // диска по разу НА КАЖДЫЙ проверяемый бит: одна аллокация в худшем
+    // случае стоила TOTAL_BLOCKS дисковых чтений, и первая загрузка,
+    // создающая десятки файлов журналов, растягивалась на минуты.
+    let mut buf = read_block(BLOCK_BITMAP_BLOCK)?;
     for bit in 0..valid_blocks_in_group() {
-        if !bitmap_get(BLOCK_BITMAP_BLOCK, bit)? {
-            bitmap_set(BLOCK_BITMAP_BLOCK, bit, true)?;
+        let idx = (bit / 8) as usize;
+        let mask = 1u8 << (bit % 8);
+        if buf[idx] & mask == 0 {
+            buf[idx] |= mask;
+            write_block(BLOCK_BITMAP_BLOCK, &buf)?;
             adjust_free_blocks(-1)?;
             return Ok(bit + 1); // физический номер = first_data_block(1) + bit
         }
@@ -270,9 +274,14 @@ fn free_block(block_num: u32) -> Result<(), Ext2Error> {
 }
 
 fn alloc_inode() -> Result<u32, Ext2Error> {
+    // Как и alloc_block: карта инодов читается один раз, скан в памяти.
+    let mut buf = read_block(INODE_BITMAP_BLOCK)?;
     for bit in 0..inodes_count() {
-        if !bitmap_get(INODE_BITMAP_BLOCK, bit)? {
-            bitmap_set(INODE_BITMAP_BLOCK, bit, true)?;
+        let idx = (bit / 8) as usize;
+        let mask = 1u8 << (bit % 8);
+        if buf[idx] & mask == 0 {
+            buf[idx] |= mask;
+            write_block(INODE_BITMAP_BLOCK, &buf)?;
             adjust_free_inodes(-1)?;
             return Ok(bit + 1);
         }
