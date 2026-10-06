@@ -55,15 +55,52 @@ impl LinkedListAllocator {
         self.initialized = true;
     }
 
-    unsafe fn add_free_region(&mut self, addr: usize, size: usize) {
+    /// Возвращает область в список свободных.
+    ///
+    /// Список отсортирован по адресу, примыкающие блоки сливаются.
+    /// Без слияния куча необратимо дробится: рост `Vec` при чтении
+    /// крупных файлов (выделить вдвое больше, скопировать, освободить
+    /// старый буфер) оставляет решето из кусков, и аллокация образа
+    /// /system (4+ МиБ) отказывала при 14 МиБ свободных в сумме.
+    unsafe fn add_free_region(&mut self, addr: usize, mut size: usize) {
         assert!(align_up(addr, mem::align_of::<FreeBlock>()) == addr);
         assert!(size >= mem::size_of::<FreeBlock>());
 
-        let mut node = FreeBlock::new(size);
-        node.next = self.head.next.take();
-        let node_ptr = addr as *mut FreeBlock;
-        node_ptr.write(node);
-        self.head.next = Some(&mut *node_ptr);
+        // `prev` — последний блок с адресом ниже возвращаемого.
+        // Голова списка (size == 0) — служебный узел вне кучи.
+        let mut prev: *mut FreeBlock = &mut self.head;
+        loop {
+            let next_start = match (*prev).next.as_deref() {
+                Some(n) => n.start_addr(),
+                None => break,
+            };
+            if next_start > addr {
+                break;
+            }
+            prev = (*prev).next.as_deref_mut().unwrap() as *mut FreeBlock;
+        }
+
+        // Следующий блок примыкает вплотную — поглощается.
+        if let Some(n) = (*prev).next.take() {
+            if addr + size == n.start_addr() {
+                size += n.size;
+                (*prev).next = n.next.take();
+            } else {
+                (*prev).next = Some(n);
+            }
+        }
+
+        let prev_ref = &mut *prev;
+        if prev_ref.size > 0 && prev_ref.end_addr() == addr {
+            // Предыдущий блок примыкает вплотную — расширяется.
+            prev_ref.size += size;
+        } else {
+            let mut node = FreeBlock::new(size);
+            node.next = prev_ref.next.take();
+            let node_ptr = addr as *mut FreeBlock;
+            node_ptr.write(node);
+            prev_ref.next = Some(&mut *node_ptr);
+        }
     }
 
     fn find_region(&mut self, size: usize, align: usize) -> Option<(&'static mut FreeBlock, usize)> {

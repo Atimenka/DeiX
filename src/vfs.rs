@@ -81,14 +81,20 @@ pub struct Stat {
 // ==================== Кеш образа /system ====================
 
 /// Прочитанный образ EROFS-раздела /system.
-static SYSTEM_IMAGE: SpinLock<Option<Vec<u8>>> = SpinLock::new(None);
+///
+/// Раздел смонтирован только для чтения и кеш нигде не сбрасывается,
+/// поэтому после первого чтения буфер утекается в `&'static` и дальше
+/// отдаётся без копирования: клонирование 4+ МиБ на каждое обращение
+/// к /system дробило кучу и валило ядро нехваткой непрерывного куска.
+static SYSTEM_IMAGE: SpinLock<Option<&'static [u8]>> = SpinLock::new(None);
 
-fn system_image() -> Result<Vec<u8>, VfsError> {
-    {
-        let guard = SYSTEM_IMAGE.lock();
-        if let Some(img) = guard.as_ref() {
-            return Ok(img.clone());
-        }
+fn system_image() -> Result<&'static [u8], VfsError> {
+    // Блокировка держится на время чтения с диска: иначе два потока,
+    // одновременно промахнувшиеся мимо кеша, прочитают и утекут образ
+    // дважды. Чтение не трогает VFS повторно, взаимоблокировки нет.
+    let mut guard = SYSTEM_IMAGE.lock();
+    if let Some(img) = *guard {
+        return Ok(img);
     }
 
     let layout = crate::partition_map::lookup_layout(MOUNT_SYSTEM)
@@ -98,9 +104,9 @@ fn system_image() -> Result<Vec<u8>, VfsError> {
         cause: e,
     })?;
 
-    let mut guard = SYSTEM_IMAGE.lock();
-    *guard = Some(img.clone());
-    Ok(img)
+    let leaked: &'static [u8] = alloc::boxed::Box::leak(img.into_boxed_slice());
+    *guard = Some(leaked);
+    Ok(leaked)
 }
 // ==================== Разбор путей ====================
 

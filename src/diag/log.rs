@@ -135,7 +135,9 @@ pub fn log_related(
 /// Serial доступен с самых ранних этапов загрузки и не требует ни кучи, ни
 /// файловой системы, поэтому именно он является основным каналом.
 fn emit(record: &ErrorRecord) {
-    // Serial: компактная машиночитаемая строка.
+    // Serial: компактная машиночитаемая строка. Пишется первой — порт
+    // работает без кучи и экрана, и запись не потеряется, даже если
+    // консоль дальше не сможет вывести строку.
     let mut line = [0u8; 160];
     let n = format_compact(record, &mut line);
     for &b in &line[..n] {
@@ -144,9 +146,11 @@ fn emit(record: &ErrorRecord) {
     crate::serial::write_byte(b'\r');
     crate::serial::write_byte(b'\n');
 
-    // Текстовая консоль: только до запуска оболочки, чтобы не перерисовывать окна.
+    // Текстовая консоль: только до запуска оболочки, чтобы не
+    // перерисовывать окна. Именно print!, а не println!: println
+    // зеркалит вывод в COM1, и каждая запись уходила в порт дважды.
     if record.severity >= Severity::Notice && booting() {
-        crate::println!("{}", core::str::from_utf8(&line[..n]).unwrap_or(""));
+        crate::print!("{}\n", core::str::from_utf8(&line[..n]).unwrap_or(""));
     }
 }
 
