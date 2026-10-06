@@ -9,11 +9,14 @@
 
 /system содержит структуру каталогов:
   - kernel/kernel.bin
-  - kmod/*.kmod
-  - lib/*.so
   - etc/init.deix
   - services/dinit.cfg
   - media/audio/ui/*.dps
+
+В /system кладутся только настоящие файлы. Заглушки вида
+libdeix_*.so и kmod/*.kmod не создаются: module.rs ожидает у KMOD
+валидный заголовок и исполняемое тело, и placeholder-байты там
+воспринимаются как повреждённый модуль.
 
 /userdata содержит файловую систему EXT2 для пользовательских данных и приложений.
 """
@@ -48,19 +51,12 @@ EXT2_MAGIC = 0xEF53
 ROOT_INO = 2
 LOST_FOUND_INO = 11
 
-# --- КАРТА РАЗДЕЛОВ DeiX (все разделы, не пересекается с ФС ядра) ---
-# P1 (/system) = 4096..12287 — это рабочий ext2-том ядра (FS_START_LBA=4096,
-# TOTAL_SECTORS=8192): суперблок, USERS.DB, AUTOSTART.CFG и т.д.
-# Остальные разделы — в свободных областях диска (образ 8 МиБ = 16384 сект):
-#   * /userdata — полноценный ext2-том (данные Ring 3);
-#   * системные /kernel /init_boot /boot /vendor_boot /super /recovery —
-#     НАСТОЯЩИЕ EROFS-образы (магия 0xE0F5E1E2, проходят fsck.erofs);
-#   * /TPM — скрытый раздел (маркер DEIXTPM, тип 0xDA).
+# --- КАРТА РАЗДЕЛОВ DeiX ---
+# Два первичных раздела в MBR, логических разделов нет.
 PRIMARY = [
     (1, 0x83, 4096,  8704, "/system"),    # bootable, системный EROFS
     (2, 0x83, 12800, 5632, "/userdata"),  # ext2, пользовательские данные
 ]
-LOGICALS = []
 ER0FS_MAGIC = 0xE0F5E1E2  # настоящая магия EROFS v1
 
 
@@ -198,30 +194,6 @@ def fill_mbr(img):
         img[off + 12:off + 16] = struct.pack("<I", secs)
     img[510] = 0x55
     img[511] = 0xAA
-
-    for idx, (num, typ, start, secs, name) in enumerate(LOGICALS):
-        ebr_off = start * SECTOR
-        e1 = bytearray(16)
-        e1[0] = 0x00
-        e1[1:4] = chs(start + 1)
-        e1[4] = typ
-        e1[5:8] = chs(start + secs - 1)
-        e1[8:12] = struct.pack("<I", 1)
-        e1[12:16] = struct.pack("<I", secs - 1)
-        img[ebr_off + 446:ebr_off + 462] = e1
-        img[ebr_off + 446:ebr_off + 462] = e1
-        # Запись 2: указатель на следующий EBR.
-        if idx + 1 < len(LOGICALS):
-            nxt = LOGICALS[idx + 1][2]
-            e2 = bytearray(16)
-            e2[0] = 0x00
-            e2[1:4] = chs(EXT_START + (nxt - EXT_START))
-            e2[4] = 0x05
-            e2[8:12] = struct.pack("<I", nxt - EXT_START)
-            e2[12:16] = struct.pack("<I", LOGICALS[idx + 1][3])
-            img[ebr_off + 462:ebr_off + 478] = e2
-        img[ebr_off + 510] = 0x55
-        img[ebr_off + 511] = 0xAA
 
 
 def build_real_erofs(files, label=""):
@@ -371,32 +343,6 @@ def write_erofs_image(img, start_lba, secs, label, files=None):
     img[base:base + len(blob)] = blob
 
 
-def make_kernel_targz(kernel_bin_path):
-    """Собирает НАСТОЯЩИЙ kernel.tar.gz (gzip deflate + tar ustar):
-    содержит kernel.bin и важные библиотеки ядра. Возвращает байты."""
-    import io, tarfile
-    kernel = open(kernel_bin_path, 'rb').read()
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode='w') as tar:
-        def add(name, data):
-            ti = tarfile.TarInfo(name)
-            ti.size = len(data)
-            ti.mode = 0o100644
-            tar.addfile(ti, io.BytesIO(data))
-        add('kernel.bin', kernel)
-        # Важные системные и модульные библиотеки ядра.
-        add('libdeix_core.so', b'DEIXLIB1\x00core\x00' + b'\x00' * 64)
-        add('libdeix_net.so',  b'DEIXLIB1\x00net\x00' + b'\x00' * 64)
-        add('libdeix_gfx.so',  b'DEIXLIB1\x00gfx\x00' + b'\x00' * 64)
-        add('libdeix_sys.so',  b'DEIXLIB1\x00sys\x00' + b'\x00' * 64)
-        add('libdeix_gui.so',  b'DEIXLIB1\x00gui\x00' + b'\x00' * 64)
-        add('libdeix_ds.so',   b'DEIXLIB1\x00ds\x00' + b'\x00' * 64)
-    raw_tar = buf.getvalue()
-    # Сжимаем настоящим gzip (deflate).
-    import gzip
-    return gzip.compress(raw_tar, compresslevel=9)
-
-
 def format_ext2_at(img, start_lba, total_sectors):
     """Форматирует ext2-том начиная с произвольного LBA (для /userdata)."""
     total_blocks = total_sectors // SPB
@@ -521,20 +467,12 @@ def init_all_partitions(img, kernel_bin='build/kernel.bin'):
     else:
         kernel_bytes = b'DEIXKERN1\x00kernel.bin\x00' + b'\x00' * 64
 
-    for num, typ, start, secs, name in PRIMARY + LOGICALS:
+    for num, typ, start, secs, name in PRIMARY:
         if name == "/userdata":
             format_ext2_at(img, start, secs)
         elif name == "/system":
             system_files = {
                 "kernel/kernel.bin":   kernel_bytes,
-                "lib/libdeix_core.so": b"DEIXLIB1\x00core\x00" + b"\x00" * 64,
-                "lib/libdeix_net.so":  b"DEIXLIB1\x00net\x00" + b"\x00" * 64,
-                "lib/libdeix_gfx.so":  b"DEIXLIB1\x00gfx\x00" + b"\x00" * 64,
-                "lib/libdeix_sys.so":  b"DEIXLIB1\x00sys\x00" + b"\x00" * 64,
-                "lib/libdeix_gui.so":  b"DEIXLIB1\x00gui\x00" + b"\x00" * 64,
-                "lib/libdeix_ds.so":   b"DEIXLIB1\x00ds\x00" + b"\x00" * 64,
-                "kmod/gfx.kmod":       b"DEIXKMOD1\x00gfx\x00" + b"\x00" * 64,
-                "kmod/net.kmod":       b"DEIXKMOD1\x00net\x00" + b"\x00" * 64,
                 "etc/init.deix":       b"# DeiX OS init script\nmount /system\nmount /userdata\n",
                 "services/dinit.cfg":  b"# Dinit services config\n",
             }
@@ -575,8 +513,6 @@ def main():
     for num, typ, start, secs, name in PRIMARY:
         fs = "erofs" if name == "/system" else "ext2"
         print(f"    P{num}: 0x{typ:02X} {name:<13} LBA {start:>6}..{start+secs-1:>6} ({secs:>4} сект)  {fs}")
-    for num, typ, start, secs, name in LOGICALS:
-        print(f"    L{num}: 0x{typ:02X} {name:<13} LBA {start:>6}..{start+secs-1:>6} ({secs:>4} сект)  EROFS")
 
 
 if __name__ == "__main__":
