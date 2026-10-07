@@ -314,7 +314,7 @@ extern "C" fn launch_trampoline() {
     // Ring 3: таблица MexApi указывает на стабы в shim-странице,
     // каждый вызов API — syscall. Падение программы завершает
     // процесс, а не ядро.
-    let code: i32 = unsafe { crate::mex::run_ring3(entry) as i32 };
+    let code: i32 = crate::mex::run_ring3(entry) as i32;
     notify_exit_by_sched(crate::sched::current_id(), pid, code);
 }
 
@@ -677,15 +677,20 @@ pub fn cmd_ps() {
         return;
     }
     let now = crate::timer::uptime_ms();
-    crate::println!("  PID   UID   PPID  STATE     FDS  CAPS  ВОЗР(с)  NAME");
+    crate::println!("  PID   UID   PPID  STATE     TASK  FDS  CAPS  ВОЗР(с)  NAME");
     for p in procs.iter() {
         let age_s = now.saturating_sub(p.started_at_ms) / 1000;
+        let task = match p.sched_id {
+            Some(id) => alloc::format!("{}", id),
+            None => String::from("-"),
+        };
         crate::println!(
-            "  {:<5} {:<5} {:<5} {:<9} {:<4} {:<#5x} {:<8} {}",
+            "  {:<5} {:<5} {:<5} {:<9} {:<5} {:<4} {:<#5x} {:<8} {}",
             p.pid,
             p.uid,
             p.parent,
             p.state.as_str(),
+            task,
             p.open_fds,
             p.caps,
             age_s,

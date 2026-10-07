@@ -13,7 +13,6 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditOp {
     Login,
-    Logout,
     ServiceSpawn,
     ServiceStop,
     ServiceCrash,
@@ -21,7 +20,6 @@ pub enum AuditOp {
     Mount,
     StageAdvance,
     VaultRejection,
-    ThreatAlert,
     KillDispatched,
 }
 
@@ -29,7 +27,6 @@ impl AuditOp {
     pub fn as_str(&self) -> &'static str {
         match self {
             AuditOp::Login => "LOGIN",
-            AuditOp::Logout => "LOGOUT",
             AuditOp::ServiceSpawn => "SVC_SPAWN",
             AuditOp::ServiceStop => "SVC_STOP",
             AuditOp::ServiceCrash => "SVC_CRASH",
@@ -37,7 +34,6 @@ impl AuditOp {
             AuditOp::Mount => "MOUNT",
             AuditOp::StageAdvance => "STAGE",
             AuditOp::VaultRejection => "VAULT_REJECT",
-            AuditOp::ThreatAlert => "THREAT_ALERT",
             AuditOp::KillDispatched => "KILL_DISPATCH",
         }
     }

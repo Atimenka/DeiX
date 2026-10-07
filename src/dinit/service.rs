@@ -18,8 +18,6 @@ pub enum RestartPolicy {
     Always,
     /// Перезапускать только при аварийном завершении (ненулевой код / краш)
     OnFailure,
-    /// Никогда не перезапускать (однократный запуск)
-    Never,
     /// Перезапускать, пока служба не остановлена явной командой
     UnlessStopped,
 }
@@ -29,7 +27,6 @@ impl RestartPolicy {
         match self {
             RestartPolicy::Always => "always",
             RestartPolicy::OnFailure => "on-failure",
-            RestartPolicy::Never => "never",
             RestartPolicy::UnlessStopped => "unless-stopped",
         }
     }
@@ -162,7 +159,6 @@ impl ServiceDescriptor {
             return false;
         }
         match self.restart_policy {
-            RestartPolicy::Never => false,
             RestartPolicy::UnlessStopped => true,
             RestartPolicy::Always | RestartPolicy::OnFailure => {
                 now.saturating_sub(self.last_crash_time) >= self.restart_backoff_ms

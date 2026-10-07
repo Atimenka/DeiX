@@ -15,9 +15,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::ata;
-use crate::partition_map::{
-    lookup_layout, PartitionLayout, KERNEL_IMAGE_INFO_LBA, KERNEL_IMAGE_INFO_MAGIC,
-};
+use crate::partition_map::{PartitionLayout, KERNEL_IMAGE_INFO_LBA, KERNEL_IMAGE_INFO_MAGIC};
 
 /// Читает весь раздел с диска напрямую в результирующий вектор без лишних аллокаций.
 pub fn read_partition_image(layout: &PartitionLayout) -> Result<Vec<u8>, String> {

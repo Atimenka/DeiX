@@ -8,7 +8,7 @@
 //!     служба без существующего исполняемого файла не запускается (DX-DIN-0008).
 //!   - Точками монтирования файловых систем с валидацией источника и режима.
 //!   - Журналом аудита безопасности (AuditLog на 1024 записи).
-//!   - Эвристическим монитором угроз (SecurityEvent -> SIGKILL).
+//!   - Эвристическим монитором угроз (ликвидация по kill_signals).
 //!   - Разбором декларативного сценария init.deix (стадии early_boot, boot).
 
 pub mod namespace;
@@ -28,7 +28,7 @@ use service::{ServiceDescriptor, ServiceKind, ServiceStatus, RestartPolicy};
 use mount::{MountPoint, MountCmd};
 use audit::{AuditLog, AuditOp, AuditResult};
 use crate::init_parser::{BootStage, Command, InitParser, INIT_DEIX_SCRIPT};
-use crate::security_monitor::{HeuristicAnalysisEngine, SecurityEvent};
+use crate::security_monitor::HeuristicAnalysisEngine;
 
 /// Состояние супервизора Dinit
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,7 +298,7 @@ impl Dinit {
             // Штатное завершение (код 0) при политике без принудительного
             // перезапуска — это не авария.
             if exit_code == 0
-                && matches!(desc.restart_policy, RestartPolicy::Never | RestartPolicy::OnFailure)
+                && matches!(desc.restart_policy, RestartPolicy::OnFailure)
             {
                 desc.mark_exited(0);
                 let _ = crate::process::reap(pid);
@@ -557,23 +557,6 @@ impl Dinit {
         self.start_service(name)
     }
 
-    /// Анализ события безопасности эвристическим движком
-    pub fn report_security_event(&mut self, event: &SecurityEvent) -> bool {
-        let flagged = self.security.process_event(event);
-        if flagged {
-            let now = crate::timer::uptime_ms();
-            self.audit.record(
-                now,
-                event.pid,
-                0,
-                AuditOp::ThreatAlert,
-                &event.target_path,
-                AuditResult::Terminated,
-                "Эвристический монитор зафиксировал критическую угрозу",
-            );
-        }
-        flagged
-    }
 }
 
 /// Глобальный экземпляр супервизора ядра
