@@ -1,10 +1,8 @@
 //! Журнал аудита безопасности Dinit (Audit Subsystem)
 //!
-//! Непрерывно фиксирует все критические события безопасности ядра:
-//! авторизацию, запуск процессов, перехват системных вызовов,
-//! монтирование, срабатывания эвристического монитора и попытки НСД.
-
-#![allow(dead_code)]
+//! Кольцевой буфер событий супервизора PID 1: входы и выходы
+//! пользователей, запуск/остановка/падение служб, монтирования,
+//! отклонённые монтирования и срабатывания эвристического монитора.
 
 use alloc::collections::VecDeque;
 use alloc::format;
@@ -16,20 +14,13 @@ use alloc::vec::Vec;
 pub enum AuditOp {
     Login,
     Logout,
-    FileRead,
-    FileWrite,
-    FileDelete,
     ServiceSpawn,
     ServiceStop,
     ServiceCrash,
     ServiceRestart,
     Mount,
-    Unmount,
-    Reboot,
-    Violation,
+    StageAdvance,
     VaultRejection,
-    SyscallInterception,
-    PrivilegeEscalationAttempt,
     ThreatAlert,
     KillDispatched,
 }
@@ -39,20 +30,13 @@ impl AuditOp {
         match self {
             AuditOp::Login => "LOGIN",
             AuditOp::Logout => "LOGOUT",
-            AuditOp::FileRead => "FILE_READ",
-            AuditOp::FileWrite => "FILE_WRITE",
-            AuditOp::FileDelete => "FILE_DEL",
             AuditOp::ServiceSpawn => "SVC_SPAWN",
             AuditOp::ServiceStop => "SVC_STOP",
             AuditOp::ServiceCrash => "SVC_CRASH",
             AuditOp::ServiceRestart => "SVC_RESTART",
             AuditOp::Mount => "MOUNT",
-            AuditOp::Unmount => "UMOUNT",
-            AuditOp::Reboot => "REBOOT",
-            AuditOp::Violation => "VIOLATION",
+            AuditOp::StageAdvance => "STAGE",
             AuditOp::VaultRejection => "VAULT_REJECT",
-            AuditOp::SyscallInterception => "SYSCALL_HOOK",
-            AuditOp::PrivilegeEscalationAttempt => "PRIV_ESC",
             AuditOp::ThreatAlert => "THREAT_ALERT",
             AuditOp::KillDispatched => "KILL_DISPATCH",
         }
@@ -64,9 +48,8 @@ impl AuditOp {
 pub enum AuditResult {
     Allowed,
     Denied,
-    Terminated,
     Failed,
-    Warning,
+    Terminated,
 }
 
 impl AuditResult {
@@ -74,9 +57,8 @@ impl AuditResult {
         match self {
             AuditResult::Allowed => "ALLOWED",
             AuditResult::Denied => "DENIED",
-            AuditResult::Terminated => "TERMINATED",
             AuditResult::Failed => "FAILED",
-            AuditResult::Warning => "WARNING",
+            AuditResult::Terminated => "TERMINATED",
         }
     }
 }
@@ -157,11 +139,10 @@ impl AuditLog {
         match result {
             AuditResult::Allowed => self.stats.allowed_events += 1,
             AuditResult::Denied => self.stats.denied_events += 1,
-            AuditResult::Terminated => self.stats.threats_intercepted += 1,
-            AuditResult::Warning => {}
             AuditResult::Failed => {}
+            AuditResult::Terminated => self.stats.threats_intercepted += 1,
         }
-        if op == AuditOp::Violation || op == AuditOp::VaultRejection || op == AuditOp::PrivilegeEscalationAttempt {
+        if op == AuditOp::VaultRejection {
             self.stats.violations += 1;
         }
 
@@ -183,10 +164,6 @@ impl AuditLog {
         self.entries.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     pub fn clear(&mut self) {
         self.entries.clear();
     }
@@ -197,22 +174,16 @@ impl AuditLog {
         self.entries.iter().skip(skip).cloned().collect()
     }
 
-    /// Фильтрация записей по нарушениям
+    /// Фильтрация записей по нарушениям и отклонённым операциям
     pub fn violations(&self) -> Vec<AuditEntry> {
         self.entries
             .iter()
             .filter(|e| {
                 e.result == AuditResult::Denied
                     || e.result == AuditResult::Terminated
-                    || e.op == AuditOp::Violation
                     || e.op == AuditOp::VaultRejection
             })
             .cloned()
             .collect()
-    }
-
-    /// Дамп всех записей
-    pub fn all(&self) -> Vec<AuditEntry> {
-        self.entries.iter().cloned().collect()
     }
 }

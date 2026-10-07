@@ -579,6 +579,9 @@ pub static TABLE: &[CodeInfo] = &[
     CodeInfo { code: ErrorCode::new(Subsystem::Elf, 8), summary: "Сбой разрешения символа",
         detail: "Символ, требуемый программой, не найден.",
         action: "Статически линкуйте программу." },
+    CodeInfo { code: ErrorCode::new(Subsystem::Elf, 9), summary: "Запуск ELF-процесса недоступен",
+        detail: "Задачи планировщика ядра исполняются в Ring 0, поэтому запускать в них пользовательские ELF-программы нельзя.",
+        action: "Используйте MEX-образ (Ring 3); запуск ELF-процессов появится вместе с пользовательским планировщиком." },
 
     // ==================== Пакеты (PKG) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Pkg, 1), summary: "Пакет не найден",

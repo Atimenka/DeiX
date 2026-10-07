@@ -8,17 +8,21 @@
 //! ```text
 //! Process
 //!  ├── PID / UID / parent
-//!  ├── AddressSpace (user image, stack, heap)
 //!  ├── FD table + cwd
 //!  ├── capabilities
 //!  └── sched slot  → планировщик
 //! ```
 //!
-//! Dinit создаёт процесс через [`spawn`], загрузчик размещает образ в
-//! адресном пространстве процесса, планировщик получает задачу,
-//! привязанную к PID через `sched::spawn_pid`. Обратный путь —
+//! Dinit создаёт процесс через [`spawn`], MEX-загрузчик размещает образ
+//! в фиксированной области MEX, планировщик получает задачу,
+//! привязанную к PID через `sched::spawn_pid`; сам пользовательский код
+//! исполняется в Ring 3 через `mex::run_ring3`. Обратный путь —
 //! [`notify_exit`]: завершение задачи помечает процесс завершённым, и
 //! Dinit может применить свою политику перезапуска.
+//!
+//! Запуск ELF-образов через планировщик ядра не поддерживается: кадры
+//! `sched::spawn_pid` создаются для Ring 0 (CS=0x08/SS=0x10), и выдавать
+//! такое исполнение за пользовательский процесс нельзя (DX-ELF-0009).
 
 use alloc::format;
 use alloc::string::String;
@@ -92,38 +96,6 @@ pub mod cap {
         | INSTALL;
 }
 
-// ==================== Адресное пространство ====================
-
-/// Адресное пространство процесса: куда размещается его образ.
-///
-/// Одна область на процесс — без этого два процесса затрут друг друга,
-/// потому что загрузчики пишут по фиксированным адресам. Программа
-/// исполняется на стеке своей задачи планировщика; отдельные поля под
-/// пользовательский стек и кучу появятся вместе с их реализацией.
-#[derive(Debug, Clone, Copy)]
-pub struct AddressSpace {
-    pub image_base: u64,
-    pub image_size: u64,
-}
-
-/// Размер образа пользовательского процесса.
-pub const AS_IMAGE_SIZE: u64 = 2 * 1024 * 1024;
-/// Начало области, откуда нарезаются адресные пространства.
-/// Выше кучи ядра (0x100000 + 16 МиБ), выше RAM-диска (0x2000000..0x2A00000)
-/// и выше фиксированной области MEX (0x3000000..0x3400000).
-const AS_AREA_START: u64 = 0x0400_0000;
-/// Шаг нарезки: образ (2 МиБ) плюс запас на выравнивание.
-const AS_SLOT_STRIDE: u64 = 3 * 1024 * 1024;
-
-/// Нарезает адресное пространство для слота `index`.
-fn address_space_for(index: usize) -> AddressSpace {
-    let base = AS_AREA_START + index as u64 * AS_SLOT_STRIDE;
-    AddressSpace {
-        image_base: base,
-        image_size: AS_IMAGE_SIZE,
-    }
-}
-
 // ==================== Файловые дескрипторы ====================
 
 /// Открытый дескриптор. Чтение/запись через дескриптор со смещением
@@ -188,7 +160,6 @@ pub struct Process {
     pub state: ProcessState,
     pub caps: u64,
     pub cwd: String,
-    pub aspace: AddressSpace,
     pub fds: FdTable,
     /// Слот планировщика для основной нити.
     pub sched_id: Option<usize>,
@@ -212,10 +183,6 @@ impl Process {
             state: ProcessState::Empty,
             caps: 0,
             cwd: String::new(),
-            aspace: AddressSpace {
-                image_base: 0,
-                image_size: 0,
-            },
             fds: FdTable::new(),
             sched_id: None,
             exit_code: None,
@@ -272,7 +239,7 @@ pub struct SpawnRequest {
     pub parent: u32,
     pub caps: u64,
     pub cwd: String,
-    /// Путь к образу ELF или MEX.
+    /// Путь к MEX-образу процесса.
     pub image_path: String,
 }
 
@@ -301,7 +268,6 @@ pub fn spawn(req: &SpawnRequest) -> Result<u32, ProcessError> {
         p.parent = req.parent;
         p.caps = req.caps;
         p.cwd = if req.cwd.is_empty() { String::from("/userdata") } else { req.cwd.clone() };
-        p.aspace = address_space_for(idx);
         p.state = ProcessState::Created;
         p.started_at_ms = crate::timer::uptime_ms();
         p.image_path = req.image_path.clone();
@@ -326,19 +292,10 @@ pub fn spawn(req: &SpawnRequest) -> Result<u32, ProcessError> {
     Ok(pid)
 }
 
-/// Формат образа процесса. От него зависит ABI точки входа.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImageKind {
-    /// MEX: `entry(*const MexApi) -> i64`, таблица API передаётся в RDI.
-    Mex,
-    /// ELF: стандартный `_start` без аргументов.
-    Elf,
-}
-
-/// Контекст запуска: PID процесса, точка входа и формат образа.
+/// Контекст запуска: PID процесса и точка входа MEX-образа.
 /// Заполняется перед созданием задачи планировщика и выбирается
 /// трамплином. Запуск строго последовательный — один за раз.
-static LAUNCH: SpinLock<Option<(u32, u64, ImageKind)>> = SpinLock::new(None);
+static LAUNCH: SpinLock<Option<(u32, u64)>> = SpinLock::new(None);
 
 /// Размер области, занимаемой MEX-образом (см. MEX_MAX_SIZE в mex.rs).
 const MEX_IMAGE_SIZE: u64 = 4 * 1024 * 1024;
@@ -350,40 +307,32 @@ static MEX_IN_USE: SpinLock<Option<u32>> = SpinLock::new(None);
 /// Точка входа задачи нового процесса. Берёт контекст запуска,
 /// исполняет образ и помечает процесс завершённым.
 extern "C" fn launch_trampoline() {
-    let (pid, entry, kind) = match LAUNCH.lock().take() {
+    let (pid, entry) = match LAUNCH.lock().take() {
         Some(v) => v,
         None => return,
     };
-    let code: i32 = unsafe {
-        match kind {
-            ImageKind::Mex => {
-                // Ring 3: таблица MexApi указывает на стабы в shim-странице,
-                // каждый вызов API — syscall. Падение программы завершает
-                // процесс, а не ядро.
-                crate::mex::run_ring3(entry) as i32
-            }
-            ImageKind::Elf => {
-                let f: extern "C" fn() -> i64 = core::mem::transmute(entry as usize);
-                f() as i32
-            }
-        }
-    };
+    // Ring 3: таблица MexApi указывает на стабы в shim-странице,
+    // каждый вызов API — syscall. Падение программы завершает
+    // процесс, а не ядро.
+    let code: i32 = unsafe { crate::mex::run_ring3(entry) as i32 };
     notify_exit_by_sched(crate::sched::current_id(), pid, code);
 }
 
 /// Загружает образ процесса и создаёт для него задачу планировщика.
 ///
-/// Поддерживаются образы MEX (`.mex`) и ELF. Образ читается через VFS,
-/// размещается в адресном пространстве процесса, после чего создаётся
-/// задача, привязанная к PID.
+/// Поддерживаются только MEX-образы: они исполняются в Ring 3 через
+/// `mex::run_ring3`. Запуск ELF-процессов через планировщик ядра
+/// недоступен: кадры `sched::spawn_pid` создаются с CS=0x08/SS=0x10
+/// (Ring 0), и исполнять в них пользовательский код нельзя
+/// (DX-ELF-0009).
 pub fn exec(pid: u32) -> Result<(), ProcessError> {
-    let (path, aspace) = {
+    let path = {
         let table = PROCS.lock();
         let p = table
             .iter()
             .find(|p| p.pid == pid)
             .ok_or(ProcessError::NotFound(pid))?;
-        (p.image_path.clone(), p.aspace)
+        p.image_path.clone()
     };
 
     if path.is_empty() {
@@ -394,11 +343,21 @@ pub fn exec(pid: u32) -> Result<(), ProcessError> {
 
     let is_mex = path.ends_with(".mex") || crate::mex::is_mex_image(&img);
 
+    if !is_mex {
+        crate::diag::error(
+            crate::diag::ErrorCode::new(crate::diag::Subsystem::Elf, 9),
+            &format!("{}: запуск ELF-процессов через планировщик ядра недоступен", path),
+        );
+        return Err(ProcessError::BadImage(String::from(
+            "запуск ELF-процессов пока недоступен: поддерживаются только MEX-образы (Ring 3)",
+        )));
+    }
+
     // MEX слинкован на фиксированный адрес и не является PIC, поэтому
     // такой образ нельзя разместить в адресном пространстве процесса —
     // он обязан лечь ровно по адресу линковки. Одновременно может
     // исполняться только один MEX-процесс.
-    let (entry, kind) = if is_mex {
+    let entry = {
         let mut guard = MEX_IN_USE.lock();
         if let Some(other) = *guard {
             return Err(ProcessError::BadImage(format!(
@@ -415,20 +374,10 @@ pub fn exec(pid: u32) -> Result<(), ProcessError> {
                 ProcessError::BadImage(e)
             })?;
         *guard = Some(pid);
-        (e, ImageKind::Mex)
-    } else {
-        let e = crate::linux::elf::load_into(&img, aspace.image_base, aspace.image_size)
-            .map_err(|e| {
-                crate::diag::error(
-                    crate::diag::ErrorCode::new(crate::diag::Subsystem::Elf, 5),
-                    &format!("ELF {}: {}", path, e),
-                );
-                ProcessError::BadImage(e)
-            })?;
-        (e.entry, ImageKind::Elf)
+        e
     };
 
-    *LAUNCH.lock() = Some((pid, entry, kind));
+    *LAUNCH.lock() = Some((pid, entry));
 
     let name = {
         let table = PROCS.lock();

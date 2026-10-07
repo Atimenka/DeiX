@@ -763,13 +763,15 @@ impl InitParser {
 }
 
 /// Эталонный скрипт init.deix (встроен в ядро).
+// Служебные демоны (security_monitor, net_daemon и др.) являются встроенными
+// подсистемами ядра и регистрируются Dinit напрямую; сценарий описывает
+// только точки монтирования. Process-службы появятся здесь, когда в образе
+// /system появятся их исполняемые файлы.
 pub const INIT_DEIX_SCRIPT: &str = concat!(
     "# Скрипт инициализации и развертывания DeiX OS\n",
     "on boot\n",
     "    mount erofs /dev/block/by-name/system /system ro\n",
     "    mount ext2 /dev/block/by-name/userdata /userdata rw\n",
-    "    service security_monitor /bin/security_monitor 3\n",
-    "    service network_manager /bin/net_daemon 3\n",
 );
 
 /// СТАДИЯ BOOT (PID 1, Ring 0): разбор карты разделов init.deix и вывод

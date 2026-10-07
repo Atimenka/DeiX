@@ -1,14 +1,15 @@
 //! Управление сервисами и демонами в Dinit (PID 1)
 //!
-//! Реализует супервизию процессов: запуск, остановку, отслеживание жизненного цикла,
-//! перезапуск по политике (Always, OnFailure, Never) с экспоненциальным backoff,
-//! контроль зависимостей и разделение по кольцам привилегий (Ring 0 / Ring 3).
-
-#![allow(dead_code)]
+//! Два типа служб:
+//!   - `Builtin`  — подсистема внутри ядра (учёт состояния, без отдельного процесса);
+//!   - `Process`  — отдельный исполняемый файл, запускаемый через process::spawn/exec.
+//!
+//! Для Process-служб реализована супервизия: запуск, остановка, отслеживание
+//! жизненного цикла, перезапуск по политике (Always, OnFailure, ...) с
+//! экспоненциальным backoff.
 
 use alloc::format;
 use alloc::string::String;
-use alloc::vec::Vec;
 
 /// Политика перезапуска службы при завершении или сбое
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,15 +25,6 @@ pub enum RestartPolicy {
 }
 
 impl RestartPolicy {
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "always" => RestartPolicy::Always,
-            "on_failure" | "on-failure" => RestartPolicy::OnFailure,
-            "unless_stopped" | "unless-stopped" => RestartPolicy::UnlessStopped,
-            _ => RestartPolicy::Never,
-        }
-    }
-
     pub fn as_str(&self) -> &'static str {
         match self {
             RestartPolicy::Always => "always",
@@ -48,8 +40,6 @@ impl RestartPolicy {
 pub enum ServiceStatus {
     /// Служба остановлена
     Stopped,
-    /// Служба находится в процессе запуска
-    Starting,
     /// Служба активно исполняется
     Running,
     /// Служба ожидает таймера перезапуска (backoff)
@@ -62,26 +52,40 @@ pub enum ServiceStatus {
     Terminated(i32),
     /// Служба аварийно упала (исчерпан лимит перезапусков)
     Crashed,
-    /// Служба отключена администратором
-    Disabled,
 }
 
 impl ServiceStatus {
     pub fn is_active(&self) -> bool {
-        matches!(self, ServiceStatus::Running | ServiceStatus::Starting)
+        matches!(self, ServiceStatus::Running)
     }
 
     pub fn as_str(&self) -> &'static str {
         match self {
             ServiceStatus::Stopped => "stopped",
-            ServiceStatus::Starting => "starting",
             ServiceStatus::Running => "running",
             ServiceStatus::Restarting => "restarting",
             ServiceStatus::Exited(_) => "exited",
             ServiceStatus::Failed(_) => "failed",
             ServiceStatus::Terminated(_) => "terminated",
             ServiceStatus::Crashed => "crashed",
-            ServiceStatus::Disabled => "disabled",
+        }
+    }
+}
+
+/// Тип службы: встроенная в ядро подсистема или отдельный процесс.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceKind {
+    /// Подсистема внутри ядра: отдельного процесса и PID у неё нет.
+    Builtin,
+    /// Отдельный исполняемый файл, запускаемый через менеджер процессов.
+    Process,
+}
+
+impl ServiceKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ServiceKind::Builtin => "builtin",
+            ServiceKind::Process => "process",
         }
     }
 }
@@ -91,25 +95,21 @@ impl ServiceStatus {
 pub struct ServiceDescriptor {
     /// Уникальное системное имя службы
     pub name: String,
-    /// Путь к исполняемому бинарному файлу
+    /// Тип службы: встроенная подсистема ядра или отдельный процесс
+    pub kind: ServiceKind,
+    /// Путь к исполняемому бинарному файлу (пустой для встроенных служб)
     pub binary_path: String,
-    /// Аргументы командной строки
-    pub args: Vec<String>,
     /// Кольцо исполнения (0 — ядро/Ring 0, 3 — пользовательское пространство/Ring 3)
     pub execution_ring: u8,
     /// Политика перезапуска
     pub restart_policy: RestartPolicy,
     /// Текущее состояние службы
     pub status: ServiceStatus,
-    /// PID процесса (если запущен)
+    /// PID процесса (если запущен; у встроенных служб PID нет)
     pub pid: Option<u32>,
-    /// Идентификатор задачи в планировщике ядра
-    pub task_id: Option<usize>,
-    /// Имена служб, от которых зависит данный сервис
-    pub dependencies: Vec<String>,
     /// Флаг автозапуска при инициализации соответствующей стадии
     pub auto_start: bool,
-    /// Является ли служба критической для системы (падение ядра при отказе)
+    /// Критическая служба: исчерпание лимита перезапусков фиксируется как CRITICAL
     pub is_critical: bool,
     /// Количество зафиксированных аварийных перезапусков
     pub crash_count: u32,
@@ -127,14 +127,12 @@ impl ServiceDescriptor {
     pub fn new(name: &str, binary_path: &str, execution_ring: u8) -> Self {
         Self {
             name: String::from(name),
+            kind: ServiceKind::Process,
             binary_path: String::from(binary_path),
-            args: Vec::new(),
             execution_ring,
             restart_policy: RestartPolicy::OnFailure,
             status: ServiceStatus::Stopped,
             pid: None,
-            task_id: None,
-            dependencies: Vec::new(),
             auto_start: true,
             is_critical: false,
             crash_count: 0,
@@ -145,29 +143,19 @@ impl ServiceDescriptor {
         }
     }
 
-    /// Полноценный конструктор со всеми параметрами политики
-    pub fn with_policy(
-        name: &str,
-        binary_path: &str,
-        execution_ring: u8,
-        policy: RestartPolicy,
-        critical: bool,
-    ) -> Self {
-        let mut desc = Self::new(name, binary_path, execution_ring);
+    /// Конструктор встроенной службы: подсистема живёт в ядре,
+    /// отдельного процесса и PID у неё нет.
+    pub fn builtin(name: &str, policy: RestartPolicy, critical: bool) -> Self {
+        let mut desc = Self::new(name, "", 0);
+        desc.kind = ServiceKind::Builtin;
         desc.restart_policy = policy;
         desc.is_critical = critical;
         desc
     }
 
-    /// Добавление зависимости
-    pub fn with_dependency(mut self, dep_name: &str) -> Self {
-        self.dependencies.push(String::from(dep_name));
-        self
-    }
-
     /// Проверка, готов ли сервис к перезапуску с учётом backoff
     pub fn can_restart(&self, now: u64) -> bool {
-        if self.status == ServiceStatus::Disabled || self.status == ServiceStatus::Stopped {
+        if self.status == ServiceStatus::Stopped {
             return false;
         }
         if self.crash_count >= self.max_restarts {
@@ -182,11 +170,17 @@ impl ServiceDescriptor {
         }
     }
 
-    /// Отметка успешного старта
-    pub fn mark_started(&mut self, pid: u32, task_id: Option<usize>, now: u64) {
+    /// Отметка активности встроенной службы (подсистема ядра работает)
+    pub fn mark_builtin_running(&mut self, now: u64) {
+        self.status = ServiceStatus::Running;
+        self.pid = None;
+        self.last_start_time = now;
+    }
+
+    /// Отметка успешного старта Process-службы
+    pub fn mark_started(&mut self, pid: u32, now: u64) {
         self.status = ServiceStatus::Running;
         self.pid = Some(pid);
-        self.task_id = task_id;
         self.last_start_time = now;
         // Если служба проработала достаточно долго (более 30 секунд), сбрасываем счётчик крашей
         if now.saturating_sub(self.last_crash_time) > 30_000 {
@@ -203,7 +197,6 @@ impl ServiceDescriptor {
             ServiceStatus::Failed(code)
         };
         self.pid = None;
-        self.task_id = None;
     }
 
     /// Обработка аварийного падения / ликвидации
@@ -212,7 +205,6 @@ impl ServiceDescriptor {
         self.crash_count += 1;
         self.restart_backoff_ms = (self.restart_backoff_ms * 2).min(10_000);
         self.pid = None;
-        self.task_id = None;
 
         if signal != 0 {
             self.status = ServiceStatus::Terminated(signal);
@@ -233,7 +225,6 @@ impl ServiceDescriptor {
     pub fn mark_stopped(&mut self) {
         self.status = ServiceStatus::Stopped;
         self.pid = None;
-        self.task_id = None;
     }
 
     /// Форматированная строка состояния для CLI и дампа
@@ -245,20 +236,29 @@ impl ServiceDescriptor {
             String::from("-")
         };
 
-        let pid_str = match self.pid {
-            Some(p) => format!("{}", p),
-            None => String::from("-"),
+        let pid_str = match (self.kind, self.pid) {
+            (ServiceKind::Builtin, _) => String::from("kernel"),
+            (ServiceKind::Process, Some(p)) => format!("{}", p),
+            (ServiceKind::Process, None) => String::from("-"),
+        };
+
+        let path_str = if self.kind == ServiceKind::Builtin {
+            "(встроена в ядро)"
+        } else {
+            self.binary_path.as_str()
         };
 
         format!(
-            "{:<16} Ring {:<1} [{:<10}] PID: {:<5} Crashes: {:<2} Up: {:<6} Path: {}",
+            "{:<16} {:<7} Ring {:<1} [{:<10}] PID: {:<6} Policy: {:<9} Crashes: {:<2} Up: {:<6} {}",
             self.name,
+            self.kind.as_str(),
             self.execution_ring,
             self.status.as_str(),
             pid_str,
+            self.restart_policy.as_str(),
             self.crash_count,
             uptime_str,
-            self.binary_path
+            path_str
         )
     }
 }
