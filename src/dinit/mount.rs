@@ -76,6 +76,9 @@ impl MountCmd {
             Err(VaultRejection::InvalidUserdataFs(_)) => {
                 Err("отклонено: для /userdata допустима только файловая система ext2")
             }
+            Err(VaultRejection::SystemPolicy(_)) => {
+                Err("отклонено: /system монтируется только как erofs ReadOnly")
+            }
         }
     }
 }

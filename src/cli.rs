@@ -1092,13 +1092,6 @@ fn enter_graphics_mode(gpu_device: &crate::pci::PciDevice, width: u32, height: u
 
 
 fn cmd_ls() {
-    let meta_entries = crate::fs::list_meta_entries();
-    if !meta_entries.is_empty() {
-        println!("  {}", t!(en: "FS Metadata:", ru: "Метаданные ФС:"));
-        for e in meta_entries {
-            println!("    {}", e);
-        }
-    }
     if !ext2::is_formatted() {
         println!(
             "{}",

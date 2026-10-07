@@ -766,7 +766,7 @@ pub fn cmd_install(arg: &str) {
         text.push_str(&format!("{:02x}", b));
     }
     text.push('\n');
-    if write_file_to(target, "USERS.DB", text.as_bytes()) {
+    if write_file_to(target, crate::auth::USERS_DB_FILE, text.as_bytes()) {
         crate::println!("  [auth] USERS.DB written to TARGET disk ext2 volume.");
     } else {
         crate::println!("  [auth] WARNING: failed to write USERS.DB to target disk!");

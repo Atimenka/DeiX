@@ -5,12 +5,15 @@
 //!
 //! ## Настоящие каталоги
 //!
-//! Файлы лежат в реальной иерархии ext2:
+//! Файлы лежат в реальной иерархии ext2 (том /userdata):
 //!
 //! ```text
-//!   /users/<имя>/files/notes.txt
-//!   /users/<имя>/configs/wm.cfg
+//!   /userdata/home/<имя>/files/notes.txt
+//!   /userdata/home/<имя>/configs/wm.cfg
 //! ```
+//!
+//! Старые сборки держали профили в /users — при первом входе файлы
+//! одноразово переносятся в /home (см. `migrate_legacy`).
 //!
 //! Менять файловую систему на ext4 или NTFS для этого не понадобилось:
 //! ext2 поддерживает подкаталоги с самого начала (в томе всегда был
@@ -29,17 +32,19 @@ use alloc::vec::Vec;
 
 use crate::ext2;
 
-/// Корень пользовательских профилей.
-const USERS_ROOT: &str = "users";
+/// Корень пользовательских профилей (внутри тома /userdata).
+const USERS_ROOT: &str = "home";
+/// Корень профилей в старых сборках (до канонического layout /userdata).
+const LEGACY_ROOT: &str = "users";
 /// Максимальная длина компонента пути.
 const MAX_NAME: usize = 40;
 
 /// Какая область профиля используется.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Area {
-    /// `/users/<имя>/files` — документы пользователя.
+    /// `home/<имя>/files` — документы пользователя.
     Files,
-    /// `/users/<имя>/configs` — настройки приложений и системы.
+    /// `home/<имя>/configs` — настройки приложений и системы.
     Configs,
 }
 
@@ -106,7 +111,49 @@ fn area_dir(user: &str, area: Area) -> String {
 
 /// Человекочитаемый путь — для вывода пользователю.
 pub fn display_path(user: &str, area: Area, name: &str) -> String {
-    format!("/users/{}/{}/{}", user, area.as_path(), name)
+    format!("/userdata/home/{}/{}/{}", user, area.as_path(), name)
+}
+
+/// Одноразовый перенос профилей старых сборок: /users/<имя>/{files,configs}
+/// -> /home/<имя>/... Файл не перетирается, если в новом месте уже есть
+/// одноимённый; перенесённый оригинал удаляется. Пустые каталоги /users
+/// остаются (в ext2.rs нет rmdir) — это не мешает работе.
+pub fn migrate_legacy() {
+    let legacy_users = match ext2::list_dir_path("/users") {
+        Ok(e) => e,
+        Err(_) => return, // каталога нет — переносить нечего
+    };
+    let mut moved = 0usize;
+    for u in legacy_users.iter().filter(|e| e.is_directory) {
+        if !valid_component(&u.name) {
+            continue;
+        }
+        for sub in ["files", "configs"] {
+            let old_dir = format!("/{}/{}/{}", LEGACY_ROOT, u.name, sub);
+            let files = match ext2::list_dir_path(&old_dir) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            for f in files.iter().filter(|f| !f.is_directory) {
+                let old = format!("{}/{}", old_dir, f.name);
+                let new = format!("/{}/{}/{}/{}", USERS_ROOT, u.name, sub, f.name);
+                if ext2::read_file_path(&new).is_ok() {
+                    continue;
+                }
+                if let Ok(data) = ext2::read_file_path(&old) {
+                    let _ = ext2::mkdir_p(&format!("/{}/{}/{}", USERS_ROOT, u.name, sub));
+                    if ext2::write_file_path(&new, &data).is_ok()
+                        && ext2::delete_file_path(&old).is_ok()
+                    {
+                        moved += 1;
+                    }
+                }
+            }
+        }
+    }
+    if moved > 0 {
+        crate::println!("  [userfs] профили перенесены: /users -> /home ({} файлов)", moved);
+    }
 }
 
 /// Записывает файл в профиль пользователя.
@@ -146,7 +193,7 @@ pub fn list(user: &str, area: Area) -> Result<Vec<String>, UserFsError> {
 /// Все пользователи, у которых есть хоть один файл на томе.
 pub fn known_profiles() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    if let Ok(entries) = ext2::list_dir_path("/users") {
+    if let Ok(entries) = ext2::list_dir_path("/home") {
         for e in entries {
             if e.is_directory {
                 out.push(e.name);
@@ -156,12 +203,14 @@ pub fn known_profiles() -> Vec<String> {
     out
 }
 
-/// Создаёт профиль: каталоги /users/<имя>/{files,configs} и стартовый
+/// Создаёт профиль: каталоги home/<имя>/{files,configs} и стартовый
 /// конфиг внутри.
 pub fn init_profile(user: &str) -> Result<(), UserFsError> {
     if !valid_component(user) {
         return Err(UserFsError::BadName);
     }
+    // Профили старых сборок (в /users) переносим один раз.
+    migrate_legacy();
     // Создаём саму иерархию каталогов.
     let _ = ext2::mkdir_p(&area_dir(user, Area::Files));
     let _ = ext2::mkdir_p(&area_dir(user, Area::Configs));
@@ -171,7 +220,7 @@ pub fn init_profile(user: &str) -> Result<(), UserFsError> {
         return Ok(());
     }
     let greeting = format!(
-        "# Профиль пользователя {}\n# Файлы:    /users/{}/files\n# Настройки: /users/{}/configs\n",
+        "# Профиль пользователя {}\n# Файлы:    /userdata/home/{}/files\n# Настройки: /userdata/home/{}/configs\n",
         user, user, user
     );
     write(user, Area::Configs, "profile.cfg", greeting.as_bytes())
@@ -203,7 +252,7 @@ pub fn cmd_profile(arg: &str, current_user: &str) {
             for ar in [Area::Files, Area::Configs] {
                 match list(current_user, ar) {
                     Ok(files) => {
-                        crate::println!("  /users/{}/{}:", current_user, ar.as_path());
+                        crate::println!("  /userdata/home/{}/{}:", current_user, ar.as_path());
                         if files.is_empty() {
                             crate::println!("    (пусто)");
                         }
@@ -238,7 +287,7 @@ pub fn cmd_profile(arg: &str, current_user: &str) {
             }
             for p in profiles {
                 let mark = if p == current_user { " <- вы" } else { "" };
-                crate::println!("    /users/{}{}", p, mark);
+                crate::println!("    /userdata/home/{}{}", p, mark);
             }
         }
         _ => {

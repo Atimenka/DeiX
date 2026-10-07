@@ -1,5 +1,9 @@
 // ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0).
-// vault — KERNEL SECURITY VAULT: /system (EROFS RO) и /userdata (EXT2/EXT4 RW).
+// vault — правила монтирования: /system (EROFS RO) и /userdata (EXT2 RW).
+//
+// Нарушение правила — это ОТКАЗ В МОНТИРОВАНИИ (регистрируется в аудите
+// dinit как VaultRejection), а не отказ ядра: некорректная строка в
+// init-скрипте не должна ронять систему.
 
 use crate::init_parser::{BootStage, MountMode};
 use alloc::string::String;
@@ -12,6 +16,7 @@ pub const SYSTEM_PARTITIONS: [&str; 1] = ["/system"];
 pub enum VaultRejection {
     UserdataPolicy(String),
     InvalidUserdataFs(String),
+    SystemPolicy(String),
 }
 
 impl VaultRejection {
@@ -19,6 +24,7 @@ impl VaultRejection {
         match self {
             VaultRejection::UserdataPolicy(msg) => msg.clone(),
             VaultRejection::InvalidUserdataFs(msg) => msg.clone(),
+            VaultRejection::SystemPolicy(msg) => msg.clone(),
         }
     }
 
@@ -26,6 +32,7 @@ impl VaultRejection {
         match self {
             VaultRejection::UserdataPolicy(_) => "userdata-policy-violation",
             VaultRejection::InvalidUserdataFs(_) => "invalid-userdata-fs",
+            VaultRejection::SystemPolicy(_) => "system-policy-violation",
         }
     }
 }
@@ -37,25 +44,32 @@ pub fn evaluate(dst: &str, fs_type: &str, mode: MountMode, _stage: BootStage) ->
     match dst {
         "/userdata" => {
             if mode == MountMode::ReadOnly {
-                return Err(VaultRejection::UserdataPolicy(format!(
-                    " /userdata не должен монтироваться ReadOnly"
+                return Err(VaultRejection::UserdataPolicy(String::from(
+                    "/userdata не должен монтироваться ReadOnly",
                 )));
             }
-            if fs_type == "ext2" || fs_type == "ext4" {
+            if fs_type == "ext2" {
                 Ok(())
             } else {
                 Err(VaultRejection::InvalidUserdataFs(format!(
-                    "файловая система '{}' для /userdata отличается от ext2/ext4",
+                    "файловая система '{}' для /userdata отличается от ext2",
                     fs_type
                 )))
             }
         }
-        other if is_system => {
-            let _: &str = other;
+        _ if is_system => {
             if fs_type == "erofs" && mode == MountMode::ReadOnly {
                 Ok(())
             } else {
-                panic!("SECURITY_VIOLATION: /system is EROFS ReadOnly!");
+                Err(VaultRejection::SystemPolicy(format!(
+                    "{} монтируется только как erofs ReadOnly (запрошено: {} {})",
+                    dst,
+                    fs_type,
+                    match mode {
+                        MountMode::ReadOnly => "ro",
+                        MountMode::ReadWrite => "rw",
+                    }
+                )))
             }
         }
         _ => Ok(()),

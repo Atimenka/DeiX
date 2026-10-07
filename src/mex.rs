@@ -548,16 +548,28 @@ fn dispatch_inner(idx: usize, a1: u64, a2: u64, a3: u64, a4: u64) -> u64 {
 /// v1.1 в MexApi будут просто не прочитаны программой (она знает только
 /// о первых 6 полях структуры), так что обратная совместимость полная.
 pub fn run(name: &str, _args: &str) {
-    let data = match ext2::read_file(name) {
+    // Сначала каталог установленных пакетов (/userdata/apps), затем
+    // корень тома (файлы, записанные пользователем через `write`).
+    let apps_path = alloc::format!("/userdata/apps/{}", name);
+    let data = match crate::vfs::read_file(&apps_path) {
         Ok(d) => d,
-        Err(ext2::Ext2Error::FileNotFound) => {
-            println!("{}", t!(en: "Program not found.", ru: "Программа не найдена."));
-            return;
-        }
-        Err(_) => {
-            println!("{}", t!(en: "Failed to read program file.", ru: "Не удалось прочитать файл программы."));
-            return;
-        }
+        Err(_) => match ext2::read_file(name) {
+            Ok(d) => d,
+            Err(ext2::Ext2Error::FileNotFound) => {
+                println!(
+                    "{}",
+                    t!(
+                        en: "Program not found (searched /userdata/apps and the volume root).",
+                        ru: "Программа не найдена (искали в /userdata/apps и в корне тома)."
+                    )
+                );
+                return;
+            }
+            Err(_) => {
+                println!("{}", t!(en: "Failed to read program file.", ru: "Не удалось прочитать файл программы."));
+                return;
+            }
+        },
     };
 
     if data.len() < MEX_HEADER_SIZE_V1 {

@@ -1,10 +1,11 @@
 //! Система автозапуска DeiX.
 //!
-//! При старте ядро ищет на ext2-диске файл `AUTOSTART.CFG` и исполняет
-//! перечисленные в нём команды построчно. Простой формат — как в DOS
-//! AUTOEXEC.BAT или Unix rc.local.
+//! После входа пользователя ядро ищет `/userdata/config/autostart.cfg`
+//! и исполняет перечисленные в нём команды построчно. Простой формат —
+//! как в DOS AUTOEXEC.BAT или Unix rc.local. Старые сборки держали файл
+//! в корне тома как AUTOSTART.CFG — он одноразово переносится.
 //!
-//! ## Формат AUTOSTART.CFG
+//! ## Формат autostart.cfg
 //!
 //! ```text
 //! # Комментарий (строки с #)
@@ -18,7 +19,7 @@
 //! ## Порядок выполнения
 //!
 //! 1. Загрузка модулей ядра (.kmod)
-//! 2. Исполнение AUTOSTART.CFG (этот модуль)
+//! 2. Исполнение autostart.cfg (этот модуль)
 //! 3. Экран входа пользователя
 //! 4. CLI
 
@@ -26,20 +27,20 @@ use crate::ext2;
 use crate::cli;
 
 
-const AUTOSTART_FILE: &str = "AUTOSTART.CFG";
+/// Канонический путь сценария автозапуска в layout /userdata.
+const AUTOSTART_PATH: &str = "/userdata/config/autostart.cfg";
+/// Имя файла в корне тома у старых сборок.
+const LEGACY_FILE: &str = "AUTOSTART.CFG";
 const MAX_LINES: usize = 64;
 const MAX_LINE_LEN: usize = 256;
 
-/// Исполняет скрипт автозапуска (если существует).
-/// Вызывается ДО экрана входа пользователя.
-
-/// Содержимое AUTOSTART.CFG «из коробки».
+/// Содержимое autostart.cfg «из коробки».
 ///
 /// По умолчанию файл пустой (только комментарии): любая блокирующая
 /// команда здесь вешает загрузку, а проверить это пользователю нечем —
 /// система просто перестаёт отвечать.
 const DEFAULT_CFG: &str = "\
-# AUTOSTART.CFG — команды, выполняемые ПОСЛЕ входа пользователя.
+# autostart.cfg — команды, выполняемые ПОСЛЕ входа пользователя.
 # Выполняется от имени вошедшего: до аутентификации файл не читается.
 #
 # ВНИМАНИЕ: НЕ добавляйте сюда 'gpu mode'. Эта команда запускает
@@ -49,7 +50,24 @@ const DEFAULT_CFG: &str = "\
 # Графический режим включайте вручную командой 'gpu mode' из CLI.
 ";
 
-/// Создаёт AUTOSTART.CFG со значениями по умолчанию, если его ещё нет.
+/// Одноразовый перенос AUTOSTART.CFG из корня тома (старые сборки) в
+/// /userdata/config/autostart.cfg. Существующий новый файл не перетирается.
+fn migrate_legacy() {
+    if crate::vfs::exists(AUTOSTART_PATH) {
+        return;
+    }
+    let old = match ext2::read_file(LEGACY_FILE) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let _ = crate::vfs::mkdir("/userdata/config");
+    if crate::vfs::write_file(AUTOSTART_PATH, &old).is_ok() {
+        let _ = ext2::delete_file(LEGACY_FILE);
+        crate::println!("  [autostart] AUTOSTART.CFG перенесён в {}", AUTOSTART_PATH);
+    }
+}
+
+/// Создаёт autostart.cfg со значениями по умолчанию, если его ещё нет.
 ///
 /// Вызывается после первого успешного входа. Существующий файл не
 /// трогаем — пользователь мог его отредактировать.
@@ -57,12 +75,14 @@ pub fn ensure_default() {
     if !ext2::is_formatted() {
         return;
     }
-    if ext2::read_file(AUTOSTART_FILE).is_ok() {
+    migrate_legacy();
+    if crate::vfs::exists(AUTOSTART_PATH) {
         return;
     }
-    match ext2::write_file(AUTOSTART_FILE, DEFAULT_CFG.as_bytes()) {
-        Ok(()) => crate::println!("  [autostart] создан AUTOSTART.CFG (шаблон)"),
-        Err(_) => crate::println!("  [autostart] не удалось создать AUTOSTART.CFG"),
+    let _ = crate::vfs::mkdir("/userdata/config");
+    match crate::vfs::write_file(AUTOSTART_PATH, DEFAULT_CFG.as_bytes()) {
+        Ok(()) => crate::println!("  [autostart] создан {} (шаблон)", AUTOSTART_PATH),
+        Err(_) => crate::println!("  [autostart] не удалось создать {}", AUTOSTART_PATH),
     }
 }
 
@@ -72,10 +92,11 @@ pub fn run() {
         return;
     }
 
-    let data = match ext2::read_file(AUTOSTART_FILE) {
+    migrate_legacy();
+    let data = match crate::vfs::read_file(AUTOSTART_PATH) {
         Ok(d) => d,
         Err(_) => {
-            crate::println!("  [autostart] No AUTOSTART.CFG found (normal — create one to auto-run commands at boot).");
+            crate::println!("  [autostart] нет {} (это нормально — создайте его для автозапуска команд).", AUTOSTART_PATH);
             return;
         }
     };
@@ -83,12 +104,12 @@ pub fn run() {
     let text = match core::str::from_utf8(&data) {
         Ok(t) => t,
         Err(_) => {
-            crate::println!("  [autostart] AUTOSTART.CFG: not valid UTF-8, skipping.");
+            crate::println!("  [autostart] autostart.cfg: не UTF-8, пропускаем.");
             return;
         }
     };
 
-    crate::println!("  [autostart] Executing AUTOSTART.CFG...");
+    crate::println!("  [autostart] Выполняется {}...", AUTOSTART_PATH);
 
     let mut line_count = 0usize;
 

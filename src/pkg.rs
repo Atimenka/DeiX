@@ -1,10 +1,10 @@
 //! Пакетный менеджер DeiX ("pkg") — устанавливает/удаляет пакеты на
 //! ext2-томе (см. ext2.rs).
 //!
-//! Честное ограничение, как и с Wi-Fi/GPU: у DeiX нет HTTP/TLS-стека
-//! (наш net/ — это Ethernet+ARP+IPv4+ICMP, без TCP), поэтому "скачивать"
-//! пакеты из настоящего интернета в буквальном смысле невозможно —
-//! заявлять обратное было бы нечестной заглушкой. Вместо этого pkg
+//! Честное ограничение: репозитория пакетов в сети не существует, а
+//! HTTPS/TLS у DeiX нет, поэтому "скачивать" пакеты из интернета
+//! невозможно — заявлять обратное было бы нечестной заглушкой. Вместо
+//! этого pkg
 //! работает с ВСТРОЕННЫМ локальным каталогом (см. CATALOG ниже):
 //! `pkg install <name>` берёт содержимое пакета из этого каталога
 //! (зашитого в само ядро при сборке) и реально копирует файлы на
@@ -18,10 +18,13 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
-/// Имя служебного файла-реестра, в котором pkg хранит список
-/// установленных пакетов (простой текстовый формат: одно имя пакета на
-/// строку). Хранится прямо на ext2-томе, как и любой другой файл.
-const REGISTRY_FILE: &str = "PKG.DB";
+/// Путь файла-реестра установленных пакетов (простой текстовый формат:
+/// одно имя пакета на строку) в каноническом layout /userdata.
+const REGISTRY_PATH: &str = "/userdata/packages/pkg.db";
+/// Имя реестра в корне тома у старых сборок (переносится одноразово).
+const LEGACY_REGISTRY: &str = "PKG.DB";
+/// Каталог, куда складываются файлы устанавливаемых пакетов.
+const APPS_DIR: &str = "/userdata/apps";
 
 /// Один пакет из встроенного каталога: имя, версия, описание и список
 /// файлов (имя_на_диске, содержимое). Реальные, работающие файлы — не
@@ -85,8 +88,38 @@ fn find_package(name: &str) -> Option<&'static Package> {
     CATALOG.iter().find(|p| p.name.eq_ignore_ascii_case(name))
 }
 
+/// Одноразовый перенос PKG.DB из корня тома (старые сборки) в
+/// /userdata/packages/pkg.db; файлы пакетов из корня — в /userdata/apps.
+fn migrate_legacy() {
+    let old = match ext2::read_file(LEGACY_REGISTRY) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    if !crate::vfs::exists(REGISTRY_PATH) {
+        let _ = crate::vfs::mkdir("/userdata/packages");
+        if crate::vfs::write_file(REGISTRY_PATH, &old).is_err() {
+            return; // реестр не перенесён — старый не трогаем
+        }
+    }
+    let _ = ext2::delete_file(LEGACY_REGISTRY);
+    // Файлы установленных пакетов: корень тома -> /userdata/apps.
+    let _ = crate::vfs::mkdir(APPS_DIR);
+    for pkg in CATALOG.iter() {
+        for (filename, _) in pkg.files {
+            if let Ok(data) = ext2::read_file(filename) {
+                let new_path = alloc::format!("{}/{}", APPS_DIR, filename);
+                if crate::vfs::write_file(&new_path, &data).is_ok() {
+                    let _ = ext2::delete_file(filename);
+                }
+            }
+        }
+    }
+    crate::println!("  [pkg] PKG.DB перенесён в {} (файлы — в {})", REGISTRY_PATH, APPS_DIR);
+}
+
 fn read_registry() -> Vec<String> {
-    match ext2::read_file(REGISTRY_FILE) {
+    migrate_legacy();
+    match crate::vfs::read_file(REGISTRY_PATH) {
         Ok(data) => match core::str::from_utf8(&data) {
             Ok(text) => text.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect(),
             Err(_) => Vec::new(),
@@ -104,7 +137,8 @@ fn write_registry(names: &[String]) -> Result<(), ()> {
     if !ext2::is_formatted() {
         ext2::format().map_err(|_| ())?;
     }
-    ext2::write_file(REGISTRY_FILE, content.as_bytes()).map_err(|_| ())
+    crate::vfs::mkdir("/userdata/packages").map_err(|_| ())?;
+    crate::vfs::write_file(REGISTRY_PATH, content.as_bytes()).map_err(|_| ())
 }
 
 /// `pkg list` — показывает и встроенный каталог доступных пакетов, и
@@ -169,12 +203,17 @@ pub fn cmd_install(name: &str) {
         }
     }
 
+    if crate::vfs::mkdir(APPS_DIR).is_err() {
+        println!("{}", t!(en: "Failed to create /userdata/apps.", ru: "Не удалось создать /userdata/apps."));
+        return;
+    }
     for (filename, content) in pkg.files {
-        match ext2::write_file(filename, content) {
+        let path = alloc::format!("{}/{}", APPS_DIR, filename);
+        match crate::vfs::write_file(&path, content) {
             Ok(()) => println_t!(
                 en: "  wrote {} ({} bytes)",
                 ru: "  записан {} ({} байт)";
-                filename, content.len()
+                path, content.len()
             ),
             Err(_) => {
                 crate::diag::error(
@@ -248,15 +287,18 @@ pub fn cmd_remove(name: &str) {
     }
 
     for (filename, _) in pkg.files {
-        match ext2::delete_file(filename) {
-            Ok(()) => println_t!(en: "  removed {}", ru: "  удалён {}"; filename),
-            Err(ext2::Ext2Error::FileNotFound) => {
-                println_t!(en: "  {} was already missing", ru: "  {} уже отсутствовал"; filename)
+        let path = alloc::format!("{}/{}", APPS_DIR, filename);
+        // Файл мог остаться в корне тома после старых сборок.
+        let legacy_removed = ext2::delete_file(filename).is_ok();
+        match crate::vfs::remove(&path) {
+            Ok(()) => println_t!(en: "  removed {}", ru: "  удалён {}"; path),
+            Err(_) if legacy_removed => {
+                println_t!(en: "  removed {} (legacy root)", ru: "  удалён {} (корень тома)"; filename)
             }
             Err(_) => println_t!(
-                en: "  failed to remove {}",
-                ru: "  не удалось удалить {}";
-                filename
+                en: "  {} was already missing",
+                ru: "  {} уже отсутствовал";
+                path
             ),
         }
     }

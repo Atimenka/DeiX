@@ -78,7 +78,7 @@ impl MountMode {
 /// Полное описание команды привязки блочного устройства к VFS.
 ///
 /// Поля (owned-строки; в no_std — alloc::String из кучи ядра):
-/// * `fs_type` — драйвер файловой системы: "erofs", "ext4", "sysfs".
+/// * `fs_type` — драйвер файловой системы: "erofs" или "ext2".
 /// * `src`     — путь к источнику/блочному устройству.
 /// * `dst`     — точка монтирования в иерархии VFS.
 /// * `mode`    — атрибут прав доступа (MountMode).
@@ -264,7 +264,7 @@ impl ParseWarningKind {
             ParseWarningKind::UserdataPolicyViolation => {
                 "rw-монтирование /userdata вне разрешённых стадий"
             }
-            ParseWarningKind::InvalidUserdataFs => "файловая система /userdata отличается от ext2/ext4",
+            ParseWarningKind::InvalidUserdataFs => "файловая система /userdata отличается от ext2",
         }
     }
 }
@@ -560,6 +560,7 @@ impl InitParser {
                                         let kind = match rejection {
                                             VaultRejection::UserdataPolicy(_) => ParseWarningKind::UserdataPolicyViolation,
                                             VaultRejection::InvalidUserdataFs(_) => ParseWarningKind::InvalidUserdataFs,
+                                            VaultRejection::SystemPolicy(_) => ParseWarningKind::UserdataPolicyViolation,
                                         };
                                         let detail = format!("[{}] {}", rejection.kind_name(), rejection.detail());
                                         self.push_warning(line_no, raw_line, kind, detail);

@@ -35,7 +35,7 @@ pub fn validate_partition_map() -> Result<(), Vec<String>> {
 
     for policy in PARTITION_MAP.iter() {
         let ok: bool = match policy.name {
-            "/userdata" => (policy.fs == "ext2" || policy.fs == "ext4") && policy.default_mode == "rw",
+            "/userdata" => policy.fs == "ext2" && policy.default_mode == "rw",
             _ => policy.fs == "erofs" && policy.default_mode == "ro",
         };
         if !ok {

@@ -30,7 +30,10 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
-const USERS_DB_FILE: &str = "USERS.DB";
+/// Имя базы пользователей на ext2-томе. ЕДИНСТВЕННАЯ константа:
+/// install.rs ссылается на неё же — расхождение имён ломало бы вход
+/// на установленной системе.
+pub const USERS_DB_FILE: &str = "USERS.DB";
 const SALT_LEN: usize = 16;
 const HASH_LEN: usize = sha256::DIGEST_LEN; // 32 байта
 

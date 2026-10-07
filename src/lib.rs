@@ -29,7 +29,6 @@ mod ext2;
 mod font;
 mod font_cyrillic;
 mod font_full;
-mod fs;
 mod gpu;
 mod hal;
 mod hda;
@@ -228,10 +227,6 @@ pub extern "C" fn kernel_main() -> ! {
     println!("  [mm] Physical page allocator: OK");
     mm::print_stats();
 
-    // Загружаем метаданные файловой системы.
-    fs::load_meta_db();
-    println!("  [fs] File access control + TrustedInstaller: OK");
-
     // Полнодисковое шифрование (XTS-AES-256). ЕДИНЫЙ ПАРОЛЬ: пароль учётной
     // записи пользователя является ключом шифрования диска.
     // При заводской настройке диск не зашифрован; первая настройка
@@ -315,7 +310,7 @@ pub extern "C" fn kernel_main() -> ! {
         dinit.register_user(uid, &username);
     }
 
-    // Профиль пользователя: /users/<имя>/files и /users/<имя>/configs.
+    // Профиль пользователя: /userdata/home/<имя>/{files,configs}.
     if let Err(e) = userfs::init_profile(&username) {
         crate::println!("  [userfs] профиль не создан: {}", e.message());
     }
@@ -326,7 +321,16 @@ pub extern "C" fn kernel_main() -> ! {
     diag::storage_ready();
     crate::serial_println!("[deix] J: storage_ready done ({} ms)", timer::uptime_ms());
 
-    // Базовый AUTOSTART.CFG (с gpu mode) — создаём при первом входе.
+    // Канонический layout /userdata: недостающие каталоги создаются
+    // идемпотентно (mkdir_p) при каждом входе.
+    for d in [
+        "/userdata/home", "/userdata/config", "/userdata/apps", "/userdata/packages",
+        "/userdata/downloads", "/userdata/cache", "/userdata/update", "/userdata/log",
+    ] {
+        let _ = vfs::mkdir(d);
+    }
+
+    // Базовый /userdata/config/autostart.cfg — создаём при первом входе.
     autostart::ensure_default();
     crate::serial_println!("[deix] K: autostart ensure_default done ({} ms)", timer::uptime_ms());
 
@@ -357,7 +361,6 @@ pub fn reset_all_globals() {
     let _ = crate::vgaglobal::end_capture();
     crate::vgaglobal::early_init_writer();
     crate::module::reset_loaded_modules();
-    crate::fs::reset_fs_state();
     crate::renderer::reset_renderer();
     crate::diag::ring::clear();
     crate::diag::panic::clear_previous_failure();
