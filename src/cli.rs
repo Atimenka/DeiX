@@ -497,7 +497,7 @@ fn cmd_help() {
     println!("  crypt <status|addpass|delpass|iter> - {}", t!(en: "volume password slots (LUKS-style)", ru: "пароли тома: слоты, как в LUKS"));
     println!("  dinit [status|services|mounts|users|audit|security|stage|reload] - {}", t!(en: "PID 1 supervisor: services, mounts, users, audit, secmon", ru: "супервизор PID 1: службы, монтирования, пользователи, аудит, монитор"));
     println!("  hal                     - {}", t!(en: "driver layer selftest on RTL8139", ru: "самопроверка прослойки драйверов на RTL8139"));
-    println!("  nvidia                  - {}", t!(en: "open NVIDIA driver: probe and identify GPU", ru: "открытый драйвер NVIDIA: поиск и опознание карты"));
+    println!("  nvidia                  - {}", t!(en: "NVIDIA hardware detection: probe and identify GPU (not an acceleration driver)", ru: "детект NVIDIA-железа: поиск и опознание карты (не драйвер ускорения)"));
     println!("  logo [show|info]        - {}", t!(en: "boot logo: show / info", ru: "загрузочное лого: показать / инфо"));
     println!("  sound [list|play <имя>|beep [hz ms]] - {}", t!(en: "UI sound effects via PC speaker", ru: "звуковые эффекты UI через PC speaker"));
     println!("  linux <run|info> <файл> - {}", t!(en: "run a Linux ELF program", ru: "запустить ELF-программу Linux"));

@@ -170,7 +170,7 @@ impl Window {
                     String::from("deix://docs"),
                     String::from("http://deix.os"),
                 ],
-                status_msg: Some(String::from("Connected to Internet gateway.")),
+                status_msg: Some(String::from("HTTP client ready (text-only, no TLS).")),
             },
         }
     }
@@ -306,18 +306,17 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
 
     if clean_url == "deix://home" {
         return alloc::vec![
-            String::from("# Welcome to DeiX Web Portal"),
-            String::from("Fast, Secure & Modern OS Web Engine"),
+            String::from("# DeiX Browser"),
+            String::from("Limited text-oriented HTTP client."),
             String::new(),
             String::from("## Quick Navigation:"),
-            String::from("* [google.com] Google World Wide Web Search"),
+            String::from("* [example.com] Plain-HTTP test page"),
             String::from("* [deix://docs] System Architecture & Manual"),
-            String::from("* [http://deix.os] Live System Status Web Dashboard"),
+            String::from("* [http://deix.os] System Status (local page)"),
             String::new(),
-            String::from("## Network Capabilities:"),
-            String::from("- Real TCP/IP Stack & Socket Connection"),
-            String::from("- Dynamic HTML/Markdown Renderer"),
-            String::from("- World Wide Web Access Engine"),
+            String::from("## Honest limitations:"),
+            String::from("- HTTP/1.0 only: no HTTPS/TLS (most modern sites redirect to HTTPS and will not load)"),
+            String::from("- Text rendering only: no CSS, JavaScript or images"),
         ];
     } else if clean_url == "deix://docs" {
         return alloc::vec![
@@ -334,14 +333,27 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::from("RTL8139 Ethernet -> ARP / IPv4 -> TCP -> HTTP/1.0 Web Client."),
         ];
     } else if clean_url == "http://deix.os" {
+        // Локальная страница с НАСТОЯЩИМИ значениями подсистем — никакой
+        // выдуманной телеметрии.
+        let heap = crate::allocator::stats();
+        let ip = crate::net::my_ip();
+        let gw = crate::net::gateway_ip();
+        let cpu = crate::cpuid::brand_string()
+            .unwrap_or_else(|| crate::cpuid::vendor_string());
         return alloc::vec![
-            String::from("# DeiX OS Live Dashboard"),
-            String::from("Status: ONLINE | Kernel Mode: Ring 0 Long Mode"),
+            String::from("# DeiX OS Status (local page)"),
+            alloc::format!("{} | Ring 0 Long Mode", crate::OS_RELEASE),
             String::new(),
-            String::from("CPU Cores: 1x x86_64 @ 3.20GHz"),
-            String::from("Memory Usage: Heap Allocated ~1.4 MB / 16 MB"),
-            String::from("Network: eth0 10.0.2.15 (QEMU Slirp Router 10.0.2.2)"),
-            String::from("Graphics: Bochs VBE 32bpp Double Buffer"),
+            alloc::format!("CPU: {}", cpu.trim()),
+            alloc::format!(
+                "Heap: {} KiB used / {} KiB total",
+                heap.used / 1024,
+                heap.total / 1024
+            ),
+            alloc::format!(
+                "Network: eth0 {}.{}.{}.{} (gw {}.{}.{}.{})",
+                ip[0], ip[1], ip[2], ip[3], gw[0], gw[1], gw[2], gw[3]
+            ),
         ];
     }
 

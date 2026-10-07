@@ -807,11 +807,11 @@ impl Desktop {
             } => {
                 if rel_x < 110 {
                     let py = rel_y / 36;
+                    // Боковая панель Files: два реальных раздела
+                    // (см. src/ui/apps/files.rs, массив partitions).
                     let new_part = match py {
                         0 => "/userdata",
-                        1 => "/system",
-                        2 => "/kernel",
-                        _ => "/userdata",
+                        _ => "/system",
                     };
                     *current_partition = String::from(new_part);
                     *current_path = String::from("/");
