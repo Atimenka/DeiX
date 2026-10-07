@@ -21,10 +21,17 @@ use alloc::vec::Vec;
 
 // ==================== КОНСТАНТЫ УСТАНОВКИ ====================
 
-/// Фиксированный размер области ядра в секторах (совпадает с NUM_SECTORS
-/// в build.sh/boot_sector.asm).
-/// Максимум секторов области ядра/загрузчика (до ext2-тома на LBA 4096).
+/// Максимум секторов, заполняемых нулями в служебной области
+/// (stage2 + ramboot + kernel + дескриптор + область дампа) до начала
+/// /system (LBA 4096). Дескриптор ядра (LBA 2047) записывается заново
+/// после заполнения.
 pub const KERNEL_AREA_SECTORS: u32 = 3500;
+
+/// Сектор дескриптора образа ядра DEIXKIMG (см. src/partition_map.rs).
+const KERNEL_IMAGE_INFO_LBA: u32 = 2047;
+
+/// Минимальная ёмкость целевого диска: конец /userdata.
+const MIN_TARGET_SECTORS: u32 = PART_USERDATA.0 + PART_USERDATA.1;
 
 /// Смещение ext2-тома /userdata на диске (то же, что ext2::FS_START_LBA).
 const FS_START_LBA: u32 = 12800;
@@ -234,7 +241,7 @@ fn write_file_to(drive: Drive, name: &str, data: &[u8]) -> bool {
     true
 }
 
-// ==================== MBR / EROFS / TPM-разделы ====================
+// ==================== MBR / разделы ====================
 
 fn chs(lba: u32) -> [u8; 3] {
     let c = lba / (63 * 255);
@@ -340,12 +347,23 @@ fn write_image_to(drive: Drive) -> Result<(), ()> {
         ata::read_sectors_from(Drive::Master, kstart + i, 1, &mut buf)?;
         ata::write_sectors_to(drive, kstart + i, 1, &buf)?;
     }
-    // Дополняем область загрузчика+ядра нулями до границы раздела.
+    // Дополняем область загрузчика+ядра нулями до границы раздела
+    // (включая область аварийного дампа — на свежей установке дампов нет).
     let total = stage2_sectors as u32 + rbs + sectors;
     if total < KERNEL_AREA_SECTORS {
         let zero = [0u8; 512];
         for i in total..KERNEL_AREA_SECTORS {
             ata::write_sectors_to(drive, 1 + i, 1, &zero)?;
+        }
+    }
+
+    // Дескриптор образа ядра (DEIXKIMG, LBA 2047): копируем с Master-диска.
+    // Сырое ядро скопировано посекторно с тех же LBA, поэтому дескриптор
+    // остаётся верным и на целевом диске.
+    {
+        let mut buf = [0u8; 512];
+        if ata::read_sectors_from(Drive::Master, KERNEL_IMAGE_INFO_LBA, 1, &mut buf).is_ok() {
+            let _ = ata::write_sectors_to(drive, KERNEL_IMAGE_INFO_LBA, 1, &buf);
         }
     }
 
@@ -364,7 +382,7 @@ fn write_image_to(drive: Drive) -> Result<(), ()> {
     Ok(())
 }
 
-/// Форматирует ext2-том /userdata (отдельный маленький том на P3).
+/// Форматирует ext2-том /userdata (P2, LBA 12800).
 fn write_userdata_ext2(drive: Drive) {
     let start_lba = PART_USERDATA.0;
     let total_sectors = PART_USERDATA.1;
@@ -440,6 +458,121 @@ fn write_userdata_ext2(drive: Drive) {
     root[30] = 10;
     root[32..42].copy_from_slice(b"lost+found");
     wb(&root, dstart);
+
+    // Каталог lost+found (инод 11, блок dstart+1).
+    let mut lf = [0u8; BLOCK];
+    lf[0..4].copy_from_slice(&11u32.to_le_bytes());
+    lf[4..6].copy_from_slice(&12u16.to_le_bytes());
+    lf[6] = 1;
+    lf[8] = b'.';
+    lf[12..16].copy_from_slice(&2u32.to_le_bytes());
+    lf[16..18].copy_from_slice(&(BLOCK as u16 - 12).to_le_bytes());
+    lf[18] = 2;
+    lf[20..22].copy_from_slice(b"..");
+    wb(&lf, dstart + 1);
+
+    // Иноды корня (ino 2) и lost+found (ino 11). Таблица инодов свежая
+    // (нули), поэтому блоки собираются целиком и пишутся за два вызова.
+    let write_ino = |buf: &mut [u8; BLOCK], ino: u32, mode: u16, size: u32, links: u16, blk: u32| {
+        let off = ((ino - 1) as usize * INODE_SIZE) % BLOCK;
+        buf[off..off + 2].copy_from_slice(&mode.to_le_bytes());
+        buf[off + 4..off + 8].copy_from_slice(&size.to_le_bytes());
+        buf[off + 26..off + 28].copy_from_slice(&links.to_le_bytes());
+        buf[off + 28..off + 32].copy_from_slice(&(SPB).to_le_bytes());
+        buf[off + 40..off + 44].copy_from_slice(&blk.to_le_bytes());
+    };
+    // ino 2 (idx 1) лежит в блоке 0 таблицы инодов.
+    let mut it0 = [0u8; BLOCK];
+    write_ino(&mut it0, 2, 0o040755, BLOCK as u32, 3, dstart);
+    wb(&it0, INODE_TABLE_START);
+    // ino 11 (idx 10) лежит в блоке 1 таблицы инодов (1280 / 1024 = 1).
+    let mut it1 = [0u8; BLOCK];
+    write_ino(&mut it1, 11, 0o040700, BLOCK as u32, 2, dstart + 1);
+    wb(&it1, INODE_TABLE_START + 1);
+}
+
+// ==================== ПРОВЕРКА УСТАНОВКИ ====================
+
+/// Проверяет установленную систему на целевом диске:
+/// MBR (подпись + таблица разделов), магия EROFS /system,
+/// магия ext2 /userdata и SHA-256 сырого ядра по дескриптору DEIXKIMG.
+/// Возвращает список обнаруженных проблем (пусто = всё в порядке).
+fn verify_install(target: Drive) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let mut sec = [0u8; 512];
+
+    // 1. MBR: подпись 0x55AA и записи P1/P2.
+    if ata::read_sectors_from(target, 0, 1, &mut sec).is_err() {
+        problems.push(String::from("MBR не читается"));
+        return problems;
+    }
+    if sec[510] != 0x55 || sec[511] != 0xAA {
+        problems.push(String::from("MBR: отсутствует подпись 0x55AA"));
+    }
+    let parts = [(446usize, PART_SYSTEM), (462usize, PART_USERDATA)];
+    for (off, (start, secs)) in parts.iter() {
+        let lba = u32::from_le_bytes([sec[off + 8], sec[off + 9], sec[off + 10], sec[off + 11]]);
+        let cnt = u32::from_le_bytes([sec[off + 12], sec[off + 13], sec[off + 14], sec[off + 15]]);
+        if lba != *start || cnt != *secs {
+            problems.push(format!(
+                "MBR: раздел @{} = LBA {}+{} (ожидалось {}+{})",
+                off, lba, cnt, start, secs
+            ));
+        }
+    }
+
+    // 2. /system: суперблок EROFS лежит на смещении 1024 от начала раздела.
+    if ata::read_sectors_from(target, PART_SYSTEM.0 + 2, 1, &mut sec).is_ok() {
+        let magic = u32::from_le_bytes([sec[0], sec[1], sec[2], sec[3]]);
+        if magic != 0xE0F5_E1E2 {
+            problems.push(format!("/system: магия EROFS не найдена (0x{:08X})", magic));
+        }
+    } else {
+        problems.push(String::from("/system: суперблок не читается"));
+    }
+
+    // 3. /userdata: суперблок ext2 в блоке 1 (LBA start+2), магия на смещении 56.
+    if ata::read_sectors_from(target, PART_USERDATA.0 + 2, 1, &mut sec).is_ok() {
+        let magic = u16::from_le_bytes([sec[56], sec[57]]);
+        if magic != EXT2_MAGIC {
+            problems.push(format!("/userdata: магия ext2 не найдена (0x{:04X})", magic));
+        }
+    } else {
+        problems.push(String::from("/userdata: суперблок не читается"));
+    }
+
+    // 4. Сырое ядро: SHA-256 по дескриптору DEIXKIMG (если он записан).
+    if ata::read_sectors_from(target, KERNEL_IMAGE_INFO_LBA, 1, &mut sec).is_ok()
+        && &sec[0..8] == b"DEIXKIMG"
+    {
+        let lba = u32::from_le_bytes([sec[8], sec[9], sec[10], sec[11]]);
+        let size = u32::from_le_bytes([sec[12], sec[13], sec[14], sec[15]]);
+        let mut expected = [0u8; 32];
+        expected.copy_from_slice(&sec[16..48]);
+
+        let mut hasher = crate::crypto::sha256::Sha256::new();
+        let mut left = size as usize;
+        let mut cur = lba;
+        let mut ok = true;
+        while left > 0 {
+            if ata::read_sectors_from(target, cur, 1, &mut sec).is_err() {
+                problems.push(String::from("ядро: сектор не читается при проверке"));
+                ok = false;
+                break;
+            }
+            let take = left.min(512);
+            hasher.update(&sec[..take]);
+            left -= take;
+            cur += 1;
+        }
+        if ok && hasher.finalize() != expected {
+            problems.push(String::from(
+                "ядро: SHA-256 сырого kernel.bin не совпадает с дескриптором DEIXKIMG",
+            ));
+        }
+    }
+
+    problems
 }
 
 // ==================== ВВОД МАСТЕРА ====================
@@ -505,7 +638,16 @@ pub fn cmd_install(arg: &str) {
     // (MBR, LBA 0) уходит в «зависший» контроллер и теряется (ext2/EROFS
     // пишутся позже и успевают, а MBR/stage2/kernel — нет).
     if slave_ok {
-        let _ = ata::slave_sector_count();
+        // Заодно валидируем ёмкость: разделы DeiX занимают MIN_TARGET_SECTORS.
+        if let Some(cnt) = ata::slave_sector_count() {
+            if cnt < MIN_TARGET_SECTORS {
+                crate::println!(
+                    "  ERROR: slave disk too small: {} sectors (< {} required).",
+                    cnt, MIN_TARGET_SECTORS
+                );
+                return;
+            }
+        }
     }
     let target: Drive;
     if test_mode {
@@ -600,7 +742,7 @@ pub fn cmd_install(arg: &str) {
         }
     }
 
-    // ---- Создание пользователя: USERS.DB -> ext2 /system + TPM ----
+    // ---- Создание пользователя: USERS.DB -> ext2-том /userdata целевого диска ----
     crate::println!("  Creating user '{}'...", username);
     // Строим USERS.DB тем же форматом, что auth.rs (username:salt:hash),
     // и пишем ПРЯМО на ЦЕЛЕВОЙ диск. НЕ через create_user(): он пишет в
@@ -631,6 +773,21 @@ pub fn cmd_install(arg: &str) {
     } else {
         crate::println!("  [auth] WARNING: failed to write USERS.DB to target disk!");
     }
+
+    // ---- Пост-проверка установки (MBR, магии ФС, SHA-256 ядра) ----
+    crate::println!("  Verifying installed system...");
+    let problems = verify_install(target);
+    if !problems.is_empty() {
+        crate::println!("==================================================");
+        crate::println!("  INSTALL FAILED VERIFICATION:");
+        for p in problems.iter() {
+            crate::println!("    * {}", p);
+        }
+        crate::println!("  The target disk may be unbootable. Re-run 'install'.");
+        crate::println!("==================================================");
+        return;
+    }
+    crate::println!("  [verify] MBR + /system (EROFS) + /userdata (ext2) + kernel SHA-256: OK");
 
     // ---- Шифрование диска ----
     if target == Drive::Master {

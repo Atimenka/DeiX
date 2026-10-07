@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""DeiX OS — образ диска на ЗАВОДСКИХ настройках с чистой MBR-разметкой.
+"""DeiX OS — разметка образа диска: MBR + /system (EROFS RO) + /userdata (EXT2 RW).
 
-Карта разделов DeiX в MBR-таблице (2-partition scheme):
+Карта разделов DeiX в MBR-таблице (источник истины — src/partition_map.rs,
+сверяется tools/check_partition_map.py):
 
   P1 0x83 bootable  LBA 4096  .. 12799 (8704 сект)  /system    (EROFS RO)
   P2 0x83           LBA 12800 .. 18431 (5632 сект)  /userdata  (EXT2 RW)
+
+Служебные области до первого раздела:
+  LBA 0           — MBR (boot_sector.bin)
+  LBA 1..2046     — stage2 + ramboot + сырой kernel.bin
+  LBA 2047        — дескриптор образа ядра DEIXKIMG (LBA/размер/SHA-256)
+  LBA 2048..2111  — область аварийного дампа (DEIXPNIC, src/diag/panic.rs)
 
 /system содержит структуру каталогов:
   - kernel/kernel.bin
@@ -13,163 +20,48 @@
   - services/dinit.cfg
   - media/audio/ui/*.dps
 
-В /system кладутся только настоящие файлы. Заглушки вида
-libdeix_*.so и kmod/*.kmod не создаются: module.rs ожидает у KMOD
-валидный заголовок и исполняемое тело, и placeholder-байты там
-воспринимаются как повреждённый модуль.
-
-/userdata содержит файловую систему EXT2 для пользовательских данных и приложений.
+В /system кладутся только настоящие файлы. Заглушки (поддельное ядро,
+пустые kmod/*.kmod, lib*.so) не создаются: отсутствие kernel.bin —
+ошибка сборки, а не повод положить муляж.
 """
+import hashlib
 import os
 import struct
 import sys
 
 SECTOR = 512
 BLOCK = 1024
-FS_START_LBA = 4096          # начало P1 = ext2-том ядра
-TOTAL_SECTORS = 8192         # том ядра (P1)
-TOTAL_BLOCKS = TOTAL_SECTORS // (BLOCK // SECTOR)  # 4096
-SPB = BLOCK // SECTOR        # 2
+SPB = BLOCK // SECTOR        # секторов на блок ext2
 
-# --- геометрия ext2 ---
+# --- геометрия ext2-тома /userdata (та же, что в src/ext2.rs) ---
 SB_BLOCK = 1
 GDT_BLOCK = 2
 BLOCK_BITMAP = 3
 INODE_BITMAP = 4
 INODE_TABLE_START = 5
 INODE_SIZE = 128
-INODES = ((max(32, TOTAL_BLOCKS * BLOCK // 4096) + 7) // 8) * 8  # 1024
-INODE_TABLE_BLOCKS = INODES * INODE_SIZE // BLOCK  # 128
-DATA_START = INODE_TABLE_START + INODE_TABLE_BLOCKS  # 133
-ROOT_DIR_BLOCK = DATA_START
-LOST_FOUND_BLOCK = DATA_START + 1
-RESERVED = LOST_FOUND_BLOCK  # 134
-VALID_BLOCKS = TOTAL_BLOCKS - 1
-FREE_BLOCKS = VALID_BLOCKS - RESERVED
-FREE_INODES = INODES - 10 - 1
 EXT2_MAGIC = 0xEF53
-ROOT_INO = 2
-LOST_FOUND_INO = 11
 
-# --- КАРТА РАЗДЕЛОВ DeiX ---
+# --- КАРТА РАЗДЕЛОВ DeiX (должна совпадать с src/partition_map.rs) ---
 # Два первичных раздела в MBR, логических разделов нет.
 PRIMARY = [
     (1, 0x83, 4096,  8704, "/system"),    # bootable, системный EROFS
     (2, 0x83, 12800, 5632, "/userdata"),  # ext2, пользовательские данные
 ]
-ER0FS_MAGIC = 0xE0F5E1E2  # настоящая магия EROFS v1
 
+# Дескриптор образа ядра: сектор LBA 2047 (см. src/partition_map.rs
+# KERNEL_IMAGE_INFO_LBA). Формат: magic(8) + kernel_lba(u32 LE) +
+# kernel_size(u32 LE) + sha256(32).
+KERNEL_IMAGE_INFO_LBA = 2047
+KERNEL_IMAGE_INFO_MAGIC = b"DEIXKIMG"
 
-def block_lba(b):
-    return FS_START_LBA + b * SPB
+# Конец последнего раздела: минимальный размер образа.
+PARTITIONS_END_SECTORS = max(start + secs for _, _, start, secs, _ in PRIMARY)
 
-
-def read_block(img, b):
-    lb = block_lba(b) * SECTOR
-    return bytearray(img[lb:lb + BLOCK])
-
-
-def write_block(img, b, data):
-    lb = block_lba(b) * SECTOR
-    img[lb:lb + BLOCK] = data
-
-
-def inode_offset(ino):
-    idx = ino - 1
-    block = INODE_TABLE_START + (idx * INODE_SIZE) // BLOCK
-    off = (idx * INODE_SIZE) % BLOCK
-    return block, off
-
-
-def write_inode(img, ino, mode, size, links, ptrs, used_blocks):
-    block, off = inode_offset(ino)
-    raw = bytearray(INODE_SIZE)
-    raw[0:2] = struct.pack("<H", mode)
-    raw[4:8] = struct.pack("<I", size)
-    raw[26:28] = struct.pack("<H", links)
-    raw[28:32] = struct.pack("<I", used_blocks * SPB)
-    for i in range(15):
-        raw[40 + i * 4:44 + i * 4] = struct.pack("<I", ptrs[i])
-    buf = read_block(img, block)
-    buf[off:off + INODE_SIZE] = raw
-    write_block(img, block, buf)
-
-
-def format_ext2(img):
-    now = 0x60000000
-    sb = bytearray(BLOCK)
-    sb[0:4] = struct.pack("<I", INODES)
-    sb[4:8] = struct.pack("<I", TOTAL_BLOCKS)
-    sb[12:16] = struct.pack("<I", FREE_BLOCKS)
-    sb[16:20] = struct.pack("<I", FREE_INODES)
-    sb[20:24] = struct.pack("<I", SB_BLOCK)
-    sb[32:36] = struct.pack("<I", TOTAL_BLOCKS)
-    sb[36:40] = struct.pack("<I", TOTAL_BLOCKS)
-    sb[40:44] = struct.pack("<I", INODES)
-    sb[48:52] = struct.pack("<I", now)
-    sb[54:56] = struct.pack("<H", 0xFFFF)
-    sb[56:58] = struct.pack("<H", EXT2_MAGIC)
-    sb[58:60] = struct.pack("<H", 1)
-    sb[64:68] = struct.pack("<I", now)
-    write_block(img, SB_BLOCK, sb)
-
-    gdt = bytearray(BLOCK)
-    gdt[0:4] = struct.pack("<I", BLOCK_BITMAP)
-    gdt[4:8] = struct.pack("<I", INODE_BITMAP)
-    gdt[8:12] = struct.pack("<I", INODE_TABLE_START)
-    gdt[12:14] = struct.pack("<H", FREE_BLOCKS)
-    gdt[14:16] = struct.pack("<H", FREE_INODES)
-    gdt[16:18] = struct.pack("<H", 2)
-    write_block(img, GDT_BLOCK, gdt)
-
-    bm = bytearray(BLOCK)
-    for b in range(RESERVED):
-        bm[b // 8] |= 1 << (b % 8)
-    for b in range(VALID_BLOCKS, BLOCK * 8):
-        bm[b // 8] |= 1 << (b % 8)
-    write_block(img, BLOCK_BITMAP, bm)
-
-    ibm = bytearray(BLOCK)
-    for i in range(10):
-        ibm[i // 8] |= 1 << (i % 8)
-    ibm[(LOST_FOUND_INO - 1) // 8] |= 1 << ((LOST_FOUND_INO - 1) % 8)
-    for i in range(INODES, BLOCK * 8):
-        ibm[i // 8] |= 1 << (i % 8)
-    write_block(img, INODE_BITMAP, ibm)
-
-    root = bytearray(BLOCK)
-    root[0:4] = struct.pack("<I", ROOT_INO)
-    root[4:6] = struct.pack("<H", 12)
-    root[6] = 1
-    root[8:9] = b"."
-    root[12:16] = struct.pack("<I", ROOT_INO)
-    root[16:18] = struct.pack("<H", 12)
-    root[18] = 2
-    root[20:22] = b".."
-    root[24:28] = struct.pack("<I", LOST_FOUND_INO)
-    root[28:30] = struct.pack("<H", BLOCK - 24)
-    root[30] = len("lost+found")
-    root[32:32 + len("lost+found")] = b"lost+found"
-    write_block(img, ROOT_DIR_BLOCK, root)
-
-    ptrs = [0] * 15
-    ptrs[0] = ROOT_DIR_BLOCK
-    write_inode(img, ROOT_INO, 0o040755, BLOCK, 3, ptrs, 1)
-
-    lf = bytearray(BLOCK)
-    lf[0:4] = struct.pack("<I", LOST_FOUND_INO)
-    lf[4:6] = struct.pack("<H", 12)
-    lf[6] = 1
-    lf[8:9] = b"."
-    lf[12:16] = struct.pack("<I", ROOT_INO)
-    lf[16:18] = struct.pack("<H", BLOCK - 12)
-    lf[18] = 2
-    lf[20:22] = b".."
-    write_block(img, LOST_FOUND_BLOCK, lf)
-
-    ptrs2 = [0] * 15
-    ptrs2[0] = LOST_FOUND_BLOCK
-    write_inode(img, LOST_FOUND_INO, 0o040700, BLOCK, 2, ptrs2, 1)
+# RAM-диск (boot/ramboot.asm, boot/boot_sector_iso.asm) копирует в память
+# ровно 10 МиБ (окно 0x2000000..0x2A00000), поэтому образ дополняется
+# до 20480 секторов, даже если разделы заканчиваются раньше.
+RAMDISK_WINDOW_SECTORS = 20480
 
 
 def chs(lba):
@@ -194,6 +86,26 @@ def fill_mbr(img):
         img[off + 12:off + 16] = struct.pack("<I", secs)
     img[510] = 0x55
     img[511] = 0xAA
+
+
+def write_kernel_image_info(img, kernel_lba, kernel_bytes):
+    """Пишет дескриптор DEIXKIMG в сектор LBA 2047.
+
+    Ядро (src/bootchain.rs) сверяет по нему сырой kernel.bin и
+    /system/kernel/kernel.bin (размер + SHA-256, DX-KRN-0013).
+    """
+    sectors = (len(kernel_bytes) + SECTOR - 1) // SECTOR
+    if kernel_lba + sectors > KERNEL_IMAGE_INFO_LBA:
+        print("ОШИБКА: сырой kernel.bin (LBA %d, %d сект) пересекает дескриптор (LBA %d)"
+              % (kernel_lba, sectors, KERNEL_IMAGE_INFO_LBA), file=sys.stderr)
+        sys.exit(1)
+    sec = bytearray(SECTOR)
+    sec[0:8] = KERNEL_IMAGE_INFO_MAGIC
+    sec[8:12] = struct.pack("<I", kernel_lba)
+    sec[12:16] = struct.pack("<I", len(kernel_bytes))
+    sec[16:48] = hashlib.sha256(kernel_bytes).digest()
+    base = KERNEL_IMAGE_INFO_LBA * SECTOR
+    img[base:base + SECTOR] = sec
 
 
 def build_real_erofs(files, label=""):
@@ -310,7 +222,6 @@ def _erofs_fallback(files):
     struct.pack_into("<Q", img, SB_OFF + 16, total_inos)
     struct.pack_into("<I", img, SB_OFF + 36, len(img) // BS)
     struct.pack_into("<I", img, SB_OFF + 40, 0)           # meta_blkaddr
-
     for d in sorted_dirs:
         nid = dir_nids[d]
         off = SB_OFF + SB_SIZE + (nid - root_nid) * ISLOT
@@ -459,14 +370,8 @@ def format_ext2_at(img, start_lba, total_sectors):
     wi(11, 0o040700, BLOCK, 2, ptrs2, 1)
 
 
-def init_all_partitions(img, kernel_bin='build/kernel.bin'):
+def init_all_partitions(img, kernel_bytes):
     """Инициализирует ФС во всех разделах: /system (EROFS RO) + /userdata (EXT2 RW)."""
-    import os as _os
-    if _os.path.exists(kernel_bin):
-        kernel_bytes = open(kernel_bin, 'rb').read()
-    else:
-        kernel_bytes = b'DEIXKERN1\x00kernel.bin\x00' + b'\x00' * 64
-
     for num, typ, start, secs, name in PRIMARY:
         if name == "/userdata":
             format_ext2_at(img, start, secs)
@@ -476,40 +381,60 @@ def init_all_partitions(img, kernel_bin='build/kernel.bin'):
                 "etc/init.deix":       b"# DeiX OS init script\nmount /system\nmount /userdata\n",
                 "services/dinit.cfg":  b"# Dinit services config\n",
             }
-            snd_dir = _os.path.join("build", "sounds")
-            if _os.path.isdir(snd_dir):
-                for _f in sorted(_os.listdir(snd_dir)):
+            # UI-звуки лежат ТОЛЬКО в /system/media/audio/ui/ —
+            # этот путь читает src/sound.rs.
+            snd_dir = os.path.join("build", "sounds")
+            if os.path.isdir(snd_dir):
+                for _f in sorted(os.listdir(snd_dir)):
                     if _f.endswith(".dps"):
-                        with open(_os.path.join(snd_dir, _f), "rb") as _fh:
-                            data = _fh.read()
-                            system_files[f"media/audio/ui/{_f}"] = data
-                            system_files[f"media/{_f}"] = data
+                        with open(os.path.join(snd_dir, _f), "rb") as _fh:
+                            system_files[f"media/audio/ui/{_f}"] = _fh.read()
             write_erofs_image(img, start, secs, name, system_files)
 
 
 def main():
-    img_path = sys.argv[1] if len(sys.argv) > 1 else "build/deix_disk.img"
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    opts = {}
+    for a in sys.argv[1:]:
+        if a.startswith("--") and "=" in a:
+            k, v = a[2:].split("=", 1)
+            opts[k] = v
+
+    img_path = args[0] if args else "build/deix_disk.img"
     parent_dir = os.path.dirname(img_path)
     if parent_dir:
         os.makedirs(parent_dir, exist_ok=True)
-    need = 20480 * SECTOR
+
+    kernel_path = os.path.join(parent_dir if parent_dir else ".", "kernel.bin")
+    if not os.path.exists(kernel_path):
+        print("ОШИБКА: %s не найден — соберите ядро (build.sh) перед разметкой образа"
+              % kernel_path, file=sys.stderr)
+        sys.exit(1)
+    with open(kernel_path, "rb") as f:
+        kernel_bytes = f.read()
+
+    need = max(PARTITIONS_END_SECTORS, RAMDISK_WINDOW_SECTORS) * SECTOR
     if not os.path.exists(img_path) or os.path.getsize(img_path) < need:
-        with open(img_path, "wb") as f:
-            f.write(b"\x00" * need)
+        with open(img_path, "ab") as f:
+            f.truncate(need)
 
     with open(img_path, "rb") as f:
         img = bytearray(f.read())
 
     fill_mbr(img)
-    init_all_partitions(img, os.path.join(parent_dir if parent_dir else '.', 'kernel.bin'))
+    init_all_partitions(img, kernel_bytes)
 
-    img[4095 * SECTOR:4095 * SECTOR + 512] = b"\x00" * 512
+    if "kernel-lba" in opts:
+        write_kernel_image_info(img, int(opts["kernel-lba"]), kernel_bytes)
+    else:
+        print("ПРЕДУПРЕЖДЕНИЕ: --kernel-lba не передан — дескриптор DEIXKIMG не записан,"
+              " сверка raw/EROFS ядра будет пропущена", file=sys.stderr)
 
     with open(img_path, "wb") as f:
         f.write(img)
 
     print(f"OK: DeiX OS — заводской образ с MBR-разметкой ({img_path})")
-    print("  Все разделы DeiX (каждый со своей ФС):")
+    print("  Разделы DeiX:")
     for num, typ, start, secs, name in PRIMARY:
         fs = "erofs" if name == "/system" else "ext2"
         print(f"    P{num}: 0x{typ:02X} {name:<13} LBA {start:>6}..{start+secs-1:>6} ({secs:>4} сект)  {fs}")

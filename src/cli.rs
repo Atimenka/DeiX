@@ -351,13 +351,13 @@ pub fn execute(line: &str) {
 }
 
 /// sound [list|play <имя>|beep [hz ms]] — звуковые эффекты UI через
-/// PC speaker (DPS-файлы из EROFS-раздела /super, см. src/sound.rs).
+/// PC speaker (DPS-файлы из /system/media/audio/ui, см. src/sound.rs).
 /// Без подкоманды — список эффектов с отметкой наличия в образе.
 fn cmd_sound(rest: &str) {
     let mut it = rest.split_whitespace();
     match it.next() {
         None | Some("list") => {
-            println!("{}", t!(en: "UI sounds (PC speaker; files live in EROFS /super):", ru: "UI-звуки (PC speaker; файлы лежат в EROFS /super):"));
+            println!("{}", t!(en: "UI sounds (PC speaker; files live in /system/media/audio/ui):", ru: "UI-звуки (PC speaker; файлы в /system/media/audio/ui):"));
             let media = crate::sound::media_files().unwrap_or_default();
             for s in crate::sound::UI_SOUNDS {
                 let have = media.iter().any(|f| f == s.dps_name());

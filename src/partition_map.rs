@@ -46,6 +46,39 @@ pub fn validate_partition_map() -> Result<(), Vec<String>> {
         }
     }
 
+    // Геометрия: служебные области и разделы не должны пересекаться.
+    let boot_end = BOOTLOADER_LBA + BOOTLOADER_SECTORS; // первый LBA после загрузчика
+    if boot_end > KERNEL_IMAGE_INFO_LBA {
+        violations.push(format!(
+            "область загрузчика (до LBA {}) пересекает дескриптор ядра (LBA {})",
+            boot_end - 1, KERNEL_IMAGE_INFO_LBA
+        ));
+    }
+    let panic_start = crate::diag::panic::PANIC_LBA;
+    let panic_end = panic_start + crate::diag::panic::PANIC_SECTORS;
+    if KERNEL_IMAGE_INFO_LBA >= panic_start {
+        violations.push(format!(
+            "дескриптор ядра (LBA {}) попадает в область аварийного дампа ({}..{})",
+            KERNEL_IMAGE_INFO_LBA, panic_start, panic_end - 1
+        ));
+    }
+    if let Some(system) = lookup_layout("/system") {
+        if panic_end > system.start_lba {
+            violations.push(format!(
+                "область аварийного дампа ({}..{}) пересекает /system (LBA {})",
+                panic_start, panic_end - 1, system.start_lba
+            ));
+        }
+        if let Some(userdata) = lookup_layout("/userdata") {
+            if system.start_lba + system.sectors > userdata.start_lba {
+                violations.push(format!(
+                    "/system ({}+{}) пересекает /userdata (LBA {})",
+                    system.start_lba, system.sectors, userdata.start_lba
+                ));
+            }
+        }
+    }
+
     if violations.is_empty() {
         Ok(())
     } else {
@@ -91,8 +124,18 @@ pub const PARTITION_LAYOUT: [PartitionLayout; 2] = [
     PartitionLayout { name: "/userdata",   start_lba: 12800, sectors: 5632, fs: "ext2",  flashable: true },
 ];
 
+/// Сырые служебные области до первого раздела (/system @ LBA 4096):
+///   LBA 0            — MBR (boot_sector.bin)
+///   LBA 1..=2046     — stage2 + ramboot + сырой kernel.bin
+///   LBA 2047         — дескриптор образа ядра (DEIXKIMG: LBA/размер/SHA-256)
+///   LBA 2048..=2111  — область аварийного дампа (DEIXPNIC, см. diag/panic.rs)
 pub const BOOTLOADER_LBA: u32 = 1;
-pub const BOOTLOADER_SECTORS: u32 = 2048;
+pub const BOOTLOADER_SECTORS: u32 = 2046;
+
+/// Сектор с дескриптором образа ядра, записывается build.sh.
+pub const KERNEL_IMAGE_INFO_LBA: u32 = 2047;
+/// Магическая подпись дескриптора образа ядра.
+pub const KERNEL_IMAGE_INFO_MAGIC: [u8; 8] = *b"DEIXKIMG";
 
 pub fn lookup_layout(name: &str) -> Option<&'static PartitionLayout> {
     for layout in PARTITION_LAYOUT.iter() {

@@ -5,8 +5,9 @@
 ; туда (long_mode_start из kernel.bin).
 ;
 ; Константы (передаются через nasm -D, см. build.sh):
-;   KERNEL_LBA      — стартовый сектор kernel.bin на диске;
-;   KERNEL_SECTORS  — размер kernel.bin в секторах.
+;   KERNEL_SIZE_DWORDS — размер копируемого kernel.bin в двойных словах
+;                        (фиксирован: 262144 = 2048 секторов, лишние
+;                        секторы за концом ядра содержат нули).
 
 bits 32
 

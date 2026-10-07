@@ -16,12 +16,14 @@
 ;            в буфер 0x11000, переключается в 32-битный PM, rep movsd в
 ;            RAMDISK_DST (0x2000000), возвращается в RM, повторяет;
 ;            затем в PM копирует kernel.bin (KERNEL_SECTORS сект) из
-;            RAMDISK_DST+LBA3*512 в 0x11000 (KERNEL_SRC для stage2);
+;            RAMDISK_DST + KERNEL_LBA*512 в память ядра;
 ;            jmp STAGE2_ADDR (0x10000) — stage2 (32-бит PM, плоский).
 ;
 ; Константы (nasm -D, см. build.sh):
 ;   RAMDISK_SECTORS — сколько секторов образа читать в RAM (весь .img);
-;   KERNEL_SECTORS  — сколько секторов kernel.bin копировать в 0x11000;
+;   KERNEL_SECTORS  — сколько секторов kernel.bin копировать;
+;   KERNEL_LBA      — стартовый сектор kernel.bin внутри образа
+;                     (= 1 + секторы stage2 + 1 сектор ramboot);
 ;   RAMDISK_DST     — куда копировать RAM-диск (0x2000000 = 32 МиБ);
 ;   STAGE2_ADDR     — куда прыгнуть (0x10000).
 

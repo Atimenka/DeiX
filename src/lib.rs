@@ -333,7 +333,7 @@ pub extern "C" fn kernel_main() -> ! {
     autostart::run();
     crate::serial_println!("[deix] L: autostart run done ({} ms)", timer::uptime_ms());
 
-    // UI-звуки (PC speaker, src/sound.rs; файлы *.dps в EROFS /super —
+    // UI-звуки (PC speaker, src/sound.rs; файлы *.dps в /system/media/audio/ui —
     // если в образе их нет, просто играем в тишине, как раньше).
     // Загрузка шла с USB-флешки (RAM-диск) — сигнал «носитель подключён»,
     // затем общий стартовый сигнал «система готова».

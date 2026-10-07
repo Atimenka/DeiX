@@ -242,6 +242,9 @@ pub static TABLE: &[CodeInfo] = &[
     CodeInfo { code: ErrorCode::new(Subsystem::Kernel, 12), summary: "Невосстановимое внутреннее состояние",
         detail: "Инвариант ядра нарушен, безопасное продолжение работы невозможно.",
         action: "Сохраните отчёт об отказе и выполните перезагрузку." },
+    CodeInfo { code: ErrorCode::new(Subsystem::Kernel, 13), summary: "Несовпадение образа ядра (KERNEL_IMAGE_MISMATCH)",
+        detail: "Сырое ядро, загруженное stage2, не совпадает по размеру или SHA-256 с /system/kernel/kernel.bin либо с дескриптором сборки DEIXKIMG.",
+        action: "Пересоберите и переустановите образ системы; не смешивайте kernel.bin из разных сборок." },
 
     // ==================== Память (MEM) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Memory, 1), summary: "Ошибка страницы (Page Fault)",
