@@ -89,7 +89,7 @@ QEMU 10.0.11, nightly 1.99 (сборка: rustc -> nasm -> ld -> objcopy). Ко�
   qemu-system-x86_64 -drive file=build/deix_disk.img,format=raw,if=ide \
   -m 512M -display none -monitor none -serial stdio -no-reboot
 ```
-Лог полной загрузки — `docs/QEMU_BOOT_LOG.txt`: ядро, все драйверы (ATA, PS/2,
+Лог полной загрузки — `docs/archive/QEMU_BOOT_LOG.txt`: ядро, все драйверы (ATA, PS/2,
 RTL8139 отсутствует — сеть пропускается, Bochs-GPU), mm, fs, TPM gate (диск
 разблокирован, XTS round-trip), security_monitor (SIGKILL рансомвара PID 666),
 partition_map (/TPM скрыт), init_parser (21 команда), sched (4 потока),
@@ -138,7 +138,7 @@ partition_map (/TPM скрыт), init_parser (21 команда), sched (4 по�
 * Поддержка shebang (#!/bin/ds), REPL (ds -i), -c, файлы .dxs.
 * Проверено в QEMU: полный скрипт демонстрации выполнен успешно.
 
-### Верификация в QEMU (лог: docs/QEMU_BOOT_LOG_v04.txt)
+### Верификация в QEMU (лог: docs/archive/QEMU_BOOT_LOG_v04.txt)
 TPM gate -> SIGKILL рансомвара -> pacman (-Sy -S -Q -Qi -Su -R) -> композитор
 (окна/клик) -> DUIL (Qt-подобный интерфейс) -> DS (полный скрипт) -> экран входа.
 Образ: build/deix_disk.img (LTO, opt=2, ~535KB stage2).

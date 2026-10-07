@@ -14,7 +14,7 @@ pub fn draw_about(
 
     r.draw_icon(w.x + 20, content_y + 16, IconType::About, theme.accent);
     r.draw_text(w.x + 48, content_y + 16, "DeiX Operating System", theme.accent, None);
-    r.draw_text(w.x + 48, content_y + 36, "Version 0.2.1-beta (Fluent Edition)", theme.text_primary, None);
+    r.draw_text(w.x + 48, content_y + 36, crate::OS_RELEASE, theme.text_primary, None);
 
     r.draw_hline(w.x + 12, content_y + 60, w.width - 24, theme.titlebar_active);
 

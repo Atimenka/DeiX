@@ -109,7 +109,7 @@ impl Window {
             restore_geometry: (x, y, 380, 240),
             content: WindowContent::Terminal {
                 lines: alloc::vec![
-                    String::from("DeiX Interactive Terminal (v0.2.1)"),
+                    alloc::format!("DeiX Interactive Terminal (v{})", crate::KERNEL_VERSION),
                     String::from("Type 'help' for commands or 'taskmgr' for system monitor."),
                 ],
                 current_line: String::new(),
@@ -321,7 +321,7 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
         ];
     } else if clean_url == "deix://docs" {
         return alloc::vec![
-            String::from("# DeiX OS v0.2.1 Documentation"),
+            alloc::format!("# {} Documentation", crate::OS_RELEASE),
             String::from("Kernel Specs & Subsystem Guide"),
             String::new(),
             String::from("### 1. Preemptive Scheduler"),
@@ -449,7 +449,7 @@ pub fn load_partition_entries(partition: &str, path: &str) -> (Vec<FileViewEntry
                 let _ = ext2::format();
                 let _ = ext2::write_file(
                     "README.TXT",
-                    b"Welcome to DeiX OS v0.2.1-beta!\r\nEdit files directly in this window.\r\n",
+                    alloc::format!("Welcome to {}!\r\nEdit files directly in this window.\r\n", crate::OS_RELEASE).as_bytes(),
                 );
             }
             match ext2::list_dir_path(path) {

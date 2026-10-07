@@ -1,10 +1,10 @@
-# 🪐 DeiX OS (v0.2.1-beta · Release)
+# 🪐 DeiX OS (0.2.1-beta · x86_64)
 
 A modern, fast, and secure 64-bit Operating System written from scratch in **Rust** and **Assembly** for the `x86_64` architecture. Small core, immutable system, writable user space.
 
 Операционная система нового поколения под `x86_64` с модульной графической оболочкой, неизменяемым системным разделом **EROFS** (`/system`) и пользовательским пространством **ext2/4** (`/userdata`).
 
-**Ядро:** ~0.7 МБ (Rust `#![no_std]` + NASM stage2) · **Лимит ядра:** 1 МиБ (2048 секторов) · **Образ диска:** 10 МиБ · **Код:** ~25 000 строк Rust · реальное железо и QEMU.
+**Ядро:** ~0.9 МБ (Rust `#![no_std]` + NASM stage2) · **Лимит сырого ядра:** LBA 1..2046 (~1 МиБ) · **Образ диска:** 10 МиБ · **Код:** ~32 000 строк Rust · реальное железо и QEMU.
 
 ---
 
@@ -163,13 +163,13 @@ MEX-процессов запрещено (`MEX_IN_USE`) — изоляция п
 
 - **🦀 Pure Rust `#![no_std]`**, старт в long mode: `boot_sector` (MBR) → `stage2` (32-бит → long mode) → `kernel.bin` @ 0x100000.
 - **🛡 Dinit (PID 1, Ring 0)** — супервизор служб, точек монтирования и аудита.
-- **🚨 Security Monitor** — эвристический детектор угроз (ransomware, code-injection) с ликвидацией (SIGKILL).
+- **🚨 Security Monitor** — эвристический монитор подозрительной файловой активности (экспериментальный).
 - **🔊 Intel HDA + PC Speaker** — DMA 48 кГц / 16-бит стерео воспроизведение + ШИМ PC Speaker.
 - **🖼️ DXLG & VBE** — VBE 32bpp графика, кириллический шрифт.
-- **🛡 Ring 3 + syscall/sysret** — аппаратная изоляция (GDT + TSS).
+- **🛡 Ring 3 + syscall/sysret** — аппаратная изоляция для MEX-программ (GDT + TSS); остальные подсистемы работают в Ring 0.
 - **🧵 Вытесняющая многозадачность** — планировщик с переключением по прерыванию IRQ0 PIT (`threads list/test`).
 - **🧾 Настоящий EROFS** (магия `0xE0F5E1E2`, валидируется `fsck.erofs`) на системном разделе `/system`.
-- **🐧 Совместимость с Linux** — загрузчик ELF64 + слой системных вызовов Linux ABI (`src/linux/`).
+- **🐧 Задел совместимости с Linux** — парсер/валидатор статических ELF64 и подмножество системных вызовов Linux ABI (`src/linux/`). Запуск ELF как процессов в этом релизе отключён: планировщик пока исполняет код только в Ring 0, и выдавать это за пользовательский процесс было бы нечестно (`DX-ELF-0009`).
 - **🌐 Сеть** — RTL8139 + ARP + IPv4 + ICMP + TCP + HTTP (`ifconfig`, `ping`).
 - **📦 MEX-приложения** — собственный формат бинарников DeiX (`run`, `pkg`, `mexcc`).
 
@@ -180,7 +180,12 @@ MEX-процессов запрещено (`MEX_IN_USE`) — изоляция п
 | Раздел | LBA | Секторов | ФС | Назначение |
 |---|---|---|---|---|
 | `/system` | 4096 | 8704 | EROFS ro | Системный раздел (ядро `kernel.bin`, библиотеки, модули `.kmod`, службы) |
-| `/userdata` | 12800 | 5632 | ext2/ext4 rw | Пользовательские данные, программы, приложения Ring 3 |
+| `/userdata` | 12800 | 5632 | ext2 rw | Пользовательские данные, программы, пакеты |
+
+Служебные области вне разделов: LBA 0 — MBR; 1..2046 — stage2 + ramboot + сырое ядро;
+2047 — дескриптор `DEIXKIMG` (LBA/размер/SHA-256 ядра для сверки с `/system/kernel/kernel.bin`);
+2048..2111 — область аварийного дампа (`DEIXPNIC`). Сверка всех источников геометрии —
+`tools/check_partition_map.py` (запускается в `build.sh` и CI).
 
 ---
 
@@ -192,12 +197,29 @@ ifconfig arp ping gpu [info|nvinfo|mode] sound [list|play|beep|mode|hda]
 dinit [status|services|mounts|users|audit|security|stage|reload]
 duil [run|calc] ds [script.dxs|-i|-c] taskmgr ls cat write mkdir rm pkg run install bigfile
 useradd passwd whoami users encrypt crypt nvidia hal microcode logo linux profile lock
-threads crash bugreport dmesg crashlog adb dev root reboot poweroff shutdown halt
+threads crash bugreport dmesg crashlog dev root reboot poweroff shutdown halt
 ps kill kmod [load|list] lsmod
 log [list|errors|warnings|critical|kernel|boot|dinit|kmod|flush|clear]
 error [list|show DX-XXX-NNNN] panic [last|clear]
 diagnostics [summary|mode on|mode off]
 ```
+
+---
+
+## ⚠️ Известные ограничения (v0.2.1-beta)
+
+- Один CPU (без SMP); диски — только ATA PIO (без AHCI/NVMe), чтение медленное (~1.4 мс/КиБ в QEMU).
+- Ring 3 доступен только MEX-программам; одновременно исполняется один MEX-процесс
+  (формат линкуется на фиксированный адрес `0x03000000`).
+- Запуск ELF-процессов отключён — загрузчик и подмножество Linux-syscalls есть,
+  но планировщик исполнял бы их в Ring 0.
+- `AddressSpace` процессов — учётная структура, а не полная изоляция страничных таблиц.
+- Аллокатор физической памяти — битовая карта (не buddy).
+- `getrandom` — не криптографический ГСЧ (jitter/rdtsc-энтропия без строгих гарантий).
+- Шифрование диска — собственный формат «по мотивам LUKS» (XTS-AES-256), несовместим с LUKS.
+- Браузер — ограниченный текстовый HTTP-клиент (без HTTPS, CSS, JS).
+- NVIDIA: детект железа по PCI и вывод информации, а не драйвер ускорения.
+- Нет USB, ACPI-управления питанием, звук — PC Speaker и базовый Intel HDA (тоны/PCM).
 
 ---
 

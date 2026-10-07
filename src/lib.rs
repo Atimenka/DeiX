@@ -5,7 +5,6 @@
 
 extern crate alloc;
 
-mod adb;
 mod allocator;
 mod ata;
 mod ramdisk;
@@ -82,6 +81,9 @@ use core::panic::PanicInfo;
 /// чтобы в отчёте об отказе и в `about` не расходились версии.
 pub const KERNEL_VERSION: &str = "0.2.1-beta";
 
+/// Полная строка релиза: имя + версия + архитектура.
+pub const OS_RELEASE: &str = "DeiX 0.2.1-beta x86_64";
+
 /// Идентификатор сборки: архитектура и режим компиляции.
 pub const BUILD_ID: &str = "x86_64-unknown-deix (no_std, release)";
 
@@ -120,7 +122,7 @@ pub extern "C" fn kernel_main() -> ! {
     vgaglobal::with_writer(|w| w.clear_screen());
     crate::serial_println!("[deix] C: clear done");
 
-    println!("DeiX v0.2.1-beta - mini kernel booted successfully!");
+    println!("{} - mini kernel booted successfully!", OS_RELEASE);
     crate::serial_println!("[deix] D: println done");
     println!("Long mode: OK | Paging: OK | VGA text driver: OK");
     crate::serial_println!("[deix] E: long mode println");

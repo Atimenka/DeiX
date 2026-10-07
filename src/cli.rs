@@ -309,8 +309,6 @@ pub fn execute(line: &str) {
         "error" => crate::diag::cli::cmd_error(rest),
         "panic" => crate::diag::cli::cmd_panic(rest),
         "diagnostics" => crate::diag::cli::cmd_diagnostics(rest),
-        "adb" => crate::adb::cmd_adb(rest),
-        "adb-repl" => crate::adb::adb_repl(),
         "dev" => {
             match rest.trim() {
                 "on" => crate::devmode::enable_dev_mode(),
@@ -537,7 +535,7 @@ fn cmd_help() {
 
 fn cmd_about() {
     let (comp_active, comp_fps) = crate::ui::compositor_status();
-    println!("DeiX v0.2.1-beta - mini kernel written in Rust (Compositor active: {}, {} FPS)", comp_active, comp_fps);
+    println!("{} - mini kernel written in Rust (Compositor active: {}, {} FPS)", crate::OS_RELEASE, comp_active, comp_fps);
     println!(
         "{}",
         t!(
@@ -1774,7 +1772,7 @@ pub const VALID_COMMANDS: &[&str] = &[
     "ls", "cat", "write", "mkdir", "rm", "pkg", "dialog", "erofs", "run", "install",
     "bigfile", "useradd", "passwd", "whoami", "users", "encrypt", "crash",
     "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",
-    "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "adb", "dev", "profile",
+    "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "dev", "profile",
     "ps", "kill", "log", "error", "panic", "diagnostics"
 ];
 
