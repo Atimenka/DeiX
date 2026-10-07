@@ -36,7 +36,7 @@ static ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::
 
 /// Инициализирует RAM-диск: проверяет сигнатуру MBR (0xAA55) в первом
 /// секторе образа. Вызывается рано в kernel_main, ДО любых обращений к
-/// диску (bootchain, ext2, BCB, TPM, OTA).
+/// диску (bootchain, ext2).
 pub fn init() -> bool {
     // Безопасно: прерывания ещё выключены или мы не работаем с памятью,
     // которая могла бы быть выдана аллокатором (резерв в mm/phys.rs).

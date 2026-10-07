@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use crate::vault::{VaultRejection, evaluate as vault_evaluate};
 
 /// Максимальная длина содержательной строки конфигурации (байт UTF-8).
-/// Защита кучи ядра от деструктивного ввода на этапе init_boot.
+/// Защита кучи ядра от деструктивного ввода на раннем этапе загрузки.
 pub const MAX_CONFIG_LINE_LEN: usize = 256;
 
 /// Максимальное количество команд в одной стадии загрузки (DoS-защита).
@@ -33,7 +33,7 @@ pub enum BootStage {
 impl BootStage {
     pub fn from_token(token: &str) -> Result<BootStage, ParseError> {
         match token {
-            "early_boot" | "early" | "init_boot" => Ok(BootStage::EarlyBoot),
+            "early_boot" | "early" => Ok(BootStage::EarlyBoot),
             "boot" => Ok(BootStage::Boot),
             other => Err(ParseError::UnknownStage(other.to_string())),
         }

@@ -1639,6 +1639,18 @@ fn cmd_run(arg: &str) {
 }
 
 fn cmd_crash(kind: &str) {
+    // Команда намеренно вызывает исключения CPU (вплоть до отказа ядра) —
+    // доступна только в dev-режиме, чтобы не уронить систему случайно.
+    if !crate::devmode::sudo_allowed() {
+        println!(
+            "{}",
+            t!(
+                en: "'crash' intentionally triggers CPU faults and is available only in dev mode ('dev on').",
+                ru: "'crash' намеренно вызывает исключения CPU и доступна только в dev-режиме ('dev on')."
+            )
+        );
+        return;
+    }
     match kind {
         "divzero" => {
             println!("{}", t!(en: "Triggering division by zero...", ru: "Вызываем деление на ноль..."));

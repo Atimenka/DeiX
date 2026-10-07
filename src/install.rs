@@ -750,9 +750,7 @@ pub fn cmd_install(arg: &str) {
     // USERS.DB — при загрузке с установленного диска экран входа считал
     // бы, что аккаунтов нет.
     let mut salt = [0u8; 16];
-    for (i, b) in salt.iter_mut().enumerate() {
-        *b = (i as u8).wrapping_mul(31).wrapping_add(7);
-    }
+    crate::rng::fill_random(&mut salt);
     let mut salted: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
     salted.extend_from_slice(&salt);
     salted.extend_from_slice(password.as_bytes());
