@@ -170,7 +170,9 @@ MEX-процессов запрещено (`MEX_IN_USE`) — изоляция п
 - **🧵 Вытесняющая многозадачность** — планировщик с переключением по прерыванию IRQ0 PIT (`threads list/test`).
 - **🧾 Настоящий EROFS** (магия `0xE0F5E1E2`, валидируется `fsck.erofs`) на системном разделе `/system`.
 - **🐧 Задел совместимости с Linux** — парсер/валидатор статических ELF64 и подмножество системных вызовов Linux ABI (`src/linux/`). Запуск ELF как процессов в этом релизе отключён: планировщик пока исполняет код только в Ring 0, и выдавать это за пользовательский процесс было бы нечестно (`DX-ELF-0009`).
-- **🌐 Сеть** — RTL8139 + ARP + IPv4 + ICMP + TCP + HTTP (`ifconfig`, `ping`).
+- **🌐 Сеть** — RTL8139 + ARP + IPv4 + ICMP + UDP + TCP; настоящий DNS-клиент
+  (A-записи по UDP/53, кеш с учётом TTL) и HTTP/1.0-клиент с переходом по
+  redirect (`ifconfig`, `ping`, `dns`, браузер в GUI).
 - **📦 MEX-приложения** — собственный формат бинарников DeiX (`run`, `pkg`, `mexcc`).
 
 ---
@@ -193,7 +195,7 @@ MEX-процессов запрещено (`MEX_IN_USE`) — изоляция п
 
 ```
 help about echo clear uptime color cpuid mem lang
-ifconfig arp ping gpu [info|nvinfo|mode] sound [list|play|beep|mode|hda]
+ifconfig [ip|dns <ip>] arp ping dns <host> gpu [info|nvinfo|mode] sound [list|play|beep|mode|hda]
 dinit [status|services|mounts|users|audit|security|stage|reload]
 duil [run|calc] ds [script.dxs|-i|-c] taskmgr ls cat write mkdir rm pkg run install bigfile
 useradd passwd whoami users encrypt crypt nvidia hal microcode logo linux profile lock
@@ -217,7 +219,11 @@ diagnostics [summary|mode on|mode off]
 - Аллокатор физической памяти — битовая карта (не buddy).
 - `getrandom` — не криптографический ГСЧ (jitter/rdtsc-энтропия без строгих гарантий).
 - Шифрование диска — собственный формат «по мотивам LUKS» (XTS-AES-256), несовместим с LUKS.
-- Браузер — ограниченный текстовый HTTP-клиент (без HTTPS, CSS, JS).
+- Браузер — ограниченный текстовый HTTP-клиент: HTTP/1.0 без TLS, поэтому
+  https://-сайты не загружаются (редирект на HTTPS даёт честную ошибку);
+  рендеринг без CSS/JS/изображений.
+- DNS — только A-записи по UDP/53: без IPv6 (AAAA), DNSSEC и TCP-fallback
+  для ответов больше 512 байт; без сборки IP-фрагментов.
 - NVIDIA: детект железа по PCI и вывод информации, а не драйвер ускорения.
 - Нет USB, ACPI-управления питанием, звук — PC Speaker и базовый Intel HDA (тоны/PCM).
 

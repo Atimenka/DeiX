@@ -121,8 +121,8 @@ set_up_page_tables:
 
     ; GPU MMIO (Bochs VBE framebuffer 0xFC000000-0x100000000, 4-й ГиБ):
     ; L3[3] -> page_table_l2_gpu, заполняем записи 480..511 (32 x 2 МиБ).
-    ; Это нужно, чтобы recovery/fastbootd/DSM могли писать пиксели в
-    ; framebuffer (без этого — page fault на 0xfd000000).
+    ; Это нужно, чтобы графические подсистемы ядра могли писать пиксели
+    ; в framebuffer (без этого — page fault на 0xfd000000).
     mov eax, page_table_l2_gpu
     or eax, 0b11
     mov [page_table_l3 + 24], eax

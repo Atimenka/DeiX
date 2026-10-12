@@ -265,6 +265,7 @@ pub fn execute(line: &str) {
         "ifconfig" => cmd_ifconfig(rest),
         "arp" => cmd_arp(),
         "ping" => cmd_ping(rest),
+        "dns" => cmd_dns(rest),
         "gpu" => cmd_gpu(rest),
         "sound" => cmd_sound(rest),
         "ls" => cmd_ls(),
@@ -490,9 +491,10 @@ fn cmd_help() {
     println!("  cpuid                   - {}", t!(en: "print CPU vendor string", ru: "вывести vendor string процессора"));
     println!("  mem <n>                 - {}", t!(en: "heap allocator test (Vec<u32> of n elements)", ru: "тест heap-аллокатора (Vec<u32> на n элементов)"));
     println!("  lang <en|ru>            - {}", t!(en: "switch interface language", ru: "переключить язык интерфейса"));
-    println!("  ifconfig [ip]           - {}", t!(en: "show/change network config", ru: "показать/сменить сетевую конфигурацию"));
+    println!("  ifconfig [ip|dns <ip>]  - {}", t!(en: "show/change network config (IP, DNS server)", ru: "показать/сменить сетевую конфигурацию (IP, DNS-сервер)"));
     println!("  arp                     - {}", t!(en: "show ARP cache", ru: "показать ARP-кэш"));
     println!("  ping <ip>               - {}", t!(en: "send ICMP echo request", ru: "отправить ICMP echo request"));
+    println!("  dns <host>              - {}", t!(en: "resolve a hostname via DNS (UDP/53)", ru: "разрешить имя хоста через DNS (UDP/53)"));
     println!("  threads [list|test]     - {}", t!(en: "preemptive multitasking: task list / selftest", ru: "вытесняющая многозадачность: список задач / самопроверка"));
     println!("  crypt <status|addpass|delpass|iter> - {}", t!(en: "volume password slots (LUKS-style)", ru: "пароли тома: слоты, как в LUKS"));
     println!("  dinit [status|services|mounts|users|audit|security|stage|reload] - {}", t!(en: "PID 1 supervisor: services, mounts, users, audit, secmon", ru: "супервизор PID 1: службы, монтирования, пользователи, аудит, монитор"));
@@ -723,20 +725,40 @@ fn cmd_ifconfig(arg: &str) {
     }
 
     if !arg.is_empty() {
-        match parse_ipv4(arg) {
-            Some(ip) => {
-                net::set_my_ip(ip);
-                println!("{}", t!(en: "IP address changed.", ru: "IP-адрес изменён."));
+        // `ifconfig dns <ip>` — сменить DNS-сервер, `ifconfig <ip>` — свой адрес.
+        if let Some(dns_arg) = arg.strip_prefix("dns ") {
+            match parse_ipv4(dns_arg.trim()) {
+                Some(ip) => {
+                    net::set_dns_ip(ip);
+                    println!("{}", t!(en: "DNS server changed.", ru: "DNS-сервер изменён."));
+                }
+                None => {
+                    println!(
+                        "{}",
+                        t!(
+                            en: "Invalid IP address. Format: ifconfig dns 10.0.2.3",
+                            ru: "Неверный IP-адрес. Формат: ifconfig dns 10.0.2.3"
+                        )
+                    );
+                    return;
+                }
             }
-            None => {
-                println!(
-                    "{}",
-                    t!(
-                        en: "Invalid IP address. Format: ifconfig 192.168.1.10",
-                        ru: "Неверный IP-адрес. Формат: ifconfig 192.168.1.10"
-                    )
-                );
-                return;
+        } else {
+            match parse_ipv4(arg) {
+                Some(ip) => {
+                    net::set_my_ip(ip);
+                    println!("{}", t!(en: "IP address changed.", ru: "IP-адрес изменён."));
+                }
+                None => {
+                    println!(
+                        "{}",
+                        t!(
+                            en: "Invalid IP address. Format: ifconfig 192.168.1.10",
+                            ru: "Неверный IP-адрес. Формат: ifconfig 192.168.1.10"
+                        )
+                    );
+                    return;
+                }
             }
         }
     }
@@ -751,6 +773,8 @@ fn cmd_ifconfig(arg: &str) {
     );
     println!("IP:      {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
     println!("Gateway: {}.{}.{}.{}", gw[0], gw[1], gw[2], gw[3]);
+    let dns = net::dns_ip();
+    println!("DNS:     {}.{}.{}.{}", dns[0], dns[1], dns[2], dns[3]);
 
     // Реальные счётчики драйвера, а не «оценка нагрузки».
     let (rxp, rxb, txp, txb) = rtl8139::traffic_counters();
@@ -778,6 +802,51 @@ fn cmd_arp() {
     }
     println!("{}", t!(en: "ARP cache:", ru: "ARP-кэш:"));
     crate::net::arp::print_cache();
+}
+
+fn cmd_dns(arg: &str) {
+    if !rtl8139::is_ready() {
+        println!(
+            "{}",
+            t!(en: "No network card detected.", ru: "Сетевая карта не найдена.")
+        );
+        return;
+    }
+    let host = arg.trim();
+    if host.is_empty() {
+        println!(
+            "{}",
+            t!(
+                en: "Usage: dns <hostname> — resolve an A record via UDP/53",
+                ru: "Использование: dns <имя хоста> — разрешить A-запись по UDP/53"
+            )
+        );
+        return;
+    }
+    if parse_ipv4(host).is_some() {
+        println!(
+            "{}",
+            t!(
+                en: "This is already an IPv4 address, nothing to resolve.",
+                ru: "Это уже IPv4-адрес, разрешать нечего."
+            )
+        );
+        return;
+    }
+    let server = net::dns_ip();
+    println_t!(
+        en: "Querying DNS server {}.{}.{}.{} ...",
+        ru: "Запрос к DNS-серверу {}.{}.{}.{} ...";
+        server[0], server[1], server[2], server[3]
+    );
+    match crate::net::dns::resolve_a(host) {
+        Some(ip) => println!("{}: {}.{}.{}.{}", host, ip[0], ip[1], ip[2], ip[3]),
+        None => println_t!(
+            en: "Could not resolve '{}' (timeout, NXDOMAIN or no network).",
+            ru: "Не удалось разрешить '{}' (таймаут, NXDOMAIN или нет сети).";
+            host
+        ),
+    }
 }
 
 fn cmd_ping(arg: &str) {
@@ -1773,7 +1842,7 @@ pub fn cmd_halt() {
 
 pub const VALID_COMMANDS: &[&str] = &[
     "help", "about", "echo", "clear", "uptime", "color", "cpuid", "mem", "lang",
-    "ifconfig", "arp", "ping", "threads", "crypt", "dinit", "hal", "gpu", "sound",
+    "ifconfig", "arp", "ping", "dns", "threads", "crypt", "dinit", "hal", "gpu", "sound",
     "ls", "cat", "write", "mkdir", "rm", "pkg", "dialog", "erofs", "run", "install",
     "bigfile", "useradd", "passwd", "whoami", "users", "encrypt", "crash",
     "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",

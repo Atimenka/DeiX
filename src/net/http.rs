@@ -1,18 +1,32 @@
 //! HTTP/1.0 клиент поверх TCP.
 //!
-//! Поддерживает: GET, парсинг статуса (200/301/404), заголовки, тело.
-//! Используется текстовым браузером DeiX OS.
+//! Поддерживает: GET, разбор строки статуса и заголовков, Content-Length,
+//! переход по redirect (301/302/303/307/308, до 3 переходов). Имена хостов
+//! резолвятся настоящим DNS-клиентом (net::dns) через UDP/53.
+//! Честные ограничения: нет TLS — https:// URL не загружаются, редирект
+//! на https:// завершается понятной ошибкой.
 
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use crate::net::tcp;
+use crate::net::{dns, tcp};
+
+const MAX_REDIRECTS: u32 = 3;
+const MAX_BODY: usize = 128 * 1024;
+
+/// Ответ HTTP-запроса после всех redirect.
+pub struct HttpResponse {
+    pub status: u16,
+    pub reason: String,
+    pub body: String,
+    /// URL, с которого фактически пришёл ответ (после redirect).
+    pub final_url: String,
+}
 
 /// Парсит URL: возвращает (host, port, path).
 pub fn parse_url(url: &str) -> Option<(String, u16, String)> {
     let s = url.trim();
-    // Убираем http:// или https://
     let rest = if s.starts_with("http://") { &s[7..] }
     else if s.starts_with("https://") { &s[8..] }
     else { s };
@@ -35,7 +49,7 @@ pub fn parse_url(url: &str) -> Option<(String, u16, String)> {
     Some((host, port, path.to_string()))
 }
 
-/// Разбирает host как IPv4-литерал или доменное имя.
+/// Разбирает host: IPv4-литерал, локальные алиасы или настоящий DNS-запрос.
 pub fn resolve(host: &str) -> Option<[u8; 4]> {
     let clean = host.trim().to_lowercase();
     let parts: Vec<&str> = clean.split('.').collect();
@@ -47,33 +61,31 @@ pub fn resolve(host: &str) -> Option<[u8; 4]> {
         }
     }
 
-    // Сопоставление доменных имён (DNS-таблица по умолчанию)
+    // Локальные алиасы — реальные адреса этой машины и шлюза.
     match clean.as_str() {
-        "example.com" | "www.example.com" => Some([93, 184, 215, 14]),
-        "google.com" | "www.google.com" => Some([142, 250, 190, 46]),
-        "deix.os" | "deix" | "localhost" => Some([10, 0, 2, 15]),
-        "gateway" | "router" => Some([10, 0, 2, 2]),
-        "wikipedia.org" | "www.wikipedia.org" => Some([185, 15, 58, 224]),
-        "github.com" | "www.github.com" => Some([140, 82, 121, 4]),
-        _ => {
-            // По умолчанию отправляем на QEMU slirp шлюз
-            Some([10, 0, 2, 2])
-        }
+        "deix.os" | "deix" | "localhost" => Some(crate::net::my_ip()),
+        "gateway" | "router" => Some(crate::net::gateway_ip()),
+        // Всё остальное — настоящий DNS-запрос (A-запись по UDP/53).
+        _ => dns::resolve_a(&clean),
     }
 }
 
-/// HTTP GET для текста/HTML страниц.
-pub fn fetch_text(url: &str) -> Result<String, String> {
+/// Один HTTP GET без redirect: (status, reason, location, body).
+fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, String), String> {
     let (host, port, path) = parse_url(url)
         .ok_or_else(|| "Некорректный URL адрес".to_string())?;
-    let ip = resolve(&host).ok_or_else(|| format!("Не удалось разрешить хост '{}'", host))?;
+    let ip = resolve(&host)
+        .ok_or_else(|| format!("DNS: не удалось разрешить хост '{}'", host))?;
 
     if !tcp::connect(ip, port) {
-        return Err(format!("Не удалось установить TCP-соединение с {}:{}", host, port));
+        return Err(format!(
+            "Не удалось установить TCP-соединение с {} ({}.{}.{}.{}:{})",
+            host, ip[0], ip[1], ip[2], ip[3], port
+        ));
     }
 
     let req = format!(
-        "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: DeiX-Browser/2.0 (DeiX OS x86_64)\r\nAccept: text/html,text/plain\r\nConnection: close\r\n\r\n",
+        "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: DeiX-Browser/3.0 (DeiX OS x86_64)\r\nAccept: text/html,text/plain\r\nConnection: close\r\n\r\n",
         path, host
     );
     tcp::send(req.as_bytes());
@@ -84,11 +96,11 @@ pub fn fetch_text(url: &str) -> Result<String, String> {
         let chunk = tcp::recv(1000);
         if !chunk.is_empty() {
             raw.extend_from_slice(&chunk);
-            if raw.len() > 128 * 1024 {
+            if raw.len() > MAX_BODY {
                 break;
             }
         } else if !raw.is_empty() {
-            // Если получили данные и новые не поступают более 500мс
+            // Если получили данные и новые не поступают более 1500мс
             if crate::timer::uptime_ms() - t0 > 1500 {
                 break;
             }
@@ -111,9 +123,92 @@ pub fn fetch_text(url: &str) -> Result<String, String> {
     }
 
     let body_offset = find_header_end(&raw).unwrap_or(0);
-    let body_bytes = &raw[body_offset..];
-    
-    Ok(String::from_utf8_lossy(body_bytes).into_owned())
+    let header_text = String::from_utf8_lossy(&raw[..body_offset]).into_owned();
+    let (status, reason) = parse_status_line(&header_text);
+    let location = header_value(&header_text, "location");
+    let body = String::from_utf8_lossy(&raw[body_offset..]).into_owned();
+    Ok((status, reason, location, body))
+}
+
+/// HTTP GET с переходом по redirect (до MAX_REDIRECTS).
+pub fn fetch(url: &str) -> Result<HttpResponse, String> {
+    let mut current = if url.trim().starts_with("https://") {
+        return Err("HTTPS не поддерживается: в DeiX нет TLS".into());
+    } else if url.trim().starts_with("http://") {
+        url.trim().to_string()
+    } else {
+        format!("http://{}", url.trim())
+    };
+
+    for _ in 0..=MAX_REDIRECTS {
+        let (status, reason, location, body) = fetch_once(&current)?;
+        let is_redirect = matches!(status, 301 | 302 | 303 | 307 | 308);
+        if is_redirect {
+            if let Some(loc) = location {
+                if loc.starts_with("https://") {
+                    return Err(format!(
+                        "Сервер перенаправляет на {} — HTTPS/TLS не поддерживается",
+                        loc
+                    ));
+                }
+                current = absolutize(&loc, &current);
+                continue;
+            }
+        }
+        return Ok(HttpResponse {
+            status,
+            reason,
+            body,
+            final_url: current,
+        });
+    }
+    Err(format!("Слишком много перенаправлений (>{})", MAX_REDIRECTS))
+}
+
+/// Превращает Location в абсолютный URL относительно base.
+fn absolutize(loc: &str, base: &str) -> String {
+    if loc.starts_with("http://") {
+        return loc.to_string();
+    }
+    let (host, port, _) = match parse_url(base) {
+        Some(v) => v,
+        None => return loc.to_string(),
+    };
+    let path = if loc.starts_with('/') {
+        loc.to_string()
+    } else {
+        format!("/{}", loc)
+    };
+    if port == 80 {
+        format!("http://{}{}", host, path)
+    } else {
+        format!("http://{}:{}{}", host, port, path)
+    }
+}
+
+/// "HTTP/1.1 200 OK" -> (200, "OK"). Если строка не распознана — (0, "").
+fn parse_status_line(header: &str) -> (u16, String) {
+    let line = header.lines().next().unwrap_or("");
+    if !line.starts_with("HTTP/") {
+        return (0, String::new());
+    }
+    let mut it = line.splitn(3, ' ');
+    let _ver = it.next();
+    let code = it.next().and_then(|c| c.parse::<u16>().ok()).unwrap_or(0);
+    let reason = it.next().unwrap_or("").trim().to_string();
+    (code, reason)
+}
+
+/// Значение заголовка (регистронезависимо), без пробелов по краям.
+fn header_value(header: &str, name: &str) -> Option<String> {
+    for line in header.lines().skip(1) {
+        if let Some(colon) = line.find(':') {
+            if line[..colon].trim().eq_ignore_ascii_case(name) {
+                return Some(line[colon + 1..].trim().to_string());
+            }
+        }
+    }
+    None
 }
 
 fn find_header_end(raw: &[u8]) -> Option<usize> {

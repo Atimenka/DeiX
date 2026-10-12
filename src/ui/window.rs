@@ -317,6 +317,7 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::from("## Honest limitations:"),
             String::from("- HTTP/1.0 only: no HTTPS/TLS (most modern sites redirect to HTTPS and will not load)"),
             String::from("- Text rendering only: no CSS, JavaScript or images"),
+            String::from("- DNS: real A-record lookups over UDP/53 (no DNSSEC, no IPv6)"),
         ];
     } else if clean_url == "deix://docs" {
         return alloc::vec![
@@ -330,7 +331,8 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::from("Built-in compositor manages window layers, VBE double buffer & FPS."),
             String::new(),
             String::from("### 3. Network Stack"),
-            String::from("RTL8139 Ethernet -> ARP / IPv4 -> TCP -> HTTP/1.0 Web Client."),
+            String::from("RTL8139 Ethernet -> ARP / IPv4 -> ICMP + UDP (DNS) + TCP -> HTTP/1.0."),
+            String::from("Hostnames are resolved with a real DNS client (A records, UDP/53)."),
         ];
     } else if clean_url == "http://deix.os" {
         // Локальная страница с НАСТОЯЩИМИ значениями подсистем — никакой
@@ -338,6 +340,7 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
         let heap = crate::allocator::stats();
         let ip = crate::net::my_ip();
         let gw = crate::net::gateway_ip();
+        let dns = crate::net::dns_ip();
         let cpu = crate::cpuid::brand_string()
             .unwrap_or_else(|| crate::cpuid::vendor_string());
         return alloc::vec![
@@ -351,8 +354,9 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
                 heap.total / 1024
             ),
             alloc::format!(
-                "Network: eth0 {}.{}.{}.{} (gw {}.{}.{}.{})",
-                ip[0], ip[1], ip[2], ip[3], gw[0], gw[1], gw[2], gw[3]
+                "Network: eth0 {}.{}.{}.{} (gw {}.{}.{}.{}, dns {}.{}.{}.{})",
+                ip[0], ip[1], ip[2], ip[3], gw[0], gw[1], gw[2], gw[3],
+                dns[0], dns[1], dns[2], dns[3]
             ),
         ];
     }
@@ -363,8 +367,8 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
         clean_url.to_string()
     };
 
-    match crate::net::http::fetch_text(&full_url) {
-        Ok(html) => parse_html_to_browser_lines(&full_url, &html),
+    match crate::net::http::fetch(&full_url) {
+        Ok(resp) => parse_html_to_browser_lines(&resp),
         // Показываем настоящую причину сбоя из net::http. Подменять её
         // «успешной» страницей нельзя: иначе сеть не диагностируется.
         Err(err) => alloc::vec![
@@ -374,19 +378,25 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::new(),
             String::from("Возможные причины:"),
             String::from("* сетевая карта не инициализирована (нет eth0)"),
-            String::from("* не разрешается имя хоста (нет DNS)"),
+            String::from("* DNS-сервер недоступен или имя не существует"),
             String::from("* хост недоступен или порт закрыт"),
-            String::from("* сервер не ответил за отведённое время"),
+            String::from("* сайт доступен только по HTTPS (TLS не поддерживается)"),
             String::new(),
-            String::from("Проверьте: `net info`, `ping <ip>`, `eth`."),
+            String::from("Проверьте в CLI: `ifconfig`, `dns <host>`, `ping <ip>`."),
         ],
     }
 }
 
-pub fn parse_html_to_browser_lines(url: &str, html: &str) -> Vec<String> {
+pub fn parse_html_to_browser_lines(resp: &crate::net::http::HttpResponse) -> Vec<String> {
+    let html = &resp.body;
     let mut lines = Vec::new();
-    lines.push(format!("# Web Page: {}", url));
-    lines.push(String::from("Status: 200 OK | TCP Connected"));
+    lines.push(format!("# Web Page: {}", resp.final_url));
+    // Настоящая строка статуса из ответа сервера, а не вечное «200 OK».
+    if resp.status == 0 {
+        lines.push(String::from("Status: unknown (no HTTP status line in reply)"));
+    } else {
+        lines.push(format!("Status: {} {}", resp.status, resp.reason));
+    }
     lines.push(String::new());
 
     let mut in_tag = false;

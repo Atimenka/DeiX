@@ -103,9 +103,30 @@ fsck.erofs --extract=/tmp/out /tmp/system.img && ls -R /tmp/out
 | `threads list` | задачи планировщика и счётчик переключений |
 | `dinit status` | службы: встроенные (Ring 0) и процессы |
 | `ifconfig` / `ping` | сеть (нужен `-device rtl8139`) |
+| `dns <host>` | настоящий DNS-запрос (A-запись по UDP/53) |
 | `gpu info` | детект видеокарты |
 | `error list` / `panic last` | журнал диагностики и последний аварийный дамп |
 | `install` | установка системы на второй диск (ATA Slave) |
+
+### Интернет в QEMU (user-mode networking, slirp)
+
+Гость получает фиксированную конфигурацию: IP `10.0.2.15/24`, шлюз
+`10.0.2.2`, DNS `10.0.2.3` (значения по умолчанию в `src/net/mod.rs`,
+меняются `ifconfig <ip>` / `ifconfig dns <ip>`). Проверка настоящего
+интернета:
+
+```
+dns example.com          # A-запись через slirp-резолвер хоста
+ping 10.0.2.2            # ICMP до шлюза slirp
+gpu mode                 # затем в браузере открыть http://example.com
+```
+
+Браузер (GUI, «Web Browser») резолвит имя через DNS, устанавливает TCP
+и делает HTTP/1.0 GET с переходом по redirect. Честные пределы: TLS нет,
+поэтому почти все современные сайты (отвечающие redirect-ом на HTTPS)
+завершатся понятной ошибкой — для проверки годятся plain-HTTP сайты
+(`example.com`, `neverssl.com`). ICMP наружу через slirp не ходит —
+`ping 8.8.8.8` не ответит, это ограничение QEMU, а не стека.
 
 ## 6. Карта памяти (важно при правках)
 
@@ -150,6 +171,10 @@ sound beep 880 200
 - `getrandom` — не криптографический ГСЧ.
 - Шифрование диска — собственный формат «по мотивам LUKS»
   (XTS-AES-256), несовместим с утилитами LUKS.
+- DNS — только A-записи по UDP/53 (без AAAA/DNSSEC/TCP-fallback); IP-стек
+  не собирает фрагментированные пакеты.
+- HTTP-клиент — HTTP/1.0 без TLS: https:// не загружается, redirect на
+  HTTPS завершается честной ошибкой.
 - Нет USB, SMP, AHCI/NVMe, ACPI-управления питанием.
 
 Ключевые файлы: `src/partition_map.rs` (геометрия), `src/bootchain.rs`

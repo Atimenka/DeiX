@@ -7,23 +7,26 @@
 
 pub mod arp;
 pub mod checksum;
+pub mod dns;
 pub mod eth;
 pub mod http;
 pub mod icmp;
 pub mod ipv4;
 pub mod tcp;
+pub mod udp;
 
 use crate::spinlock::SpinLock;
 use crate::sync::without_interrupts;
 
 /// Конфигурация сетевого интерфейса: наш IP-адрес (по умолчанию — это
 /// фиксированный адрес, который QEMU user-mode networking (slirp) выдаёт
-/// гостю "из коробки": 10.0.2.15/24, шлюз/хост 10.0.2.2). Меняется командой
-/// `ifconfig <ip>` в CLI, если понадобится другая сеть (например, при
-/// `-netdev tap` с другой подсетью).
+/// гостю "из коробки": 10.0.2.15/24, шлюз/хост 10.0.2.2, DNS 10.0.2.3).
+/// Меняется командами `ifconfig <ip>` и `ifconfig dns <ip>` в CLI, если
+/// понадобится другая сеть (например, при `-netdev tap` с другой подсетью).
 pub struct NetConfig {
     pub ip: [u8; 4],
     pub gateway: [u8; 4],
+    pub dns: [u8; 4],
 }
 
 impl NetConfig {
@@ -31,6 +34,7 @@ impl NetConfig {
         NetConfig {
             ip: [10, 0, 2, 15],
             gateway: [10, 0, 2, 2],
+            dns: [10, 0, 2, 3],
         }
     }
 }
@@ -47,6 +51,16 @@ pub fn gateway_ip() -> [u8; 4] {
 
 pub fn set_my_ip(ip: [u8; 4]) {
     without_interrupts(|| CONFIG.lock().ip = ip);
+    dns::flush_cache();
+}
+
+pub fn dns_ip() -> [u8; 4] {
+    without_interrupts(|| CONFIG.lock().dns)
+}
+
+pub fn set_dns_ip(ip: [u8; 4]) {
+    without_interrupts(|| CONFIG.lock().dns = ip);
+    dns::flush_cache();
 }
 
 /// Вызывается драйвером карты (rtl8139.rs) для каждого принятого
@@ -63,9 +77,16 @@ pub fn on_ethernet_frame(frame: &[u8]) {
     match header.ethertype {
         eth::ETHERTYPE_ARP => arp::handle_packet(payload, &header),
         eth::ETHERTYPE_IPV4 => {
-            // Также передаём TCP-модулю для обработки.
-            // Сохраняем полный фрейм (с Ethernet-заголовком) для TCP.
-            tcp::rx_enqueue(frame.to_vec());
+            // Демультиплексация по протоколу IP: TCP и UDP складываются
+            // в очереди своих модулей (синхронные connect/recv разбирают
+            // их сами), ICMP обрабатывается сразу в ipv4::handle_packet.
+            if payload.len() >= 20 {
+                match payload[9] {
+                    6 => tcp::rx_enqueue(frame.to_vec()),
+                    udp::PROTO_UDP => udp::rx_enqueue(frame.to_vec()),
+                    _ => {}
+                }
+            }
             ipv4::handle_packet(payload);
         }
         _ => {}
