@@ -13,6 +13,7 @@ pub mod http;
 pub mod icmp;
 pub mod ipv4;
 pub mod tcp;
+pub mod tls;
 pub mod udp;
 
 use crate::spinlock::SpinLock;

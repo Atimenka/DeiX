@@ -165,12 +165,12 @@ impl Window {
                 active_tab: 0,
                 address_input: String::from(url),
                 bookmarks: alloc::vec![
-                    String::from("example.com"),
+                    String::from("https://example.com"),
                     String::from("deix://home"),
                     String::from("deix://docs"),
                     String::from("http://deix.os"),
                 ],
-                status_msg: Some(String::from("HTTP client ready (text-only, no TLS).")),
+                status_msg: Some(String::from("HTTP/HTTPS client ready (text-only, TLS 1.3 without cert check).")),
             },
         }
     }
@@ -307,15 +307,16 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
     if clean_url == "deix://home" {
         return alloc::vec![
             String::from("# DeiX Browser"),
-            String::from("Limited text-oriented HTTP client."),
+            String::from("Limited text-oriented HTTP/HTTPS client."),
             String::new(),
             String::from("## Quick Navigation:"),
-            String::from("* [example.com] Plain-HTTP test page"),
+            String::from("* [https://example.com] HTTPS test page (TLS 1.3)"),
             String::from("* [deix://docs] System Architecture & Manual"),
             String::from("* [http://deix.os] System Status (local page)"),
             String::new(),
             String::from("## Honest limitations:"),
-            String::from("- HTTP/1.0 only: no HTTPS/TLS (most modern sites redirect to HTTPS and will not load)"),
+            String::from("- HTTPS: own TLS 1.3 client (X25519 + AES-128-GCM); server certificates are NOT verified (no CA store)"),
+            String::from("- TLS 1.3 only: servers without it fail with an honest error; HTTP/1.0 requests (no chunked encoding)"),
             String::from("- Text rendering only: no CSS, JavaScript or images"),
             String::from("- DNS: real A-record lookups over UDP/53 (no DNSSEC, no IPv6)"),
         ];
@@ -331,8 +332,9 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::from("Built-in compositor manages window layers, VBE double buffer & FPS."),
             String::new(),
             String::from("### 3. Network Stack"),
-            String::from("RTL8139 Ethernet -> ARP / IPv4 -> ICMP + UDP (DNS) + TCP -> HTTP/1.0."),
+            String::from("RTL8139 Ethernet -> ARP / IPv4 -> ICMP + UDP (DNS) + TCP -> HTTP/1.0 + TLS 1.3 (https)."),
             String::from("Hostnames are resolved with a real DNS client (A records, UDP/53)."),
+            String::from("TLS 1.3: X25519 + HKDF-SHA256 + AES-128-GCM, certificates NOT verified."),
         ];
     } else if clean_url == "http://deix.os" {
         // Локальная страница с НАСТОЯЩИМИ значениями подсистем — никакой
@@ -380,7 +382,7 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::from("* сетевая карта не инициализирована (нет eth0)"),
             String::from("* DNS-сервер недоступен или имя не существует"),
             String::from("* хост недоступен или порт закрыт"),
-            String::from("* сайт доступен только по HTTPS (TLS не поддерживается)"),
+            String::from("* сервер не поддерживает TLS 1.3 (старые HTTPS-сайты не загрузятся)"),
             String::new(),
             String::from("Проверьте в CLI: `ifconfig`, `dns <host>`, `ping <ip>`."),
         ],
@@ -396,6 +398,11 @@ pub fn parse_html_to_browser_lines(resp: &crate::net::http::HttpResponse) -> Vec
         lines.push(String::from("Status: unknown (no HTTP status line in reply)"));
     } else {
         lines.push(format!("Status: {} {}", resp.status, resp.reason));
+    }
+    if resp.final_url.starts_with("https://") {
+        lines.push(String::from(
+            "TLS 1.3: channel encrypted, server certificate NOT verified (no CA store)",
+        ));
     }
     lines.push(String::new());
 

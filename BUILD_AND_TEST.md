@@ -121,14 +121,16 @@ fsck.erofs --extract=/tmp/out /tmp/system.img && ls -R /tmp/out
 ```
 dns example.com          # A-запись через slirp-резолвер хоста
 ping 10.0.2.2            # ICMP до шлюза slirp
-gpu mode                 # затем в браузере открыть http://example.com
+gpu mode                 # затем в браузере открыть https://example.com
 ```
 
 Браузер (GUI, «Web Browser») резолвит имя через DNS, устанавливает TCP
-и делает HTTP/1.0 GET с переходом по redirect. Честные пределы: TLS нет,
-поэтому почти все современные сайты (отвечающие redirect-ом на HTTPS)
-завершатся понятной ошибкой — для проверки годятся plain-HTTP сайты
-(`example.com`, `neverssl.com`). ICMP наружу через slirp не ходит —
+и делает HTTP/1.0 GET с переходом по redirect; `https://` работает через
+собственный TLS 1.3 клиент (`src/net/tls.rs`). Честные пределы: TLS
+только 1.3 (без 1.2), сертификаты сервера не проверяются (нет CA store),
+поэтому канал защищён лишь от пассивного прослушивания. Для проверки:
+`https://example.com`, `https://www.google.com` (большие страницы
+обрезаются по лимиту 128 КиБ). ICMP наружу через slirp не ходит —
 `ping 8.8.8.8` не ответит, это ограничение QEMU, а не стека.
 
 ## 6. Карта памяти (важно при правках)
@@ -176,8 +178,8 @@ sound beep 880 200
   (XTS-AES-256), несовместим с утилитами LUKS.
 - DNS — только A-записи по UDP/53 (без AAAA/DNSSEC/TCP-fallback); IP-стек
   не собирает фрагментированные пакеты.
-- HTTP-клиент — HTTP/1.0 без TLS: https:// не загружается, redirect на
-  HTTPS завершается честной ошибкой.
+- HTTP-клиент — HTTP/1.0 (без chunked encoding); https:// через TLS 1.3
+  без проверки сертификатов (нет CA store), TLS 1.2 не поддерживается.
 - Нет USB, SMP, AHCI/NVMe, ACPI-управления питанием.
 
 Ключевые файлы: `src/partition_map.rs` (геометрия), `src/bootchain.rs`

@@ -1,16 +1,17 @@
-//! HTTP/1.0 клиент поверх TCP.
+//! HTTP/1.0 клиент поверх TCP и TLS 1.3.
 //!
 //! Поддерживает: GET, разбор строки статуса и заголовков, Content-Length,
-//! переход по redirect (301/302/303/307/308, до 3 переходов). Имена хостов
-//! резолвятся настоящим DNS-клиентом (net::dns) через UDP/53.
-//! Честные ограничения: нет TLS — https:// URL не загружаются, редирект
-//! на https:// завершается понятной ошибкой.
+//! переход по redirect (301/302/303/307/308, до 3 переходов), https://
+//! через собственный TLS 1.3 клиент (net::tls). Имена хостов резолвятся
+//! настоящим DNS-клиентом (net::dns) через UDP/53.
+//! Честные ограничения: HTTP/1.0 без chunked encoding; TLS только 1.3 и
+//! сертификат сервера не проверяется (см. net/tls.rs).
 
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use crate::net::{dns, tcp};
+use crate::net::{dns, tcp, tls};
 
 const MAX_REDIRECTS: u32 = 3;
 const MAX_BODY: usize = 128 * 1024;
@@ -24,12 +25,12 @@ pub struct HttpResponse {
     pub final_url: String,
 }
 
-/// Парсит URL: возвращает (host, port, path).
-pub fn parse_url(url: &str) -> Option<(String, u16, String)> {
+/// Парсит URL: возвращает (host, port, path, https).
+pub fn parse_url(url: &str) -> Option<(String, u16, String, bool)> {
     let s = url.trim();
-    let rest = if s.starts_with("http://") { &s[7..] }
-    else if s.starts_with("https://") { &s[8..] }
-    else { s };
+    let (rest, https) = if s.starts_with("http://") { (&s[7..], false) }
+    else if s.starts_with("https://") { (&s[8..], true) }
+    else { (s, false) };
 
     // Отделяем host[:port] от path
     let slash = rest.find('/').unwrap_or(rest.len());
@@ -37,16 +38,17 @@ pub fn parse_url(url: &str) -> Option<(String, u16, String)> {
     let path = if slash < rest.len() { &rest[slash..] } else { "/" };
 
     // Отделяем порт если есть
+    let default_port: u16 = if https { 443 } else { 80 };
     let (host, port) = if let Some(colon) = host_part.find(':') {
         let port_str = &host_part[colon+1..];
-        let port: u16 = port_str.parse().unwrap_or(80);
+        let port: u16 = port_str.parse().unwrap_or(default_port);
         (host_part[..colon].to_string(), port)
     } else {
-        (host_part.to_string(), 80u16)
+        (host_part.to_string(), default_port)
     };
 
     if host.is_empty() { return None; }
-    Some((host, port, path.to_string()))
+    Some((host, port, path.to_string(), https))
 }
 
 /// Разбирает host: IPv4-литерал, локальные алиасы или настоящий DNS-запрос.
@@ -70,30 +72,69 @@ pub fn resolve(host: &str) -> Option<[u8; 4]> {
     }
 }
 
+/// Транспорт одного запроса: открытый TCP или TLS 1.3 поверх него.
+enum Conn {
+    Plain,
+    Tls(tls::TlsStream),
+}
+
+impl Conn {
+    fn send(&mut self, data: &[u8]) -> Result<(), String> {
+        match self {
+            Conn::Plain => {
+                if tcp::send(data) { Ok(()) } else { Err("TCP: отправка не удалась".into()) }
+            }
+            Conn::Tls(t) => t.send(data),
+        }
+    }
+
+    fn recv(&mut self, timeout_ms: u64) -> Vec<u8> {
+        match self {
+            Conn::Plain => tcp::recv(timeout_ms),
+            Conn::Tls(t) => t.recv(timeout_ms),
+        }
+    }
+
+    fn close(&mut self) {
+        match self {
+            Conn::Plain => tcp::close(),
+            Conn::Tls(t) => t.close(),
+        }
+    }
+}
+
 /// Один HTTP GET без redirect: (status, reason, location, body).
 fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, String), String> {
-    let (host, port, path) = parse_url(url)
+    let (host, port, path, https) = parse_url(url)
         .ok_or_else(|| "Некорректный URL адрес".to_string())?;
     let ip = resolve(&host)
         .ok_or_else(|| format!("DNS: не удалось разрешить хост '{}'", host))?;
 
-    if !tcp::connect(ip, port) {
-        return Err(format!(
-            "Не удалось установить TCP-соединение с {} ({}.{}.{}.{}:{})",
-            host, ip[0], ip[1], ip[2], ip[3], port
-        ));
-    }
+    let mut conn = if https {
+        Conn::Tls(tls::connect(ip, port, &host)?)
+    } else {
+        if !tcp::connect(ip, port) {
+            return Err(format!(
+                "Не удалось установить TCP-соединение с {} ({}.{}.{}.{}:{})",
+                host, ip[0], ip[1], ip[2], ip[3], port
+            ));
+        }
+        Conn::Plain
+    };
 
     let req = format!(
         "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: DeiX-Browser/3.0 (DeiX OS x86_64)\r\nAccept: text/html,text/plain\r\nConnection: close\r\n\r\n",
         path, host
     );
-    tcp::send(req.as_bytes());
+    if let Err(e) = conn.send(req.as_bytes()) {
+        conn.close();
+        return Err(e);
+    }
 
     let mut raw: Vec<u8> = Vec::new();
     let t0 = crate::timer::uptime_ms();
     loop {
-        let chunk = tcp::recv(1000);
+        let chunk = conn.recv(1000);
         if !chunk.is_empty() {
             raw.extend_from_slice(&chunk);
             if raw.len() > MAX_BODY {
@@ -116,7 +157,7 @@ fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, String), String
             break;
         }
     }
-    tcp::close();
+    conn.close();
 
     if raw.is_empty() {
         return Err("Сервер не прислал ответа".into());
@@ -132,9 +173,7 @@ fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, String), String
 
 /// HTTP GET с переходом по redirect (до MAX_REDIRECTS).
 pub fn fetch(url: &str) -> Result<HttpResponse, String> {
-    let mut current = if url.trim().starts_with("https://") {
-        return Err("HTTPS не поддерживается: в DeiX нет TLS".into());
-    } else if url.trim().starts_with("http://") {
+    let mut current = if url.trim().starts_with("http://") || url.trim().starts_with("https://") {
         url.trim().to_string()
     } else {
         format!("http://{}", url.trim())
@@ -145,12 +184,6 @@ pub fn fetch(url: &str) -> Result<HttpResponse, String> {
         let is_redirect = matches!(status, 301 | 302 | 303 | 307 | 308);
         if is_redirect {
             if let Some(loc) = location {
-                if loc.starts_with("https://") {
-                    return Err(format!(
-                        "Сервер перенаправляет на {} — HTTPS/TLS не поддерживается",
-                        loc
-                    ));
-                }
                 current = absolutize(&loc, &current);
                 continue;
             }
@@ -165,12 +198,13 @@ pub fn fetch(url: &str) -> Result<HttpResponse, String> {
     Err(format!("Слишком много перенаправлений (>{})", MAX_REDIRECTS))
 }
 
-/// Превращает Location в абсолютный URL относительно base.
+/// Превращает Location в абсолютный URL относительно base
+/// (с сохранением схемы base для относительных ссылок).
 fn absolutize(loc: &str, base: &str) -> String {
-    if loc.starts_with("http://") {
+    if loc.starts_with("http://") || loc.starts_with("https://") {
         return loc.to_string();
     }
-    let (host, port, _) = match parse_url(base) {
+    let (host, port, _, https) = match parse_url(base) {
         Some(v) => v,
         None => return loc.to_string(),
     };
@@ -179,10 +213,12 @@ fn absolutize(loc: &str, base: &str) -> String {
     } else {
         format!("/{}", loc)
     };
-    if port == 80 {
-        format!("http://{}{}", host, path)
+    let scheme = if https { "https" } else { "http" };
+    let default_port = if https { 443 } else { 80 };
+    if port == default_port {
+        format!("{}://{}{}", scheme, host, path)
     } else {
-        format!("http://{}:{}{}", host, port, path)
+        format!("{}://{}:{}{}", scheme, host, port, path)
     }
 }
 
