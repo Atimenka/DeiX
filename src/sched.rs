@@ -78,6 +78,11 @@ struct Task {
     /// PID процесса-владельца (см. `crate::process`), если задача
     /// создана менеджером процессов. 0 — задача ядра без процесса.
     pid: u32,
+    /// Задача добровольно простаивает в `idle_wait()` (hlt в ожидании
+    /// события). Тики PIT в этом состоянии честно учитываются как
+    /// простой процессора, а не как работа задачи — иначе главный
+    /// поток ("dinit") показывал бы 100% CPU, просто ожидая ввода.
+    idle_waiting: bool,
 }
 
 impl Task {
@@ -89,6 +94,7 @@ impl Task {
             name: String::new(),
             runtime_ticks: 0,
             pid: 0,
+            idle_waiting: false,
         }
     }
 }
@@ -105,6 +111,8 @@ static SCHED_ACTIVE: AtomicBool = AtomicBool::new(false);
 static SWITCHES: AtomicUsize = AtomicUsize::new(0);
 /// Всего тиков PIT, учтённых планировщиком. Знаменатель для доли CPU.
 static TICKS_TOTAL: AtomicUsize = AtomicUsize::new(0);
+/// Тики PIT, пришедшиеся на добровольный простой (idle_wait).
+static IDLE_TICKS: AtomicUsize = AtomicUsize::new(0);
 /// Защита операций spawn/join (в обычном коде, не в прерывании).
 static TABLE_LOCK: SpinLock<()> = SpinLock::new(());
 
@@ -218,7 +226,12 @@ extern "C" fn schedule_from_irq(rsp: u64) -> u64 {
         if tasks[cur].state != State::Empty {
             tasks[cur].rsp = rsp;
             // Один тик PIT прошёл, пока эта задача была на процессоре.
-            tasks[cur].runtime_ticks = tasks[cur].runtime_ticks.wrapping_add(1);
+            // Простой в idle_wait() учитываем отдельно: это не работа.
+            if tasks[cur].idle_waiting {
+                IDLE_TICKS.fetch_add(1, Ordering::Relaxed);
+            } else {
+                tasks[cur].runtime_ticks = tasks[cur].runtime_ticks.wrapping_add(1);
+            }
             TICKS_TOTAL.fetch_add(1, Ordering::Relaxed);
         }
 
@@ -464,6 +477,26 @@ pub fn list() -> Vec<TaskInfo> {
 pub fn ticks_total() -> usize {
     TICKS_TOTAL.load(Ordering::Relaxed)
 }
+
+/// Тики PIT, пришедшиеся на добровольный простой (idle_wait).
+pub fn idle_ticks() -> usize {
+    IDLE_TICKS.load(Ordering::Relaxed)
+}
+
+/// Честный `hlt`: помечает текущую задачу простаивающей, чтобы тики
+/// ожидания не записывались ей в счёт работы процессора. Использовать
+/// во всех циклах ожидания события (ввод, сеть, сон) вместо голого hlt.
+pub fn idle_wait() {
+    let cur = CURRENT.load(Ordering::Relaxed);
+    unsafe {
+        let tasks = &mut *(&raw mut TASKS);
+        tasks[cur].idle_waiting = true;
+        core::arch::asm!("hlt");
+        // Сюда исполнение возвращается только когда планировщик снова
+        // поставил наш слот на процессор — флаг снимаем со своего слота.
+        tasks[cur].idle_waiting = false;
+    }
+}
 /// Человекочитаемое имя состояния задачи.
 pub fn state_str(state: State) -> &'static str {
     match state {
@@ -580,7 +613,11 @@ pub fn cmd_threads(arg: &str) {
                 );
             }
             crate::println!("  Переключений контекста всего: {}", switch_count());
-            crate::println!("  Тиков PIT учтено: {}", ticks_total());
+            crate::println!(
+                "  Тиков PIT учтено: {} (из них простой процессора: {})",
+                ticks_total(),
+                idle_ticks()
+            );
         }
         "" | "test" => selftest(),
         _ => crate::println!("threads [list|test] — вытесняющая многозадачность"),

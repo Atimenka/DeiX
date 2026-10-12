@@ -26,8 +26,12 @@ else
   AUDIO_ARGS=(-audiodev none,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0)
 fi
 
+# Сеть: user-mode networking (slirp) + RTL8139 — гость получает
+# 10.0.2.15/24, шлюз 10.0.2.2, DNS 10.0.2.3; без этих флагов браузер и
+# команды dns/ping честно сообщат об отсутствии сетевой карты.
 qemu-system-x86_64 \
     -drive format=raw,file="$IMG" \
     -m 512M \
+    -netdev user,id=n0 -device rtl8139,netdev=n0 \
     "${AUDIO_ARGS[@]}" \
     "$@"

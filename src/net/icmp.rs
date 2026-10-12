@@ -110,6 +110,6 @@ pub fn ping(dst_ip: [u8; 4], id: u16, seq: u16, timeout_ms: u64) -> Option<u64> 
         if elapsed > timeout_ms {
             return None;
         }
-        unsafe { core::arch::asm!("hlt") };
+        crate::sched::idle_wait();
     }
 }

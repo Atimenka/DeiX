@@ -212,7 +212,7 @@ extern "C" fn kapi_uptime_ms() -> u64 {
 extern "C" fn kapi_sleep_ms(ms: u64) {
     let t0 = crate::timer::uptime_ms();
     while crate::timer::uptime_ms() - t0 < ms {
-        unsafe { core::arch::asm!("hlt") };
+        crate::sched::idle_wait();
     }
 }
 

@@ -62,6 +62,9 @@ stage2/ramboot -> cargo build --release -> objcopy kernel.bin -> MBR ->
 
 ## 4. Запуск
 
+`./run.sh` и `./run_debug.sh` уже включают сеть (slirp + RTL8139) и звук.
+Вручную:
+
 ```bash
 # Headless, весь вывод в терминал
 qemu-system-x86_64 -drive file=build/deix_disk.img,format=raw,if=ide \

@@ -399,62 +399,104 @@ pub fn parse_html_to_browser_lines(resp: &crate::net::http::HttpResponse) -> Vec
     }
     lines.push(String::new());
 
-    let mut in_tag = false;
-    let mut current_word = String::new();
-    let mut current_line = String::new();
+    let cs: Vec<char> = html.chars().collect();
 
-    for ch in html.chars() {
-        if ch == '<' {
-            in_tag = true;
-            if !current_word.is_empty() {
-                if current_line.len() + current_word.len() > 60 {
-                    lines.push(current_line.clone());
-                    current_line.clear();
-                }
-                if !current_line.is_empty() {
-                    current_line.push(' ');
-                }
-                current_line.push_str(&current_word);
-                current_word.clear();
-            }
-        } else if ch == '>' {
-            in_tag = false;
-        } else if !in_tag {
-            if ch == '\n' || ch == '\r' {
-                if !current_word.is_empty() {
-                    if !current_line.is_empty() {
-                        current_line.push(' ');
-                    }
-                    current_line.push_str(&current_word);
-                    current_word.clear();
-                }
-                if !current_line.is_empty() {
-                    lines.push(current_line.clone());
-                    current_line.clear();
-                }
-            } else if ch == ' ' || ch == '\t' {
-                if !current_word.is_empty() {
-                    if current_line.len() + current_word.len() > 60 {
-                        lines.push(current_line.clone());
-                        current_line.clear();
-                    }
-                    if !current_line.is_empty() {
-                        current_line.push(' ');
-                    }
-                    current_line.push_str(&current_word);
-                    current_word.clear();
-                }
-            } else {
-                current_word.push(ch);
-            }
+    if let Some(title) = extract_title(&cs) {
+        if !title.is_empty() {
+            lines.push(format!("## {}", title));
+            lines.push(String::new());
         }
     }
 
-    if !current_word.is_empty() {
-        current_line.push_str(&current_word);
+    // Проход по документу: содержимое <script>/<style> и комментарии
+    // пропускаются (иначе минифицированный JS/CSS высыпается на экран
+    // «разбросанными буквами»), блочные теги дают перенос строки,
+    // HTML-сущности декодируются.
+    let mut text = String::new();
+    let mut i = 0usize;
+    while i < cs.len() {
+        if cs[i] == '<' {
+            if starts_with_ci(&cs, i, "<!--") {
+                i = find_ci(&cs, i, "-->").map(|p| p + 3).unwrap_or(cs.len());
+                continue;
+            }
+            if starts_with_ci(&cs, i, "<script") {
+                i = find_ci(&cs, i, "</script").unwrap_or(cs.len());
+                i = skip_past_gt(&cs, i);
+                text.push('\n');
+                continue;
+            }
+            if starts_with_ci(&cs, i, "<style") {
+                i = find_ci(&cs, i, "</style").unwrap_or(cs.len());
+                i = skip_past_gt(&cs, i);
+                text.push('\n');
+                continue;
+            }
+            let tag_end = skip_past_gt(&cs, i);
+            let name = tag_name(&cs, i);
+            if name == "li" {
+                text.push_str("\n* ");
+            } else if is_block_tag(&name) {
+                text.push('\n');
+            }
+            i = tag_end;
+        } else if cs[i] == '&' {
+            let (ch, next) = decode_entity(&cs, i);
+            text.push(ch);
+            i = next;
+        } else {
+            let c = cs[i];
+            if c == '\r' {
+                // игнорируем, перенос даст \n
+            } else if c == '\n' || c == '\t' {
+                text.push(' ');
+            } else {
+                text.push(c);
+            }
+            i += 1;
+        }
     }
-    if !current_line.is_empty() {
-        lines.push(current_line);
+
+    // Сборка строк: схлопывание пробелов, перенос по словам на 72
+    // символа, слова длиннее лимита режутся жёстко (длинные URL).
+    const WRAP: usize = 72;
+    let mut blank_pending = false;
+    for para in text.split('\n') {
+        if para.split_whitespace().next().is_none() {
+            // пустой абзац: максимум одна пустая строка подряд
+            blank_pending = true;
+            continue;
+        }
+        if blank_pending && !lines.is_empty() {
+            lines.push(String::new());
+        }
+        blank_pending = false;
+        let mut line = String::new();
+        for word in para.split_whitespace() {
+            let mut rest = word;
+            loop {
+                if line.is_empty() {
+                    if rest.chars().count() <= WRAP {
+                        line.push_str(rest);
+                        break;
+                    }
+                    // жёсткий разрез сверхдлинного слова по границе символа
+                    let cut = char_prefix_len(rest, WRAP);
+                    line.push_str(&rest[..cut]);
+                    lines.push(core::mem::take(&mut line));
+                    rest = &rest[cut..];
+                } else if line.chars().count() + 1 + rest.chars().count() <= WRAP {
+                    line.push(' ');
+                    line.push_str(rest);
+                    break;
+                } else {
+                    lines.push(core::mem::take(&mut line));
+                }
+            }
+        }
+        if !line.is_empty() {
+            lines.push(line);
+        }
     }
 
     if lines.len() <= 3 {
@@ -462,6 +504,141 @@ pub fn parse_html_to_browser_lines(resp: &crate::net::http::HttpResponse) -> Vec
     }
 
     lines
+}
+
+/// Регистронезависимое (ASCII) сравнение с образцом на позиции pos.
+fn starts_with_ci(cs: &[char], pos: usize, pat: &str) -> bool {
+    let pc: Vec<char> = pat.chars().collect();
+    if pos + pc.len() > cs.len() {
+        return false;
+    }
+    pc.iter()
+        .enumerate()
+        .all(|(k, p)| cs[pos + k].to_ascii_lowercase() == *p)
+}
+
+/// Поиск образца (ASCII, без регистра) начиная с from. Возвращает позицию.
+fn find_ci(cs: &[char], from: usize, pat: &str) -> Option<usize> {
+    let pc: Vec<char> = pat.chars().collect();
+    if pc.is_empty() || cs.len() < pc.len() {
+        return None;
+    }
+    (from..=cs.len() - pc.len()).find(|&p| {
+        pc.iter()
+            .enumerate()
+            .all(|(k, q)| cs[p + k].to_ascii_lowercase() == *q)
+    })
+}
+
+/// Позиция сразу за ближайшим '>' (конец тега).
+fn skip_past_gt(cs: &[char], from: usize) -> usize {
+    let mut i = from;
+    while i < cs.len() {
+        if cs[i] == '>' {
+            return i + 1;
+        }
+        i += 1;
+    }
+    cs.len()
+}
+
+/// Имя тега в нижнем регистре: "</div class..>" -> "div".
+fn tag_name(cs: &[char], pos: usize) -> String {
+    let mut i = pos + 1;
+    if i < cs.len() && cs[i] == '/' {
+        i += 1;
+    }
+    let mut name = String::new();
+    while i < cs.len() && cs[i].is_ascii_alphanumeric() && name.len() < 12 {
+        name.push(cs[i].to_ascii_lowercase());
+        i += 1;
+    }
+    name
+}
+
+/// Блочные теги, дающие перенос строки.
+fn is_block_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "p" | "div" | "br" | "tr" | "ul" | "ol" | "table" | "section" | "article"
+            | "header" | "footer" | "nav" | "form" | "blockquote" | "pre" | "hr"
+            | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "title" | "head" | "body"
+    )
+}
+
+/// Содержимое <title>...</title>, если есть.
+fn extract_title(cs: &[char]) -> Option<String> {
+    let open = find_ci(cs, 0, "<title")?;
+    let start = skip_past_gt(cs, open);
+    let close = find_ci(cs, start, "</title")?;
+    let mut t = String::new();
+    let mut i = start;
+    while i < close {
+        if cs[i] == '&' {
+            let (ch, next) = decode_entity(cs, i);
+            t.push(ch);
+            i = next;
+        } else {
+            t.push(cs[i]);
+            i += 1;
+        }
+    }
+    let trimmed: String = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    if trimmed.len() > 120 {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// Декодирует HTML-сущность на позиции pos ('&'): возвращает символ и
+/// позицию за сущностью. Нераспознанное — просто '&', позиция +1.
+fn decode_entity(cs: &[char], pos: usize) -> (char, usize) {
+    // ищем ';' в пределах 10 символов
+    let mut end = pos + 1;
+    while end < cs.len() && end - pos <= 10 && cs[end] != ';' {
+        end += 1;
+    }
+    if end >= cs.len() || cs[end] != ';' {
+        return ('&', pos + 1);
+    }
+    let name: String = cs[pos + 1..end].iter().collect();
+    let decoded = match name.as_str() {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" | "#39" => Some('\''),
+        "nbsp" => Some(' '),
+        "copy" => Some('©'),
+        "reg" => Some('®'),
+        "deg" => Some('°'),
+        "ndash" | "mdash" => Some('-'),
+        "laquo" => Some('«'),
+        "raquo" => Some('»'),
+        "hellip" => Some('…'),
+        _ => {
+            if let Some(num) = name.strip_prefix("#x").or_else(|| name.strip_prefix("#X")) {
+                u32::from_str_radix(num, 16).ok().and_then(char::from_u32)
+            } else if let Some(num) = name.strip_prefix('#') {
+                num.parse::<u32>().ok().and_then(char::from_u32)
+            } else {
+                None
+            }
+        }
+    };
+    match decoded {
+        Some(c) => (c, end + 1),
+        None => ('&', pos + 1),
+    }
+}
+
+/// Длина (в байтах) префикса строки из не более max символов.
+fn char_prefix_len(s: &str, max: usize) -> usize {
+    match s.char_indices().nth(max) {
+        Some((idx, _)) => idx,
+        None => s.len(),
+    }
 }
 
 pub fn load_partition_entries(partition: &str, path: &str) -> (Vec<FileViewEntry>, Option<String>) {

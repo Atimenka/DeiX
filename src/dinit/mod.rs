@@ -574,6 +574,19 @@ pub fn init() {
 
 /// Периодический тик супервизора
 pub fn tick() {
+    // Квант супервизора не чаще раза в 500 мс: детект упавших служб не
+    // требует частоты цикла событий GUI, а каждый tick обходит все
+    // службы с проверками живости — гонять его сотни раз в секунду
+    // значит зря жечь процессор.
+    static LAST_TICK_MS: core::sync::atomic::AtomicU64 =
+        core::sync::atomic::AtomicU64::new(0);
+    let now = crate::timer::uptime_ms();
+    let last = LAST_TICK_MS.load(core::sync::atomic::Ordering::Relaxed);
+    if now.saturating_sub(last) < 500 {
+        return;
+    }
+    LAST_TICK_MS.store(now, core::sync::atomic::Ordering::Relaxed);
+
     if let Some(mut lock) = DINIT.try_lock() {
         if let Some(dinit) = lock.as_mut() {
             dinit.supervisor_tick();

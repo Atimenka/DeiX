@@ -25,6 +25,7 @@ echo "=========================================================="
 qemu-system-x86_64 \
     -drive file="$IMG",format=raw,if=ide \
     -m 512M \
+    -netdev user,id=n0 -device rtl8139,netdev=n0 \
     -no-reboot \
     -no-shutdown \
     -d guest_errors,int,cpu_reset \

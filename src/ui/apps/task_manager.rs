@@ -109,7 +109,18 @@ pub fn draw_task_manager(
         _ => (String::from("-"), 0usize),
     };
 
-    let cpu_str = format!("CPU top: {:>2}%  ({})", busy_percent, busiest_name_short(&busy_name));
+    let idle_ticks = crate::sched::idle_ticks();
+    let idle_percent = if ticks_total > 0 {
+        (idle_ticks * 100) / ticks_total
+    } else {
+        0
+    };
+    let cpu_str = format!(
+        "CPU top: {:>2}%  ({})  idle: {}%",
+        busy_percent,
+        busiest_name_short(&busy_name),
+        idle_percent
+    );
     r.draw_text(w.x + 12, content_y + 28, &cpu_str, theme.text_primary, None);
     r.fill_rounded_rect(w.x + 190, content_y + 28, 100, 10, 2, theme.titlebar_inactive);
     r.fill_rounded_rect(w.x + 190, content_y + 28, busy_percent.min(100) as u32, 10, 2, theme.accent);

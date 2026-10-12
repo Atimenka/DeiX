@@ -95,6 +95,9 @@ pub struct Desktop {
     /// Курсор сдвинулся, но сцена не менялась — быстрый путь без
     /// полной перерисовки (save-under, см. update_cursor_only).
     cursor_moved: bool,
+    /// Состояние левой кнопки в прошлом кадре: клики обрабатываются
+    /// по фронту нажатия, а не каждый кадр, пока кнопка зажата.
+    prev_left_button: bool,
     /// Пиксели back buffer под курсором (сохраняются перед его отрисовкой).
     cursor_saved_pixels: Vec<u32>,
     /// Фактическая (обрезанная по экрану) область сохранённых пикселей.
@@ -141,6 +144,7 @@ impl Desktop {
             prev_start_menu_rect: None,
             prev_control_center_rect: None,
             cursor_moved: false,
+            prev_left_button: false,
             cursor_saved_pixels: Vec::new(),
             cursor_saved_rect: crate::renderer::Rect::new(0, 0, 0, 0),
             cursor_saved_valid: false,
@@ -320,8 +324,50 @@ impl Desktop {
             self.cursor_moved = true;
         }
 
+        let pressed = m.left_button && !self.prev_left_button;
+        self.prev_left_button = m.left_button;
+
         if m.left_button {
+            // Перетаскивание/изменение размера продолжается, пока кнопка
+            // зажата; сцена перерисовывается только при реальном сдвиге.
+            if let Some((idx, orig_x, orig_y, mx0, my0)) = self.dragging_window {
+                if let Some(w) = self.windows.get_mut(idx) {
+                    if !w.maximized {
+                        let nx = orig_x + (m.x - mx0);
+                        let ny = (orig_y + (m.y - my0)).max(0);
+                        if w.x != nx || w.y != ny {
+                            w.x = nx;
+                            w.y = ny;
+                            self.dirty = true;
+                        }
+                    }
+                }
+                return;
+            }
+
+            if let Some((idx, orig_x, orig_y, orig_w, orig_h)) = self.resizing_window {
+                if let Some(w) = self.windows.get_mut(idx) {
+                    if !w.maximized {
+                        let new_w = (orig_w as i32 + (m.x - orig_x)).max(220) as u32;
+                        let new_h = (orig_h as i32 + (m.y - orig_y)).max(140) as u32;
+                        if w.width != new_w || w.height != new_h {
+                            w.width = new_w;
+                            w.height = new_h;
+                            self.dirty = true;
+                        }
+                    }
+                }
+                return;
+            }
+
+            // Клик обрабатывается один раз — по фронту нажатия. Удержание
+            // кнопки не должно каждый кадр заново «нажимать» интерфейс
+            // и гонять полную перерисовку сцены.
+            if !pressed {
+                return;
+            }
             self.dirty = true;
+
             if self.start_menu_open && m.x < 260 && m.y < taskbar_y {
                 self.handle_start_menu_click(m.x, m.y, taskbar_y, screen_w, screen_h);
                 return;
@@ -337,28 +383,6 @@ impl Desktop {
             }
             if self.control_center_open {
                 self.control_center_open = false;
-            }
-
-            if let Some((idx, orig_x, orig_y, mx0, my0)) = self.dragging_window {
-                if let Some(w) = self.windows.get_mut(idx) {
-                    if !w.maximized {
-                        w.x = orig_x + (m.x - mx0);
-                        w.y = (orig_y + (m.y - my0)).max(0);
-                    }
-                }
-                return;
-            }
-
-            if let Some((idx, orig_x, orig_y, orig_w, orig_h)) = self.resizing_window {
-                if let Some(w) = self.windows.get_mut(idx) {
-                    if !w.maximized {
-                        let new_w = (orig_w as i32 + (m.x - orig_x)).max(220) as u32;
-                        let new_h = (orig_h as i32 + (m.y - orig_y)).max(140) as u32;
-                        w.width = new_w;
-                        w.height = new_h;
-                    }
-                }
-                return;
             }
 
             for i in (0..self.windows.len()).rev() {
@@ -995,6 +1019,10 @@ impl Desktop {
         let screen_w = r.width() as i32;
         let screen_h = r.height() as i32;
 
+        // Снимаем курсор прошлого кадра: без этого при полной перерисовке
+        // (например, с зажатой кнопкой мыши) его пиксели оставались в back
+        // buffer вне damage-областей и тянулись следом за мышью.
+        self.restore_under_cursor(r);
         self.diff_exposed_regions(r, screen_w, screen_h);
 
         draw_wallpaper(r, &theme, self, screen_w, screen_h);
@@ -1206,7 +1234,7 @@ impl Desktop {
                 self.cursor_moved = false;
             }
 
-            unsafe { core::arch::asm!("hlt") };
+            crate::sched::idle_wait();
         }
     }
 }

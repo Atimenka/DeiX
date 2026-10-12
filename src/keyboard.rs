@@ -188,6 +188,6 @@ pub fn read_char() -> u8 {
         if let Some(c) = try_read_char() {
             return c;
         }
-        unsafe { core::arch::asm!("hlt") };
+        crate::sched::idle_wait();
     }
 }

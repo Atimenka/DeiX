@@ -367,7 +367,7 @@ pub fn run() -> Option<String> {
                     redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
                 } else {
                     // hlt: спим до прерывания, не жжём процессор впустую.
-                    unsafe { core::arch::asm!("hlt") };
+                    crate::sched::idle_wait();
                 }
                 continue;
             }
@@ -565,7 +565,7 @@ pub fn lock(username: &str) {
         let c = match poll_key() {
             Some(c) => c,
             None => {
-                unsafe { core::arch::asm!("hlt") };
+                crate::sched::idle_wait();
                 continue;
             }
         };

@@ -82,6 +82,6 @@ pub fn recv_from(port: u16, timeout_ms: u64) -> Option<([u8; 4], u16, Vec<u8>)> 
         if crate::timer::uptime_ms() - t0 > timeout_ms {
             return None;
         }
-        unsafe { core::arch::asm!("hlt") };
+        crate::sched::idle_wait();
     }
 }

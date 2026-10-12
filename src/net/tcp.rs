@@ -116,7 +116,7 @@ pub fn connect(dip: [u8;4], dport: u16) -> bool {
             }
         }
         if crate::timer::uptime_ms()-t0 > 5000 { return false; }
-        unsafe { core::arch::asm!("hlt"); }
+        crate::sched::idle_wait();
     }
 }
 
@@ -159,7 +159,7 @@ pub fn recv(to: u64) -> Vec<u8> {
             }
         }
         if crate::timer::uptime_ms()-t0 > to { return Vec::new(); }
-        unsafe { core::arch::asm!("hlt"); }
+        crate::sched::idle_wait();
     }
 }
 
