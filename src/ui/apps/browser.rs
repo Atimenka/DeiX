@@ -3,7 +3,6 @@
 use crate::renderer::{Color, IconType, Renderer};
 use crate::ui::theme::UiTheme;
 use crate::ui::window::{BrowserTab, Window};
-use alloc::format;
 use alloc::string::String;
 
 pub fn draw_browser(

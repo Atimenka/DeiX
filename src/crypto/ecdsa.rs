@@ -5,7 +5,6 @@
 //! постоянное время не требуется.
 
 use super::bigint::BigUint;
-use alloc::vec::Vec;
 use core::cmp::Ordering;
 
 pub struct Curve {

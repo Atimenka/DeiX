@@ -51,7 +51,7 @@ impl AesGcm128 {
     /// GHASH по aad и ciphertext с длинами (в битах) в финальном блоке.
     fn ghash(&self, aad: &[u8], ct: &[u8]) -> [u8; 16] {
         let mut y = [0u8; 16];
-        let mut absorb = |data: &[u8], y: &mut [u8; 16]| {
+        let absorb = |data: &[u8], y: &mut [u8; 16]| {
             for chunk in data.chunks(16) {
                 let mut block = [0u8; 16];
                 block[..chunk.len()].copy_from_slice(chunk);

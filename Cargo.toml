@@ -13,3 +13,9 @@ panic = "abort"
 
 [profile.release]
 panic = "abort"
+# kernel.bin ограничен геометрией диска (KERNEL_SECTORS=2048 в build.sh и
+# boot/*.asm — 1 МиБ). С дефолтным opt-level=3 бинарник перестал влезать,
+# поэтому оптимизируем по размеру и включаем LTO.
+opt-level = "s"
+lto = true
+codegen-units = 1
