@@ -13,8 +13,11 @@
 //! шифрованием диска.
 
 pub mod aes;
+pub mod bigint;
+pub mod ecdsa;
 pub mod gcm;
 pub mod hkdf;
+pub mod rsa;
 pub mod sha256;
 pub mod pbkdf2;
 pub mod sha512;

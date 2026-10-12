@@ -16,6 +16,7 @@ pub mod ipv4;
 pub mod tcp;
 pub mod tls;
 pub mod udp;
+pub mod x509;
 
 use crate::spinlock::SpinLock;
 use crate::sync::without_interrupts;

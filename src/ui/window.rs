@@ -170,7 +170,7 @@ impl Window {
                     String::from("deix://docs"),
                     String::from("http://deix.os"),
                 ],
-                status_msg: Some(String::from("HTTP/HTTPS client ready (text-only, TLS 1.3 without cert check).")),
+                status_msg: Some(String::from("HTTP/HTTPS client ready (TLS 1.3, certificate verification on).")),
             },
         }
     }
@@ -315,7 +315,8 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::from("* [http://deix.os] System Status (local page)"),
             String::new(),
             String::from("## Honest limitations:"),
-            String::from("- HTTPS: own TLS 1.3 client (X25519 + AES-128-GCM); server certificates are NOT verified (no CA store)"),
+            String::from("- HTTPS: own TLS 1.3 client (X25519 + AES-128-GCM) with X.509 chain verification"),
+            String::from("  (23 Mozilla root CAs, expiry via RTC, SAN hostname check; no OCSP/CRL revocation)"),
             String::from("- TLS 1.3 only: servers without it fail with an honest error"),
             String::from("- HTTP/1.1 with chunked transfer and gzip (DEFLATE) decompression; GET only, no keep-alive"),
             String::from("- Text rendering only: no CSS, JavaScript or images"),
@@ -335,7 +336,7 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::from("### 3. Network Stack"),
             String::from("RTL8139 Ethernet -> ARP / IPv4 -> ICMP + UDP (DNS) + TCP -> HTTP/1.1 + TLS 1.3 (https)."),
             String::from("Hostnames are resolved with a real DNS client (A records, UDP/53)."),
-            String::from("TLS 1.3: X25519 + HKDF-SHA256 + AES-128-GCM, certificates NOT verified."),
+            String::from("TLS 1.3: X25519 + HKDF-SHA256 + AES-128-GCM; X.509 chains verified against 23 Mozilla roots."),
             String::from("HTTP/1.1: chunked transfer decoding + gzip (RFC 1951/1952) decompression."),
         ];
     } else if clean_url == "http://deix.os" {
@@ -385,6 +386,7 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::from("* DNS-сервер недоступен или имя не существует"),
             String::from("* хост недоступен или порт закрыт"),
             String::from("* сервер не поддерживает TLS 1.3 (старые HTTPS-сайты не загрузятся)"),
+            String::from("* сертификат сервера не прошёл проверку (срок, имя хоста, цепочка до CA)"),
             String::new(),
             String::from("Проверьте в CLI: `ifconfig`, `dns <host>`, `ping <ip>`."),
         ],
@@ -403,7 +405,7 @@ pub fn parse_html_to_browser_lines(resp: &crate::net::http::HttpResponse) -> Vec
     }
     if resp.final_url.starts_with("https://") {
         lines.push(String::from(
-            "TLS 1.3: channel encrypted, server certificate NOT verified (no CA store)",
+            "TLS 1.3: encrypted, certificate chain verified (23 Mozilla roots; no OCSP/CRL)",
         ));
     }
     lines.push(String::new());

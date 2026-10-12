@@ -10,9 +10,10 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// Предел распакованных данных: сжатое тело ограничено MAX_BODY в
-/// http.rs, этот лимит защищает от «бомб» декомпрессии.
-const MAX_OUT: usize = 512 * 1024;
+/// Предел распакованных данных — защита от «бомб» декомпрессии и
+/// переполнения 16-МиБ кучи ядра. При достижении предела распаковка
+/// мягко останавливается и страница показывается усечённой.
+const MAX_OUT: usize = 2 * 1024 * 1024;
 
 const MAX_BITS: usize = 15;
 
@@ -120,21 +121,22 @@ const DIST_EXTRA: [u32; 30] = [
 ];
 
 /// Декодирует literal/length-коды блока до символа конца (256).
+/// Ok(true) — блок дочитан; Ok(false) — достигнут предел MAX_OUT.
 fn inflate_codes(
     br: &mut BitReader,
     litlen: &Huffman,
     dist: &Huffman,
     out: &mut Vec<u8>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     loop {
         let sym = decode(br, litlen)?;
         if sym < 256 {
             if out.len() >= MAX_OUT {
-                return Err("DEFLATE: распакованные данные превышают лимит 512 КиБ".into());
+                return Ok(false);
             }
             out.push(sym as u8);
         } else if sym == 256 {
-            return Ok(());
+            return Ok(true);
         } else {
             let s = (sym - 257) as usize;
             if s >= LEN_BASE.len() {
@@ -149,10 +151,10 @@ fn inflate_codes(
             if d > out.len() {
                 return Err("DEFLATE: ссылка за начало данных".into());
             }
-            if out.len() + len > MAX_OUT {
-                return Err("DEFLATE: распакованные данные превышают лимит 512 КиБ".into());
-            }
             for _ in 0..len {
+                if out.len() >= MAX_OUT {
+                    return Ok(false);
+                }
                 let b = out[out.len() - d];
                 out.push(b);
             }
@@ -161,7 +163,8 @@ fn inflate_codes(
 }
 
 /// Stored-блок (BTYPE=00): LEN/NLEN + сырые байты.
-fn inflate_stored(br: &mut BitReader, out: &mut Vec<u8>) -> Result<(), String> {
+/// Ok(true) — блок скопирован целиком; Ok(false) — предел MAX_OUT.
+fn inflate_stored(br: &mut BitReader, out: &mut Vec<u8>) -> Result<bool, String> {
     br.align_byte();
     if br.pos + 4 > br.data.len() {
         return Err("DEFLATE: stored-блок оборван".into());
@@ -176,11 +179,13 @@ fn inflate_stored(br: &mut BitReader, out: &mut Vec<u8>) -> Result<(), String> {
         return Err("DEFLATE: данные stored-блока оборваны".into());
     }
     if out.len() + len > MAX_OUT {
-        return Err("DEFLATE: распакованные данные превышают лимит 512 КиБ".into());
+        let take = MAX_OUT - out.len();
+        out.extend_from_slice(&br.data[br.pos..br.pos + take]);
+        return Ok(false);
     }
     out.extend_from_slice(&br.data[br.pos..br.pos + len]);
     br.pos += len;
-    Ok(())
+    Ok(true)
 }
 
 /// Фиксированные таблицы (BTYPE=01, RFC 1951 §3.2.6).
@@ -253,29 +258,33 @@ fn dynamic_tables(br: &mut BitReader) -> Result<(Huffman, Huffman), String> {
 }
 
 /// Распаковывает сырой DEFLATE-поток.
-fn inflate(data: &[u8]) -> Result<Vec<u8>, String> {
+/// Второй элемент результата — true, если вывод усечён по MAX_OUT.
+fn inflate(data: &[u8]) -> Result<(Vec<u8>, bool), String> {
     let mut br = BitReader::new(data);
     let mut out = Vec::new();
     loop {
         let bfinal = br.bits(1)?;
         let btype = br.bits(2)?;
-        match btype {
+        let complete = match btype {
             0 => inflate_stored(&mut br, &mut out)?,
             1 => {
                 let (ll, dd) = fixed_tables();
-                inflate_codes(&mut br, &ll, &dd, &mut out)?;
+                inflate_codes(&mut br, &ll, &dd, &mut out)?
             }
             2 => {
                 let (ll, dd) = dynamic_tables(&mut br)?;
-                inflate_codes(&mut br, &ll, &dd, &mut out)?;
+                inflate_codes(&mut br, &ll, &dd, &mut out)?
             }
             _ => return Err("DEFLATE: некорректный тип блока (11)".into()),
+        };
+        if !complete {
+            return Ok((out, true));
         }
         if bfinal == 1 {
             break;
         }
     }
-    Ok(out)
+    Ok((out, false))
 }
 
 /// CRC-32 (полином 0xEDB88320, как в gzip/zip) — побитово, без таблицы.
@@ -295,7 +304,9 @@ fn crc32(data: &[u8]) -> u32 {
 }
 
 /// Распаковывает gzip-поток (RFC 1952) с проверкой CRC-32 и ISIZE.
-pub fn gunzip(data: &[u8]) -> Result<Vec<u8>, String> {
+/// Второй элемент результата — true, если вывод усечён по лимиту
+/// (тогда CRC/ISIZE не проверяются — конец потока не читался).
+pub fn gunzip(data: &[u8]) -> Result<(Vec<u8>, bool), String> {
     if data.len() < 18 {
         return Err("gzip: поток короче минимального".into());
     }
@@ -336,7 +347,10 @@ pub fn gunzip(data: &[u8]) -> Result<Vec<u8>, String> {
         return Err("gzip: заголовок оборван".into());
     }
 
-    let out = inflate(&data[off..data.len() - 8])?;
+    let (out, truncated) = inflate(&data[off..data.len() - 8])?;
+    if truncated {
+        return Ok((out, true));
+    }
 
     let tail = &data[data.len() - 8..];
     let crc_expect = u32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]);
@@ -347,7 +361,7 @@ pub fn gunzip(data: &[u8]) -> Result<Vec<u8>, String> {
     if crc32(&out) != crc_expect {
         return Err("gzip: контрольная сумма CRC-32 не совпала".into());
     }
-    Ok(out)
+    Ok((out, false))
 }
 
 #[cfg(test)]
@@ -363,7 +377,8 @@ mod tests {
             0x0c, 0x71, 0x55, 0x28, 0xcf, 0x2f, 0xca, 0x2e, 0x56, 0x54, 0x70, 0x19,
             0x20, 0x71, 0x00, 0xdf, 0x0c, 0x4f, 0xf1, 0x90, 0x00, 0x00, 0x00,
         ];
-        let out = gunzip(&gz).expect("valid gzip stream");
+        let (out, truncated) = gunzip(&gz).expect("valid gzip stream");
+        assert!(!truncated);
         assert_eq!(out, b"DeiX OS: DEFLATE works! DeiX OS: DEFLATE works! DeiX OS: DEFLATE works! DeiX OS: DEFLATE works! DeiX OS: DEFLATE works! DeiX OS: DEFLATE works! ".to_vec());
     }
 
@@ -376,7 +391,8 @@ mod tests {
             0x6f, 0x63, 0x6b, 0x20, 0x74, 0x65, 0x73, 0x74, 0xb0, 0xe8, 0x2c, 0xd0,
             0x11, 0x00, 0x00, 0x00,
         ];
-        let out = gunzip(&gz).expect("valid gzip stream");
+        let (out, truncated) = gunzip(&gz).expect("valid gzip stream");
+        assert!(!truncated);
         assert_eq!(out, b"stored block test".to_vec());
     }
 

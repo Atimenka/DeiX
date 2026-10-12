@@ -1,13 +1,15 @@
 //! TLS 1.3 клиент (RFC 8446) поверх net::tcp.
 //!
 //! Реализовано: рукопожатие X25519 + HKDF-SHA256, шифросьют
-//! TLS_AES_128_GCM_SHA256 (обязательный для TLS 1.3), проверка server
-//! Finished, record layer с AEAD, алерты, close_notify.
+//! TLS_AES_128_GCM_SHA256 (обязательный для TLS 1.3), ПРОВЕРКА
+//! СЕРТИФИКАТА СЕРВЕРА (цепочка X.509 до встроенных корней Mozilla,
+//! срок действия, имя хоста — см. net/x509.rs) и подписи
+//! CertificateVerify, проверка server Finished, record layer с AEAD,
+//! алерты, close_notify.
 //!
 //! ЧЕСТНЫЕ ОГРАНИЧЕНИЯ (не скрываем):
-//! - Сертификат сервера НЕ проверяется: в системе нет хранилища
-//!   доверенных CA и парсера X.509. Канал защищён от пассивного
-//!   прослушивания, но НЕ от активного MITM.
+//! - Отзыв сертификатов не проверяется (нет OCSP/CRL), нет Certificate
+//!   Transparency; набор корней — 23 CA (см. x509.rs).
 //! - Только TLS 1.3: серверы без его поддержки получают честный отказ.
 //! - Только X25519; HelloRetryRequest с другой группой не обслуживается.
 //! - ГСЧ ядра (rng.rs) — RDRAND с jitter-фолбэком, не сертифицированный
@@ -18,6 +20,7 @@ use crate::crypto::hkdf::{hkdf_expand, hkdf_extract, hmac_sha256};
 use crate::crypto::sha256::{sha256, Sha256};
 use crate::crypto::x25519::{x25519, BASEPOINT};
 use crate::net::tcp;
+use crate::net::x509;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -245,12 +248,10 @@ fn build_client_hello(
     groups.extend_from_slice(&GROUP_X25519.to_be_bytes());
     push_ext(&mut ext, 0x000a, &groups);
 
-    // signature_algorithms: предлагаем распространённые схемы, чтобы
-    // сервер мог подписать CertificateVerify (мы подпись не проверяем,
-    // но расширение обязательно).
-    let algs: [u16; 9] = [
-        0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601, 0x0807,
-    ];
+    // signature_algorithms: предлагаем ТОЛЬКО схемы, подписи которых
+    // мы реально проверяем (x509::verify_tls_signature):
+    // ecdsa_secp256r1_sha256, ecdsa_secp384r1_sha384, rsa_pss_rsae_sha256.
+    let algs: [u16; 3] = [0x0403, 0x0503, 0x0804];
     let mut sig = Vec::with_capacity(2 + algs.len() * 2);
     sig.extend_from_slice(&((algs.len() * 2) as u16).to_be_bytes());
     for a in algs.iter() {
@@ -379,6 +380,42 @@ pub fn connect(ip: [u8; 4], port: u16, host: &str) -> Result<TlsStream, String> 
     }
 }
 
+/// Разбирает Certificate (RFC 8446 §4.4.2): DER-цепочка, лист первым.
+fn parse_certificate_msg(msg: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    if msg.len() < 8 {
+        return Err("TLS: сообщение Certificate обрезано".into());
+    }
+    let ctx_len = msg[4] as usize;
+    let mut off = 5 + ctx_len;
+    if msg.len() < off + 3 {
+        return Err("TLS: сообщение Certificate обрезано".into());
+    }
+    let list_len =
+        ((msg[off] as usize) << 16) | ((msg[off + 1] as usize) << 8) | msg[off + 2] as usize;
+    off += 3;
+    let end = (off + list_len).min(msg.len());
+    let mut chain = Vec::new();
+    while off + 3 <= end {
+        let cert_len =
+            ((msg[off] as usize) << 16) | ((msg[off + 1] as usize) << 8) | msg[off + 2] as usize;
+        off += 3;
+        if off + cert_len > end {
+            return Err("TLS: сертификат в списке обрезан".into());
+        }
+        chain.push(msg[off..off + cert_len].to_vec());
+        off += cert_len;
+        if off + 2 > end {
+            break;
+        }
+        let ext_len = u16::from_be_bytes([msg[off], msg[off + 1]]) as usize;
+        off += 2 + ext_len;
+    }
+    if chain.is_empty() {
+        return Err("TLS: сервер прислал пустой список сертификатов".into());
+    }
+    Ok(chain)
+}
+
 fn handshake(host: &str) -> Result<TlsStream, String> {
     let deadline = crate::timer::uptime_ms() + HANDSHAKE_TIMEOUT_MS;
 
@@ -438,6 +475,8 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
     // --- серверный flight: EncryptedExtensions..Finished ---
     let mut hs_stream: Vec<u8> = Vec::new();
     let mut server_finished = false;
+    let mut leaf_key: Option<x509::PubKey> = None;
+    let mut cert_verified = false;
     while !server_finished {
         let (rtype, payload) = read_record(&mut rx, deadline)?;
         match rtype {
@@ -461,6 +500,12 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
             let msg: Vec<u8> = hs_stream.drain(..mlen).collect();
             match msg[0] {
                 HS_FINISHED => {
+                    if !cert_verified {
+                        return Err(
+                            "TLS: сервер не предъявил сертификат с подписью (PSK-режим не поддерживается)"
+                                .into(),
+                        );
+                    }
                     let th = transcript.clone().finalize();
                     let fk_v = hkdf_expand_label(&s_hs, b"finished", &[], 32);
                     let mut fk = [0u8; 32];
@@ -472,9 +517,39 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
                     transcript.update(&msg);
                     server_finished = true;
                 }
-                HS_ENCRYPTED_EXTENSIONS | HS_CERTIFICATE | HS_CERT_VERIFY => {
-                    // Сертификат принимается БЕЗ проверки цепочки и подписи
-                    // (нет хранилища CA) — см. честные ограничения в шапке.
+                HS_ENCRYPTED_EXTENSIONS => {
+                    transcript.update(&msg);
+                }
+                HS_CERTIFICATE => {
+                    let chain = parse_certificate_msg(&msg)?;
+                    x509::verify_chain(&chain, host)
+                        .map_err(|e| format!("сертификат {}: {}", host, e))?;
+                    leaf_key = Some(x509::leaf_public_key(&chain[0])?);
+                    transcript.update(&msg);
+                }
+                HS_CERT_VERIFY => {
+                    // Подпись покрывает транскрипт ПО Certificate
+                    // включительно (RFC 8446 §4.4.3) — снимок до update.
+                    let th = transcript.clone().finalize();
+                    let key = leaf_key
+                        .as_ref()
+                        .ok_or_else(|| String::from("TLS: CertificateVerify раньше Certificate"))?;
+                    if msg.len() < 8 {
+                        return Err("TLS: CertificateVerify обрезан".into());
+                    }
+                    let scheme = u16::from_be_bytes([msg[4], msg[5]]);
+                    let sig_len = u16::from_be_bytes([msg[6], msg[7]]) as usize;
+                    if msg.len() != 8 + sig_len {
+                        return Err("TLS: длина подписи CertificateVerify не сходится".into());
+                    }
+                    let mut content = Vec::with_capacity(64 + 34 + 32);
+                    content.extend_from_slice(&[0x20u8; 64]);
+                    content.extend_from_slice(b"TLS 1.3, server CertificateVerify");
+                    content.push(0);
+                    content.extend_from_slice(&th);
+                    x509::verify_tls_signature(key, scheme, &content, &msg[8..])
+                        .map_err(|e| format!("TLS: {}", e))?;
+                    cert_verified = true;
                     transcript.update(&msg);
                 }
                 other => {

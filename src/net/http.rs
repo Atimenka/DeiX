@@ -6,8 +6,8 @@
 //! до 3 переходов), https:// через собственный TLS 1.3 клиент (net::tls).
 //! Имена хостов резолвятся настоящим DNS-клиентом (net::dns) через UDP/53.
 //! Честные ограничения: только GET и Connection: close (без keep-alive и
-//! конвейеризации); TLS только 1.3 и сертификат сервера не проверяется
-//! (см. net/tls.rs).
+//! конвейеризации); TLS только 1.3, сертификаты проверяются по цепочке
+//! до встроенных корней без OCSP/CRL (см. net/tls.rs, net/x509.rs).
 
 use alloc::format;
 use alloc::string::String;
@@ -16,7 +16,7 @@ use alloc::vec::Vec;
 use crate::net::{dns, inflate, tcp, tls};
 
 const MAX_REDIRECTS: u32 = 3;
-const MAX_BODY: usize = 128 * 1024;
+const MAX_BODY: usize = 1024 * 1024;
 
 /// Ответ HTTP-запроса после всех redirect.
 pub struct HttpResponse {
@@ -181,7 +181,9 @@ fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, String), String
         body_bytes = dechunk(&body_bytes).0;
     }
     if header_contains(&header_text, "content-encoding", "gzip") {
-        body_bytes = inflate::gunzip(&body_bytes).map_err(|e| {
+        // При усечении по лимиту распаковки показываем, что успели
+        // распаковать — страница будет честно обрезана.
+        let (data, _truncated) = inflate::gunzip(&body_bytes).map_err(|e| {
             format!(
                 "{} — ответ сжат gzip, но повреждён или обрезан (принято {} байт, лимит {} КиБ)",
                 e,
@@ -189,6 +191,7 @@ fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, String), String
                 MAX_BODY / 1024
             )
         })?;
+        body_bytes = data;
     }
 
     let body = String::from_utf8_lossy(&body_bytes).into_owned();
