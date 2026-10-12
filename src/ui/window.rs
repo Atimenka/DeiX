@@ -316,7 +316,8 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::new(),
             String::from("## Honest limitations:"),
             String::from("- HTTPS: own TLS 1.3 client (X25519 + AES-128-GCM); server certificates are NOT verified (no CA store)"),
-            String::from("- TLS 1.3 only: servers without it fail with an honest error; HTTP/1.0 requests (no chunked encoding)"),
+            String::from("- TLS 1.3 only: servers without it fail with an honest error"),
+            String::from("- HTTP/1.1 with chunked transfer and gzip (DEFLATE) decompression; GET only, no keep-alive"),
             String::from("- Text rendering only: no CSS, JavaScript or images"),
             String::from("- DNS: real A-record lookups over UDP/53 (no DNSSEC, no IPv6)"),
         ];
@@ -332,9 +333,10 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::from("Built-in compositor manages window layers, VBE double buffer & FPS."),
             String::new(),
             String::from("### 3. Network Stack"),
-            String::from("RTL8139 Ethernet -> ARP / IPv4 -> ICMP + UDP (DNS) + TCP -> HTTP/1.0 + TLS 1.3 (https)."),
+            String::from("RTL8139 Ethernet -> ARP / IPv4 -> ICMP + UDP (DNS) + TCP -> HTTP/1.1 + TLS 1.3 (https)."),
             String::from("Hostnames are resolved with a real DNS client (A records, UDP/53)."),
             String::from("TLS 1.3: X25519 + HKDF-SHA256 + AES-128-GCM, certificates NOT verified."),
+            String::from("HTTP/1.1: chunked transfer decoding + gzip (RFC 1951/1952) decompression."),
         ];
     } else if clean_url == "http://deix.os" {
         // Локальная страница с НАСТОЯЩИМИ значениями подсистем — никакой

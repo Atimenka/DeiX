@@ -11,6 +11,7 @@ pub mod dns;
 pub mod eth;
 pub mod http;
 pub mod icmp;
+pub mod inflate;
 pub mod ipv4;
 pub mod tcp;
 pub mod tls;

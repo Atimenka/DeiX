@@ -1,17 +1,19 @@
-//! HTTP/1.0 клиент поверх TCP и TLS 1.3.
+//! HTTP/1.1 клиент поверх TCP и TLS 1.3.
 //!
 //! Поддерживает: GET, разбор строки статуса и заголовков, Content-Length,
-//! переход по redirect (301/302/303/307/308, до 3 переходов), https://
-//! через собственный TLS 1.3 клиент (net::tls). Имена хостов резолвятся
-//! настоящим DNS-клиентом (net::dns) через UDP/53.
-//! Честные ограничения: HTTP/1.0 без chunked encoding; TLS только 1.3 и
-//! сертификат сервера не проверяется (см. net/tls.rs).
+//! Transfer-Encoding: chunked (RFC 9112 §7.1), Content-Encoding: gzip
+//! (распаковка в net::inflate), переход по redirect (301/302/303/307/308,
+//! до 3 переходов), https:// через собственный TLS 1.3 клиент (net::tls).
+//! Имена хостов резолвятся настоящим DNS-клиентом (net::dns) через UDP/53.
+//! Честные ограничения: только GET и Connection: close (без keep-alive и
+//! конвейеризации); TLS только 1.3 и сертификат сервера не проверяется
+//! (см. net/tls.rs).
 
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use crate::net::{dns, tcp, tls};
+use crate::net::{dns, inflate, tcp, tls};
 
 const MAX_REDIRECTS: u32 = 3;
 const MAX_BODY: usize = 128 * 1024;
@@ -123,7 +125,7 @@ fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, String), String
     };
 
     let req = format!(
-        "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: DeiX-Browser/3.0 (DeiX OS x86_64)\r\nAccept: text/html,text/plain\r\nConnection: close\r\n\r\n",
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: DeiX-Browser/3.0 (DeiX OS x86_64)\r\nAccept: text/html,text/plain\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n",
         path, host
     );
     if let Err(e) = conn.send(req.as_bytes()) {
@@ -147,7 +149,13 @@ fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, String), String
             }
         }
         if let Some(he) = find_header_end(&raw) {
-            if let Some(cl) = content_length(&raw[..he]) {
+            let head = String::from_utf8_lossy(&raw[..he]).into_owned();
+            if header_contains(&head, "transfer-encoding", "chunked") {
+                // Ответ chunked: ждём финальный нулевой chunk.
+                if dechunk(&raw[he..]).1 {
+                    break;
+                }
+            } else if let Some(cl) = content_length(&raw[..he]) {
                 if raw.len() >= he + cl {
                     break;
                 }
@@ -167,8 +175,62 @@ fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, String), String
     let header_text = String::from_utf8_lossy(&raw[..body_offset]).into_owned();
     let (status, reason) = parse_status_line(&header_text);
     let location = header_value(&header_text, "location");
-    let body = String::from_utf8_lossy(&raw[body_offset..]).into_owned();
+
+    let mut body_bytes: Vec<u8> = raw[body_offset..].to_vec();
+    if header_contains(&header_text, "transfer-encoding", "chunked") {
+        body_bytes = dechunk(&body_bytes).0;
+    }
+    if header_contains(&header_text, "content-encoding", "gzip") {
+        body_bytes = inflate::gunzip(&body_bytes).map_err(|e| {
+            format!(
+                "{} — ответ сжат gzip, но повреждён или обрезан (принято {} байт, лимит {} КиБ)",
+                e,
+                raw.len(),
+                MAX_BODY / 1024
+            )
+        })?;
+    }
+
+    let body = String::from_utf8_lossy(&body_bytes).into_owned();
     Ok((status, reason, location, body))
+}
+
+/// true, если заголовок name присутствует и содержит value (без учёта
+/// регистра), например transfer-encoding: chunked.
+fn header_contains(header: &str, name: &str, value: &str) -> bool {
+    match header_value(header, name) {
+        Some(v) => v.to_ascii_lowercase().contains(value),
+        None => false,
+    }
+}
+
+/// Разбирает chunked-тело (RFC 9112 §7.1): (собранные данные, завершено).
+/// Трейлеры после нулевого chunk игнорируются.
+fn dechunk(raw: &[u8]) -> (Vec<u8>, bool) {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    loop {
+        let line_end = match raw[pos.min(raw.len())..].windows(2).position(|w| w == b"\r\n") {
+            Some(p) => pos + p,
+            None => return (out, false),
+        };
+        let line = String::from_utf8_lossy(&raw[pos..line_end]).into_owned();
+        // после размера могут идти расширения chunk: "1a3f;ext=..."
+        let size_str = line.split(';').next().unwrap_or("").trim().to_string();
+        let size = match usize::from_str_radix(&size_str, 16) {
+            Ok(v) => v,
+            Err(_) => return (out, false),
+        };
+        pos = line_end + 2;
+        if size == 0 {
+            return (out, true);
+        }
+        if raw.len() < pos + size + 2 {
+            return (out, false); // chunk ещё не докачан
+        }
+        out.extend_from_slice(&raw[pos..pos + size]);
+        pos += size + 2; // данные + завершающий CRLF
+    }
 }
 
 /// HTTP GET с переходом по redirect (до MAX_REDIRECTS).
