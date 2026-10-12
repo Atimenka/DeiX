@@ -78,10 +78,10 @@ use core::panic::PanicInfo;
 
 /// Версия ядра. Единственный источник — остальные места берут её отсюда,
 /// чтобы в отчёте об отказе и в `about` не расходились версии.
-pub const KERNEL_VERSION: &str = "0.2.1-beta";
+pub const KERNEL_VERSION: &str = "0.3.0-beta";
 
 /// Полная строка релиза: имя + версия + архитектура.
-pub const OS_RELEASE: &str = "DeiX 0.2.1-beta x86_64";
+pub const OS_RELEASE: &str = "DeiX 0.3.0-beta x86_64";
 
 /// Идентификатор сборки: архитектура и режим компиляции.
 pub const BUILD_ID: &str = "x86_64-unknown-deix (no_std, release)";

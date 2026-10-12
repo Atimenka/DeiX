@@ -143,9 +143,9 @@ impl Window {
     }
 
     pub fn new_browser(x: i32, y: i32, initial_url: &str) -> Self {
-        let url = if initial_url.is_empty() { "google.com" } else { initial_url };
+        let url = if initial_url.is_empty() { "deix://home" } else { initial_url };
         let tab0 = BrowserTab {
-            title: String::from("Google Search"),
+            title: String::from("DeiX Browser"),
             url: String::from(url),
             content: fetch_and_render_web_page(url),
             scroll: 0,
@@ -165,7 +165,7 @@ impl Window {
                 active_tab: 0,
                 address_input: String::from(url),
                 bookmarks: alloc::vec![
-                    String::from("google.com"),
+                    String::from("example.com"),
                     String::from("deix://home"),
                     String::from("deix://docs"),
                     String::from("http://deix.os"),

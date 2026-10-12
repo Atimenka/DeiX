@@ -49,6 +49,7 @@ pub fn resolve(host: &str) -> Option<[u8; 4]> {
 
     // Сопоставление доменных имён (DNS-таблица по умолчанию)
     match clean.as_str() {
+        "example.com" | "www.example.com" => Some([93, 184, 215, 14]),
         "google.com" | "www.google.com" => Some([142, 250, 190, 46]),
         "deix.os" | "deix" | "localhost" => Some([10, 0, 2, 15]),
         "gateway" | "router" => Some([10, 0, 2, 2]),

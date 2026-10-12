@@ -83,6 +83,42 @@ pub struct Desktop {
     pub wallpaper_cache: WallpaperSurface,
     pub dirty: bool,
     pub last_cursor_pos: (i32, i32),
+    /// Видимые области окон ПРОШЛОГО кадра (с полями под тень/blur).
+    /// Diff с текущим кадром даёт damage для областей, освободившихся
+    /// после закрытия/перетаскивания/сворачивания окна — без него обои
+    /// там не восстанавливались и оставались артефакты.
+    prev_window_rects: Vec<crate::renderer::Rect>,
+    /// Область меню Пуск прошлого кадра (если было открыто).
+    prev_start_menu_rect: Option<crate::renderer::Rect>,
+    /// Область Центра управления прошлого кадра (если был открыт).
+    prev_control_center_rect: Option<crate::renderer::Rect>,
+    /// Курсор сдвинулся, но сцена не менялась — быстрый путь без
+    /// полной перерисовки (save-under, см. update_cursor_only).
+    cursor_moved: bool,
+    /// Пиксели back buffer под курсором (сохраняются перед его отрисовкой).
+    cursor_saved_pixels: Vec<u32>,
+    /// Фактическая (обрезанная по экрану) область сохранённых пикселей.
+    cursor_saved_rect: crate::renderer::Rect,
+    cursor_saved_valid: bool,
+}
+
+/// Запас вокруг окна под мягкую тень (4 px), blur-ореол (4 px) и
+/// смещённую подложку тени (+4..+6 px вправо/вниз у draw_window).
+const WINDOW_VISUAL_MARGIN: i32 = 12;
+
+/// Ширина и высота области курсора (глиф 11x16 + запас на линии контура).
+const CURSOR_W: u32 = 16;
+const CURSOR_H: u32 = 20;
+
+/// Полная видимая область окна: рамка + заголовок + тень + blur.
+fn window_visual_rect(w: &Window, titlebar_h: i32) -> crate::renderer::Rect {
+    let total_h = w.height as i32 + titlebar_h;
+    crate::renderer::Rect::new(
+        w.x - WINDOW_VISUAL_MARGIN,
+        w.y - WINDOW_VISUAL_MARGIN,
+        (w.width as i32 + WINDOW_VISUAL_MARGIN * 2).max(0) as u32,
+        (total_h + WINDOW_VISUAL_MARGIN * 2).max(0) as u32,
+    )
 }
 
 impl Desktop {
@@ -101,6 +137,13 @@ impl Desktop {
             wallpaper_cache: WallpaperSurface::new(800, 600),
             dirty: true,
             last_cursor_pos: (0, 0),
+            prev_window_rects: Vec::new(),
+            prev_start_menu_rect: None,
+            prev_control_center_rect: None,
+            cursor_moved: false,
+            cursor_saved_pixels: Vec::new(),
+            cursor_saved_rect: crate::renderer::Rect::new(0, 0, 0, 0),
+            cursor_saved_valid: false,
         }
     }
 
@@ -125,7 +168,7 @@ impl Desktop {
     pub fn open_browser(&mut self, screen_w: i32, screen_h: i32) {
         let x = (screen_w - 560) / 2 + (self.windows.len() as i32 * 20) % 100;
         let y = (screen_h - 360) / 2 + (self.windows.len() as i32 * 20) % 100;
-        self.windows.push(Window::new_browser(x, y, "google.com"));
+        self.windows.push(Window::new_browser(x, y, "deix://home"));
         self.focused_window = Some(self.windows.len() - 1);
         self.start_menu_open = false;
         self.dirty = true;
@@ -263,16 +306,18 @@ impl Desktop {
         }
     }
 
-    pub fn handle_input(&mut self, r: &mut Renderer, screen_w: i32, screen_h: i32) {
+    pub fn handle_input(&mut self, screen_w: i32, screen_h: i32) {
         let m = mouse::snapshot();
         let ui_m = UiMetrics::fluent();
         let taskbar_y = screen_h - ui_m.taskbar_height as i32;
 
         if m.x != self.last_cursor_pos.0 || m.y != self.last_cursor_pos.1 {
-            r.add_damage(crate::renderer::Rect::new(self.last_cursor_pos.0 - 2, self.last_cursor_pos.1 - 2, 20, 24));
-            r.add_damage(crate::renderer::Rect::new(m.x - 2, m.y - 2, 20, 24));
+            // Движение мыши само по себе сцену не меняет: вместо полной
+            // перерисовки (все окна + blur + панель на каждый пиксель
+            // движения) курсор обновляется быстрым путём save-under
+            // в run_event_loop (update_cursor_only).
             self.last_cursor_pos = (m.x, m.y);
-            self.dirty = true;
+            self.cursor_moved = true;
         }
 
         if m.left_button {
@@ -374,6 +419,11 @@ impl Desktop {
 
             self.handle_desktop_click(m.x, m.y, screen_w, screen_h);
         } else {
+            // Конец перетаскивания/изменения размера: один полный кадр,
+            // чтобы вернуть blur (на время drag он отключён ради скорости).
+            if self.dragging_window.is_some() || self.resizing_window.is_some() {
+                self.dirty = true;
+            }
             self.dragging_window = None;
             self.resizing_window = None;
         }
@@ -892,14 +942,14 @@ impl Desktop {
                     }
                     if rel_x >= win.width as i32 - 30 {
                         let new_tab = BrowserTab {
-                            title: String::from("Google Search"),
-                            url: String::from("google.com"),
-                            content: fetch_and_render_web_page("google.com"),
+                            title: String::from("New Tab"),
+                            url: String::from("deix://home"),
+                            content: fetch_and_render_web_page("deix://home"),
                             scroll: 0,
                         };
                         tabs.push(new_tab);
                         *active_tab = tabs.len() - 1;
-                        *address_input = String::from("google.com");
+                        *address_input = String::from("deix://home");
                         self.dirty = true;
                     }
                     return;
@@ -945,6 +995,8 @@ impl Desktop {
         let screen_w = r.width() as i32;
         let screen_h = r.height() as i32;
 
+        self.diff_exposed_regions(r, screen_w, screen_h);
+
         draw_wallpaper(r, &theme, self, screen_w, screen_h);
         draw_desktop_icons(r, &theme, self.selected_icon);
 
@@ -967,7 +1019,133 @@ impl Desktop {
             draw_control_center(r, &theme, screen_w, screen_h);
         }
 
+        let m = mouse::snapshot();
+        self.save_under_cursor(r, m.x, m.y);
         draw_cursor(r);
+        r.add_damage(crate::renderer::Rect::new(m.x, m.y, CURSOR_W, CURSOR_H));
+        r.present();
+    }
+
+    /// Diff видимых областей между кадрами. Всё, что исчезло
+    /// (закрытое/свёрнутое/перетащенное окно, закрытое меню) или
+    /// появилось, добавляется в damage ДО draw_wallpaper — иначе обои
+    /// под освободившейся областью не восстанавливаются и на экране
+    /// остаются куски старых окон.
+    fn diff_exposed_regions(&mut self, r: &mut Renderer, screen_w: i32, screen_h: i32) {
+        let ui_m = UiMetrics::fluent();
+        let titlebar_h = ui_m.titlebar_height;
+        let taskbar_y = screen_h - ui_m.taskbar_height as i32;
+
+        let mut current: Vec<crate::renderer::Rect> = Vec::with_capacity(self.windows.len());
+        for w in self.windows.iter() {
+            if !w.minimized {
+                current.push(window_visual_rect(w, titlebar_h));
+            }
+        }
+        for old in self.prev_window_rects.iter() {
+            if !current.iter().any(|c| c == old) {
+                r.add_damage(*old);
+            }
+        }
+        for new in current.iter() {
+            if !self.prev_window_rects.iter().any(|o| o == new) {
+                r.add_damage(*new);
+            }
+        }
+        self.prev_window_rects = current;
+
+        // Меню Пуск: геометрия из draw_start_menu (4, taskbar_y-244, 260x240)
+        // + запас на контурную рамку.
+        let menu_rect = crate::renderer::Rect::new(2, taskbar_y - 246, 264, 244);
+        if self.start_menu_open {
+            if self.prev_start_menu_rect.is_none() {
+                r.add_damage(menu_rect);
+            }
+            self.prev_start_menu_rect = Some(menu_rect);
+        } else if let Some(old) = self.prev_start_menu_rect.take() {
+            r.add_damage(old);
+        }
+
+        // Центр управления: геометрия из draw_control_center
+        // (screen_w-208, taskbar_y-164, 200x160) + запас на рамку.
+        let cc_rect = crate::renderer::Rect::new(screen_w - 210, taskbar_y - 166, 204, 164);
+        if self.control_center_open {
+            if self.prev_control_center_rect.is_none() {
+                r.add_damage(cc_rect);
+            }
+            self.prev_control_center_rect = Some(cc_rect);
+        } else if let Some(old) = self.prev_control_center_rect.take() {
+            r.add_damage(old);
+        }
+    }
+
+    /// Сохраняет пиксели back buffer под курсором (вызывается перед
+    /// draw_cursor), чтобы быстрый путь мог восстановить фон без
+    /// полной перерисовки сцены.
+    fn save_under_cursor(&mut self, r: &mut Renderer, x: i32, y: i32) {
+        let x0 = x.max(0);
+        let y0 = y.max(0);
+        let x1 = (x + CURSOR_W as i32).min(r.width() as i32);
+        let y1 = (y + CURSOR_H as i32).min(r.height() as i32);
+        if x0 >= x1 || y0 >= y1 {
+            self.cursor_saved_valid = false;
+            return;
+        }
+        let w = (x1 - x0) as usize;
+        let stride = r.width() as usize;
+        self.cursor_saved_pixels.clear();
+        for row in y0..y1 {
+            let start = row as usize * stride + x0 as usize;
+            self.cursor_saved_pixels.extend_from_slice(&r.back_buffer[start..start + w]);
+        }
+        self.cursor_saved_rect =
+            crate::renderer::Rect::new(x0, y0, w as u32, (y1 - y0) as u32);
+        self.cursor_saved_valid = true;
+    }
+
+    /// Возвращает в back buffer пиксели, сохранённые save_under_cursor,
+    /// и помечает эту область как damage.
+    fn restore_under_cursor(&mut self, r: &mut Renderer) {
+        if !self.cursor_saved_valid {
+            return;
+        }
+        let rect = self.cursor_saved_rect;
+        if rect.x < 0
+            || rect.y < 0
+            || rect.x + rect.w as i32 > r.width() as i32
+            || rect.y + rect.h as i32 > r.height() as i32
+        {
+            // Область вышла за пределы экрана (например, после смены
+            // разрешения) — сохранённые пиксели неактуальны.
+            self.cursor_saved_valid = false;
+            return;
+        }
+        let w = rect.w as usize;
+        let stride = r.width() as usize;
+        for (i, row) in (rect.y..rect.y + rect.h as i32).enumerate() {
+            let start = row as usize * stride + rect.x as usize;
+            r.back_buffer[start..start + w]
+                .copy_from_slice(&self.cursor_saved_pixels[i * w..(i + 1) * w]);
+        }
+        r.add_damage(rect);
+        self.cursor_saved_valid = false;
+    }
+
+    /// Быстрый путь для кадров, где сдвинулся только курсор: восстановить
+    /// фон на старом месте, сохранить фон на новом, нарисовать курсор и
+    /// вывести два маленьких прямоугольника. Полная перерисовка сцены
+    /// (все окна + blur + панель) на каждое движение мыши не нужна.
+    fn update_cursor_only(&mut self, r: &mut Renderer) {
+        if !self.cursor_saved_valid {
+            // Нет сохранённого фона (например, первый кадр) — полный рендер.
+            self.render(r);
+            return;
+        }
+        let m = mouse::snapshot();
+        self.restore_under_cursor(r);
+        self.save_under_cursor(r, m.x, m.y);
+        draw_cursor(r);
+        r.add_damage(crate::renderer::Rect::new(m.x, m.y, CURSOR_W, CURSOR_H));
         r.present();
     }
 
@@ -976,7 +1154,7 @@ impl Desktop {
         let screen_h = r.height() as i32;
 
         if !preserve_windows {
-            self.windows.push(Window::new_browser(40, 40, "google.com"));
+            self.windows.push(Window::new_browser(40, 40, "deix://home"));
             self.windows.push(Window::new_files(380, 50));
             self.focused_window = Some(self.windows.len() - 1);
             self.dirty = true;
@@ -1008,7 +1186,7 @@ impl Desktop {
             crate::dinit::tick();
             crate::diag::persist::flush();
 
-            self.handle_input(r, screen_w, screen_h);
+            self.handle_input(screen_w, screen_h);
 
             if let Some((w, h)) = self.pending_resolution.take() {
                 return DesktopExit::ChangeResolution(w, h);
@@ -1022,6 +1200,10 @@ impl Desktop {
                 self.frame_counter = timer::uptime_ms();
                 self.render(r);
                 self.dirty = false;
+                self.cursor_moved = false;
+            } else if self.cursor_moved {
+                self.update_cursor_only(r);
+                self.cursor_moved = false;
             }
 
             unsafe { core::arch::asm!("hlt") };

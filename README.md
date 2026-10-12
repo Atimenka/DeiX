@@ -1,4 +1,4 @@
-# 🪐 DeiX OS (0.2.1-beta · x86_64)
+# 🪐 DeiX OS (0.3.0-beta · x86_64)
 
 A modern, fast, and secure 64-bit Operating System written from scratch in **Rust** and **Assembly** for the `x86_64` architecture. Small core, immutable system, writable user space.
 
@@ -206,7 +206,7 @@ diagnostics [summary|mode on|mode off]
 
 ---
 
-## ⚠️ Известные ограничения (v0.2.1-beta)
+## ⚠️ Известные ограничения (v0.3.0-beta)
 
 - Один CPU (без SMP); диски — только ATA PIO (без AHCI/NVMe), чтение медленное (~1.4 мс/КиБ в QEMU).
 - Ring 3 доступен только MEX-программам; одновременно исполняется один MEX-процесс

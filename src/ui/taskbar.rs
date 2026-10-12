@@ -125,7 +125,9 @@ pub fn draw_control_center(r: &mut Renderer, theme: &UiTheme, screen_w: i32, scr
     r.draw_hline(cc_x + 12, cc_y + 32, (cc_w - 24) as u32, theme.titlebar_active);
 
     r.draw_icon(cc_x + 12, cc_y + 44, IconType::Wifi, Color::GREEN);
-    r.draw_text(cc_x + 36, cc_y + 44, "eth0: 10.0.2.15", theme.text_primary, None);
+    let ip = crate::net::my_ip();
+    let ip_line = alloc::format!("eth0: {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
+    r.draw_text(cc_x + 36, cc_y + 44, &ip_line, theme.text_primary, None);
 
     r.draw_icon(cc_x + 12, cc_y + 70, IconType::Volume, theme.accent);
     r.draw_text(cc_x + 36, cc_y + 70, "Audio: 80% [HDA]", theme.text_primary, None);

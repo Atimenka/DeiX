@@ -30,11 +30,25 @@ impl DamageList {
             return;
         }
 
-        // Проверяем возможность объединения с существующими прямоугольниками (coalescing)
-        for i in 0..self.count {
-            if self.rects[i].intersects(&rect) {
-                self.rects[i] = self.rects[i].union(&rect);
-                return;
+        // Каскадное объединение: после union результат может пересечь
+        // другие прямоугольники списка — сливаем, пока сливается.
+        // Одно слияние (как было раньше) оставляло пересекающиеся
+        // прямоугольники, и present() копировал одни области дважды.
+        let mut rect = rect;
+        loop {
+            let mut merged = false;
+            for i in 0..self.count {
+                if self.rects[i].intersects(&rect) {
+                    rect = self.rects[i].union(&rect);
+                    // Убираем поглощённый прямоугольник (swap-remove).
+                    self.count -= 1;
+                    self.rects[i] = self.rects[self.count];
+                    merged = true;
+                    break;
+                }
+            }
+            if !merged {
+                break;
             }
         }
 

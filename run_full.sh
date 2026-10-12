@@ -2,7 +2,7 @@
 # DeiX OS — Full hardware emulation + networking + Intel HDA audio
 DISK="$(dirname "$0")/build/deix_disk.img"
 
-echo "=== DeiX OS v0.2.1 ==="
+echo "=== DeiX OS v0.3.0 ==="
 echo "512 MB RAM | RTL8139 NIC | Intel HDA Audio | 10.0.2.15 IP"
 echo "Commands: help, sound, sound hda test, profile ls, ping 10.0.2.2"
 echo ""

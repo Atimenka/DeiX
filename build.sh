@@ -256,8 +256,8 @@ nasm -f bin -D STAGE2_SIZE_DWORDS=$STAGE2_DWORDS -D KERNEL_SIZE_DWORDS=$KERNEL_D
     -D RAMDISK_SIZE_DWORDS=2621440 \
     boot/boot_sector_iso.asm -o "$BUILD/boot_sector_iso.bin"
 
-echo "==> [8b] Релизные артефакты (DeiX 0.2.1-beta x86_64)"
-DEIX_VERSION="0.2.1-beta"
+echo "==> [8b] Релизные артефакты (DeiX 0.3.0-beta x86_64)"
+DEIX_VERSION="0.3.0-beta"
 cp "$DISK_IMG" "$BUILD/deix-$DEIX_VERSION-x86_64.img"
 if [ -f "$BUILD/deix.iso" ]; then
     cp "$BUILD/deix.iso" "$BUILD/deix-$DEIX_VERSION-x86_64.iso"

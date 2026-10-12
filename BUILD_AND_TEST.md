@@ -1,4 +1,4 @@
-# DeiX 0.2.1-beta — сборка и тестирование
+# DeiX 0.3.0-beta — сборка и тестирование
 
 Документ описывает текущее состояние ветки. Всё, что здесь перечислено,
 соответствует коду; известные ограничения собраны в конце.
@@ -29,7 +29,7 @@ bash build.sh
 ```
 
 Результат: `build/deix_disk.img` (10 МиБ) и релизные артефакты
-`build/deix-0.2.1-beta-x86_64.img` + `build/SHA256SUMS`.
+`build/deix-0.3.0-beta-x86_64.img` + `build/SHA256SUMS`.
 
 Шаги: сверка карты разделов (`tools/check_partition_map.py`) -> nasm
 stage2/ramboot -> cargo build --release -> objcopy kernel.bin -> MBR ->
@@ -77,7 +77,7 @@ qemu-system-x86_64 -drive file=build/deix_disk.img,format=raw,if=ide \
 
 Маркер успешной загрузки в serial-логе:
 `=== DeiX boot: serial debug active ===`, затем
-`DeiX 0.2.1-beta x86_64 - mini kernel booted successfully!`.
+`DeiX 0.3.0-beta x86_64 - mini kernel booted successfully!`.
 
 ## 5. Тесты
 
