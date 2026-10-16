@@ -761,9 +761,10 @@ impl Desktop {
         _screen_h: i32,
     ) {
         let ui_m = UiMetrics::fluent();
+        let content = WindowFrame::of(&self.windows[win_idx], &ui_m).content;
         let win = &mut self.windows[win_idx];
-        let rel_x = mx - win.x;
-        let rel_y = my - (win.y + ui_m.titlebar_height);
+        let rel_x = mx - content.x;
+        let rel_y = my - content.y;
 
         if rel_y < 0 {
             return;
