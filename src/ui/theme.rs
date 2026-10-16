@@ -167,6 +167,11 @@ impl UiTheme {
     }
 }
 
+/// Названия стилей обоев (индекс = `UiTheme::wallpaper_style`).
+/// Каждому имени соответствует реально отличающаяся генерация фона
+/// в `desktop::generate_wallpaper` — декоративных пунктов здесь нет.
+pub const WALLPAPER_STYLES: [&str; 4] = ["Aurora", "Midnight", "Plasma Flow", "Minimal"];
+
 static mut CURRENT_THEME: Option<UiTheme> = None;
 
 pub fn get_theme() -> UiTheme {

@@ -1,13 +1,17 @@
-//! Панель задач (Taskbar), Меню Пуск (Start Menu), Центр управления и курсор
+//! Панель задач (Taskbar), Меню Пуск (Start Menu), Центр управления и курсор.
+//!
+//! Геометрия меню Пуск и Центра управления описана один раз
+//! (`start_menu_layout`, `control_center_rect`) и используется и для
+//! отрисовки, и для обработки кликов в `desktop.rs`, и для damage-diff.
 
 use crate::mouse;
-use crate::renderer::{Color, IconType, Renderer};
+use crate::renderer::{Color, IconType, Rect, Renderer};
 use crate::timer;
 use crate::ui::desktop::Desktop;
 use crate::ui::metrics::UiMetrics;
 use crate::ui::theme::UiTheme;
-use alloc::vec::Vec;
 
+#[derive(Clone, Copy)]
 pub enum StartMenuAction {
     OpenTerminal,
     OpenFiles,
@@ -17,23 +21,90 @@ pub enum StartMenuAction {
     OpenThemeSettings,
     OpenAbout,
     OpenDisplaySettings,
-    Restart,
-    Shutdown,
 }
 
-pub fn start_menu_items() -> Vec<(&'static str, StartMenuAction, IconType)> {
-    alloc::vec![
-        ("Terminal", StartMenuAction::OpenTerminal, IconType::Terminal),
-        ("Files Manager", StartMenuAction::OpenFiles, IconType::Files),
-        ("Web Browser", StartMenuAction::OpenBrowser, IconType::Browser),
-        ("Task Manager", StartMenuAction::OpenTaskManager, IconType::TaskManager),
-        ("Error Center", StartMenuAction::OpenErrorCenter, IconType::Settings),
-        ("Personalization", StartMenuAction::OpenThemeSettings, IconType::Theme),
-        ("Display Settings", StartMenuAction::OpenDisplaySettings, IconType::Display),
-        ("About System", StartMenuAction::OpenAbout, IconType::About),
-        ("Restart OS", StartMenuAction::Restart, IconType::Restart),
-        ("Shutdown", StartMenuAction::Shutdown, IconType::Power),
-    ]
+/// Приложения меню Пуск (сетка 2 x 4). Restart/Shutdown — отдельные
+/// кнопки в нижнем ряду меню (см. `StartMenuLayout`), не пункты сетки:
+/// раньше массив содержал 10 пунктов, а рисовались только 8, и два
+/// действия были доступны лишь кликом в невидимую область.
+pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 8] = [
+    ("Terminal", StartMenuAction::OpenTerminal, IconType::Terminal),
+    ("Files", StartMenuAction::OpenFiles, IconType::Files),
+    ("Browser", StartMenuAction::OpenBrowser, IconType::Browser),
+    ("Task Mgr", StartMenuAction::OpenTaskManager, IconType::TaskManager),
+    ("Errors", StartMenuAction::OpenErrorCenter, IconType::Settings),
+    ("Personalize", StartMenuAction::OpenThemeSettings, IconType::Theme),
+    ("Display", StartMenuAction::OpenDisplaySettings, IconType::Display),
+    ("About", StartMenuAction::OpenAbout, IconType::About),
+];
+
+/// Все интерактивные области меню Пуск.
+pub struct StartMenuLayout {
+    pub menu: Rect,
+    pub app_items: [Rect; START_MENU_APPS.len()],
+    pub restart: Rect,
+    pub shutdown: Rect,
+}
+
+pub fn start_menu_layout(screen_h: i32) -> StartMenuLayout {
+    let m = UiMetrics::fluent();
+    let taskbar_y = screen_h - m.taskbar_height as i32;
+    let menu_w = 260i32;
+    let menu_h = 200i32;
+    let mx = 4i32;
+    let my = taskbar_y - menu_h - 4;
+
+    let col_w = (menu_w - 24) / 2;
+    let mut app_items = [Rect::new(0, 0, 0, 0); START_MENU_APPS.len()];
+    for (i, slot) in app_items.iter_mut().enumerate() {
+        let col = (i % 2) as i32;
+        let row = (i / 2) as i32;
+        *slot = Rect::new(mx + 8 + col * col_w, my + 10 + row * 36, (col_w - 4) as u32, 32);
+    }
+
+    StartMenuLayout {
+        menu: Rect::new(mx, my, menu_w as u32, menu_h as u32),
+        app_items,
+        restart: Rect::new(mx + menu_w - 156, my + menu_h - 30, 72, 22),
+        shutdown: Rect::new(mx + menu_w - 78, my + menu_h - 30, 72, 22),
+    }
+}
+
+/// Область Центра управления (для отрисовки, кликов и damage-diff).
+pub fn control_center_rect(screen_w: i32, screen_h: i32) -> Rect {
+    let m = UiMetrics::fluent();
+    let taskbar_y = screen_h - m.taskbar_height as i32;
+    let cc_w = 220i32;
+    let cc_h = 150i32;
+    Rect::new(screen_w - cc_w - 8, taskbar_y - cc_h - 4, cc_w as u32, cc_h as u32)
+}
+
+/// Строка часов панели: реальное время из CMOS RTC. Если RTC выдаёт
+/// неправдоподобные значения, uptime показывается ЯВНО как uptime,
+/// а не маскируется под время суток.
+pub fn clock_text() -> alloc::string::String {
+    if crate::rtc::is_plausible() {
+        let t = crate::rtc::now();
+        alloc::format!("{:02}:{:02}", t.hour, t.minute)
+    } else {
+        let mins = timer::uptime_ms() / 60_000;
+        if mins < 100 {
+            alloc::format!("up {}m", mins)
+        } else {
+            alloc::format!("up {}h", mins / 60)
+        }
+    }
+}
+
+/// Ключ смены показаний часов: пока он не изменился, панель не
+/// перерисовывается ради времени (см. run_event_loop).
+pub fn clock_key() -> u32 {
+    if crate::rtc::is_plausible() {
+        let t = crate::rtc::now();
+        t.hour as u32 * 60 + t.minute as u32
+    } else {
+        0x8000_0000 | (timer::uptime_ms() / 60_000) as u32
+    }
 }
 
 pub fn draw_taskbar(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen_w: i32, screen_h: i32) {
@@ -68,75 +139,86 @@ pub fn draw_taskbar(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen
         r.draw_text(item_x + 8, y + (taskbar_h - 16) / 2, truncate(&w.title, 14), label_color, None);
     }
 
-    r.draw_icon(screen_w - 110, y + 12, IconType::Wifi, theme.text_primary);
+    // Сеть: иконка отражает реальное наличие устройства, а не всегда
+    // «подключено». Детали — в Центре управления.
+    let net_color = if crate::rtl8139::is_present() {
+        theme.text_primary
+    } else {
+        Color::GRAY
+    };
+    r.draw_icon(screen_w - 110, y + 12, IconType::Wifi, net_color);
     r.draw_icon(screen_w - 85, y + 12, IconType::Volume, theme.text_primary);
 
-    let secs = timer::uptime_ms() / 1000;
-    let clock = alloc::format!("{:02}:{:02}", (secs / 60) % 100, secs % 60);
+    let clock = clock_text();
     r.draw_text(screen_w - 60, y + (taskbar_h - 16) / 2, &clock, theme.text_primary, None);
 }
 
 pub fn draw_start_menu(r: &mut Renderer, theme: &UiTheme, _screen_w: i32, screen_h: i32) {
-    let ui_m = UiMetrics::fluent();
-    let taskbar_y = screen_h - ui_m.taskbar_height as i32;
-    let items = start_menu_items();
-    let menu_w = 260i32;
-    let menu_h = 240i32;
-    let menu_y = taskbar_y - menu_h - 4;
+    let l = start_menu_layout(screen_h);
 
-    r.fill_rounded_rect(4, menu_y, menu_w as u32, menu_h as u32, theme.corner_radius, theme.window_bg);
-    r.draw_rect_outline_alpha(4, menu_y, menu_w as u32, menu_h as u32, theme.titlebar_active, 180);
+    r.fill_rounded_rect(l.menu.x, l.menu.y, l.menu.w, l.menu.h, theme.corner_radius, theme.window_bg);
+    r.draw_rect_outline_alpha(l.menu.x, l.menu.y, l.menu.w, l.menu.h, theme.titlebar_active, 180);
 
-    r.fill_rounded_rect(12, menu_y + 10, (menu_w - 24) as u32, 24, 4, theme.titlebar_active);
-    r.draw_icon(18, menu_y + 14, IconType::Search, theme.text_secondary);
-    r.draw_text(38, menu_y + 14, "Search apps...", theme.text_secondary, None);
-
-    let col_w = (menu_w - 24) / 2;
-    for (i, (label, _, icon)) in items.iter().enumerate() {
-        if i >= 8 { break; }
-        let col = i % 2;
-        let row = i / 2;
-        let ix = 12 + col as i32 * col_w;
-        let iy = menu_y + 40 + row as i32 * 36;
-
-        r.fill_rounded_rect(ix, iy, (col_w - 4) as u32, 32, 4, theme.titlebar_inactive);
-        r.draw_icon(ix + 6, iy + 8, *icon, theme.accent);
-        r.draw_text(ix + 26, iy + 6, truncate(label, 9), theme.text_primary, None);
+    for (i, (label, _, icon)) in START_MENU_APPS.iter().enumerate() {
+        let item = l.app_items[i];
+        r.fill_rounded_rect(item.x, item.y, item.w, item.h, 4, theme.titlebar_inactive);
+        r.draw_icon(item.x + 6, item.y + 8, *icon, theme.accent);
+        r.draw_text(item.x + 26, item.y + 6, truncate(label, 11), theme.text_primary, None);
     }
 
-    r.draw_hline(12, menu_y + menu_h - 36, (menu_w - 24) as u32, theme.titlebar_active);
-    r.draw_text(16, menu_y + menu_h - 26, "root @ DeiX", theme.text_secondary, None);
-    r.fill_rounded_rect(menu_w - 60, menu_y + menu_h - 30, 48, 22, 4, Color::RED);
-    r.draw_text(menu_w - 54, menu_y + menu_h - 26, "OFF", Color::WHITE, None);
+    let sep_y = l.menu.y + l.menu.h as i32 - 38;
+    r.draw_hline(l.menu.x + 8, sep_y, l.menu.w - 16, theme.titlebar_active);
+    r.draw_text(l.menu.x + 12, sep_y + 10, "root @ DeiX", theme.text_secondary, None);
+
+    r.fill_rounded_rect(l.restart.x, l.restart.y, l.restart.w, l.restart.h, 4, theme.titlebar_active);
+    r.draw_icon(l.restart.x + 4, l.restart.y + 3, IconType::Restart, theme.text_primary);
+    r.draw_text(l.restart.x + 22, l.restart.y + 4, "Reboot", theme.text_primary, None);
+
+    r.fill_rounded_rect(l.shutdown.x, l.shutdown.y, l.shutdown.w, l.shutdown.h, 4, Color::RED);
+    r.draw_icon(l.shutdown.x + 4, l.shutdown.y + 3, IconType::Power, Color::WHITE);
+    r.draw_text(l.shutdown.x + 22, l.shutdown.y + 4, "Power", Color::WHITE, None);
 }
 
 pub fn draw_control_center(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_h: i32) {
-    let ui_m = UiMetrics::fluent();
-    let taskbar_y = screen_h - ui_m.taskbar_height as i32;
-    let cc_w = 200i32;
-    let cc_h = 160i32;
-    let cc_x = screen_w - cc_w - 8;
-    let cc_y = taskbar_y - cc_h - 4;
+    let cc = control_center_rect(screen_w, screen_h);
+    let (cc_x, cc_y) = (cc.x, cc.y);
 
-    r.fill_rounded_rect(cc_x, cc_y, cc_w as u32, cc_h as u32, theme.corner_radius, theme.window_bg);
-    r.draw_rect_outline_alpha(cc_x, cc_y, cc_w as u32, cc_h as u32, theme.titlebar_active, 180);
+    r.fill_rounded_rect(cc_x, cc_y, cc.w, cc.h, theme.corner_radius, theme.window_bg);
+    r.draw_rect_outline_alpha(cc_x, cc_y, cc.w, cc.h, theme.titlebar_active, 180);
 
     r.draw_text(cc_x + 12, cc_y + 10, "Control Center", theme.accent, None);
-    r.draw_hline(cc_x + 12, cc_y + 32, (cc_w - 24) as u32, theme.titlebar_active);
+    r.draw_hline(cc_x + 12, cc_y + 32, cc.w - 24, theme.titlebar_active);
 
-    r.draw_icon(cc_x + 12, cc_y + 44, IconType::Wifi, Color::GREEN);
-    let ip = crate::net::my_ip();
-    let ip_line = alloc::format!("eth0: {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
-    r.draw_text(cc_x + 36, cc_y + 44, &ip_line, theme.text_primary, None);
+    // Сеть: реальное наличие устройства + настроенный IP. Зелёная иконка
+    // не рисуется, когда карты нет.
+    if crate::rtl8139::is_present() {
+        let ip = crate::net::my_ip();
+        r.draw_icon(cc_x + 12, cc_y + 44, IconType::Wifi, Color::GREEN);
+        let line = alloc::format!("eth0: {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
+        r.draw_text(cc_x + 36, cc_y + 44, &line, theme.text_primary, None);
+    } else {
+        r.draw_icon(cc_x + 12, cc_y + 44, IconType::Wifi, Color::GRAY);
+        r.draw_text(cc_x + 36, cc_y + 44, "No network device", theme.text_secondary, None);
+    }
 
-    r.draw_icon(cc_x + 12, cc_y + 70, IconType::Volume, theme.accent);
-    r.draw_text(cc_x + 36, cc_y + 70, "Audio: 80% [HDA]", theme.text_primary, None);
+    // Звук: реально инициализированный backend, без фиктивных процентов.
+    let (audio_color, audio_line) = if crate::hda::is_ready() {
+        (theme.accent, "Audio: Intel HDA ready")
+    } else {
+        (theme.text_secondary, "Audio: PC speaker only")
+    };
+    r.draw_icon(cc_x + 12, cc_y + 70, IconType::Volume, audio_color);
+    r.draw_text(cc_x + 36, cc_y + 70, audio_line, theme.text_primary, None);
 
-    r.draw_icon(cc_x + 12, cc_y + 96, IconType::Theme, Color::YELLOW);
-    r.draw_text(cc_x + 36, cc_y + 96, "Compositor: built-in", theme.text_primary, None);
+    // Дисплей: фактический режим framebuffer.
+    let disp = alloc::format!("Display: {}x{} 32bpp", r.width(), r.height());
+    r.draw_icon(cc_x + 12, cc_y + 96, IconType::Display, theme.text_secondary);
+    r.draw_text(cc_x + 36, cc_y + 96, &disp, theme.text_primary, None);
 
-    r.fill_rounded_rect(cc_x + 12, cc_y + 124, (cc_w - 24) as u32, 24, 4, theme.titlebar_active);
-    r.draw_text(cc_x + 32, cc_y + 128, "System Running", Color::GREEN, None);
+    // Реальное время работы системы.
+    let secs = timer::uptime_ms() / 1000;
+    let up = alloc::format!("Uptime: {}m {:02}s", secs / 60, secs % 60);
+    r.draw_text(cc_x + 36, cc_y + 122, &up, theme.text_secondary, None);
 }
 
 pub fn draw_cursor(r: &mut Renderer) {

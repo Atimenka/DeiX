@@ -1,7 +1,7 @@
 //! Управление окнами и отрисовка оконных контейнеров
 
 use crate::ext2;
-use crate::renderer::{Color, Renderer};
+use crate::renderer::{Color, Rect, Renderer};
 use crate::ui::apps;
 use crate::ui::metrics::UiMetrics;
 use crate::ui::theme::UiTheme;
@@ -76,10 +76,7 @@ pub enum WindowContent {
         /// Прокрутка списка (индекс первой видимой записи).
         scroll: usize,
     },
-    ThemeSettings {
-        volume_level: u8,
-        brightness_level: u8,
-    },
+    ThemeSettings,
     About,
     DisplaySettings,
 }
@@ -94,6 +91,64 @@ pub struct Window {
     pub maximized: bool,
     pub restore_geometry: (i32, i32, u32, u32),
     pub content: WindowContent,
+}
+
+/// Единая геометрия декораций окна. И отрисовка (`draw_window`), и
+/// обработка мыши (`desktop.rs`) обязаны использовать эти прямоугольники:
+/// два независимых источника координат уже приводили к несовпадению
+/// видимой кнопки и её hitbox.
+pub struct WindowFrame {
+    /// Рамка окна целиком (заголовок + содержимое).
+    pub outer: Rect,
+    /// Строка заголовка.
+    pub titlebar: Rect,
+    /// Видимые кнопки (кликам даётся запас `BTN_HIT_PAD`).
+    pub close: Rect,
+    pub maximize: Rect,
+    pub minimize: Rect,
+    /// Часть заголовка, за которую окно перетаскивается (без кнопок).
+    pub drag: Rect,
+    /// Уголок изменения размера (справа внизу).
+    pub resize: Rect,
+    /// Область содержимого приложения.
+    pub content: Rect,
+}
+
+impl WindowFrame {
+    /// Запас hitbox вокруг видимой кнопки: 12 + 2*3 = 18 < шаг 20,
+    /// зоны соседних кнопок не пересекаются.
+    pub const BTN_HIT_PAD: i32 = 3;
+
+    pub fn of(w: &Window, m: &UiMetrics) -> Self {
+        let titlebar_h = m.titlebar_height;
+        let d = m.button_diameter as u32;
+        let total_h = w.height + titlebar_h as u32;
+        let btn_y = w.y + (titlebar_h - m.button_diameter) / 2;
+        let right = w.x + w.width as i32;
+
+        // Зона drag заканчивается до кнопок (с их hit-запасом), чтобы
+        // промах мимо Close не начинал перетаскивание.
+        let drag_w = (w.width as i32 - 62 - Self::BTN_HIT_PAD).max(0) as u32;
+
+        WindowFrame {
+            outer: Rect::new(w.x, w.y, w.width, total_h),
+            titlebar: Rect::new(w.x, w.y, w.width, titlebar_h as u32),
+            close: Rect::new(right - 22, btn_y, d, d),
+            maximize: Rect::new(right - 42, btn_y, d, d),
+            minimize: Rect::new(right - 62, btn_y, d, d),
+            drag: Rect::new(w.x, w.y, drag_w, titlebar_h as u32),
+            resize: Rect::new(right - 16, w.y + total_h as i32 - 16, 16, 16),
+            content: Rect::new(w.x, w.y + titlebar_h, w.width, w.height),
+        }
+    }
+}
+
+/// Геометрия развёрнутого окна: учитывает панель задач снизу и то, что
+/// `height` — высота СОДЕРЖИМОГО (заголовок добавляется сверху). Раньше
+/// заголовок не вычитался, и развёрнутое окно перекрывало панель задач.
+pub fn maximized_geometry(screen_w: i32, screen_h: i32, m: &UiMetrics) -> (i32, i32, u32, u32) {
+    let h = (screen_h - m.taskbar_height as i32 - m.titlebar_height).max(120);
+    (0, 0, screen_w.max(160) as u32, h as u32)
 }
 
 impl Window {
@@ -202,10 +257,7 @@ impl Window {
             minimized: false,
             maximized: false,
             restore_geometry: (x, y, 480, 320),
-            content: WindowContent::ThemeSettings {
-                volume_level: 80,
-                brightness_level: 100,
-            },
+            content: WindowContent::ThemeSettings,
         }
     }
 
@@ -276,9 +328,9 @@ impl Window {
                 read_only,
                 error,
                 status_msg: if read_only {
-                    Some(String::from("только чтение"))
+                    Some(String::from("read-only"))
                 } else {
-                    Some(String::from("сохранение при закрытии окна"))
+                    Some(String::from("saved when window closes"))
                 },
             },
         }
@@ -377,18 +429,18 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
         // Показываем настоящую причину сбоя из net::http. Подменять её
         // «успешной» страницей нельзя: иначе сеть не диагностируется.
         Err(err) => alloc::vec![
-            format!("# Не удалось загрузить {}", full_url),
+            format!("# Failed to load {}", full_url),
             String::new(),
-            format!("Ошибка: {}", err),
+            format!("Error: {}", err),
             String::new(),
-            String::from("Возможные причины:"),
-            String::from("* сетевая карта не инициализирована (нет eth0)"),
-            String::from("* DNS-сервер недоступен или имя не существует"),
-            String::from("* хост недоступен или порт закрыт"),
-            String::from("* сервер не поддерживает TLS 1.3 (старые HTTPS-сайты не загрузятся)"),
-            String::from("* сертификат сервера не прошёл проверку (срок, имя хоста, цепочка до CA)"),
+            String::from("Possible causes:"),
+            String::from("* network card not initialized (no eth0)"),
+            String::from("* DNS server unreachable or the name does not exist"),
+            String::from("* host unreachable or port closed"),
+            String::from("* server does not support TLS 1.3 (older HTTPS sites will not load)"),
+            String::from("* server certificate failed verification (expiry, hostname, CA chain)"),
             String::new(),
-            String::from("Проверьте в CLI: `ifconfig`, `dns <host>`, `ping <ip>`."),
+            String::from("Check in the CLI: `ifconfig`, `dns <host>`, `ping <ip>`."),
         ],
     }
 }
@@ -706,6 +758,7 @@ pub fn draw_window(
     let titlebar_h = ui_m.titlebar_height;
     let button_d = ui_m.button_diameter;
     let total_h = w.height + titlebar_h as u32;
+    let frame = WindowFrame::of(w, &ui_m);
 
     if theme.enable_blur && !is_dragging {
         r.apply_blur_rect(w.x - 4, w.y - 4, w.width + 8, total_h + 8, 2);
@@ -733,17 +786,13 @@ pub fn draw_window(
     let title_color = if is_focused { theme.text_primary } else { theme.text_secondary };
     r.draw_text(w.x + 12, w.y + 6, &w.title, title_color, None);
 
-    let btn_y = w.y + (titlebar_h - button_d) / 2;
-
-    let min_x = w.x + w.width as i32 - 62;
-    r.fill_circle(min_x + button_d / 2, btn_y + button_d / 2, button_d / 2, Color::rgb(234, 179, 8));
-    r.draw_hline(min_x + 3, btn_y + button_d / 2, button_d as u32 - 6, Color::rgb(120, 80, 0));
-
-    let max_x = w.x + w.width as i32 - 42;
-    r.fill_circle(max_x + button_d / 2, btn_y + button_d / 2, button_d / 2, Color::GREEN);
-
-    let close_x = w.x + w.width as i32 - 22;
-    r.fill_circle(close_x + button_d / 2, btn_y + button_d / 2, button_d / 2, Color::RED);
+    // Кнопки — строго по прямоугольникам WindowFrame (теми же
+    // пользуется обработчик кликов в desktop.rs).
+    let rad = button_d / 2;
+    r.fill_circle(frame.minimize.x + rad, frame.minimize.y + rad, rad, Color::rgb(234, 179, 8));
+    r.draw_hline(frame.minimize.x + 3, frame.minimize.y + rad, button_d as u32 - 6, Color::rgb(120, 80, 0));
+    r.fill_circle(frame.maximize.x + rad, frame.maximize.y + rad, rad, Color::GREEN);
+    r.fill_circle(frame.close.x + rad, frame.close.y + rad, rad, Color::RED);
 
     let content_y = w.y + titlebar_h;
 
@@ -753,7 +802,7 @@ pub fn draw_window(
         }
         WindowContent::Files {
             current_partition,
-            current_path: _,
+            current_path,
             entries,
             selected_idx,
             search_query,
@@ -765,6 +814,7 @@ pub fn draw_window(
                 theme,
                 w,
                 current_partition,
+                current_path,
                 entries,
                 *selected_idx,
                 search_query,
@@ -833,18 +883,8 @@ pub fn draw_window(
                 content_y,
             );
         }
-        WindowContent::ThemeSettings {
-            volume_level,
-            brightness_level,
-        } => {
-            apps::draw_theme_settings(
-                r,
-                theme,
-                w,
-                *volume_level,
-                *brightness_level,
-                content_y,
-            );
+        WindowContent::ThemeSettings => {
+            apps::draw_theme_settings(r, theme, w, content_y);
         }
         WindowContent::ErrorCenter { selected, scroll } => {
             apps::draw_error_center(r, theme, w, *selected, *scroll, content_y);

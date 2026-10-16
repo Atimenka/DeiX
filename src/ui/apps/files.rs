@@ -1,16 +1,44 @@
-//! Отрисовка приложения Менеджер файлов и Редактор файлов
+//! Отрисовка приложения Менеджер файлов и Редактор файлов.
+//!
+//! Геометрия интерактивных элементов задана функциями ниже (координаты
+//! относительно области содержимого окна); обработчик кликов в
+//! `desktop.rs` обязан использовать те же прямоугольники.
 
-use crate::renderer::{Color, IconType, Renderer};
+use crate::renderer::{Color, IconType, Rect, Renderer};
 use crate::ui::theme::UiTheme;
 use crate::ui::window::{FileViewEntry, Window};
 use alloc::format;
 use alloc::string::String;
+
+/// Ширина боковой панели разделов.
+pub const SIDEBAR_W: i32 = 110;
+/// Первая строка списка файлов (от верха содержимого).
+pub const LIST_START_Y: i32 = 44;
+/// Шаг строки списка.
+pub const ROW_H: i32 = 22;
+
+/// Кнопка «+File» (относительно области содержимого). Правый якорь —
+/// как и при отрисовке.
+pub fn new_file_btn_rect(win_w: u32) -> Rect {
+    Rect::new(win_w as i32 - 120, 6, 50, 24)
+}
+
+/// Кнопка «+Folder».
+pub fn new_folder_btn_rect(win_w: u32) -> Rect {
+    Rect::new(win_w as i32 - 64, 6, 55, 24)
+}
+
+/// Кнопка раздела в боковой панели.
+pub fn sidebar_item_rect(i: usize) -> Rect {
+    Rect::new(4, 8 + i as i32 * 36, 102, 28)
+}
 
 pub fn draw_files(
     r: &mut Renderer,
     theme: &UiTheme,
     w: &Window,
     current_partition: &str,
+    current_path: &str,
     entries: &[FileViewEntry],
     selected_idx: Option<usize>,
     search_query: &str,
@@ -20,28 +48,41 @@ pub fn draw_files(
 ) {
     r.fill_rect_alpha(w.x, content_y, w.width, w.height, theme.window_bg, theme.opacity);
 
-    r.fill_rect(w.x, content_y, 110, w.height, theme.titlebar_inactive);
+    r.fill_rect(w.x, content_y, SIDEBAR_W as u32, w.height, theme.titlebar_inactive);
     let partitions = ["/userdata", "/system"];
-    let mut py = content_y + 8;
-    for p in partitions.iter() {
+    for (i, p) in partitions.iter().enumerate() {
+        let item = sidebar_item_rect(i);
         let is_sel = current_partition == *p;
         let bg = if is_sel { theme.titlebar_active } else { theme.titlebar_inactive };
         let fg = if is_sel { theme.accent } else { theme.text_secondary };
-        r.fill_rounded_rect(w.x + 4, py, 102, 28, 4, bg);
-        r.draw_text(w.x + 12, py + 6, p, fg, None);
-        py += 36;
+        r.fill_rounded_rect(w.x + item.x, content_y + item.y, item.w, item.h, 4, bg);
+        r.draw_text(w.x + item.x + 8, content_y + item.y + 6, p, fg, None);
     }
 
-    r.fill_rect(w.x + 110, content_y, w.width - 110, 36, theme.titlebar_active);
-    r.draw_text(w.x + 116, content_y + 10, &format!("Search: [{}]", search_query), theme.text_primary, None);
+    r.fill_rect(w.x + SIDEBAR_W, content_y, w.width - SIDEBAR_W as u32, 36, theme.titlebar_active);
+    r.draw_icon(w.x + SIDEBAR_W + 6, content_y + 10, IconType::Search, theme.text_secondary);
+    r.draw_text(
+        w.x + SIDEBAR_W + 26,
+        content_y + 10,
+        &format!("[{}]", search_query),
+        theme.text_primary,
+        None,
+    );
 
-    r.fill_rounded_rect(w.x + w.width as i32 - 120, content_y + 6, 50, 24, 4, theme.accent);
-    r.draw_text(w.x + w.width as i32 - 115, content_y + 10, "+File", Color::WHITE, None);
+    // Создание файлов возможно только на записываемом разделе: на
+    // /system (EROFS, read-only) кнопки не рисуются и не кликаются.
+    let writable = current_partition == "/userdata";
+    if writable {
+        let fb = new_file_btn_rect(w.width);
+        r.fill_rounded_rect(w.x + fb.x, content_y + fb.y, fb.w, fb.h, 4, theme.accent);
+        r.draw_text(w.x + fb.x + 5, content_y + fb.y + 4, "+File", Color::WHITE, None);
 
-    r.fill_rounded_rect(w.x + w.width as i32 - 64, content_y + 6, 55, 24, 4, theme.accent);
-    r.draw_text(w.x + w.width as i32 - 60, content_y + 10, "+Folder", Color::WHITE, None);
+        let db = new_folder_btn_rect(w.width);
+        r.fill_rounded_rect(w.x + db.x, content_y + db.y, db.w, db.h, 4, theme.accent);
+        r.draw_text(w.x + db.x + 4, content_y + db.y + 4, "+Folder", Color::WHITE, None);
+    }
 
-    let list_start_y = content_y + 44;
+    let list_start_y = content_y + LIST_START_Y;
     let mut ey = list_start_y;
     for (idx, entry) in entries.iter().enumerate() {
         if ey + 20 > content_y + w.height as i32 - 30 {
@@ -49,10 +90,10 @@ pub fn draw_files(
         }
         let is_selected = selected_idx == Some(idx);
         let bg = if is_selected { theme.titlebar_active } else { theme.window_bg };
-        r.fill_rect(w.x + 114, ey - 2, w.width - 120, 20, bg);
+        r.fill_rect(w.x + SIDEBAR_W + 4, ey - 2, w.width - (SIDEBAR_W as u32 + 10), 20, bg);
 
         let icon_color = if entry.is_dir { Color::YELLOW } else { theme.accent };
-        r.draw_icon(w.x + 118, ey, IconType::Files, icon_color);
+        r.draw_icon(w.x + SIDEBAR_W + 8, ey, IconType::Files, icon_color);
 
         let entry_str = if entry.is_dir {
             format!("{:<18} <DIR>", entry.name)
@@ -60,14 +101,23 @@ pub fn draw_files(
             format!("{:<18} {:>6} B", entry.name, entry.size)
         };
         let text_color = if is_selected { theme.accent } else { theme.text_primary };
-        r.draw_text(w.x + 138, ey + 2, &entry_str, text_color, None);
-        ey += 22;
+        r.draw_text(w.x + SIDEBAR_W + 28, ey + 2, &entry_str, text_color, None);
+        ey += ROW_H;
     }
 
+    // Нижняя строка: сообщение об операции, ошибка или текущий путь.
+    let bottom_y = content_y + w.height as i32 - 20;
     if let Some(msg) = status_msg {
-        r.draw_text(w.x + 118, content_y + w.height as i32 - 20, msg, Color::GREEN, None);
+        r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, msg, Color::GREEN, None);
     } else if let Some(err) = error {
-        r.draw_text(w.x + 118, content_y + w.height as i32 - 20, err, Color::RED, None);
+        r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, err, Color::RED, None);
+    } else {
+        let loc = if current_path == "/" {
+            String::from(current_partition)
+        } else {
+            format!("{}{}", current_partition, current_path)
+        };
+        r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, &loc, theme.text_secondary, None);
     }
 }
 

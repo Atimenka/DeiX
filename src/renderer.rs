@@ -56,6 +56,23 @@ impl Rect {
             && self.y < other.y + other.h as i32
             && self.y + self.h as i32 > other.y
     }
+
+    /// Точка внутри прямоугольника.
+    pub fn contains(&self, px: i32, py: i32) -> bool {
+        px >= self.x
+            && px < self.x + self.w as i32
+            && py >= self.y
+            && py < self.y + self.h as i32
+    }
+
+    /// Точка внутри прямоугольника, расширенного на `pad` со всех сторон
+    /// (hitbox мелких кнопок чуть больше видимой области).
+    pub fn contains_pad(&self, px: i32, py: i32, pad: i32) -> bool {
+        px >= self.x - pad
+            && px < self.x + self.w as i32 + pad
+            && py >= self.y - pad
+            && py < self.y + self.h as i32 + pad
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

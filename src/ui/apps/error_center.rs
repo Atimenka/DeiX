@@ -56,12 +56,12 @@ pub fn draw_error_center(
     r.draw_text(w.x + 12, content_y + 28, &counts, theme.text_primary, None);
 
     let session = format!(
-        "Сессия #{}   событий: {}   в буфере: {}{}",
+        "Session #{}   events: {}   buffered: {}{}",
         s.boot_session,
         s.total_events,
         s.buffered,
         if diag::panic::has_previous_failure() {
-            "   ЕСТЬ ОТЧЁТ О ПРЕДЫДУЩЕМ ОТКАЗЕ"
+            "   PREVIOUS FAILURE REPORT AVAILABLE"
         } else {
             ""
         }
@@ -78,7 +78,7 @@ pub fn draw_error_center(
         r.draw_text(
             w.x + 16,
             content_y + LIST_START + 4,
-            "Ошибок и предупреждений не зарегистрировано.",
+            "No errors or warnings have been recorded.",
             theme.text_secondary,
             None,
         );
@@ -128,7 +128,7 @@ pub fn draw_error_center(
         r.draw_text(w.x + 12, card_y + 8, &line1, theme.text_primary, None);
 
         let line2 = format!(
-            "pid {}   повторов {}   действие: {}",
+            "pid {}   repeats {}   action: {}",
             rec.pid,
             rec.occurrences,
             rec.action.name()
@@ -140,7 +140,7 @@ pub fn draw_error_center(
 
         if let Some(cause) = diag::ring::by_id(rec.related_id) {
             let line4 = format!(
-                "Первопричина: {} {}",
+                "Root cause: {} {}",
                 cause.code.as_string(),
                 cause.message()
             );
@@ -150,7 +150,7 @@ pub fn draw_error_center(
         r.draw_text(
             w.x + 12,
             card_y + 8,
-            "Выберите запись, чтобы увидеть карточку ошибки.",
+            "Select a record to view its error card.",
             theme.text_secondary,
             None,
         );
