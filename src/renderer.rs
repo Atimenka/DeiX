@@ -701,14 +701,17 @@ use crate::sync::without_interrupts;
 static ACTIVE_RENDERER: SpinLock<Option<Renderer>> = SpinLock::new(None);
 
 pub fn set_active_framebuffer(fb: Framebuffer) {
+    // Старый back buffer освобождается до выделения нового (на куче в
+    // 16 МиБ два полноэкранных буфера одновременно не живут), а сам
+    // новый Renderer строится ВНЕ лока: если аллокация запаникует,
+    // обработчик паники сможет взять рендерер и нарисовать отчёт,
+    // а не оставить чёрный экран.
     without_interrupts(|| {
-        let mut guard = ACTIVE_RENDERER.lock();
-        // Сначала освобождаем back buffer старого режима, потом выделяем
-        // новый: иначе при переходе на большое разрешение оба буфера
-        // (например, 1.8 МиБ + 5 МиБ) живут одновременно и на куче в
-        // 16 МиБ это заканчивалось alloc error — чёрным экраном.
-        *guard = None;
-        *guard = Some(Renderer::new(fb));
+        *ACTIVE_RENDERER.lock() = None;
+    });
+    let r = Renderer::new(fb);
+    without_interrupts(|| {
+        *ACTIVE_RENDERER.lock() = Some(r);
     });
 }
 
@@ -728,7 +731,10 @@ pub fn ensure_framebuffer() {
 }
 
 pub fn reset_renderer() {
-    *ACTIVE_RENDERER.lock() = None;
+    // Дроп старого рендерера (большой Vec) — вне лока и под запретом
+    // прерываний симметрично остальным операциям над ACTIVE_RENDERER.
+    let old = without_interrupts(|| ACTIVE_RENDERER.lock().take());
+    drop(old);
 }
 
 pub fn has_active_framebuffer() -> bool {

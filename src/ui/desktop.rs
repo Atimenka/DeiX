@@ -1780,9 +1780,13 @@ impl Desktop {
             self.dirty = true;
         }
 
+        // Маяки первого кадра: по serial-логу видно, дошла ли сессия до
+        // отрисовки и завершилась ли она (диагностика чёрного экрана).
+        crate::serial_println!("[desktop] session start {}x{}", screen_w, screen_h);
         r.add_damage(crate::renderer::Rect::new(0, 0, screen_w as u32, screen_h as u32));
         self.render(r);
         self.dirty = false;
+        crate::serial_println!("[desktop] first frame presented");
 
         loop {
             // Win/Super открывает и закрывает меню Пуск.
@@ -1976,8 +1980,6 @@ fn isqrt(v: i64) -> i32 {
     x as i32
 }
 
-/// Смешивает цвет `fg` с альфой поверх пикселя кеша.
-#[inline]
 /// Мягкий диск в пиксельный буфер: альфа квадратично спадает от
 /// центра (peak) к краю (0). Основа свечений в генераторе обоев.
 fn blend_soft_disc(
@@ -2011,6 +2013,8 @@ fn blend_soft_disc(
     }
 }
 
+/// Смешивает цвет `fg` с альфой поверх пикселя кеша.
+#[inline]
 fn blend_into(pixels: &mut [u32], idx: usize, fg: Color, alpha: u8) {
     if let Some(p) = pixels.get_mut(idx) {
         *p = fg.alpha_blend(Color::from_u32(*p), alpha).0;

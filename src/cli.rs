@@ -1168,7 +1168,14 @@ fn enter_graphics_mode(gpu_device: &crate::pci::PciDevice, width: u32, height: u
             crate::renderer::set_active_framebuffer(fb);
             true
         }
-        None => false,
+        None => {
+            // VBE уже выключен/перепрограммирован: без восстановления
+            // текстового режима пользователь остался бы на чёрном
+            // экране с невидимой консолью.
+            crate::vbe::restore_text_mode();
+            crate::font::restore_full_font();
+            false
+        }
     }
 }
 
