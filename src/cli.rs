@@ -314,6 +314,7 @@ pub fn execute(line: &str) {
         "panic" => crate::diag::cli::cmd_panic(rest),
         "diagnostics" => crate::diag::cli::cmd_diagnostics(rest),
         "notify" => cmd_notify(rest),
+        "curl" => cmd_curl(rest),
         "dev" => {
             match rest.trim() {
                 "on" => crate::devmode::enable_dev_mode(),
@@ -526,6 +527,7 @@ fn cmd_help() {
     println!("  run <program.mex>       - {}", t!(en: "run a .mex program", ru: "запустить .mex программу"));
     println!("  install                 - {}", t!(en: "clone this disk onto a second physical disk (real HDD install)", ru: "клонировать этот диск на второй физический диск (установка на реальный HDD)"));
     println!("  sysfs [status|convert]  - {}", t!(en: "convert /system from EROFS to ext2 (dev mode only)", ru: "конвертировать /system из EROFS в ext2 (только dev-режим)"));
+    println!("  curl <url>              - {}", t!(en: "HTTP(S) GET for network diagnostics", ru: "HTTP(S) GET для диагностики сети"));
     println!("  dev [link|request|on|off|revoke] - {}", t!(en: "developer mode (link device to account, server-side activation, see docs/DEVAUTH.md)", ru: "режим разработчика (серверная активация, см. docs/DEVAUTH.md)"));
     println!("  bigfile <size_kb>       - {}", t!(en: "test ext2 indirect blocks with a large file", ru: "проверить indirect-блоки ext2 большим файлом"));
     println!("  useradd <user> <pass>   - {}", t!(en: "create a new user account", ru: "создать новый аккаунт пользователя"));
@@ -842,6 +844,44 @@ fn cmd_ifconfig(arg: &str) {
         );
     } else {
         println!("RX drops: 0");
+    }
+}
+
+fn cmd_curl(arg: &str) {
+    if !rtl8139::is_ready() {
+        println!(
+            "{}",
+            t!(en: "No network card detected.", ru: "Сетевая карта не найдена.")
+        );
+        return;
+    }
+    let url = arg.trim();
+    if url.is_empty() {
+        println!(
+            "{}",
+            t!(
+                en: "Usage: curl <url> - HTTP(S) GET, prints status and the start of the body",
+                ru: "Использование: curl <url> - HTTP(S) GET, печатает статус и начало тела"
+            )
+        );
+        return;
+    }
+    let started = crate::timer::uptime_ms();
+    match crate::net::http::fetch_bytes(url) {
+        Ok(resp) => {
+            println!(
+                "  HTTP {} {} ({} bytes, {} ms, {})",
+                resp.status,
+                resp.reason,
+                resp.body.len(),
+                crate::timer::uptime_ms() - started,
+                resp.content_type
+            );
+            let text = String::from_utf8_lossy(&resp.body);
+            let head: String = text.chars().take(300).collect();
+            println!("{}", head);
+        }
+        Err(e) => println!("  curl: {}", e),
     }
 }
 
@@ -1950,7 +1990,7 @@ pub const VALID_COMMANDS: &[&str] = &[
     "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",
     "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "dev", "profile",
     "ps", "kill", "log", "error", "panic", "diagnostics", "wallpaper", "sysfs",
-    "notify"
+    "notify", "curl"
 ];
 
 pub fn is_valid_command(name: &str) -> bool {

@@ -11,6 +11,7 @@ serverless-функции в `api/` (Node 22).
 | `/request` | заявка на токен для привязанного устройства (только для вошедших) и «Мои заявки» |
 | `/admin` | панель Owner: принять/отклонить/удалить заявку, приём заявок вкл/выкл |
 | `POST /api/auth` | `config`, `me`, `register`, `login`, `logout`, `change_password` |
+| `POST /api/os?fn=...` | шлюз для ОС: `begin_device_link`, `device_link_status`, `request_dev_unlock`, `claim_dev_unlock` |
 | `POST /api/devices` | `list`, `link` (код из `dev link`), `unlink` |
 | `POST /api/request` | `mine`, `submit` |
 | `POST /api/admin` | `list`, `decide`, `remove`, `set_open` (только role=owner) |

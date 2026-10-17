@@ -123,6 +123,16 @@ globalThis.fetch = async (url, init = {}) => {
     const owner = u.searchParams.get('user_id').slice(3);
     return jsonResponse(200, [...db.links.values()].filter((l) => l.user_id === owner));
   }
+  if (path === 'rpc/begin_device_link') {
+    db.codes.set(body.p_device_id, 'ABCD2345');
+    return jsonResponse(200, { status: 'code', code: 'ABCD-2345', expires_in: 600 });
+  }
+  if (path === 'rpc/request_dev_unlock') {
+    const link = db.links.get(body.p_device_id);
+    if (!link) return jsonResponse(400, { code: 'P0001', message: "device is not linked to an account: run 'dev link' in DeiX" });
+    assert.equal(body.p_source, 'os');
+    return jsonResponse(200, { result: 'created', status: 'pending' });
+  }
   if (path === 'rpc/link_device') {
     const entry = [...db.codes].find(([, c]) => c === body.p_code.replace('-', '').toUpperCase());
     if (!entry) return jsonResponse(400, { code: 'P0001', message: 'invalid or expired code' });
@@ -169,6 +179,7 @@ const authHandler = require('../api/auth');
 const adminHandler = require('../api/admin');
 const requestHandler = require('../api/request');
 const devicesHandler = require('../api/devices');
+const osHandler = require('../api/os');
 
 function call(handler, body, { cookies = {}, headers } = {}) {
   return new Promise((resolve) => {
@@ -299,6 +310,39 @@ test('wrong link codes are rate limited', async () => {
     assert.equal((await call(devicesHandler, { action: 'link', code: 'ZZZZ-ZZZZ' }, { cookies: user })).status, 400);
   }
   assert.equal((await call(devicesHandler, { action: 'link', code: 'ZZZZ-ZZZZ' }, { cookies: user })).status, 429);
+});
+
+function callOs(fn, body, method = 'POST') {
+  return new Promise((resolve) => {
+    const out = { statusCode: 200 };
+    const req = { method, url: `/api/os?fn=${fn}`, body, headers: { host: 'site.test', 'x-forwarded-for': '7.7.7.7' } };
+    const res = {
+      setHeader: () => {},
+      end: (text) => resolve({ status: out.statusCode, json: JSON.parse(text) }),
+    };
+    Object.defineProperty(res, 'statusCode', { get: () => out.statusCode, set: (v) => (out.statusCode = v) });
+    osHandler(req, res);
+  });
+}
+
+test('OS gateway forwards only whitelisted functions and reports refusals as PostgREST errors', async () => {
+  const dev = 'c'.repeat(32);
+  assert.equal((await callOs('begin_device_link', {}, 'GET')).status, 405);
+  assert.equal((await callOs('drop_everything', { p_device_id: dev })).status, 404);
+  assert.equal((await callOs('begin_device_link', { p_device_id: 'zz' })).status, 400);
+
+  const code = await callOs('begin_device_link', { p_device_id: dev });
+  assert.equal(code.status, 200);
+  assert.equal(code.json.code, 'ABCD-2345');
+
+  const refused = await callOs('request_dev_unlock', { p_device_id: dev, p_hostname: 'DeiX', p_source: 'web' });
+  assert.equal(refused.status, 400);
+  assert.match(refused.json.message, /not linked/);
+
+  db.links.set(dev, { device_id: dev, user_id: 'u' });
+  const ok = await callOs('request_dev_unlock', { p_device_id: dev, p_hostname: 'DeiX', p_source: 'web' });
+  assert.equal(ok.json.result, 'created');
+  db.links.delete(dev);
 });
 
 test('csrf header and origin are enforced', async () => {

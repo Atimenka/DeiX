@@ -17,14 +17,14 @@
 //   dev revoke  — удаляет локальный ключ (повторная активация — снова
 //                 через сервер).
 //
-// Сервер — Supabase PostgREST (см. supabase/migrations). ОС ходит туда
-// по HTTPS с publishable-ключом: он ПУБЛИЧНЫЙ по дизайну и дает право
-// вызвать четыре функции — begin_device_link и device_link_status
-// (привязка к аккаунту), request_dev_unlock (подать заявку) и
-// claim_dev_unlock (узнать статус и забрать одобренный токен; токен
-// выдается один раз). К таблицам у этого ключа доступа нет. Заявки
-// одобряет владелец проекта в админ-панели сайта (web/);
-// service-ключи и пароль БД в ОС не встраиваются.
+// Сервер — шлюз на сайте проекта (web/api/os.js, Vercel): ОС ходит по
+// HTTPS на домен сайта, а не на supabase.co: так ОС не зависит от того,
+// доступен ли supabase.co из сети пользователя.
+// Шлюз пропускает ровно четыре функции — begin_device_link и
+// device_link_status (привязка к аккаунту), request_dev_unlock (подать
+// заявку) и claim_dev_unlock (узнать статус и забрать одобренный токен;
+// токен выдается один раз) — и вызывает их в Supabase сам. Ключей базы
+// в ОС нет. Заявки одобряет владелец проекта в админ-панели сайта.
 //
 // Честная граница (§42): это реестр устройств, а не защита от владельца
 // машины — исходники открыты, проверку можно пропатчить. Никаких других
@@ -39,8 +39,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use crate::println;
 use crate::ui::notify::{self, Kind};
 
-const SUPABASE_URL: &str = "https://xtsrvmwfnsxunvwuaplz.supabase.co";
-const ANON_KEY: &str = "sb_publishable_gFxef7M8SrR-yUO_KyLkMg_AoNsUins";
+const GATEWAY_URL: &str = "https://deix-atimenkas-projects.vercel.app/api/os";
 
 /// Интервал фонового опроса статуса заявки.
 const POLL_INTERVAL_MS: u64 = 20_000;
@@ -128,14 +127,11 @@ enum ServerStatus {
 }
 
 fn rpc(name: &str, body: &str) -> Result<crate::net::http::HttpBytes, String> {
-    let url = format!("{}/rest/v1/rpc/{}", SUPABASE_URL, name);
+    let url = format!("{}?fn={}", GATEWAY_URL, name);
     crate::net::http::request_bytes(
         "POST",
         &url,
-        &[
-            ("apikey", ANON_KEY),
-            ("Content-Type", "application/json"),
-        ],
+        &[("Content-Type", "application/json")],
         body.as_bytes(),
     )
 }
@@ -204,10 +200,12 @@ fn describe_rejection(function: &str, status: u16, body: &[u8]) -> String {
     let message = json_str_field(&text, "message").unwrap_or_else(|| clip(text.trim(), 160));
     let hint = match status {
         404 => format!(
-            " - function {} not found on this project: apply supabase/migrations (see docs/DEVAUTH.md)",
+            " - the site gateway does not know '{}': redeploy web/ (see docs/DEVAUTH.md)",
             function
         ),
-        401 | 403 => String::from(" - the project rejected the anon key"),
+        401 | 403 => String::from(
+            " - the site refused the request (is Vercel Authentication still enabled for the project?)",
+        ),
         _ => String::new(),
     };
     format!("HTTP {}: {}{}", status, clip(&message, 160), hint)
