@@ -49,7 +49,10 @@ pub fn run() -> ! {
         } else {
             match keyboard::try_read_char() {
                 Some(c) => c,
-                None => continue,
+                None => {
+                    crate::devauth::poll_pending();
+                    continue;
+                }
             }
         };
         match c {

@@ -2,7 +2,10 @@
 // devauth — серверная активация dev-режима (см. docs/DEVAUTH.md).
 //
 // Поток:
-//   dev request — создаёт device_id и подаёт заявку на сервер;
+//   dev request — создаёт device_id, отправляет заявку одним POST и
+//                 сразу отключается; дальше ответ сервера ждёт не команда,
+//                 а фоновый опрос статуса (poll_pending), который сам
+//                 сообщает об одобрении или отказе;
 //   dev on      — требует активации: кешированный ключ в /userdata или
 //                 статус 'approved' на сервере (ключ кешируется, дальше
 //                 работает офлайн);
@@ -23,10 +26,23 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+
 use crate::println;
 
 const SUPABASE_URL: &str = "https://xtsrvmwfnsxunvwuaplz.supabase.co";
 const ANON_KEY: &str = "sb_publishable_gFxef7M8SrR-yUO_KyLkMg_AoNsUins";
+
+/// Интервал фонового опроса статуса заявки.
+const POLL_INTERVAL_MS: u64 = 20_000;
+/// Подряд идущих сбоев связи, после которых опрос прекращается.
+const POLL_MAX_FAILURES: u32 = 5;
+
+/// Заявка подана (или уже была на сервере) и решение ещё не получено.
+static PENDING: AtomicBool = AtomicBool::new(false);
+static POLLING: AtomicBool = AtomicBool::new(false);
+static NEXT_POLL_MS: AtomicU64 = AtomicU64::new(0);
+static POLL_FAILURES: AtomicU32 = AtomicU32::new(0);
 
 const DEVICE_ID_FILE: &str = "/userdata/etc/device.id";
 const UNLOCK_KEY_FILE: &str = "/userdata/etc/dev_unlock.key";
@@ -124,7 +140,13 @@ fn server_status(id: &str) -> Result<ServerStatus, String> {
     }
 }
 
-fn server_request(id: &str) -> Result<(), String> {
+enum RequestError {
+    /// Заявка с таким device_id уже есть (HTTP 409).
+    Duplicate,
+    Failed(String),
+}
+
+fn server_request(id: &str) -> Result<(), RequestError> {
     let url = format!("{}/rest/v1/dev_unlocks", SUPABASE_URL);
     let body = format!(
         "{{\"device_id\":\"{}\",\"hostname\":\"{}\"}}",
@@ -140,11 +162,16 @@ fn server_request(id: &str) -> Result<(), String> {
             ("Prefer", "return=minimal"),
         ],
         body.as_bytes(),
-    )?;
+    )
+    .map_err(RequestError::Failed)?;
     match resp.status {
         201 => Ok(()),
-        409 => Err(String::from("request already exists (duplicate device_id)")),
-        _ => Err(http_error("request", resp.status, &resp.body)),
+        409 => Err(RequestError::Duplicate),
+        _ => Err(RequestError::Failed(http_error(
+            "request",
+            resp.status,
+            &resp.body,
+        ))),
     }
 }
 
@@ -205,7 +232,9 @@ pub fn ensure_unlocked() -> Result<&'static str, String> {
     }
 }
 
-/// `dev request`: подаёт заявку на активацию.
+/// `dev request`: отправляет заявку одним POST и сразу возвращается.
+/// Одобрение команда не ждёт: статус заявки дальше опрашивает
+/// `poll_pending` из главного цикла.
 pub fn cmd_request() {
     let id = match device_id() {
         Ok(id) => id,
@@ -215,26 +244,105 @@ pub fn cmd_request() {
         }
     };
     println!("  [devauth] device id: {}", id);
-    // Если заявка уже есть — честно показываем её состояние вместо
-    // заведомого 409 от сервера.
-    match server_status(&id) {
-        Ok(ServerStatus::NotRequested) => match server_request(&id) {
-            Ok(()) => {
-                println!("  [devauth] request filed. Ask the project owner to approve");
-                println!("  [devauth] this device id, then run 'dev on'.");
-            }
-            Err(e) => println!("  [devauth] {}", e),
-        },
-        Ok(ServerStatus::Pending) => {
-            println!("  [devauth] request already filed and pending approval.");
+    if cached_unlock(&id) {
+        println!("  [devauth] already activated - run 'dev on'.");
+        return;
+    }
+    match server_request(&id) {
+        Ok(()) => {
+            println!("  [devauth] request sent, connection closed.");
+            println!("  [devauth] Ask the project owner to approve this device id.");
         }
-        Ok(ServerStatus::Approved(_)) => {
-            println!("  [devauth] already approved - run 'dev on'.");
+        Err(RequestError::Duplicate) => {
+            println!("  [devauth] request for this device id is already on the server.");
+        }
+        Err(RequestError::Failed(e)) => {
+            println!("  [devauth] server unreachable: {}", e);
+            return;
+        }
+    }
+    start_polling();
+    println!(
+        "  [devauth] status is checked in the background every {} s;",
+        POLL_INTERVAL_MS / 1000
+    );
+    println!("  [devauth] you will be told when the server decides.");
+}
+
+fn start_polling() {
+    POLL_FAILURES.store(0, Ordering::Relaxed);
+    NEXT_POLL_MS.store(
+        crate::timer::uptime_ms() + POLL_INTERVAL_MS,
+        Ordering::Relaxed,
+    );
+    PENDING.store(true, Ordering::Relaxed);
+}
+
+fn announce(message: &str) {
+    println!("  [devauth] {}", message);
+    crate::diag::notice(crate::diag::NONE, message);
+}
+
+/// Фоновая проверка статуса заявки. Вызывается из главных циклов CLI и
+/// рабочего стола, вне выполнения команд: сетевой стек однозадачный.
+/// Пока заявка не подавалась или решение уже получено — выходит сразу.
+pub fn poll_pending() {
+    if !PENDING.load(Ordering::Relaxed) {
+        return;
+    }
+    if crate::timer::uptime_ms() < NEXT_POLL_MS.load(Ordering::Relaxed) {
+        return;
+    }
+    if POLLING.swap(true, Ordering::Acquire) {
+        return;
+    }
+    check_pending();
+    NEXT_POLL_MS.store(
+        crate::timer::uptime_ms() + POLL_INTERVAL_MS,
+        Ordering::Relaxed,
+    );
+    POLLING.store(false, Ordering::Release);
+}
+
+fn check_pending() {
+    let id = match device_id() {
+        Ok(id) => id,
+        Err(e) => {
+            PENDING.store(false, Ordering::Relaxed);
+            announce(&format!("status polling stopped: no device id ({})", e));
+            return;
+        }
+    };
+    match server_status(&id) {
+        Ok(ServerStatus::Pending) => POLL_FAILURES.store(0, Ordering::Relaxed),
+        Ok(ServerStatus::Approved(key)) => {
+            PENDING.store(false, Ordering::Relaxed);
+            match store_unlock(&id, &key) {
+                Ok(()) => announce("request APPROVED by the server - run 'dev on'."),
+                Err(e) => announce(&format!(
+                    "request APPROVED, but the key could not be saved: {}",
+                    e
+                )),
+            }
         }
         Ok(ServerStatus::Denied) => {
-            println!("  [devauth] request was denied by the project owner.");
+            PENDING.store(false, Ordering::Relaxed);
+            announce("request was DENIED by the project owner.");
         }
-        Err(e) => println!("  [devauth] server unreachable: {}", e),
+        Ok(ServerStatus::NotRequested) => {
+            PENDING.store(false, Ordering::Relaxed);
+            announce("the server has no request for this device id - run 'dev request'.");
+        }
+        Err(e) => {
+            let failures = POLL_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
+            if failures >= POLL_MAX_FAILURES {
+                PENDING.store(false, Ordering::Relaxed);
+                announce(&format!(
+                    "status polling stopped after {} failures: {}",
+                    failures, e
+                ));
+            }
+        }
     }
 }
 
@@ -266,5 +374,8 @@ pub fn status_lines() -> Vec<String> {
         Err(_) => "no",
     };
     out.push(format!("  activation: {}", unlocked));
+    if PENDING.load(Ordering::Relaxed) {
+        out.push(String::from("  request: waiting for the server decision (background check)"));
+    }
     out
 }

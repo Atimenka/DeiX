@@ -2066,6 +2066,7 @@ impl Desktop {
             // Квант супервизора: детект упавших служб и политика
             // перезапуска. Без этого вызова RestartPolicy не работает.
             crate::dinit::tick();
+            crate::devauth::poll_pending();
             crate::diag::persist::flush();
 
             self.handle_input(screen_w, screen_h);
