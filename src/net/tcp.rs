@@ -95,7 +95,11 @@ fn tcp_payload(pkt: &[u8]) -> Vec<u8> {
     if pkt.len() < tcp+TcpHdr::SZ { return Vec::new(); }
     let h = unsafe { &*(pkt.as_ptr().add(tcp) as *const TcpHdr) };
     let start = tcp + h.doff();
-    if pkt.len() > start { Vec::from(&pkt[start..]) } else { Vec::new() }
+    // Короткие кадры Ethernet добиваются нулями до 60 байт: данные TCP
+    // заканчиваются по полю Total Length заголовка IPv4, а не по концу кадра.
+    let ip_total = u16::from_be_bytes([pkt[16], pkt[17]]) as usize;
+    let end = (14 + ip_total).min(pkt.len());
+    if end > start { Vec::from(&pkt[start..end]) } else { Vec::new() }
 }
 
 pub fn connect(dip: [u8;4], dport: u16) -> bool {
