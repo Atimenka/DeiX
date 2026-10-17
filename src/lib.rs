@@ -18,6 +18,7 @@ mod cp866;
 mod cpuid;
 mod crypto;
 mod crypto_storage;
+mod devauth;
 mod devmode;
 mod diag;
 mod dialog;

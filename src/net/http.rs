@@ -1,12 +1,14 @@
 //! HTTP/1.1 клиент поверх TCP и TLS 1.3.
 //!
-//! Поддерживает: GET, разбор строки статуса и заголовков, Content-Length,
-//! Transfer-Encoding: chunked (RFC 9112 §7.1), Content-Encoding: gzip
-//! (распаковка в net::inflate), переход по redirect (301/302/303/307/308,
-//! до 3 переходов), https:// через собственный TLS 1.3 клиент (net::tls).
-//! Имена хостов резолвятся настоящим DNS-клиентом (net::dns) через UDP/53.
-//! Честные ограничения: только GET и Connection: close (без keep-alive и
-//! конвейеризации); TLS только 1.3, сертификаты проверяются по цепочке
+//! Поддерживает: GET и запросы с произвольным методом/заголовками/телом
+//! (request_bytes — для REST API, например активации dev-режима), разбор
+//! строки статуса и заголовков, Content-Length, Transfer-Encoding:
+//! chunked (RFC 9112 §7.1), Content-Encoding: gzip (распаковка в
+//! net::inflate), переход по redirect (301/302/303/307/308, до 3
+//! переходов, только GET), https:// через собственный TLS 1.3 клиент
+//! (net::tls). Имена хостов резолвятся настоящим DNS-клиентом (net::dns)
+//! через UDP/53. Честные ограничения: Connection: close (без keep-alive
+//! и конвейеризации); TLS только 1.3, сертификаты проверяются по цепочке
 //! до встроенных корней без OCSP/CRL (см. net/tls.rs, net/x509.rs).
 
 use alloc::format;
@@ -110,6 +112,18 @@ impl Conn {
 
 /// Один HTTP GET без redirect: (status, reason, location, тело-байты, content-type).
 fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
+    request_once("GET", url, &[], &[])
+}
+
+/// Один HTTP-запрос произвольным методом без redirect.
+/// `extra_headers` добавляются к базовым; `body` отправляется как есть
+/// (Content-Length ставится для любого метода, кроме GET без тела).
+fn request_once(
+    method: &str,
+    url: &str,
+    extra_headers: &[(&str, &str)],
+    body: &[u8],
+) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
     let (host, port, path, https) = parse_url(url)
         .ok_or_else(|| "Некорректный URL адрес".to_string())?;
     let ip = resolve(&host)
@@ -127,11 +141,23 @@ fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, Vec<u8>, String
         Conn::Plain
     };
 
-    let req = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: DeiX-Browser/3.0 (DeiX OS x86_64)\r\nAccept: */*\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n",
-        path, host
+    let mut req = format!(
+        "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: DeiX-Browser/3.0 (DeiX OS x86_64)\r\nAccept: */*\r\nAccept-Encoding: gzip\r\nConnection: close\r\n",
+        method, path, host
     );
-    if let Err(e) = conn.send(req.as_bytes()) {
+    for (name, value) in extra_headers {
+        req.push_str(name);
+        req.push_str(": ");
+        req.push_str(value);
+        req.push_str("\r\n");
+    }
+    if !body.is_empty() || method != "GET" {
+        req.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
+    req.push_str("\r\n");
+    let mut req_bytes = req.into_bytes();
+    req_bytes.extend_from_slice(body);
+    if let Err(e) = conn.send(&req_bytes) {
         conn.close();
         return Err(e);
     }
@@ -265,6 +291,26 @@ pub fn fetch_bytes(url: &str) -> Result<HttpBytes, String> {
         });
     }
     Err(format!("Слишком много перенаправлений (>{})", MAX_REDIRECTS))
+}
+
+/// Запрос произвольным методом (POST/GET/...) с заголовками и телом,
+/// БЕЗ перехода по redirect: REST API (PostgREST) redirect'ов не шлёт,
+/// а молча повторять POST по Location было бы неверно.
+pub fn request_bytes(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+) -> Result<HttpBytes, String> {
+    let (status, reason, _location, resp_body, content_type) =
+        request_once(method, url, headers, body)?;
+    Ok(HttpBytes {
+        status,
+        reason,
+        body: resp_body,
+        content_type,
+        final_url: url.trim().to_string(),
+    })
 }
 
 

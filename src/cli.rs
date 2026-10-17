@@ -314,6 +314,8 @@ pub fn execute(line: &str) {
             match rest.trim() {
                 "on" => crate::devmode::enable_dev_mode(),
                 "off" => crate::devmode::disable_dev_mode(),
+                "request" => crate::devauth::cmd_request(),
+                "revoke" => crate::devauth::cmd_revoke(),
                 _ => crate::devmode::dev_status(),
             }
         }
@@ -517,6 +519,7 @@ fn cmd_help() {
     println!("  run <program.mex>       - {}", t!(en: "run a .mex program", ru: "запустить .mex программу"));
     println!("  install                 - {}", t!(en: "clone this disk onto a second physical disk (real HDD install)", ru: "клонировать этот диск на второй физический диск (установка на реальный HDD)"));
     println!("  sysfs [status|convert]  - {}", t!(en: "convert /system from EROFS to ext2 (dev mode only)", ru: "конвертировать /system из EROFS в ext2 (только dev-режим)"));
+    println!("  dev [request|on|off|revoke] - {}", t!(en: "developer mode (server-side activation, see docs/DEVAUTH.md)", ru: "режим разработчика (серверная активация, см. docs/DEVAUTH.md)"));
     println!("  bigfile <size_kb>       - {}", t!(en: "test ext2 indirect blocks with a large file", ru: "проверить indirect-блоки ext2 большим файлом"));
     println!("  useradd <user> <pass>   - {}", t!(en: "create a new user account", ru: "создать новый аккаунт пользователя"));
     println!("  passwd <u> <old> <new>  - {}", t!(en: "change a user's password", ru: "сменить пароль пользователя"));

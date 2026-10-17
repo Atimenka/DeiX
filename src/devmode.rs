@@ -30,8 +30,21 @@ pub fn sudo_allowed() -> bool {
 }
 
 /// Включает dev-режим: дает sudo.
-/// Требует подтверждения (пользователь должен ввести 'yes').
+/// Требует серверной активации (devauth, см. docs/DEVAUTH.md) и
+/// подтверждения (пользователь должен ввести 'yes').
 pub fn enable_dev_mode() {
+    match crate::devauth::ensure_unlocked() {
+        Ok(source) => {
+            crate::println!("  [dev] Активация подтверждена: {}.", source);
+        }
+        Err(reason) => {
+            crate::println!("  [dev] Активация НЕ пройдена: {}", reason);
+            crate::println!("  [dev] Порядок: 'dev request' -> одобрение владельцем");
+            crate::println!("  [dev] проекта (docs/DEVAUTH.md) -> 'dev on'.");
+            return;
+        }
+    }
+
     crate::println!("  [dev] ВКЛЮЧЕНИЕ РЕЖИМА РАЗРАБОТЧИКА");
     crate::println!("  [dev] sudo/su/root станут доступны.");
     crate::print!("  Подтвердите вводом 'yes': ");
@@ -57,6 +70,10 @@ pub fn dev_status() {
     crate::println!("=== Dev-режим ===");
     crate::println!("  dev_mode: {}", sudo_allowed());
     crate::println!("  sudo доступен: {}", sudo_allowed());
+    for line in crate::devauth::status_lines() {
+        crate::println!("{}", line);
+    }
+    crate::println!("  команды: dev request | dev on | dev off | dev revoke");
 }
 
 /// Чтение строки с клавиатуры или COM1.
