@@ -9,6 +9,13 @@ use core::sync::atomic::{AtomicBool, Ordering};
 const ESCAPE_SCANCODE: u8 = 0x01;
 static ESCAPE_PRESSED: AtomicBool = AtomicBool::new(false);
 
+/// Win/Super (E0 5B левая, E0 5C правая). Как и Escape, отдаётся
+/// отдельным флагом, а не через очередь символов: клавиша глобальная
+/// (открыть/закрыть меню Пуск) и не должна попадать в поле ввода.
+const LEFT_SUPER_SCANCODE: u8 = 0x5B;
+const RIGHT_SUPER_SCANCODE: u8 = 0x5C;
+static SUPER_PRESSED: AtomicBool = AtomicBool::new(false);
+
 const QUEUE_SIZE: usize = 128;
 
 struct KeyQueue {
@@ -139,6 +146,9 @@ pub fn on_scancode(scancode: u8) {
             ARROW_DOWN_SCANCODE => QUEUE.lock().push(ARROW_DOWN),
             ARROW_LEFT_SCANCODE => QUEUE.lock().push(ARROW_LEFT),
             ARROW_RIGHT_SCANCODE => QUEUE.lock().push(ARROW_RIGHT),
+            LEFT_SUPER_SCANCODE | RIGHT_SUPER_SCANCODE => {
+                SUPER_PRESSED.store(true, Ordering::Relaxed);
+            }
             _ => {}
         }
         return;
@@ -181,6 +191,11 @@ pub fn try_read_char() -> Option<u8> {
 
 pub fn try_read_escape() -> bool {
     ESCAPE_PRESSED.swap(false, Ordering::Relaxed)
+}
+
+/// Было ли нажатие Win/Super с прошлого опроса (флаг сбрасывается).
+pub fn try_read_super() -> bool {
+    SUPER_PRESSED.swap(false, Ordering::Relaxed)
 }
 
 pub fn read_char() -> u8 {
