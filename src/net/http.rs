@@ -60,6 +60,17 @@ pub fn parse_url(url: &str) -> Option<(String, u16, String, bool)> {
     Some((host, port, path.to_string(), https))
 }
 
+/// Все адреса хоста: литерал и алиасы дают один адрес, DNS — до четырёх.
+pub fn resolve_all(host: &str) -> Vec<[u8; 4]> {
+    let clean = host.trim().to_lowercase();
+    match clean.as_str() {
+        "deix.os" | "deix" | "localhost" | "gateway" | "router" => {}
+        _ if clean.split('.').count() == 4 && clean.split('.').all(|p| p.parse::<u8>().is_ok()) => {}
+        _ => return dns::resolve_all(&clean),
+    }
+    resolve(host).into_iter().collect()
+}
+
 /// Разбирает host: IPv4-литерал, локальные алиасы или настоящий DNS-запрос.
 pub fn resolve(host: &str) -> Option<[u8; 4]> {
     let clean = host.trim().to_lowercase();
@@ -135,17 +146,16 @@ fn request_once(
 ) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
     let (host, port, path, https) = parse_url(url)
         .ok_or_else(|| "Некорректный URL адрес".to_string())?;
-    let ip = resolve(&host)
-        .ok_or_else(|| format!("DNS: не удалось разрешить хост '{}'", host))?;
+    let ips = resolve_all(&host);
+    if ips.is_empty() {
+        return Err(format!("DNS: не удалось разрешить хост '{}'", host));
+    }
 
     let mut conn = if https {
-        Conn::Tls(tls::connect(ip, port, &host)?)
+        Conn::Tls(tls::connect(&ips, port, &host)?)
     } else {
-        if !tcp::connect(ip, port) {
-            return Err(format!(
-                "Не удалось установить TCP-соединение с {} ({}.{}.{}.{}:{}): {}",
-                host, ip[0], ip[1], ip[2], ip[3], port, tcp::connect_failure()
-            ));
+        if let Err(why) = tcp::connect_any(&ips, port) {
+            return Err(format!("Не удалось установить TCP-соединение с {} ({})", host, why));
         }
         Conn::Plain
     };

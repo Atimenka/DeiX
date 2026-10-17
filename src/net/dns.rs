@@ -22,25 +22,27 @@ const TTL_MAX_MS: u64 = 600_000;
 const TTL_MIN_MS: u64 = 5_000;
 const CACHE_CAP: usize = 16;
 
+const MAX_ADDRS: usize = 4;
+
 struct CacheEntry {
     name: String,
-    ip: [u8; 4],
+    ips: Vec<[u8; 4]>,
     expires_ms: u64,
 }
 
 static CACHE: SpinLock<Vec<CacheEntry>> = SpinLock::new(Vec::new());
 static QUERY_SEQ: SpinLock<u16> = SpinLock::new(0);
 
-fn cache_get(name: &str) -> Option<[u8; 4]> {
+fn cache_get(name: &str) -> Option<Vec<[u8; 4]>> {
     let now = crate::timer::uptime_ms();
     without_interrupts(|| {
         let mut c = CACHE.lock();
         c.retain(|e| e.expires_ms > now);
-        c.iter().find(|e| e.name == name).map(|e| e.ip)
+        c.iter().find(|e| e.name == name).map(|e| e.ips.clone())
     })
 }
 
-fn cache_put(name: &str, ip: [u8; 4], ttl_ms: u64) {
+fn cache_put(name: &str, ips: Vec<[u8; 4]>, ttl_ms: u64) {
     let now = crate::timer::uptime_ms();
     let ttl = ttl_ms.clamp(TTL_MIN_MS, TTL_MAX_MS);
     without_interrupts(|| {
@@ -51,7 +53,7 @@ fn cache_put(name: &str, ip: [u8; 4], ttl_ms: u64) {
         }
         c.push(CacheEntry {
             name: name.to_string(),
-            ip,
+            ips,
             expires_ms: now + ttl,
         });
     });
@@ -105,10 +107,10 @@ fn skip_name(msg: &[u8], mut pos: usize) -> Option<usize> {
     }
 }
 
-/// Разбирает ответ: возвращает (ip, ttl_ms) первой A-записи из секции
-/// ответов. CNAME-записи пропускаются — сервер кладёт A каноничного
-/// имени в тот же ответ.
-fn parse_response(msg: &[u8], expect_id: u16) -> Option<([u8; 4], u64)> {
+/// Разбирает ответ: возвращает все A-записи из секции ответов (не более
+/// MAX_ADDRS) и наименьший TTL в мс. CNAME-записи пропускаются — сервер
+/// кладёт A каноничного имени в тот же ответ.
+fn parse_response(msg: &[u8], expect_id: u16) -> Option<(Vec<[u8; 4]>, u64)> {
     if msg.len() < 12 {
         return None;
     }
@@ -128,6 +130,8 @@ fn parse_response(msg: &[u8], expect_id: u16) -> Option<([u8; 4], u64)> {
         pos = skip_name(msg, pos)? + 4; // QTYPE + QCLASS
     }
 
+    let mut ips: Vec<[u8; 4]> = Vec::new();
+    let mut min_ttl_ms = u64::MAX;
     for _ in 0..ancount {
         pos = skip_name(msg, pos)?;
         if pos + 10 > msg.len() {
@@ -143,25 +147,34 @@ fn parse_response(msg: &[u8], expect_id: u16) -> Option<([u8; 4], u64)> {
         }
         if rtype == 1 && rclass == 1 && rdlen == 4 {
             let ip = [msg[pos], msg[pos + 1], msg[pos + 2], msg[pos + 3]];
-            return Some((ip, ttl as u64 * 1000));
+            if ips.len() < MAX_ADDRS && !ips.contains(&ip) {
+                ips.push(ip);
+            }
+            min_ttl_ms = min_ttl_ms.min(ttl as u64 * 1000);
         }
         pos += rdlen; // CNAME и прочие типы пропускаем
     }
-    None
+    if ips.is_empty() { None } else { Some((ips, min_ttl_ms)) }
 }
 
-/// Резолвит A-запись `host` через настроенный DNS-сервер.
-/// None — имя не разрешилось (нет сети, таймаут или NXDOMAIN).
+/// Резолвит первую A-запись `host`.
 pub fn resolve_a(host: &str) -> Option<[u8; 4]> {
+    resolve_all(host).first().copied()
+}
+
+/// Резолвит все A-записи `host` (до MAX_ADDRS) через настроенный
+/// DNS-сервер. Пустой список — имя не разрешилось (нет сети, таймаут
+/// или NXDOMAIN).
+pub fn resolve_all(host: &str) -> Vec<[u8; 4]> {
     let name = host.trim().to_lowercase();
     if !valid_hostname(&name) {
-        return None;
+        return Vec::new();
     }
-    if let Some(ip) = cache_get(&name) {
-        return Some(ip);
+    if let Some(ips) = cache_get(&name) {
+        return ips;
     }
     if !crate::rtl8139::is_ready() {
-        return None;
+        return Vec::new();
     }
 
     let server = crate::net::dns_ip();
@@ -191,19 +204,19 @@ pub fn resolve_a(host: &str) -> Option<[u8; 4]> {
                     if sip != server || sp != DNS_PORT {
                         continue; // чужая датаграмма — ждём дальше
                     }
-                    if let Some((ip, ttl_ms)) = parse_response(&data, id) {
-                        cache_put(&name, ip, ttl_ms);
-                        return Some(ip);
+                    if let Some((ips, ttl_ms)) = parse_response(&data, id) {
+                        cache_put(&name, ips.clone(), ttl_ms);
+                        return ips;
                     }
                     // Ответ сервера с ошибкой (NXDOMAIN и т.п.) —
                     // повторять бессмысленно.
-                    return None;
+                    return Vec::new();
                 }
                 None => break, // таймаут попытки
             }
         }
     }
-    None
+    Vec::new()
 }
 
 /// Сбрасывает DNS-кеш (используется при смене сетевой конфигурации).

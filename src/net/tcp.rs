@@ -4,6 +4,8 @@
 use crate::net::ipv4;
 use crate::rtl8139;
 use crate::spinlock::SpinLock;
+use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::collections::VecDeque;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -44,8 +46,10 @@ static CUR_RETRIES: AtomicU32 = AtomicU32::new(0);
 const RTO_INITIAL_MS: u32 = 1000;
 const RTO_MAX_MS: u32 = 8000;
 const MAX_RETRIES: u32 = 5;
-/// Паузы перед повторной отправкой SYN: 1 с, 2 с, 4 с.
-const SYN_WAITS_MS: [u64; 3] = [1000, 2000, 4000];
+/// Паузы после каждого SYN при единственном адресе: 15 с суммарно.
+const SYN_WAITS_ONE_MS: [u64; 4] = [1000, 2000, 4000, 8000];
+/// Паузы при нескольких адресах: 7 с на адрес, затем следующий адрес.
+const SYN_WAITS_MANY_MS: [u64; 3] = [1000, 2000, 4000];
 
 /// Начальный seq (ISN) всех наших соединений.
 const ISN: u32 = 0xDEADBEEF;
@@ -154,8 +158,26 @@ fn tcp_payload(pkt: &[u8]) -> Vec<u8> {
     if end > start { Vec::from(&pkt[start..end]) } else { Vec::new() }
 }
 
-pub fn connect(dip: [u8;4], dport: u16) -> bool {
-    if !rtl8139::is_ready() { return false; }
+/// Пробует адреса по очереди до первого ответившего. Ошибка —
+/// причина отказа по каждому адресу.
+pub fn connect_any(ips: &[[u8; 4]], dport: u16) -> Result<(), String> {
+    let mut report = String::new();
+    for ip in ips {
+        let waits: &[u64] = if ips.len() == 1 { &SYN_WAITS_ONE_MS } else { &SYN_WAITS_MANY_MS };
+        match connect_one(*ip, dport, waits) {
+            Ok(()) => return Ok(()),
+            Err(why) => {
+                if !report.is_empty() { report.push_str("; "); }
+                report.push_str(&format!("{}.{}.{}.{}:{}: {}", ip[0], ip[1], ip[2], ip[3], dport, why));
+            }
+        }
+    }
+    if report.is_empty() { report.push_str("нет адресов для подключения"); }
+    Err(report)
+}
+
+fn connect_one(dip: [u8;4], dport: u16, waits: &[u64]) -> Result<(), &'static str> {
+    if !rtl8139::is_ready() { return Err("сетевая карта не готова"); }
     let sp = { let mut p = NPORT.lock(); let v = *p; *p = if *p>=65535 {1024} else {*p+1}; v };
     let isn: u32 = ISN;
     let mut c = TcpConn { state:0, sport:sp, dip, dport, seq:isn, ack:0 };
@@ -169,7 +191,7 @@ pub fn connect(dip: [u8;4], dport: u16) -> bool {
     SENT_END.store(isn.wrapping_add(1), Ordering::Relaxed);
     PEER_ACK.store(isn.wrapping_add(1), Ordering::Relaxed);
     *LAST_END.lock() = "данных ещё не ждали";
-    for wait in SYN_WAITS_MS {
+    for wait in waits.iter().copied() {
         send_seg(&c, SYN, &[]);
         let t0 = crate::timer::uptime_ms();
         loop {
@@ -178,12 +200,12 @@ pub fn connect(dip: [u8;4], dport: u16) -> bool {
                 if let Some((f, _a, s)) = parse_tcp(&pkt, sp, dport) {
                     if f&RST != 0 {
                         *LAST_END.lock() = "сервер отклонил соединение (RST на SYN)";
-                        return false;
+                        return Err("сервер отклонил соединение (RST на SYN)");
                     }
                     if f&SYN!=0 && f&ACK!=0 {
                         c.ack = s.wrapping_add(1); c.seq = isn.wrapping_add(1);
                         send_seg(&c, ACK, &[]);
-                        c.state = 1; *CONN.lock() = Some(c); return true;
+                        c.state = 1; *CONN.lock() = Some(c); return Ok(());
                     }
                 }
             }
@@ -191,13 +213,13 @@ pub fn connect(dip: [u8;4], dport: u16) -> bool {
             crate::sched::idle_wait();
         }
     }
-    *LAST_END.lock() = "нет SYN-ACK за 7 с (3 попытки SYN)";
-    false
-}
-
-/// Причина, по которой не удалось открыть соединение.
-pub fn connect_failure() -> &'static str {
-    last_end()
+    let why = if waits.len() == SYN_WAITS_ONE_MS.len() {
+        "нет SYN-ACK за 15 с (4 попытки SYN)"
+    } else {
+        "нет SYN-ACK за 7 с (3 попытки SYN)"
+    };
+    *LAST_END.lock() = why;
+    Err(why)
 }
 
 pub fn send(data: &[u8]) -> bool {

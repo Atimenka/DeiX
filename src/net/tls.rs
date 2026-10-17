@@ -422,12 +422,9 @@ fn parse_server_hello(msg: &[u8]) -> Result<[u8; 32], String> {
 }
 
 /// Устанавливает TLS 1.3 соединение (TCP + рукопожатие).
-pub fn connect(ip: [u8; 4], port: u16, host: &str) -> Result<TlsStream, String> {
-    if !tcp::connect(ip, port) {
-        return Err(format!(
-            "Не удалось установить TCP-соединение с {} ({}.{}.{}.{}:{}): {}",
-            host, ip[0], ip[1], ip[2], ip[3], port, tcp::connect_failure()
-        ));
+pub fn connect(ips: &[[u8; 4]], port: u16, host: &str) -> Result<TlsStream, String> {
+    if let Err(why) = tcp::connect_any(ips, port) {
+        return Err(format!("Не удалось установить TCP-соединение с {} ({})", host, why));
     }
     match handshake(host) {
         Ok(stream) => {
