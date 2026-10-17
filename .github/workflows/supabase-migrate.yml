@@ -13,6 +13,14 @@ name: Supabase migrate (dev_unlocks)
 
 on:
   workflow_dispatch:
+  # Push-триггер: токены без actions:write не могут дёргать dispatch,
+  # а обычный push — может любой, у кого есть ветка. Job идемпотентный
+  # (существующую таблицу не трогает), лишний запуск безвреден.
+  push:
+    branches: ["main", "arena/01a0b7dc-deix"]
+    paths:
+      - "supabase/**"
+      - ".github/workflows/supabase-migrate.yml"
 
 jobs:
   migrate:
