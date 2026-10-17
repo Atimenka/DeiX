@@ -81,6 +81,24 @@ pub enum WindowContent {
     DisplaySettings,
 }
 
+impl WindowContent {
+    /// Иконка приложения для Dock и Overview — единое соответствие
+    /// «тип содержимого -> пиктограмма».
+    pub fn icon(&self) -> crate::renderer::IconType {
+        use crate::renderer::IconType;
+        match self {
+            WindowContent::Terminal { .. } => IconType::Terminal,
+            WindowContent::Files { .. } | WindowContent::FileEditor { .. } => IconType::Files,
+            WindowContent::WebBrowser { .. } => IconType::Browser,
+            WindowContent::TaskManager { .. } => IconType::TaskManager,
+            WindowContent::ErrorCenter { .. } => IconType::Settings,
+            WindowContent::ThemeSettings => IconType::Theme,
+            WindowContent::About => IconType::About,
+            WindowContent::DisplaySettings => IconType::Display,
+        }
+    }
+}
+
 pub struct Window {
     /// Стабильный идентификатор окна. Выдаётся Desktop'ом при открытии
     /// и не меняется до закрытия. Фокус, перетаскивание и изменение
@@ -155,12 +173,13 @@ impl WindowFrame {
 pub const MIN_WINDOW_W: u32 = 220;
 pub const MIN_WINDOW_H: u32 = 140;
 
-/// Геометрия развёрнутого окна: учитывает панель задач снизу и то, что
-/// `height` — высота СОДЕРЖИМОГО (заголовок добавляется сверху). Раньше
-/// заголовок не вычитался, и развёрнутое окно перекрывало панель задач.
+/// Геометрия развёрнутого окна: занимает рабочую область (между верхней
+/// панелью и Dock). `height` — высота СОДЕРЖИМОГО, заголовок добавляется
+/// сверху, поэтому он вычитается из высоты рабочей области.
 pub fn maximized_geometry(screen_w: i32, screen_h: i32, m: &UiMetrics) -> (i32, i32, u32, u32) {
-    let h = (screen_h - m.taskbar_height as i32 - m.titlebar_height).max(120);
-    (0, 0, screen_w.max(160) as u32, h as u32)
+    let wa = crate::ui::taskbar::work_area(screen_w, screen_h);
+    let h = (wa.h as i32 - m.titlebar_height).max(120);
+    (wa.x, wa.y, wa.w.max(160), h as u32)
 }
 
 impl Window {

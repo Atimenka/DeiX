@@ -153,6 +153,8 @@ pub enum IconType {
     Wifi,
     Volume,
     Search,
+    /// Обзор окон (Overview): четыре плитки.
+    Grid,
     Bookmark,
     Home,
     Reload,
@@ -567,6 +569,12 @@ impl Renderer {
             IconType::Search => {
                 self.draw_rect(x + 2, y + 2, 8, 8, color);
                 self.draw_line(x + 9, y + 9, x + 14, y + 14, color);
+            }
+            IconType::Grid => {
+                self.draw_rect(x + 2, y + 2, 5, 5, color);
+                self.draw_rect(x + 9, y + 2, 5, 5, color);
+                self.draw_rect(x + 2, y + 9, 5, 5, color);
+                self.draw_rect(x + 9, y + 9, 5, 5, color);
             }
             IconType::Bookmark => {
                 self.draw_vline(x + 4, y + 2, 12, color);

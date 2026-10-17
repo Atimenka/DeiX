@@ -11,8 +11,10 @@ use crate::ui::metrics::UiMetrics;
 use crate::ui::surface::WallpaperSurface;
 use crate::ui::text as text_util;
 use crate::ui::taskbar::{
-    clock_key, control_center_rect, draw_control_center, draw_cursor, draw_start_menu,
-    draw_taskbar, start_menu_layout, StartMenuAction, START_MENU_APPS,
+    clock_key, control_center_rect, dock_layout, draw_control_center, draw_cursor, draw_dock,
+    draw_overview, draw_start_menu, draw_top_panel, filtered_app_indices, launch_matches,
+    overview_card_rect, panel_menu_button_rect, panel_rect, panel_status_rect, start_menu_layout,
+    work_area, DockAction, StartMenuAction, START_MENU_APPS,
 };
 use crate::ui::theme::{get_theme, set_theme, UiTheme};
 use crate::ui::window::{
@@ -81,7 +83,17 @@ pub struct Desktop {
     /// id окна в фокусе.
     pub focused_id: Option<u32>,
     pub start_menu_open: bool,
+    /// Поисковый запрос меню Пуск (набирается с клавиатуры).
+    pub menu_search: String,
     pub control_center_open: bool,
+    /// Режим обзора окон (Overview).
+    pub overview_open: bool,
+    /// Состояние Overview в прошлом кадре — для damage на весь экран
+    /// при открытии/закрытии (обзор затемняет всю сцену).
+    prev_overview_open: bool,
+    /// Область Dock прошлого кадра: ширина Dock зависит от числа окон,
+    /// при его сжатии освободившуюся полосу надо перерисовать.
+    prev_dock_rect: Option<Rect>,
     pub selected_icon: Option<usize>,
     /// (id, исходный x, исходный y, x мыши при захвате, y мыши при захвате)
     pub dragging_window: Option<(u32, i32, i32, i32, i32)>,
@@ -149,7 +161,11 @@ impl Desktop {
             focused_id: None,
             next_window_id: 1,
             start_menu_open: false,
+            menu_search: String::new(),
             control_center_open: false,
+            overview_open: false,
+            prev_overview_open: false,
+            prev_dock_rect: None,
             selected_icon: None,
             dragging_window: None,
             resizing_window: None,
@@ -200,6 +216,7 @@ impl Desktop {
         win.restore_geometry = (x, y, w, h);
         self.push_focused(win);
         self.start_menu_open = false;
+        self.overview_open = false;
     }
 
     /// Единственный путь добавления окна: выдаёт стабильный id,
@@ -222,12 +239,17 @@ impl Desktop {
         self.focused_id.and_then(|id| self.index_of(id))
     }
 
-    /// Окно по индексу в фокусе? (для отрисовки панели задач и рамок)
+    /// Окно по индексу в фокусе? (для отрисовки Dock и рамок)
     pub fn is_focused(&self, idx: usize) -> bool {
         match (self.focused_id, self.windows.get(idx)) {
             (Some(id), Some(w)) => w.id == id,
             _ => false,
         }
+    }
+
+    /// Заголовок активного окна — для верхней панели.
+    pub fn focused_title(&self) -> Option<&str> {
+        self.focused_index().map(|i| self.windows[i].title.as_str())
     }
 
     pub fn open_terminal(&mut self, screen_w: i32, screen_h: i32) {
@@ -347,8 +369,8 @@ impl Desktop {
         screen_h: i32,
     ) {
         let m = UiMetrics::fluent();
-        let taskbar_y = screen_h - m.taskbar_height as i32;
-        let work_h = (taskbar_y - m.titlebar_height).max(MIN_WINDOW_H as i32) as u32;
+        let wa = work_area(screen_w, screen_h);
+        let work_h = (wa.h as i32 - m.titlebar_height).max(MIN_WINDOW_H as i32) as u32;
 
         let Some(idx) = self.index_of(id) else { return };
         let w = &mut self.windows[idx];
@@ -356,8 +378,9 @@ impl Desktop {
             return;
         }
 
-        if my <= 1 {
-            // Развернуть; Restore вернёт окно туда, откуда его тащили.
+        if my <= m.top_panel_height {
+            // Дотащили до верхней панели — развернуть; Restore вернёт
+            // окно туда, откуда его тащили.
             w.restore_geometry = (orig_x, orig_y, w.width, w.height);
             let (gx, gy, gw, gh) = maximized_geometry(screen_w, screen_h, &m);
             w.x = gx;
@@ -367,13 +390,13 @@ impl Desktop {
             w.maximized = true;
         } else if mx <= 1 {
             w.x = 0;
-            w.y = 0;
+            w.y = wa.y;
             w.width = (screen_w / 2).max(MIN_WINDOW_W as i32) as u32;
             w.height = work_h;
         } else if mx >= screen_w - 2 {
             let half = (screen_w / 2).max(MIN_WINDOW_W as i32);
             w.x = screen_w - half;
-            w.y = 0;
+            w.y = wa.y;
             w.width = half as u32;
             w.height = work_h;
         }
@@ -410,7 +433,8 @@ impl Desktop {
     pub fn handle_input(&mut self, screen_w: i32, screen_h: i32) {
         let m = mouse::snapshot();
         let ui_m = UiMetrics::fluent();
-        let taskbar_y = screen_h - ui_m.taskbar_height as i32;
+        let wa = work_area(screen_w, screen_h);
+        let wa_bottom = wa.y + wa.h as i32;
 
         if m.x != self.last_cursor_pos.0 || m.y != self.last_cursor_pos.1 {
             // Движение мыши само по себе сцену не меняет: вместо полной
@@ -432,12 +456,12 @@ impl Desktop {
                     let w = &mut self.windows[idx];
                     if !w.maximized {
                         // Заголовок всегда остаётся достижим: не выше
-                        // экрана, не под панелью задач, и минимум 60px
+                        // рабочей области, не под Dock, и минимум 60px
                         // окна видно по горизонтали.
                         let nx = (orig_x + (m.x - mx0))
                             .clamp(-(w.width as i32) + 60, screen_w - 60);
                         let ny = (orig_y + (m.y - my0))
-                            .clamp(0, taskbar_y - ui_m.titlebar_height);
+                            .clamp(wa.y, wa_bottom - ui_m.titlebar_height);
                         if w.x != nx || w.y != ny {
                             w.x = nx;
                             w.y = ny;
@@ -474,6 +498,23 @@ impl Desktop {
             }
             self.dirty = true;
 
+            // Overview поверх всего: клик по карточке активирует окно,
+            // мимо карточек — закрывает обзор. Вниз клик не проваливается.
+            if self.overview_open {
+                let n = self.windows.len();
+                for i in 0..n {
+                    if overview_card_rect(i, n, screen_w, screen_h).contains(m.x, m.y) {
+                        if self.windows[i].minimized {
+                            self.windows[i].minimized = false;
+                        }
+                        self.focus_window(i);
+                        break;
+                    }
+                }
+                self.overview_open = false;
+                return;
+            }
+
             // Открытое меню Пуск: клик внутри обрабатывается меню, клик
             // вне — только закрывает его. Клик не «проваливается» сквозь
             // меню на окна и рабочий стол.
@@ -481,15 +522,10 @@ impl Desktop {
                 let l = start_menu_layout(screen_h);
                 if l.menu.contains(m.x, m.y) {
                     self.handle_start_menu_click(m.x, m.y, screen_w, screen_h);
-                } else if m.y >= taskbar_y && m.x > ui_m.start_button_width {
-                    // Клик по панели вне кнопки Start: меню закрывается,
-                    // клик обрабатывается панелью.
-                    self.start_menu_open = false;
-                    self.handle_taskbar_click(m.x, screen_w);
                 } else {
-                    // Клик мимо меню (включая повторный клик по Start) —
-                    // просто закрыть, без «проваливания» на окна.
-                    self.start_menu_open = false;
+                    // Клик мимо меню (включая повторный клик по кнопке
+                    // DeiX — toggle) — закрыть, без «проваливания» вниз.
+                    self.close_start_menu();
                 }
                 return;
             }
@@ -504,8 +540,28 @@ impl Desktop {
                 return;
             }
 
-            if m.y >= taskbar_y {
-                self.handle_taskbar_click(m.x, screen_w);
+            // Верхняя панель.
+            if panel_rect(screen_w).contains(m.x, m.y) {
+                if panel_menu_button_rect().contains(m.x, m.y) {
+                    self.start_menu_open = true;
+                    self.menu_search.clear();
+                    self.control_center_open = false;
+                } else if panel_status_rect(screen_w).contains(m.x, m.y) {
+                    self.control_center_open = true;
+                }
+                return;
+            }
+
+            // Dock рисуется поверх окон — и кликается раньше них.
+            let dl = dock_layout(self, screen_w, screen_h);
+            if dl.dock.contains(m.x, m.y) {
+                for item in dl.items.iter() {
+                    if item.rect.contains(m.x, m.y) {
+                        let action = item.action;
+                        self.handle_dock_action(action, screen_w, screen_h);
+                        break;
+                    }
+                }
                 return;
             }
 
@@ -576,7 +632,13 @@ impl Desktop {
             }
         }
 
-        self.handle_keyboard_for_focused_window();
+        // При открытом меню Пуск клавиатура идёт в строку поиска,
+        // а не в приложение под меню.
+        if self.start_menu_open {
+            self.handle_menu_search_keys(screen_w, screen_h);
+        } else {
+            self.handle_keyboard_for_focused_window();
+        }
     }
 
     fn handle_keyboard_for_focused_window(&mut self) {
@@ -772,25 +834,42 @@ impl Desktop {
         }
     }
 
+    /// Закрывает меню Пуск, очищая поисковый запрос.
+    fn close_start_menu(&mut self) {
+        self.start_menu_open = false;
+        self.menu_search.clear();
+    }
+
+    /// Запускает приложение из меню/Dock. Открытие окна закрывает меню.
+    fn launch_app(&mut self, action: StartMenuAction, screen_w: i32, screen_h: i32) {
+        match action {
+            StartMenuAction::OpenTerminal => self.open_terminal(screen_w, screen_h),
+            StartMenuAction::OpenFiles => self.open_files(screen_w, screen_h),
+            StartMenuAction::OpenBrowser => self.open_browser(screen_w, screen_h),
+            StartMenuAction::OpenTaskManager => self.open_task_manager(screen_w, screen_h),
+            StartMenuAction::OpenErrorCenter => self.open_error_center(screen_w, screen_h),
+            StartMenuAction::OpenThemeSettings => self.open_theme_settings(screen_w, screen_h),
+            StartMenuAction::OpenAbout => self.open_about(screen_w, screen_h),
+            StartMenuAction::OpenDisplaySettings => self.open_display_settings(screen_w, screen_h),
+        }
+        self.menu_search.clear();
+    }
+
     fn handle_start_menu_click(&mut self, x: i32, y: i32, screen_w: i32, screen_h: i32) {
         // Геометрия кликов — ровно те же прямоугольники, по которым
-        // draw_start_menu рисует пункты.
+        // draw_start_menu рисует пункты; порядок отфильтрованных
+        // приложений — тот же filtered_app_indices, что и у отрисовки.
         let l = start_menu_layout(screen_h);
 
-        for (i, rect) in l.app_items.iter().enumerate() {
-            if rect.contains(x, y) {
-                match START_MENU_APPS[i].1 {
-                    StartMenuAction::OpenTerminal => self.open_terminal(screen_w, screen_h),
-                    StartMenuAction::OpenFiles => self.open_files(screen_w, screen_h),
-                    StartMenuAction::OpenBrowser => self.open_browser(screen_w, screen_h),
-                    StartMenuAction::OpenTaskManager => self.open_task_manager(screen_w, screen_h),
-                    StartMenuAction::OpenErrorCenter => self.open_error_center(screen_w, screen_h),
-                    StartMenuAction::OpenThemeSettings => self.open_theme_settings(screen_w, screen_h),
-                    StartMenuAction::OpenAbout => self.open_about(screen_w, screen_h),
-                    StartMenuAction::OpenDisplaySettings => {
-                        self.open_display_settings(screen_w, screen_h)
-                    }
-                }
+        if l.search.contains(x, y) {
+            return; // ввод и так идёт в поле поиска
+        }
+
+        let mut idx = [0usize; START_MENU_APPS.len()];
+        let n = filtered_app_indices(&self.menu_search, &mut idx);
+        for k in 0..n {
+            if l.app_items[k].contains(x, y) {
+                self.launch_app(START_MENU_APPS[idx[k]].1, screen_w, screen_h);
                 return;
             }
         }
@@ -807,44 +886,78 @@ impl Desktop {
         }
     }
 
-    fn handle_taskbar_click(&mut self, x: i32, screen_w: i32) {
-        let m = UiMetrics::fluent();
-        if x <= m.start_button_width {
-            self.start_menu_open = !self.start_menu_open;
-            self.control_center_open = false;
-            self.dirty = true;
-            return;
-        }
-
-        if x >= screen_w - 120 {
-            self.control_center_open = !self.control_center_open;
-            self.start_menu_open = false;
-            self.dirty = true;
-            return;
-        }
-
-        // Элементы окон: индексация и граница обрыва совпадают с
-        // draw_taskbar (item_x + item_w должен помещаться до трея).
-        let rel = x - m.start_button_width - 8;
-        if rel < 0 {
-            return;
-        }
-        let idx = (rel / m.taskbar_item_width) as usize;
-        let item_x = m.start_button_width + 8 + idx as i32 * m.taskbar_item_width;
-        if idx >= self.windows.len() || item_x + m.taskbar_item_width > screen_w - 120 {
-            return;
-        }
-
-        // Поведение: свёрнутое окно — восстановить и активировать;
-        // неактивное — активировать; уже активное — свернуть.
-        if self.windows[idx].minimized {
-            self.toggle_minimize(idx); // восстановление + фокус
-        } else if !self.is_focused(idx) {
-            self.focus_window(idx);
-        } else {
-            self.toggle_minimize(idx); // сворачивание активного
+    /// Клик по элементу Dock.
+    fn handle_dock_action(&mut self, action: DockAction, screen_w: i32, screen_h: i32) {
+        self.dirty = true;
+        match action {
+            DockAction::Overview => {
+                self.overview_open = !self.overview_open;
+                self.close_start_menu();
+                self.control_center_open = false;
+            }
+            DockAction::Launch(i) => {
+                let act = START_MENU_APPS[i].1;
+                // Если окно такого приложения уже открыто — активировать
+                // верхнее из них (и восстановить, если свёрнуто), а не
+                // плодить копии; новое окно всегда можно открыть из меню.
+                let existing = self
+                    .windows
+                    .iter()
+                    .rposition(|w| launch_matches(act, &w.content));
+                match existing {
+                    Some(idx) => {
+                        if self.windows[idx].minimized {
+                            self.windows[idx].minimized = false;
+                        }
+                        self.focus_window(idx);
+                    }
+                    None => self.launch_app(act, screen_w, screen_h),
+                }
+            }
+            DockAction::Window(id) => {
+                if let Some(idx) = self.index_of(id) {
+                    // Свёрнутое — восстановить; неактивное — активировать;
+                    // активное — свернуть.
+                    if self.windows[idx].minimized {
+                        self.toggle_minimize(idx);
+                    } else if !self.is_focused(idx) {
+                        self.focus_window(idx);
+                    } else {
+                        self.toggle_minimize(idx);
+                    }
+                }
+            }
         }
     }
+
+    /// Клавиатура при открытом меню Пуск: набор уходит в строку поиска,
+    /// Enter запускает первый найденный пункт, Backspace стирает.
+    fn handle_menu_search_keys(&mut self, screen_w: i32, screen_h: i32) {
+        while let Some(b) = keyboard::try_read_char() {
+            self.dirty = true;
+            match b {
+                0x08 => {
+                    self.menu_search.pop();
+                }
+                b'\n' | b'\r' => {
+                    let mut idx = [0usize; START_MENU_APPS.len()];
+                    let n = filtered_app_indices(&self.menu_search, &mut idx);
+                    if n > 0 {
+                        self.launch_app(START_MENU_APPS[idx[0]].1, screen_w, screen_h);
+                    }
+                    return;
+                }
+                b if b >= 0x20 && b < 0x7F => {
+                    if self.menu_search.chars().count() < 24 {
+                        self.menu_search.push(b as char);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+
 
     fn handle_desktop_click(&mut self, x: i32, y: i32, screen_w: i32, screen_h: i32) {
         let shortcuts = desktop_shortcuts();
@@ -1233,14 +1346,19 @@ impl Desktop {
             }
         }
 
-        draw_taskbar(r, &theme, self, screen_w, screen_h);
+        draw_dock(r, &theme, self, screen_w, screen_h);
+        draw_top_panel(r, &theme, self, screen_w);
 
         if self.start_menu_open {
-            draw_start_menu(r, &theme, screen_w, screen_h);
+            draw_start_menu(r, &theme, self, screen_h);
         }
 
         if self.control_center_open {
             draw_control_center(r, &theme, screen_w, screen_h);
+        }
+
+        if self.overview_open {
+            draw_overview(r, &theme, self, screen_w, screen_h);
         }
 
         let m = mouse::snapshot();
@@ -1304,6 +1422,26 @@ impl Desktop {
             self.prev_control_center_rect = Some(cc_rect);
         } else if let Some(old) = self.prev_control_center_rect.take() {
             r.add_damage(old);
+        }
+
+        // Dock: его ширина зависит от числа окон. Если область Dock
+        // изменилась (окно открыли/закрыли), старую полосу надо
+        // перерисовать, иначе по краям остаются куски прежнего Dock.
+        let dock = dock_layout(self, screen_w, screen_h).dock;
+        let dock_rect = Rect::new(dock.x - 2, dock.y - 2, dock.w + 4, dock.h + 4);
+        if self.prev_dock_rect != Some(dock_rect) {
+            if let Some(old) = self.prev_dock_rect {
+                r.add_damage(old);
+            }
+            r.add_damage(dock_rect);
+            self.prev_dock_rect = Some(dock_rect);
+        }
+
+        // Overview затемняет весь экран — его открытие/закрытие требует
+        // полной перерисовки сцены.
+        if self.overview_open != self.prev_overview_open {
+            r.add_damage(Rect::new(0, 0, screen_w as u32, screen_h as u32));
+            self.prev_overview_open = self.overview_open;
         }
     }
 
@@ -1415,10 +1553,13 @@ impl Desktop {
 
         loop {
             if keyboard::try_read_escape() {
-                // Escape сначала закрывает открытое меню/панель и только
+                // Escape сначала закрывает обзор/меню/панель и только
                 // при их отсутствии завершает графическую сессию.
-                if self.start_menu_open || self.control_center_open {
-                    self.start_menu_open = false;
+                if self.overview_open {
+                    self.overview_open = false;
+                    self.dirty = true;
+                } else if self.start_menu_open || self.control_center_open {
+                    self.close_start_menu();
                     self.control_center_open = false;
                     self.dirty = true;
                 } else {
@@ -1757,17 +1898,18 @@ fn clamp_window_geometry(
     screen_h: i32,
 ) -> (i32, i32, u32, u32) {
     let m = UiMetrics::fluent();
-    let taskbar_y = screen_h - m.taskbar_height as i32;
+    let wa = work_area(screen_w, screen_h);
+    let wa_bottom = wa.y + wa.h as i32;
 
     let max_w = (screen_w - 8).max(MIN_WINDOW_W as i32) as u32;
-    let max_h = (taskbar_y - m.titlebar_height - 8).max(MIN_WINDOW_H as i32) as u32;
+    let max_h = (wa.h as i32 - m.titlebar_height - 8).max(MIN_WINDOW_H as i32) as u32;
     let w = w.clamp(MIN_WINDOW_W, max_w);
     let h = h.clamp(MIN_WINDOW_H, max_h);
 
     let x = x.clamp(0, (screen_w - w as i32).max(0));
-    // Заголовок (titlebar + содержимое начинается ниже) не должен уходить
-    // ни выше экрана, ни под панель задач.
-    let y = y.clamp(0, (taskbar_y - m.titlebar_height - h as i32).max(0));
+    // Окно целиком в рабочей области: не выше верхней панели и не под
+    // Dock (заголовок + содержимое должны помещаться).
+    let y = y.clamp(wa.y, (wa_bottom - m.titlebar_height - h as i32).max(wa.y));
 
     (x, y, w, h)
 }
