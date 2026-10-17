@@ -28,7 +28,7 @@ in pure Python. With `mkfs.erofs` the image is more compact, and
 bash build.sh
 ```
 
-Result: `build/deix_disk.img` (10 MiB) and the release artifacts
+Result: `build/deix_disk.img` (20 MiB) and the release artifacts
 `build/deix-0.3.0-beta-x86_64.img` + `build/SHA256SUMS`.
 
 Steps: partition map check (`tools/check_partition_map.py`) -> nasm
@@ -47,8 +47,8 @@ Kernel only, no image: `cargo build --release`.
 | boot | 1..2046 | ≤2046 | stage2 + ramboot + raw kernel.bin |
 | `DEIXKIMG` | 2047 | 1 | kernel descriptor: LBA, size, SHA-256 |
 | panic dump | 2048 | 64 | crash dump (`DEIXPNIC`), outside any FS |
-| `/system` | 4096 | 8704 | EROFS, read-only |
-| `/userdata` | 12800 | 5632 | ext2, read/write |
+| `/system` | 4096 | 20480 | EROFS, read-only |
+| `/userdata` | 24576 | 16384 | ext2, read/write |
 
 Booting uses the raw kernel (MBR -> stage2 -> kernel.bin at LBA 1..2046);
 `/system/kernel/kernel.bin` is a copy of the same file inside EROFS. After
@@ -95,7 +95,7 @@ python3 tools/qemu_install_test.py      # install onto a second disk + boot from
 Verifying EROFS with a third-party tool:
 
 ```bash
-dd if=build/deix_disk.img of=/tmp/system.img bs=512 skip=4096 count=8704
+dd if=build/deix_disk.img of=/tmp/system.img bs=512 skip=4096 count=20480
 dump.erofs /tmp/system.img | head -5     # -> Filesystem magic number: 0xE0F5E1E2
 fsck.erofs --extract=/tmp/out /tmp/system.img && ls -R /tmp/out
 ```

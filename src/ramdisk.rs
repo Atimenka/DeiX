@@ -23,8 +23,8 @@
 
 /// Физический адрес RAM-диска (совпадает с RAMDISK_DST в boot/ramboot.asm).
 pub const RAMDISK_BASE: usize = 0x2000000;
-/// Сколько секторов образа скопировано загрузчиком (весь .img, 10 МиБ).
-pub const RAMDISK_SECTORS: u32 = 20480;
+/// Сколько секторов образа скопировано загрузчиком (весь .img, 20 МиБ).
+pub const RAMDISK_SECTORS: u32 = 40960;
 /// Размер RAM-диска в байтах.
 pub const RAMDISK_SIZE: usize = RAMDISK_SECTORS as usize * 512;
 

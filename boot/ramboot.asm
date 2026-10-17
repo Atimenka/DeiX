@@ -2,7 +2,7 @@
 ; Зачем: ядро в long mode не может вызывать BIOS int13 и читает разделы через
 ; ATA PIO (порты 0x1F0) — это работает для внутреннего SATA, но НЕ для USB /
 ; Ventoy (виртуальный диск). Поэтому до перехода в long mode мы читаем весь
-; образ (10 МиБ) через int13 и кладём его в RAM по адресу RAMDISK_DST, а ядро
+; образ (20 МиБ) через int13 и кладём его в RAM по адресу RAMDISK_DST, а ядро
 ; обращается к разделам как к памяти (см. src/ramdisk.rs).
 ;
 ; РАЗМЕЩЕНИЕ: код в НИЗКОЙ памяти 0x9000 (org 0x7E00, DS=0). Это позволяет
@@ -31,7 +31,7 @@ bits 16
 org 0x7E00
 
 %ifndef RAMDISK_SECTORS
-RAMDISK_SECTORS equ 20480
+RAMDISK_SECTORS equ 40960
 %endif
 %ifndef KERNEL_SECTORS
 KERNEL_SECTORS equ 2048

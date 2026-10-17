@@ -120,8 +120,8 @@ pub struct PartitionLayout {
 }
 
 pub const PARTITION_LAYOUT: [PartitionLayout; 2] = [
-    PartitionLayout { name: "/system",     start_lba: 4096,  sectors: 8704, fs: "erofs", flashable: true },
-    PartitionLayout { name: "/userdata",   start_lba: 12800, sectors: 5632, fs: "ext2",  flashable: true },
+    PartitionLayout { name: "/system",     start_lba: 4096,  sectors: 20480, fs: "erofs", flashable: true },
+    PartitionLayout { name: "/userdata",   start_lba: 24576, sectors: 16384, fs: "ext2",  flashable: true },
 ];
 
 /// Сырые служебные области до первого раздела (/system @ LBA 4096):

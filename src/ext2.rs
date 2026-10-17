@@ -71,10 +71,12 @@ const PTRS_PER_INDIRECT_BLOCK: usize = BLOCK_SIZE / 4;
 /// Максимальный размер файла с прямыми + одинарным indirect блоком.
 const MAX_FILE_BLOCKS: usize = MAX_DIRECT_BLOCKS + PTRS_PER_INDIRECT_BLOCK;
 
-/// Начало тома ext2 на диске (/userdata раздел на LBA 12800).
-pub const FS_START_LBA: u32 = 12800;
-/// Размер тома в секторах (раздел /userdata = 5632 секторов).
-const TOTAL_SECTORS: u32 = 5632;
+/// Начало тома ext2 на диске (/userdata раздел на LBA 24576).
+pub const FS_START_LBA: u32 = 24576;
+/// Размер тома в секторах (раздел /userdata = 16384 секторов = 8 МиБ —
+/// максимум одной группы ext2 при блоке 1024: 8192 блоков = ровно один
+/// блок битовой карты).
+const TOTAL_SECTORS: u32 = 16384;
 const TOTAL_BLOCKS: u32 = TOTAL_SECTORS / SECTORS_PER_BLOCK;
 
 const SB_BLOCK: u32 = 1;

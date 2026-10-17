@@ -5,8 +5,8 @@
 Карта разделов DeiX в MBR-таблице (источник истины — src/partition_map.rs,
 сверяется tools/check_partition_map.py):
 
-  P1 0x83 bootable  LBA 4096  .. 12799 (8704 сект)  /system    (EROFS RO)
-  P2 0x83           LBA 12800 .. 18431 (5632 сект)  /userdata  (EXT2 RW)
+  P1 0x83 bootable  LBA 4096  .. 24575 (20480 сект)  /system    (EROFS RO)
+  P2 0x83           LBA 24576 .. 40959 (16384 сект)  /userdata  (EXT2 RW)
 
 Служебные области до первого раздела:
   LBA 0           — MBR (boot_sector.bin)
@@ -45,8 +45,8 @@ EXT2_MAGIC = 0xEF53
 # --- КАРТА РАЗДЕЛОВ DeiX (должна совпадать с src/partition_map.rs) ---
 # Два первичных раздела в MBR, логических разделов нет.
 PRIMARY = [
-    (1, 0x83, 4096,  8704, "/system"),    # bootable, системный EROFS
-    (2, 0x83, 12800, 5632, "/userdata"),  # ext2, пользовательские данные
+    (1, 0x83, 4096,  20480, "/system"),    # bootable, системный EROFS
+    (2, 0x83, 24576, 16384, "/userdata"),  # ext2, пользовательские данные
 ]
 
 # Дескриптор образа ядра: сектор LBA 2047 (см. src/partition_map.rs
@@ -59,9 +59,9 @@ KERNEL_IMAGE_INFO_MAGIC = b"DEIXKIMG"
 PARTITIONS_END_SECTORS = max(start + secs for _, _, start, secs, _ in PRIMARY)
 
 # RAM-диск (boot/ramboot.asm, boot/boot_sector_iso.asm) копирует в память
-# ровно 10 МиБ (окно 0x2000000..0x2A00000), поэтому образ дополняется
-# до 20480 секторов, даже если разделы заканчиваются раньше.
-RAMDISK_WINDOW_SECTORS = 20480
+# ровно 20 МиБ (окно 0x2000000..0x3400000), поэтому образ дополняется
+# до 40960 секторов, даже если разделы заканчиваются раньше.
+RAMDISK_WINDOW_SECTORS = 40960
 
 
 def chs(lba):

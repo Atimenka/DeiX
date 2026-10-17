@@ -15,8 +15,8 @@
 #   LBA 1..2046     — stage2 + ramboot + сырой kernel.bin
 #   LBA 2047        — дескриптор образа ядра DEIXKIMG (LBA/размер/SHA-256)
 #   LBA 2048..2111  — область аварийного дампа (DEIXPNIC, src/diag/panic.rs)
-#   LBA 4096..12799 — /system   (EROFS RO, 8704 сект)
-#   LBA 12800..18431 — /userdata (EXT2 RW, 5632 сект)
+#   LBA 4096..24575 — /system   (EROFS RO, 20480 сект)
+#   LBA 24576..40959 — /userdata (EXT2 RW, 16384 сект)
 set -euo pipefail
 
 source "$HOME/.cargo/env" 2>/dev/null || true
@@ -48,7 +48,7 @@ KERNEL_LBA=$(( 1 + STAGE2_SECTORS + RAMBOOT_SECTORS ))
 echo "    kernel.bin LBA: $KERNEL_LBA"
 
 echo "==> [1c/8] Собираем ramboot (RAM-диск: дочитывает весь образ в 0x2000000)"
-nasm -f bin -D RAMDISK_SECTORS=20480 -D RAMDISK_DST=0x2000000 \
+nasm -f bin -D RAMDISK_SECTORS=40960 -D RAMDISK_DST=0x2000000 \
     -D KERNEL_SECTORS=2048 -D KERNEL_LBA=$KERNEL_LBA \
     boot/ramboot.asm -o "$BUILD/ramboot.bin"
 RAMBOOT_SIZE=$(stat -c%s "$BUILD/ramboot.bin")
@@ -192,7 +192,7 @@ if [ "$STAGE2_SECTORS2" -ne "$STAGE2_SECTORS" ]; then
     strip --strip-all "$BUILD/stage2.elf" -o "$BUILD/stage2.stripped.elf"
     objcopy -O binary "$BUILD/stage2.stripped.elf" "$BUILD/stage2.bin"
     # KERNEL_LBA изменился — пересобираем ramboot с новым значением.
-    nasm -f bin -D RAMDISK_SECTORS=20480 -D RAMDISK_DST=0x2000000 \
+    nasm -f bin -D RAMDISK_SECTORS=40960 -D RAMDISK_DST=0x2000000 \
         -D KERNEL_SECTORS=2048 -D KERNEL_LBA=$KERNEL_LBA \
         boot/ramboot.asm -o "$BUILD/ramboot.bin"
 fi
@@ -220,8 +220,8 @@ fi
 cat "$BUILD/boot_sector.bin" "$BUILD/stage2.pad.bin" "$BUILD/ramboot.bin" "$BUILD/kernel.bin" > "$DISK_IMG"
 
 # Дополняем образ нулями до размера, кратного 512, а затем до большего из:
-#   - конца последнего раздела (/userdata: LBA 12800 + 5632 = 18432 сект);
-#   - окна RAM-диска (ramboot/boot_sector_iso читают ровно 20480 сект = 10 МиБ).
+#   - конца последнего раздела (/userdata: LBA 24576 + 16384 = 40960 сект);
+#   - окна RAM-диска (ramboot/boot_sector_iso читают ровно 40960 сект = 20 МиБ).
 python3 - "$DISK_IMG" <<'PYEOF'
 import sys, os
 path = sys.argv[1]
@@ -231,8 +231,8 @@ if pad:
     with open(path, "ab") as f:
         f.write(b"\x00" * pad)
 
-PARTITIONS_END = 12800 + 5632   # сверяется tools/check_partition_map.py
-RAMDISK_WINDOW = 20480          # boot/ramboot.asm RAMDISK_SECTORS
+PARTITIONS_END = 24576 + 16384  # сверяется tools/check_partition_map.py
+RAMDISK_WINDOW = 40960          # boot/ramboot.asm RAMDISK_SECTORS
 min_size = max(PARTITIONS_END, RAMDISK_WINDOW) * 512
 size = os.path.getsize(path)
 if size < min_size:
@@ -245,17 +245,17 @@ echo "==> [7b/8] Форматируем разделы: MBR + ext2 + НАСТО�
 # (магия 0xE0F5E1E2, проходят fsck.erofs).
 python3 tools/make_deix_fs.py "$DISK_IMG" --kernel-lba=$KERNEL_LBA
 
-echo "==> [8/8] Компилируем ISO-загрузчик (RAM-диск 10 МиБ)"
+echo "==> [8/8] Компилируем ISO-загрузчик (RAM-диск 20 МиБ)"
 # Отдельный маленький загрузчик (boot/boot_sector_iso.asm): BIOS грузит
 # весь boot-образ по 0x7c00, стаб копирует stage2 на 0x10000, kernel.bin
-# на 0x100000 и ПОЛНЫЙ 10-МиБ образ диска (RAM-диск) на 0x2000000 — ядро
+# на 0x100000 и ПОЛНЫЙ 20-МиБ образ диска (RAM-диск) на 0x2000000 — ядро
 # читает все разделы из памяти и работает с любого носителя (Ventoy/USB).
 STAGE2_PAD_SIZE=$(stat -c%s "$BUILD/stage2.pad.bin")
 KERNEL_SIZE=$(stat -c%s "$BUILD/kernel.bin")
 STAGE2_DWORDS=$(( STAGE2_PAD_SIZE / 4 ))
 KERNEL_DWORDS=$(( (KERNEL_SIZE + 3) / 4 ))
 nasm -f bin -D STAGE2_SIZE_DWORDS=$STAGE2_DWORDS -D KERNEL_SIZE_DWORDS=$KERNEL_DWORDS \
-    -D RAMDISK_SIZE_DWORDS=2621440 \
+    -D RAMDISK_SIZE_DWORDS=5242880 \
     boot/boot_sector_iso.asm -o "$BUILD/boot_sector_iso.bin"
 
 echo "==> [8b] Релизные артефакты (DeiX 0.3.0-beta x86_64)"

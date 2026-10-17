@@ -2,7 +2,7 @@
 """deix_storage.py — доступ к разделам образа диска DeiX с хост-машины.
 
 Умеет:
-  * /userdata (ext2, LBA 12800): список/чтение/запись файлов и каталогов,
+  * /userdata (ext2, LBA 24576): список/чтение/запись файлов и каталогов,
     в том числе на ЗАШИФРОВАННОМ томе — по паролю пользователя DeiX.
     Поддержаны обе схемы шифрования ядра (src/crypto_storage.rs):
       - заголовок DEIXLUKS (LBA 4094): PBKDF2-SHA512 -> KEK, слоты
@@ -35,7 +35,7 @@ import sys
 SECTOR = 512
 
 # Раскладка диска — см. tools/make_deix_fs.py и src/partition_map.rs.
-USERDATA_LBA = 12800
+USERDATA_LBA = 24576
 EROFS_LBA = 4096
 
 # Шифрование — см. src/crypto_storage.rs и src/luks.rs.

@@ -222,8 +222,8 @@ KERNEL_LBA equ (1 + NUM_SECTORS + RAMBOOT_SECTORS)
 ; та же таблица пишется tools/make_deix_fs.py в собранный образ и
 ; src/install.rs::build_mbr на целевой диск):
 ;
-;   P1 0x83 bootable  LBA 4096  + 8704 сект (4096..12799)   /system  (EROFS RO)
-;   P2 0x83           LBA 12800 + 5632 сект (12800..18431)  /userdata (EXT2 RW)
+;   P1 0x83 bootable  LBA 4096  + 20480 сект (4096..24575)   /system  (EROFS RO)
+;   P2 0x83           LBA 24576 + 16384 сект (24576..40959)  /userdata (EXT2 RW)
 ;
 ; Сам загрузчик и ядро НЕ читают эту таблицу в рантайме — она нужна,
 ; чтобы внешние инструменты (fdisk, parted, GParted) видели диск как
@@ -238,16 +238,16 @@ times (446-($-$$)) db 0
 db 0x80                     ; boot indicator: активный раздел
 db 0x41, 0x02, 0x00          ; CHS start (LBA 4096)
 db 0x83                     ; тип раздела: Linux native
-db 0xCB, 0x0B, 0x00          ; CHS end (LBA 12799)
+db 0x87, 0x06, 0x01          ; CHS end (LBA 24575)
 dd 4096                     ; LBA start (= partition_map.rs /system)
-dd 8704                     ; секторов   (= partition_map.rs /system)
+dd 20480                    ; секторов   (= partition_map.rs /system)
 ; --- P2: /userdata (EXT2 RW) ---
 db 0x00                     ; не загрузочный
-db 0xCB, 0x0C, 0x00          ; CHS start (LBA 12800)
+db 0x87, 0x07, 0x01          ; CHS start (LBA 24576)
 db 0x83                     ; тип раздела: Linux native
-db 0x25, 0x24, 0x01          ; CHS end (LBA 18431)
-dd 12800                    ; LBA start (= partition_map.rs /userdata)
-dd 5632                     ; секторов   (= partition_map.rs /userdata)
+db 0x8C, 0x0A, 0x02          ; CHS end (LBA 40959)
+dd 24576                    ; LBA start (= partition_map.rs /userdata)
+dd 16384                    ; секторов   (= partition_map.rs /userdata)
 times 16 db 0                ; запись 3 (не используется)
 times 16 db 0                ; запись 4 (не используется)
 

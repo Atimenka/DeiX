@@ -34,17 +34,17 @@ const KERNEL_IMAGE_INFO_LBA: u32 = 2047;
 const MIN_TARGET_SECTORS: u32 = PART_USERDATA.0 + PART_USERDATA.1;
 
 /// Смещение ext2-тома /userdata на диске (то же, что ext2::FS_START_LBA).
-const FS_START_LBA: u32 = 12800;
+const FS_START_LBA: u32 = 24576;
 /// Размер тома /userdata в секторах.
-const FS_TOTAL_SECTORS: u32 = 5632;
+const FS_TOTAL_SECTORS: u32 = 16384;
 /// Размер тома /userdata в блоках (1024 байта = 2 сектора).
 const FS_TOTAL_BLOCKS: u32 = FS_TOTAL_SECTORS / 2;
 
 /// Карта разделов (2-partition scheme, совпадает с tools/make_deix_fs.py):
-/// P1 /system (4096..12799, 8704 сект, EROFS RO)
-/// P2 /userdata (12800..18431, 5632 сект, EXT2 RW)
-const PART_SYSTEM: (u32, u32) = (4096, 8704);
-const PART_USERDATA: (u32, u32) = (12800, 5632);
+/// P1 /system (4096..24575, 20480 сект, EROFS RO)
+/// P2 /userdata (24576..40959, 16384 сект, EXT2 RW)
+const PART_SYSTEM: (u32, u32) = (4096, 20480);
+const PART_USERDATA: (u32, u32) = (24576, 16384);
 
 /// MBR-загрузчик, включённый в ядро (build.sh собирает boot_sector.bin ДО
 /// компиляции ядра; NUM_SECTORS = размер stage2).
@@ -376,13 +376,13 @@ fn write_image_to(drive: Drive) -> Result<(), ()> {
         }
     }
 
-    // /userdata: ext2-том на P2 (LBA 12800).
+    // /userdata: ext2-том на P2 (LBA 24576).
     write_userdata_ext2(drive);
 
     Ok(())
 }
 
-/// Форматирует ext2-том /userdata (P2, LBA 12800).
+/// Форматирует ext2-том /userdata (P2, LBA 24576).
 fn write_userdata_ext2(drive: Drive) {
     let start_lba = PART_USERDATA.0;
     let total_sectors = PART_USERDATA.1;
