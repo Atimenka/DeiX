@@ -16,7 +16,8 @@ use crate::ui::taskbar::{
 use crate::ui::theme::{get_theme, set_theme, UiTheme};
 use crate::ui::window::{
     draw_window, fetch_and_render_web_page, load_partition_entries, maximized_geometry,
-    BrowserTab, Window, WindowContent, WindowFrame, RESOLUTION_PRESETS,
+    BrowserTab, Window, WindowContent, WindowFrame, MIN_WINDOW_H, MIN_WINDOW_W,
+    RESOLUTION_PRESETS,
 };
 use alloc::format;
 use alloc::string::String;
@@ -72,13 +73,21 @@ pub enum DesktopExit {
 }
 
 pub struct Desktop {
+    /// Окна в порядке z (последнее — верхнее). Индексы меняются при
+    /// каждой смене порядка, поэтому всё долгоживущее (фокус, drag,
+    /// resize) привязано к Window::id, а не к индексу.
     pub windows: Vec<Window>,
-    pub focused_window: Option<usize>,
+    /// id окна в фокусе.
+    pub focused_id: Option<u32>,
     pub start_menu_open: bool,
     pub control_center_open: bool,
     pub selected_icon: Option<usize>,
-    pub dragging_window: Option<(usize, i32, i32, i32, i32)>,
-    pub resizing_window: Option<(usize, i32, i32, u32, u32)>,
+    /// (id, исходный x, исходный y, x мыши при захвате, y мыши при захвате)
+    pub dragging_window: Option<(u32, i32, i32, i32, i32)>,
+    /// (id, x мыши при захвате, y мыши при захвате, исходная ширина, исходная высота)
+    pub resizing_window: Option<(u32, i32, i32, u32, u32)>,
+    /// Следующий свободный Window::id (монотонный счётчик).
+    next_window_id: u32,
     pub should_exit: bool,
     pub pending_resolution: Option<(u32, u32)>,
     pub frame_counter: u64,
@@ -136,7 +145,8 @@ impl Desktop {
     pub fn new() -> Self {
         Desktop {
             windows: Vec::new(),
-            focused_window: None,
+            focused_id: None,
+            next_window_id: 1,
             start_menu_open: false,
             control_center_open: false,
             selected_icon: None,
@@ -187,10 +197,36 @@ impl Desktop {
         win.width = w;
         win.height = h;
         win.restore_geometry = (x, y, w, h);
-        self.windows.push(win);
-        self.focused_window = Some(self.windows.len() - 1);
+        self.push_focused(win);
         self.start_menu_open = false;
+    }
+
+    /// Единственный путь добавления окна: выдаёт стабильный id,
+    /// кладёт окно наверх z-порядка и фокусирует.
+    fn push_focused(&mut self, mut win: Window) {
+        win.id = self.next_window_id;
+        self.next_window_id += 1;
+        self.focused_id = Some(win.id);
+        self.windows.push(win);
         self.dirty = true;
+    }
+
+    /// Текущий индекс окна с данным id (меняется при смене z-порядка).
+    fn index_of(&self, id: u32) -> Option<usize> {
+        self.windows.iter().position(|w| w.id == id)
+    }
+
+    /// Индекс окна в фокусе.
+    fn focused_index(&self) -> Option<usize> {
+        self.focused_id.and_then(|id| self.index_of(id))
+    }
+
+    /// Окно по индексу в фокусе? (для отрисовки панели задач и рамок)
+    pub fn is_focused(&self, idx: usize) -> bool {
+        match (self.focused_id, self.windows.get(idx)) {
+            (Some(id), Some(w)) => w.id == id,
+            _ => false,
+        }
     }
 
     pub fn open_terminal(&mut self, screen_w: i32, screen_h: i32) {
@@ -254,25 +290,30 @@ impl Desktop {
                     );
                 }
             }
-            self.windows.remove(idx);
+            let closed = self.windows.remove(idx);
             self.dirty = true;
-            if self.windows.is_empty() {
-                self.focused_window = None;
-            } else if let Some(focused) = self.focused_window {
-                if focused == idx {
-                    self.focused_window = Some(self.windows.len() - 1);
-                } else if focused > idx {
-                    self.focused_window = Some(focused - 1);
-                }
+            if self.focused_id == Some(closed.id) {
+                self.focus_topmost_visible();
             }
         }
+    }
+
+    /// Передаёт фокус верхнему не свёрнутому окну (после закрытия или
+    /// сворачивания активного). Если таких нет — фокус никому.
+    fn focus_topmost_visible(&mut self) {
+        self.focused_id = self
+            .windows
+            .iter()
+            .rev()
+            .find(|w| !w.minimized)
+            .map(|w| w.id);
     }
 
     pub fn focus_window(&mut self, idx: usize) {
         if idx < self.windows.len() {
             let win = self.windows.remove(idx);
+            self.focused_id = Some(win.id);
             self.windows.push(win);
-            self.focused_window = Some(self.windows.len() - 1);
             self.dirty = true;
         }
     }
@@ -282,18 +323,58 @@ impl Desktop {
             self.windows[idx].minimized = !self.windows[idx].minimized;
             self.dirty = true;
             if self.windows[idx].minimized {
-                if self.focused_window == Some(idx) {
-                    self.focused_window = None;
-                    for i in (0..self.windows.len()).rev() {
-                        if !self.windows[i].minimized {
-                            self.focused_window = Some(i);
-                            break;
-                        }
-                    }
+                if self.focused_id == Some(self.windows[idx].id) {
+                    self.focus_topmost_visible();
                 }
             } else {
                 self.focus_window(idx);
             }
+        }
+    }
+
+    /// Снап при отпускании перетаскивания у края экрана: верхний край —
+    /// развернуть, левый/правый — половина рабочей области. Окно должно
+    /// быть реально дотащено до края (курсор в 2px от него).
+    fn snap_on_drag_release(
+        &mut self,
+        id: u32,
+        orig_x: i32,
+        orig_y: i32,
+        mx: i32,
+        my: i32,
+        screen_w: i32,
+        screen_h: i32,
+    ) {
+        let m = UiMetrics::fluent();
+        let taskbar_y = screen_h - m.taskbar_height as i32;
+        let work_h = (taskbar_y - m.titlebar_height).max(MIN_WINDOW_H as i32) as u32;
+
+        let Some(idx) = self.index_of(id) else { return };
+        let w = &mut self.windows[idx];
+        if w.maximized {
+            return;
+        }
+
+        if my <= 1 {
+            // Развернуть; Restore вернёт окно туда, откуда его тащили.
+            w.restore_geometry = (orig_x, orig_y, w.width, w.height);
+            let (gx, gy, gw, gh) = maximized_geometry(screen_w, screen_h, &m);
+            w.x = gx;
+            w.y = gy;
+            w.width = gw;
+            w.height = gh;
+            w.maximized = true;
+        } else if mx <= 1 {
+            w.x = 0;
+            w.y = 0;
+            w.width = (screen_w / 2).max(MIN_WINDOW_W as i32) as u32;
+            w.height = work_h;
+        } else if mx >= screen_w - 2 {
+            let half = (screen_w / 2).max(MIN_WINDOW_W as i32);
+            w.x = screen_w - half;
+            w.y = 0;
+            w.width = half as u32;
+            w.height = work_h;
         }
     }
 
@@ -345,11 +426,17 @@ impl Desktop {
         if m.left_button {
             // Перетаскивание/изменение размера продолжается, пока кнопка
             // зажата; сцена перерисовывается только при реальном сдвиге.
-            if let Some((idx, orig_x, orig_y, mx0, my0)) = self.dragging_window {
-                if let Some(w) = self.windows.get_mut(idx) {
+            if let Some((id, orig_x, orig_y, mx0, my0)) = self.dragging_window {
+                if let Some(idx) = self.index_of(id) {
+                    let w = &mut self.windows[idx];
                     if !w.maximized {
-                        let nx = orig_x + (m.x - mx0);
-                        let ny = (orig_y + (m.y - my0)).max(0);
+                        // Заголовок всегда остаётся достижим: не выше
+                        // экрана, не под панелью задач, и минимум 60px
+                        // окна видно по горизонтали.
+                        let nx = (orig_x + (m.x - mx0))
+                            .clamp(-(w.width as i32) + 60, screen_w - 60);
+                        let ny = (orig_y + (m.y - my0))
+                            .clamp(0, taskbar_y - ui_m.titlebar_height);
                         if w.x != nx || w.y != ny {
                             w.x = nx;
                             w.y = ny;
@@ -360,11 +447,14 @@ impl Desktop {
                 return;
             }
 
-            if let Some((idx, orig_x, orig_y, orig_w, orig_h)) = self.resizing_window {
-                if let Some(w) = self.windows.get_mut(idx) {
+            if let Some((id, mx0, my0, orig_w, orig_h)) = self.resizing_window {
+                if let Some(idx) = self.index_of(id) {
+                    let w = &mut self.windows[idx];
                     if !w.maximized {
-                        let new_w = (orig_w as i32 + (m.x - orig_x)).max(220) as u32;
-                        let new_h = (orig_h as i32 + (m.y - orig_y)).max(140) as u32;
+                        let new_w =
+                            (orig_w as i32 + (m.x - mx0)).max(MIN_WINDOW_W as i32) as u32;
+                        let new_h =
+                            (orig_h as i32 + (m.y - my0)).max(MIN_WINDOW_H as i32) as u32;
                         if w.width != new_w || w.height != new_h {
                             w.width = new_w;
                             w.height = new_h;
@@ -440,17 +530,17 @@ impl Desktop {
                     return;
                 }
                 if f.resize.contains(m.x, m.y) && !win_maximized {
-                    let (win_w, win_h) = (self.windows[i].width, self.windows[i].height);
+                    let (id, win_w, win_h) =
+                        (self.windows[i].id, self.windows[i].width, self.windows[i].height);
                     self.focus_window(i);
-                    self.resizing_window = Some((self.windows.len() - 1, m.x, m.y, win_w, win_h));
+                    self.resizing_window = Some((id, m.x, m.y, win_w, win_h));
                     return;
                 }
                 if f.drag.contains(m.x, m.y) {
+                    let (id, cur_x, cur_y) =
+                        (self.windows[i].id, self.windows[i].x, self.windows[i].y);
                     self.focus_window(i);
-                    let last_idx = self.windows.len() - 1;
-                    let cur_x = self.windows[last_idx].x;
-                    let cur_y = self.windows[last_idx].y;
-                    self.dragging_window = Some((last_idx, cur_x, cur_y, m.x, m.y));
+                    self.dragging_window = Some((id, cur_x, cur_y, m.x, m.y));
                     return;
                 }
                 if f.titlebar.contains(m.x, m.y) {
@@ -471,18 +561,25 @@ impl Desktop {
         } else {
             // Конец перетаскивания/изменения размера: один полный кадр,
             // чтобы вернуть blur (на время drag он отключён ради скорости).
-            if self.dragging_window.is_some() || self.resizing_window.is_some() {
+            if let Some((id, orig_x, orig_y, mx0, my0)) = self.dragging_window.take() {
+                // Снап — только если окно реально тащили: клик по
+                // заголовку без движения не должен разворачивать окно,
+                // даже когда оно стоит у края экрана.
+                if (m.x, m.y) != (mx0, my0) {
+                    self.snap_on_drag_release(id, orig_x, orig_y, m.x, m.y, screen_w, screen_h);
+                }
                 self.dirty = true;
             }
-            self.dragging_window = None;
-            self.resizing_window = None;
+            if self.resizing_window.take().is_some() {
+                self.dirty = true;
+            }
         }
 
         self.handle_keyboard_for_focused_window();
     }
 
     fn handle_keyboard_for_focused_window(&mut self) {
-        if let Some(focused_idx) = self.focused_window {
+        if let Some(focused_idx) = self.focused_index() {
             if let Some(w) = self.windows.get_mut(focused_idx) {
                 if w.minimized {
                     return;
@@ -722,7 +819,7 @@ impl Desktop {
         // неактивное — активировать; уже активное — свернуть.
         if self.windows[idx].minimized {
             self.toggle_minimize(idx); // восстановление + фокус
-        } else if self.focused_window != Some(idx) {
+        } else if !self.is_focused(idx) {
             self.focus_window(idx);
         } else {
             self.toggle_minimize(idx); // сворачивание активного
@@ -1089,10 +1186,7 @@ impl Desktop {
         }
 
         if let Some((x, y, name, full, read_only)) = open_editor {
-            self.windows
-                .push(Window::new_file_editor(x, y, &name, &full, read_only));
-            self.focused_window = Some(self.windows.len() - 1);
-            self.dirty = true;
+            self.push_focused(Window::new_file_editor(x, y, &name, &full, read_only));
         }
     }
 
@@ -1114,7 +1208,7 @@ impl Desktop {
 
         for i in 0..self.windows.len() {
             if !self.windows[i].minimized {
-                let is_focused = self.focused_window == Some(i);
+                let is_focused = self.is_focused(i);
                 draw_window(r, &theme, &self.windows[i], is_focused, is_dragging);
             }
         }
@@ -1268,10 +1362,8 @@ impl Desktop {
         let screen_h = r.height() as i32;
 
         if !preserve_windows {
-            self.windows.push(Window::new_browser(40, 40, "deix://home"));
-            self.windows.push(Window::new_files(380, 50));
-            self.focused_window = Some(self.windows.len() - 1);
-            self.dirty = true;
+            self.push_focused(Window::new_browser(40, 40, "deix://home"));
+            self.push_focused(Window::new_files(380, 50));
         } else {
             // Смена разрешения: у развёрнутых окон пересчитывается только
             // текущая (развёрнутая) геометрия — restore_geometry не
@@ -1647,10 +1739,10 @@ fn clamp_window_geometry(
     let m = UiMetrics::fluent();
     let taskbar_y = screen_h - m.taskbar_height as i32;
 
-    let max_w = (screen_w - 8).max(160) as u32;
-    let max_h = (taskbar_y - m.titlebar_height - 8).max(100) as u32;
-    let w = w.clamp(160, max_w);
-    let h = h.clamp(80, max_h);
+    let max_w = (screen_w - 8).max(MIN_WINDOW_W as i32) as u32;
+    let max_h = (taskbar_y - m.titlebar_height - 8).max(MIN_WINDOW_H as i32) as u32;
+    let w = w.clamp(MIN_WINDOW_W, max_w);
+    let h = h.clamp(MIN_WINDOW_H, max_h);
 
     let x = x.clamp(0, (screen_w - w as i32).max(0));
     // Заголовок (titlebar + содержимое начинается ниже) не должен уходить

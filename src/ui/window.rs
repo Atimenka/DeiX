@@ -82,6 +82,12 @@ pub enum WindowContent {
 }
 
 pub struct Window {
+    /// Стабильный идентификатор окна. Выдаётся Desktop'ом при открытии
+    /// и не меняется до закрытия. Фокус, перетаскивание и изменение
+    /// размера привязываются к id, а не к индексу в векторе: индексы
+    /// сдвигаются при каждом изменении z-порядка (focus_window
+    /// переставляет окно в конец) и при закрытии окон.
+    pub id: u32,
     pub title: String,
     pub x: i32,
     pub y: i32,
@@ -143,6 +149,12 @@ impl WindowFrame {
     }
 }
 
+/// Минимальный размер содержимого окна. Один источник и для ручного
+/// изменения размера, и для прижатия к экрану (clamp_window_geometry):
+/// раньше у них были разные минимумы (220x140 против 160x80).
+pub const MIN_WINDOW_W: u32 = 220;
+pub const MIN_WINDOW_H: u32 = 140;
+
 /// Геометрия развёрнутого окна: учитывает панель задач снизу и то, что
 /// `height` — высота СОДЕРЖИМОГО (заголовок добавляется сверху). Раньше
 /// заголовок не вычитался, и развёрнутое окно перекрывало панель задач.
@@ -154,6 +166,7 @@ pub fn maximized_geometry(screen_w: i32, screen_h: i32, m: &UiMetrics) -> (i32, 
 impl Window {
     pub fn new_terminal(x: i32, y: i32) -> Self {
         Window {
+            id: 0,
             title: String::from("Terminal"),
             x,
             y,
@@ -177,6 +190,7 @@ impl Window {
         let current_path = String::from("/");
         let (entries, error) = load_partition_entries(&current_partition, &current_path);
         Window {
+            id: 0,
             title: String::from("Files"),
             x,
             y,
@@ -207,6 +221,7 @@ impl Window {
         };
 
         Window {
+            id: 0,
             title: String::from("DeiX Web Browser"),
             x,
             y,
@@ -232,6 +247,7 @@ impl Window {
 
     pub fn new_task_manager(x: i32, y: i32) -> Self {
         Window {
+            id: 0,
             title: String::from("Task Manager"),
             x,
             y,
@@ -249,6 +265,7 @@ impl Window {
 
     pub fn new_theme_settings(x: i32, y: i32) -> Self {
         Window {
+            id: 0,
             title: String::from("Personalization"),
             x,
             y,
@@ -263,6 +280,7 @@ impl Window {
 
     pub fn new_error_center(x: i32, y: i32) -> Self {
         Window {
+            id: 0,
             title: String::from("Error Center"),
             x,
             y,
@@ -280,6 +298,7 @@ impl Window {
 
     pub fn new_about(x: i32, y: i32) -> Self {
         Window {
+            id: 0,
             title: String::from("About DeiX OS"),
             x,
             y,
@@ -309,6 +328,7 @@ impl Window {
             Err(e) => (alloc::vec![String::new()], Some(e.message()), true),
         };
         Window {
+            id: 0,
             title: format!("Editor - {}", filename),
             x,
             y,
@@ -340,6 +360,7 @@ impl Window {
         let height = RESOLUTION_PRESETS.len() as u32 * 28 + 40;
         let y_pos = (cur_h as i32 - height as i32) / 2;
         Window {
+            id: 0,
             title: String::from("Display Settings"),
             x,
             y: y_pos.max(20),

@@ -126,7 +126,7 @@ pub fn draw_taskbar(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen
         if item_x + item_w > screen_w - 120 {
             break;
         }
-        let is_focused = desktop.focused_window == Some(i) && !w.minimized;
+        let is_focused = desktop.is_focused(i) && !w.minimized;
         let bg = if is_focused { theme.titlebar_active } else { theme.window_bg };
 
         r.fill_rounded_rect(item_x, y + 6, (item_w - 6) as u32, ui_m.taskbar_height - 12, 6, bg);
