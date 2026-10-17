@@ -164,6 +164,19 @@ if [ $(( KERNEL_LBA + KERNEL_SECTORS )) -gt "$KIMG_INFO_LBA" ]; then
     exit 1
 fi
 
+# .bss ядра (куча 16 МиБ и статические буферы) обязана кончаться ниже
+# Ring 3 (0x1400000, src/usermode.rs): иначе ядро затирает собственную
+# память и загрузка не доходит до оболочки.
+BSS_END_HEX=$(nm "$BUILD/kernel.elf" | awk '$3=="__kernel_bss_end"{print $1}')
+BSS_END=$(( 16#${BSS_END_HEX:-0} ))
+BSS_LIMIT=$(( 0x1400000 ))
+printf '    .bss ядра заканчивается на 0x%X (лимит 0x%X, запас %d КиБ)\n' \
+    "$BSS_END" "$BSS_LIMIT" $(( (BSS_LIMIT - BSS_END) / 1024 ))
+if [ "$BSS_END" -eq 0 ] || [ "$BSS_END" -gt "$BSS_LIMIT" ]; then
+    echo "ОШИБКА: .bss ядра не помещается ниже 0x1400000 (или __kernel_bss_end не найден)."
+    exit 1
+fi
+
 echo "==> [5/8] Проверяем MBR-загрузчик (512 байт)"
 BOOT_SIZE=$(stat -c%s "$BUILD/boot_sector.bin")
 if [ "$BOOT_SIZE" -ne 512 ]; then
