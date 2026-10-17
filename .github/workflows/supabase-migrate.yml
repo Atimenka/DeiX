@@ -41,14 +41,23 @@ jobs:
             exit 1
           fi
 
-          try() { psql -h "$1" -p "$2" -U "$3" -d postgres -tAc "select 1" >/dev/null 2>&1; }
+          # Пробует подключиться; при неудаче печатает ПРИЧИНУ от psql
+          # (в ней нет пароля: "password authentication failed",
+          # "Network is unreachable", "Tenant or user not found" и т.п.).
+          try() {
+            local err
+            err=$(psql -h "$1" -p "$2" -U "$3" -d postgres -tAc "select 1" 2>&1 >/dev/null) \
+              && return 0
+            echo "    $1:$2 ($3) -> ${err}" | head -1
+            return 1
+          }
 
           HOST=""; PORT=""; DBUSER=""
           echo "probing direct connection db.$REF.supabase.co:5432 ..."
           if try "db.$REF.supabase.co" 5432 postgres; then
             HOST="db.$REF.supabase.co"; PORT=5432; DBUSER=postgres
           else
-            echo "direct connection failed (IPv6-only project or rotated password); probing IPv4 poolers..."
+            echo "direct connection failed; probing IPv4 poolers..."
             for pfx in aws-0 aws-1; do
               for r in eu-central-1 eu-central-2 eu-west-1 eu-west-2 eu-west-3 eu-north-1 \
                        us-east-1 us-east-2 us-west-1 us-west-2 \
