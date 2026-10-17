@@ -211,7 +211,7 @@ pub fn traffic_counters() -> (u64, u64, u64, u64) {
 /// Карта найдена и инициализирована. GUI использует это для честного
 /// статуса сети: без устройства иконка/строка не изображают подключение.
 pub fn is_present() -> bool {
-    STATE.lock().initialized
+    without_interrupts(|| STATE.lock().initialized)
 }
 
 /// Пытается найти RTL8139 на шине PCI и проинициализировать её. Возвращает
@@ -377,14 +377,19 @@ pub fn on_interrupt() {
 /// Вычитывает из кольцевого RX-буфера все накопившиеся пакеты и передаёт
 /// их обработчику Ethernet-уровня.
 pub fn poll_rx() {
-    let io_base = {
+    let io_base = without_interrupts(|| {
         let st = STATE.lock();
-        if !st.initialized { return; }
-        st.io_base
+        if st.initialized { Some(st.io_base) } else { None }
+    });
+    let io_base = match io_base {
+        Some(base) => base,
+        None => return,
     };
     // Сначала выгребаем кадры из карты в кольцо, потом разбираем их
-    // сетевым стеком уже вне контекста прерывания.
-    unsafe { drain_rx_buffer(io_base); }
+    // сетевым стеком уже вне контекста прерывания. Выгрузка идёт с
+    // отключёнными прерываниями: ISR карты читает тот же `rx_offset`, и
+    // без этого оба вычитывали бы один кадр и портили указатель CAPR.
+    without_interrupts(|| unsafe { drain_rx_buffer(io_base) });
     poll_deferred();
 }
 

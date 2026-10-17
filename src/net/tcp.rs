@@ -106,6 +106,7 @@ pub fn connect(dip: [u8;4], dport: u16) -> bool {
     send_seg(&c, SYN, &[]);
     let t0 = crate::timer::uptime_ms();
     loop {
+        crate::rtl8139::poll_rx();
         while let Some(pkt) = rx_dequeue() {
             if let Some((f, _a, s)) = parse_tcp(&pkt, sp, dport) {
                 if f&SYN!=0 && f&ACK!=0 {
