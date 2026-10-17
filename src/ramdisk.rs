@@ -23,8 +23,8 @@
 
 /// Физический адрес RAM-диска (совпадает с RAMDISK_DST в boot/ramboot.asm).
 pub const RAMDISK_BASE: usize = 0x2000000;
-/// Сколько секторов образа скопировано загрузчиком (весь .img, 10 МиБ).
-pub const RAMDISK_SECTORS: u32 = 20480;
+/// Сколько секторов образа скопировано загрузчиком (весь .img, 20 МиБ).
+pub const RAMDISK_SECTORS: u32 = 40960;
 /// Размер RAM-диска в байтах.
 pub const RAMDISK_SIZE: usize = RAMDISK_SECTORS as usize * 512;
 
@@ -36,7 +36,7 @@ static ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::
 
 /// Инициализирует RAM-диск: проверяет сигнатуру MBR (0xAA55) в первом
 /// секторе образа. Вызывается рано в kernel_main, ДО любых обращений к
-/// диску (bootchain, ext2, BCB, TPM, OTA).
+/// диску (bootchain, ext2).
 pub fn init() -> bool {
     // Безопасно: прерывания ещё выключены или мы не работаем с памятью,
     // которая могла бы быть выдана аллокатором (резерв в mm/phys.rs).
@@ -116,7 +116,3 @@ pub fn write_sectors(lba: u32, count: u8, data: &[u8]) -> Result<(), ()> {
     Ok(())
 }
 
-// Подстраховка от неиспользуемости ata-импорта (перехват делается в ata.rs,
-// но ссылка здесь держит модуль связанным).
-#[allow(unused_imports)]
-use crate::ata as _ata_ref;

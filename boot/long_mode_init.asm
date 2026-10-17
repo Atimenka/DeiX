@@ -3,8 +3,8 @@
 
 global long_mode_start
 extern kernel_main
-extern __bss_start
-extern __bss_end
+extern __kernel_bss_start
+extern __kernel_bss_end
 
 section .text
 bits 64
@@ -20,12 +20,17 @@ long_mode_start:
 
     ; Обнуляем .bss ЯДРА (HEAP_STORAGE и пр.) — секция NOBITS не хранится
     ; в kernel.bin, а stage2 обнуляет только СВОЙ .bss (таблицы страниц и
-    ; стек). Без этого шага куча ядра содержит мусор от прошлой загрузки.    mov rdi, __bss_start
-    mov rcx, __bss_end
+    ; стек). Без этого шага куча ядра содержит мусор от прошлой загрузки.
+    mov rdi, __kernel_bss_start
+    mov rcx, __kernel_bss_end
+    cmp rcx, rdi
+    jbe .bss_done
     sub rcx, rdi
-    xor al, al
+    shr rcx, 3
+    xor rax, rax
     cld
-    rep stosb
+    rep stosq
+.bss_done:
     ; Гарантируем IF=0 перед ядром: аппаратные прерывания (таймер, IRQ14
     ; от IDE/CD) НЕ должны приходить до установки IDT в interrupts::init().
     cli

@@ -165,6 +165,61 @@ impl Aes256 {
     }
 }
 
+/// AES-128 (FIPS-197: NK=4, NR=10), только шифрование блока.
+/// Нужен для AES-128-GCM — обязательного сьюта TLS 1.3
+/// (TLS_AES_128_GCM_SHA256, RFC 8446 §9.1). Переиспользует SBOX и
+/// преобразования раунда AES-256 выше.
+pub struct Aes128 {
+    round_keys: [[u8; 16]; 11],
+}
+
+impl Aes128 {
+    pub fn new(key: &[u8; 16]) -> Self {
+        const NK128: usize = 4;
+        const NR128: usize = 10;
+        let mut w = [[0u8; 4]; NB * (NR128 + 1)];
+
+        for i in 0..NK128 {
+            w[i] = [key[4 * i], key[4 * i + 1], key[4 * i + 2], key[4 * i + 3]];
+        }
+
+        for i in NK128..NB * (NR128 + 1) {
+            let mut temp = w[i - 1];
+            if i % NK128 == 0 {
+                temp = sub_word(rot_word(temp));
+                temp[0] ^= RCON[i / NK128];
+            }
+            for j in 0..4 {
+                w[i][j] = w[i - NK128][j] ^ temp[j];
+            }
+        }
+
+        let mut round_keys = [[0u8; 16]; NR128 + 1];
+        for r in 0..=NR128 {
+            for c in 0..4 {
+                round_keys[r][c * 4..c * 4 + 4].copy_from_slice(&w[r * 4 + c]);
+            }
+        }
+
+        Aes128 { round_keys }
+    }
+
+    pub fn encrypt_block(&self, block: &mut [u8; 16]) {
+        add_round_key(block, &self.round_keys[0]);
+
+        for round in 1..10 {
+            sub_bytes(block);
+            shift_rows(block);
+            mix_columns(block);
+            add_round_key(block, &self.round_keys[round]);
+        }
+
+        sub_bytes(block);
+        shift_rows(block);
+        add_round_key(block, &self.round_keys[10]);
+    }
+}
+
 fn sub_word(word: [u8; 4]) -> [u8; 4] {
     [SBOX[word[0] as usize], SBOX[word[1] as usize], SBOX[word[2] as usize], SBOX[word[3] as usize]]
 }
@@ -235,6 +290,28 @@ fn inv_mix_columns(block: &mut [u8; 16]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_aes128_fips197_vector() {
+        // Официальный тестовый вектор NIST FIPS-197 Appendix C.1 (AES-128).
+        let key: [u8; 16] = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+            0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        ];
+        let mut block: [u8; 16] = [
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+            0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+        ];
+        let aes = Aes128::new(&key);
+        aes.encrypt_block(&mut block);
+        assert_eq!(
+            block,
+            [
+                0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30,
+                0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4, 0xc5, 0x5a,
+            ]
+        );
+    }
 
     #[test]
     fn test_aes256_fips197_vector() {

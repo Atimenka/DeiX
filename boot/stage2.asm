@@ -5,18 +5,21 @@
 ; туда (long_mode_start из kernel.bin).
 ;
 ; Константы (передаются через nasm -D, см. build.sh):
-;   KERNEL_LBA      — стартовый сектор kernel.bin на диске;
-;   KERNEL_SECTORS  — размер kernel.bin в секторах.
+;   KERNEL_SIZE_DWORDS — размер копируемого kernel.bin в двойных словах
+;                        (фиксирован: 262144 = 2048 секторов, лишние
+;                        секторы за концом ядра содержат нули).
 
 bits 32
 
 global stage2_start
-extern __bss_start
-extern __bss_end
+extern __stage2_bss_start
+extern __stage2_bss_end
 
 %ifndef KERNEL_SRC
-KERNEL_SRC equ 0x800000   ; буфер kernel.bin (8 МиБ, ВЫШЕ legacy-дыры и .bss)
-; ПОЧЕМУ 0x200000, а не 0x11000: старый буфер упирался в видеопамять VGA
+KERNEL_SRC equ 0x800000   ; буфер kernel.bin (8 МиБ; попадает внутрь .bss
+; ядра, но это безопасно: long_mode_init очищает .bss уже ПОСЛЕ копирования
+; буфера в 0x100000)
+; ПОЧЕМУ выше 1 МиБ, а не 0x11000: старый буфер упирался в видеопамять VGA
 ; (0xA0000), из-за чего ядро физически не могло превысить 572 КиБ —
 ; загрузка обрывалась сразу после stage2. Копирование выполняет ramboot
 ; уже в 32-битном protected mode, поэтому адрес выше 1 МиБ доступен.
@@ -32,24 +35,21 @@ stage2_start:
     ; Обнуляем секцию .bss ДО первого call/push — там лежат таблицы страниц
     ; и стек загрузчика. Секция .bss физически не хранится в файле образа
     ; (NOBITS), поэтому загрузчик обязан сам обнулить эту память.
-    mov edi, __bss_start
-    mov ecx, __bss_end
+    mov edi, __stage2_bss_start
+    mov ecx, __stage2_bss_end
+    cmp ecx, edi
+    jbe .bss_done
     sub ecx, edi
+    shr ecx, 2
     xor eax, eax
     cld
-    rep stosb
+    rep stosd
+.bss_done:
 
     mov esp, stack_top
 
-    ; Копируем kernel.bin из real-памяти (0x20000, куда его загрузил
-    ; boot_sector через int13) в 0x100000 — там его ждёт линкер kernel.ld.
-    ; НЕ используем ATA PIO: в этой QEMU-версии прямой доступ к портам
-    ; 0x1F0 (READ SECTORS) возвращает ABRT, а BIOS int13 работает.
-    mov esi, KERNEL_SRC      ; 0x20000
-    mov edi, KERNEL_DST      ; 0x100000
-    mov ecx, KERNEL_SIZE_DWORDS
-    cld
-    rep movsd
+    ; kernel.bin уже скопирован напрямую по адресу 0x100000 в ramboot.asm —
+    ; дублирующий проход копирования 1 МиБ памяти убран для максимальной скорости загрузки.
 
     call check_cpuid
     call check_long_mode
@@ -123,8 +123,8 @@ set_up_page_tables:
 
     ; GPU MMIO (Bochs VBE framebuffer 0xFC000000-0x100000000, 4-й ГиБ):
     ; L3[3] -> page_table_l2_gpu, заполняем записи 480..511 (32 x 2 МиБ).
-    ; Это нужно, чтобы recovery/fastbootd/DSM могли писать пиксели в
-    ; framebuffer (без этого — page fault на 0xfd000000).
+    ; Это нужно, чтобы графические подсистемы ядра могли писать пиксели
+    ; в framebuffer (без этого — page fault на 0xfd000000).
     mov eax, page_table_l2_gpu
     or eax, 0b11
     mov [page_table_l3 + 24], eax

@@ -189,19 +189,12 @@ pub fn enable_encryption(password: &str) -> Result<(), ()> {
     if is_encryption_enabled() {
         return Ok(());
     }
-    // 1) Собрать файлы корня тома (пока они записаны открыто).
+    // 1) Собрать ВСЕ файлы тома, включая подкаталоги (пока они записаны
+    //    открыто). Плоский сбор только корня терял бы /home, /config и
+    //    прочие каталоги канонического layout при переформатировании.
     let mut files: alloc::vec::Vec<(alloc::string::String, alloc::vec::Vec<u8>)> =
         alloc::vec::Vec::new();
-    if let Ok(entries) = crate::ext2::list_root() {
-        for e in entries {
-            if e.is_directory {
-                continue;
-            }
-            if let Ok(data) = crate::ext2::read_file(&e.name) {
-                files.push((e.name, data));
-            }
-        }
-    }
+    collect_tree("/", &mut files);
     // 2) Маркер "диск зашифрован" + СОЗДАНИЕ ЗАГОЛОВКА СО СЛОТАМИ.
     //    Мастер-ключ случайный, пароль его только запечатывает — отсюда
     //    возможность иметь несколько паролей и менять их, не
@@ -217,11 +210,36 @@ pub fn enable_encryption(password: &str) -> Result<(), ()> {
     //    загрузке не смог бы подтвердить пароль.
     crate::ext2::format().map_err(|_| ())?;
     // 4) Перезапись файлов (включая USERS.DB): теперь всё хранится
-    //    зашифрованным и доступно только с этим паролем.
-    for (name, data) in files {
-        let _ = crate::ext2::write_file(&name, &data);
+    //    зашифрованным и доступно только с этим паролем. Пути полные —
+    //    write_file_path пересоздаёт недостающие каталоги (mkdir -p).
+    for (path, data) in files {
+        let _ = crate::ext2::write_file_path(&path, &data);
     }
     Ok(())
+}
+
+/// Рекурсивно собирает все обычные файлы тома: (полный путь, данные).
+/// Служебный lost+found пропускается.
+fn collect_tree(dir: &str, out: &mut alloc::vec::Vec<(alloc::string::String, alloc::vec::Vec<u8>)>) {
+    let entries = match crate::ext2::list_dir_path(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for e in entries {
+        if e.name == "lost+found" {
+            continue;
+        }
+        let path = if dir == "/" {
+            alloc::format!("/{}", e.name)
+        } else {
+            alloc::format!("{}/{}", dir, e.name)
+        };
+        if e.is_directory {
+            collect_tree(&path, out);
+        } else if let Ok(data) = crate::ext2::read_file_path(&path) {
+            out.push((path, data));
+        }
+    }
 }
 
 /// Отключает шифрование (диск снова читается/пишется как есть) — не

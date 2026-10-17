@@ -161,6 +161,6 @@ pub fn resolve(ip: [u8; 4], timeout_ms: u64) -> Option<[u8; 6]> {
         if timer::uptime_ms() - start > timeout_ms {
             return None;
         }
-        unsafe { core::arch::asm!("hlt") };
+        crate::sched::idle_wait();
     }
 }

@@ -26,10 +26,14 @@
 use crate::crypto::sha256;
 use crate::ext2;
 use crate::rng;
-use alloc::string::{String, ToString};
+use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 
-const USERS_DB_FILE: &str = "USERS.DB";
+/// Имя базы пользователей на ext2-томе. ЕДИНСТВЕННАЯ константа:
+/// install.rs ссылается на неё же — расхождение имён ломало бы вход
+/// на установленной системе.
+pub const USERS_DB_FILE: &str = "USERS.DB";
 const SALT_LEN: usize = 16;
 const HASH_LEN: usize = sha256::DIGEST_LEN; // 32 байта
 
@@ -94,17 +98,12 @@ fn hex_value(c: u8) -> Option<u8> {
 /// ни одного аккаунта не создано) — возвращает пустой список, это не
 /// ошибка.
 fn load_users() -> Result<Vec<UserRecord>, AuthError> {
-    // USERS.DB хранится в TPM (NV-слот + скрытый раздел /TPM) и дублируется
-    // в ext2-том. Приоритет: TPM (защищено PCR), затем ext2.
-    let data: alloc::vec::Vec<u8> = match crate::tpm::tpm_load_users_db() {
-        Ok(d) if !d.is_empty() => d,
-        _ => match ext2::read_file(USERS_DB_FILE) {
-            Ok(d) => d,
-            Err(ext2::Ext2Error::FileNotFound) | Err(ext2::Ext2Error::NotFormatted) => {
-                return Ok(Vec::new());
-            }
-            Err(_) => return Err(AuthError::DiskError),
-        },
+    let data: alloc::vec::Vec<u8> = match ext2::read_file(USERS_DB_FILE) {
+        Ok(d) => d,
+        Err(ext2::Ext2Error::FileNotFound) | Err(ext2::Ext2Error::NotFormatted) => {
+            return Ok(Vec::new());
+        }
+        Err(_) => return Err(AuthError::DiskError),
     };
 
     let text = core::str::from_utf8(&data).map_err(|_| AuthError::CorruptDatabase)?;
@@ -156,10 +155,8 @@ fn save_users(users: &[UserRecord]) -> Result<(), AuthError> {
         text.push('\n');
     }
 
-    // 1) ext2-том (рабочая копия).
+    // ext2-том (рабочая копия).
     ext2::write_file(USERS_DB_FILE, text.as_bytes()).map_err(|_| AuthError::DiskError)?;
-    // 2) TPM: NV-слот + скрытый раздел /TPM (защищённая копия).
-    let _ = crate::tpm::tpm_save_users_db(text.as_bytes());
     Ok(())
 }
 
@@ -271,13 +268,28 @@ pub fn change_password(username: &str, old_password: &str, new_password: &str) -
     user.salt = new_salt;
     user.hash = hash_password(&new_salt, new_password);
 
-    save_users(&users)
+    save_users(&users)?;
+
+    if crate::luks::exists() {
+        if let Ok(new_slot) = crate::luks::add_password_with_master(new_password) {
+            if let Some((_, old_slot)) = crate::luks::unlock(old_password) {
+                if old_slot != new_slot {
+                    let _ = crate::luks::remove_slot(old_password, old_slot);
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// true, если хотя бы один аккаунт уже создан — используется CLI, чтобы
 /// решить, нужно ли при загрузке предлагать "создать первый аккаунт"
 /// или сразу "войти в систему".
 pub fn has_any_users() -> bool {
+    if crate::crypto_storage::is_encryption_enabled() {
+        return true;
+    }
     load_users().map(|u| !u.is_empty()).unwrap_or(false)
 }
 
@@ -370,7 +382,7 @@ pub fn run_login_screen() -> String {
     // (crypto_storage::try_unlock), затем проверяет пользователя.
     println!();
     println!("=====================================");
-    println!("        DeiX v0.2-beta - Login        ");
+    println!("        {} - Login        ", crate::OS_RELEASE);
     println!("=====================================");
     if crate::crypto_storage::is_encryption_enabled() {
         println!("Disk is encrypted (XTS-AES-256). Your account password unlocks it.");

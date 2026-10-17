@@ -1,20 +1,20 @@
-// ❗ЗАВИСИМОТИ: инит скрипт pid 1 который будет ограничивать пользовательский
-// ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0). Интеграция в существующий код
-// init_parser — парсер init.deix (стадия init_boot, PID 1): карта разделов,
+// ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0).
+// init_parser — парсер init.deix (PID 1): карта разделов,
 // команды mount/service, реестр BTreeMap<BootStage, Vec<Command>>, Vault-проверка.
 // no_std-совместимо (ядро DeiX OS): только core/alloc (BTreeMap, String, Vec),
 // вывод — через crate::println!/crate::print! (стиль dxinit.rs).
 
 
 use alloc::collections::BTreeMap;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
 
 use crate::vault::{VaultRejection, evaluate as vault_evaluate};
 
 /// Максимальная длина содержательной строки конфигурации (байт UTF-8).
-/// Защита кучи ядра от деструктивного ввода на этапе init_boot.
+/// Защита кучи ядра от деструктивного ввода на раннем этапе загрузки.
 pub const MAX_CONFIG_LINE_LEN: usize = 256;
 
 /// Максимальное количество команд в одной стадии загрузки (DoS-защита).
@@ -25,76 +25,24 @@ pub const MAX_STAGE_COMMANDS: usize = 512;
 /// no_std-заметка: enum без данных — размер 1 байт, Copy, не требует
 /// динамической памяти. Hash позволяет использовать его ключом HashMap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-    pub enum BootStage {
-    /// Ранняя загрузка Ring 0: микроядро, структуры PID 1, init.deix.
-    InitBoot,
-    /// Загрузка раздела оборудования/драйверов (HAL, прошивка вендора).
-    VendorBoot,
-    /// Штатная загрузка основной ОС.
+pub enum BootStage {
+    EarlyBoot,
     Boot,
-    /// Изолированная среда восстановления (TWRP/OrangeFox).
-    Recovery,
-    /// Демон прошивки пользовательского пространства (fastboot flash).
-    Fastbootd,
-    /// Аварийный режим прошивки Ring 0 (Emergency Download / unbrick).
-    Edl,
 }
 
 impl BootStage {
-    /// Строгий разбор токена стадии из конфигурационного файла.
-    /// Допустимы ровно шесть литералов; любой иной — типизированная
-    /// ошибка ParseError::UnknownStage (отказоустойчивость по ТЗ).
     pub fn from_token(token: &str) -> Result<BootStage, ParseError> {
         match token {
-            "init_boot" => Ok(BootStage::InitBoot),
-            "vendor_boot" => Ok(BootStage::VendorBoot),
+            "early_boot" | "early" => Ok(BootStage::EarlyBoot),
             "boot" => Ok(BootStage::Boot),
-            "recovery" => Ok(BootStage::Recovery),
-            "fastbootd" => Ok(BootStage::Fastbootd),
-            "edl" => Ok(BootStage::Edl),
             other => Err(ParseError::UnknownStage(other.to_string())),
         }
     }
 
-    /// Обратное представление стадии в строковый литерал (диагностика).
     pub fn as_token(&self) -> &'static str {
         match self {
-            BootStage::InitBoot => "init_boot",
-            BootStage::VendorBoot => "vendor_boot",
+            BootStage::EarlyBoot => "early_boot",
             BootStage::Boot => "boot",
-            BootStage::Recovery => "recovery",
-            BootStage::Fastbootd => "fastbootd",
-            BootStage::Edl => "edl",
-        }
-    }
-
-    /// Является ли стадия штатным контекстом прошивки, в котором РАЗРЕШЕНА
-    /// запись (rw) в системные разделы: Fastbootd, Edl, Recovery.
-    /// Развёрнутый match исключает обход логики через манипуляции
-    /// с условиями (требование ТЗ по защите Vault).
-    pub fn is_flash_authorized(&self) -> bool {
-        match self {
-            BootStage::Fastbootd => true,
-            BootStage::Edl => true,
-            BootStage::Recovery => true,
-            BootStage::InitBoot => false,
-            BootStage::VendorBoot => false,
-            BootStage::Boot => false,
-        }
-    }
-
-    /// Разрешено ли на данной стадии монтирование /userdata в режиме rw.
-    /// Строго по ТЗ: Boot и Recovery; прошивочные контексты (Fastbootd,
-    /// Edl) также могут сбрасывать пользовательские данные, ранние стадии
-    /// (InitBoot, VendorBoot) — нет.
-    pub fn allows_userdata_rw(&self) -> bool {
-        match self {
-            BootStage::Boot => true,
-            BootStage::Recovery => true,
-            BootStage::Fastbootd => true,
-            BootStage::Edl => true,
-            BootStage::InitBoot => false,
-            BootStage::VendorBoot => false,
         }
     }
 }
@@ -130,7 +78,7 @@ impl MountMode {
 /// Полное описание команды привязки блочного устройства к VFS.
 ///
 /// Поля (owned-строки; в no_std — alloc::String из кучи ядра):
-/// * `fs_type` — драйвер файловой системы: "erofs", "ext4", "sysfs".
+/// * `fs_type` — драйвер файловой системы: "erofs" или "ext2".
 /// * `src`     — путь к источнику/блочному устройству.
 /// * `dst`     — точка монтирования в иерархии VFS.
 /// * `mode`    — атрибут прав доступа (MountMode).
@@ -296,8 +244,7 @@ pub enum ParseWarningKind {
     MissingStageContext,
     TooManyStageCommands,
     UserdataPolicyViolation,
-    NonExt4Userdata,
-    TpmPartitionDenied,
+    InvalidUserdataFs,
 }
 
 impl ParseWarningKind {
@@ -317,8 +264,7 @@ impl ParseWarningKind {
             ParseWarningKind::UserdataPolicyViolation => {
                 "rw-монтирование /userdata вне разрешённых стадий"
             }
-            ParseWarningKind::NonExt4Userdata => "файловая система /userdata отличается от ext4",
-            ParseWarningKind::TpmPartitionDenied => "доступ к скрытому разделу /TPM запрещён",
+            ParseWarningKind::InvalidUserdataFs => "файловая система /userdata отличается от ext2",
         }
     }
 }
@@ -611,21 +557,12 @@ impl InitParser {
                                     Err(rejection) => {
                                         // Команда отклонена политикой Vault
                                         // (предупреждение формируется здесь).
-                                        let (kind, detail): (ParseWarningKind, String) =
-                                            match rejection {
-                                                VaultRejection::UserdataPolicy(msg) => (
-                                                    ParseWarningKind::UserdataPolicyViolation,
-                                                    msg,
-                                                ),
-                                                VaultRejection::NonExt4Userdata(msg) => (
-                                                    ParseWarningKind::NonExt4Userdata,
-                                                    msg,
-                                                ),
-                                                VaultRejection::TpmPartitionDenied(msg) => (
-                                                    ParseWarningKind::TpmPartitionDenied,
-                                                    msg,
-                                                ),
-                                            };
+                                        let kind = match rejection {
+                                            VaultRejection::UserdataPolicy(_) => ParseWarningKind::UserdataPolicyViolation,
+                                            VaultRejection::InvalidUserdataFs(_) => ParseWarningKind::InvalidUserdataFs,
+                                            VaultRejection::SystemPolicy(_) => ParseWarningKind::UserdataPolicyViolation,
+                                        };
+                                        let detail = format!("[{}] {}", rejection.kind_name(), rejection.detail());
                                         self.push_warning(line_no, raw_line, kind, detail);
                                     }
                                 }
@@ -826,50 +763,25 @@ impl InitParser {
     }
 }
 
-/// Эталонный скрипт init.deix (встроен в ядро для стадии init_boot).
-/// В реальной сборке файл читается из защищённого раздела /init_boot
-/// (EROFS, ReadOnly); здесь — константа для раннего самоконтроля ядра.
+/// Эталонный скрипт init.deix (встроен в ядро).
+// Служебные демоны (security_monitor, net_daemon и др.) являются встроенными
+// подсистемами ядра и регистрируются Dinit напрямую; сценарий описывает
+// только точки монтирования. Process-службы появятся здесь, когда в образе
+// /system появятся их исполняемые файлы.
 pub const INIT_DEIX_SCRIPT: &str = concat!(
-    "# Скрипт инициализации и развертывания DeiX OS — мастер-карта разделов\n",
-    "on init_boot\n",
-    "    mount erofs /dev/block/by-name/kernel /kernel ro\n",
-    "    mount erofs /dev/block/by-name/init_boot /init_boot ro\n",
-    "    service pid1_core /bin/pid1_core 0\n",
-    "\n",
-    "on vendor_boot\n",
-    "    mount erofs /dev/block/by-name/vendor_boot /vendor_boot ro\n",
-    "\n",
+    "# Скрипт инициализации и развертывания DeiX OS\n",
     "on boot\n",
-    "    mount erofs /dev/block/by-name/super /system ro\n",
-    "    mount erofs /dev/block/by-name/boot /boot ro\n",
-    "    mount ext4 /dev/block/by-name/userdata /userdata rw\n",
-    "    service security_monitor /bin/security_monitor 3\n",
-    "    service network_manager /bin/net_daemon 3\n",
-    "\n",
-    "on recovery\n",
-    "    mount ext4 /dev/block/by-name/userdata /userdata rw\n",
-    "    service twrp_shell /bin/twrp 3\n",
-    "\n",
-    "on fastbootd\n",
-    "    mount erofs /dev/block/by-name/super /system rw\n",
-    "    service fastbootd_daemon /bin/fastbootd 3\n",
-    "\n",
-    "on edl\n",
-    "    mount erofs /dev/block/by-name/kernel /kernel rw\n",
-    "    service edl_bridge /bin/edl_bridge 0\n",
+    "    mount erofs /dev/block/by-name/system /system ro\n",
+    "    mount ext2 /dev/block/by-name/userdata /userdata rw\n",
 );
 
-/// СТАДИЯ INIT_BOOT (PID 1, Ring 0): разбор карты разделов init.deix и вывод
-/// диагностики в консоль ядра (стиль dxinit::status / autostart::run).
-/// Нарушение политики Vault (rw-монтирование системного раздела вне
-/// Fastbootd/EDL/Recovery) приводит к panic! — ядро немедленно останавливается
-/// (см. vault.rs). Вызывается из kernel_main() (src/lib.rs) ПОСЛЕ инициализации
-/// аллокатора и ФС, но ДО запуска пользовательского пространства.
+/// СТАДИЯ BOOT (PID 1, Ring 0): разбор карты разделов init.deix и вывод
+/// диагностики в консоль ядра.
 pub fn boot_report(script: &str) {
     let mut parser: InitParser = InitParser::new();
     let _registry: BTreeMap<BootStage, Vec<Command>> = parser.parse(script);
 
-    crate::println!("  [init_parser] Стадия init_boot: init.deix разобран");
+    crate::println!("  [init_parser] init.deix разобран");
     for stage in parser.stage_order.iter() {
         match parser.registry.get(stage) {
             Some(commands) => {
@@ -892,8 +804,9 @@ pub fn boot_report(script: &str) {
         false => {
             for warning in parser.warnings.iter() {
                 crate::println!(
-                    "    [WARN] строка {} | {} | {}",
+                    "    [WARN] строка {} ('{}') | {} | {}",
                     warning.line_no,
+                    warning.raw_line,
                     warning.kind.describe(),
                     warning.detail
                 );

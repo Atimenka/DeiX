@@ -40,12 +40,14 @@ const TX_BUFFER_SIZE: usize = 1792; // максимум для одного де
 const NUM_TX_DESCRIPTORS: usize = 4;
 
 #[repr(align(4))]
-struct RxBuffer([u8; RX_BUFFER_SIZE]);
+struct RxBuffer {
+    bytes: [u8; RX_BUFFER_SIZE],
+}
 
 #[repr(align(4))]
 struct TxBuffer([u8; TX_BUFFER_SIZE]);
 
-static mut RX_BUFFER: RxBuffer = RxBuffer([0; RX_BUFFER_SIZE]);
+static mut RX_BUFFER: RxBuffer = RxBuffer { bytes: [0; RX_BUFFER_SIZE] };
 static mut TX_BUFFERS: [TxBuffer; NUM_TX_DESCRIPTORS] = [
     TxBuffer([0; TX_BUFFER_SIZE]),
     TxBuffer([0; TX_BUFFER_SIZE]),
@@ -74,6 +76,143 @@ impl Rtl8139State {
 }
 
 static STATE: SpinLock<Rtl8139State> = SpinLock::new(Rtl8139State::new());
+
+// ==================== Отложенная обработка RX ====================
+//
+// Обработчик прерывания карты обязан вернуться как можно быстрее и не
+// имеет права аллоцировать: куча защищена локом, который может держать
+// прерванный код, а разбор Ethernet/IP/TCP — это сотни инструкций на
+// пакет. Поэтому ISR только копирует кадр в заранее выделенное кольцо,
+// а весь стек работает потом, из `poll_deferred`.
+
+/// Число слотов приёмного кольца.
+const RX_RING_SLOTS: usize = 16;
+/// Максимальный размер кадра в слоте.
+const RX_RING_FRAME: usize = 1600;
+
+struct RxRing {
+    slots: [[u8; RX_RING_FRAME]; RX_RING_SLOTS],
+    lens: [usize; RX_RING_SLOTS],
+    /// Куда пишет ISR.
+    head: usize,
+    /// Откуда читает рабочий поток.
+    tail: usize,
+    /// Сколько кадров сейчас в кольце.
+    count: usize,
+    /// Кадры, потерянные из-за переполнения кольца.
+    drops: u64,
+}
+
+impl RxRing {
+    const fn new() -> Self {
+        RxRing {
+            slots: [[0; RX_RING_FRAME]; RX_RING_SLOTS],
+            lens: [0; RX_RING_SLOTS],
+            head: 0,
+            tail: 0,
+            count: 0,
+            drops: 0,
+        }
+    }
+}
+
+/// Кольцо защищено `IrqSpinLock`: его одновременно трогают ISR карты и
+/// рабочий поток, а на одном CPU это ровно тот случай, когда обычный
+/// спинлок даёт мёртвую петлю.
+static RX_RING: crate::spinlock::IrqSpinLock<RxRing> = crate::spinlock::IrqSpinLock::new(RxRing::new());
+
+/// Кладёт кадр в приёмное кольцо. Вызывается из ISR, без аллокаций.
+/// Возвращает `false`, если кольцо заполнено и кадр потерян.
+fn rx_ring_push(frame: &[u8]) -> bool {
+    let mut ring = RX_RING.lock();
+    if ring.count >= RX_RING_SLOTS {
+        ring.drops += 1;
+        return false;
+    }
+    let len = frame.len().min(RX_RING_FRAME);
+    let head = ring.head;
+    ring.slots[head][..len].copy_from_slice(&frame[..len]);
+    ring.lens[head] = len;
+    ring.head = (head + 1) % RX_RING_SLOTS;
+    ring.count += 1;
+    true
+}
+
+/// Забирает следующий кадр из кольца. Вызывается из рабочего потока.
+fn rx_ring_pop() -> Option<(usize, usize)> {
+    let mut ring = RX_RING.lock();
+    if ring.count == 0 {
+        return None;
+    }
+    let slot = ring.tail;
+    let len = ring.lens[slot];
+    ring.tail = (ring.tail + 1) % RX_RING_SLOTS;
+    ring.count -= 1;
+    Some((slot, len))
+}
+
+/// Сколько кадров потеряно из-за переполнения приёмного кольца.
+pub fn rx_drops() -> u64 {
+    RX_RING.lock().drops
+}
+
+/// Разбирает накопившиеся в кольце кадры сетевым стеком.
+///
+/// Вызывается из основного цикла и из `tcp::poll_rx`, то есть вне
+/// контекста прерывания — здесь уже можно аллоцировать.
+pub fn poll_deferred() {
+    while let Some((slot, len)) = rx_ring_pop() {
+        // Копируем кадр из слота, чтобы не держать блокировку кольца
+        // на время разбора стеком.
+        let mut buf = [0u8; RX_RING_FRAME];
+        {
+            let ring = RX_RING.lock();
+            buf[..len].copy_from_slice(&ring.slots[slot][..len]);
+        }
+        crate::net::on_ethernet_frame(&buf[..len]);
+    }
+
+    // Переполнения кольца фиксирует ISR (там журналировать нельзя —
+    // форматирование и куча в прерывании запрещены), а регистрируем мы их
+    // здесь, по дельте счётчика. Повторы схлопывает агрегация журнала.
+    static LOGGED_DROPS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let drops = rx_drops();
+    let logged = LOGGED_DROPS.swap(drops, core::sync::atomic::Ordering::Relaxed);
+    if drops > logged {
+        crate::diag::warn(
+            crate::diag::ErrorCode::new(crate::diag::Subsystem::Net, 7),
+            &alloc::format!(
+                "RTL8139: кольцо приёма переполнено, потеряно кадров: +{} (всего {})",
+                drops - logged,
+                drops
+            ),
+        );
+    }
+}
+
+/// Счётчики трафика. Обновляются атомарно: RX растёт в контексте
+/// прерывания, поэтому блокировку здесь брать нельзя.
+static RX_PACKETS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static RX_BYTES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static TX_PACKETS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static TX_BYTES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Накопленный трафик: `(rx_packets, rx_bytes, tx_packets, tx_bytes)`.
+pub fn traffic_counters() -> (u64, u64, u64, u64) {
+    use core::sync::atomic::Ordering;
+    (
+        RX_PACKETS.load(Ordering::Relaxed),
+        RX_BYTES.load(Ordering::Relaxed),
+        TX_PACKETS.load(Ordering::Relaxed),
+        TX_BYTES.load(Ordering::Relaxed),
+    )
+}
+
+/// Карта найдена и инициализирована. GUI использует это для честного
+/// статуса сети: без устройства иконка/строка не изображают подключение.
+pub fn is_present() -> bool {
+    STATE.lock().initialized
+}
 
 /// Пытается найти RTL8139 на шине PCI и проинициализировать её. Возвращает
 /// true, если карта найдена и готова к работе (тогда можно слать/принимать
@@ -115,7 +254,7 @@ pub fn init() -> bool {
         }
 
         // Настраиваем приёмный буфer.
-        let rx_phys_addr = core::ptr::addr_of!(RX_BUFFER) as u32;
+        let rx_phys_addr = core::ptr::addr_of!(RX_BUFFER.bytes) as u32;
         outl(io_base + REG_RBSTART, rx_phys_addr);
 
         // Разрешаем прерывания Transmit OK и Receive OK.
@@ -128,7 +267,7 @@ pub fn init() -> bool {
         const WRAP: u32 = 1 << 7;
         // RX-буфер 64K (QEMU читает размер из битов 12:11 RCR:
         // (val>>11)&3 = 3 -> 64K; биты 11:10 НЕ работают — буфер оставался
-        // 16K и переполнялся при доставке OTA-пакета 250КБ).
+        // 16K и переполнялся при доставке файла ~250 КБ).
         const RXBUF64: u32 = 3 << 11;
         outl(io_base + REG_RCR, AB | AM | APM | WRAP | RXBUF64);
 
@@ -196,6 +335,9 @@ pub fn send_frame(data: &[u8]) -> bool {
             outl(tsd, size);
         }
 
+        TX_PACKETS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        TX_BYTES.fetch_add(data.len() as u64, core::sync::atomic::Ordering::Relaxed);
+
         true
     })
 }
@@ -240,7 +382,10 @@ pub fn poll_rx() {
         if !st.initialized { return; }
         st.io_base
     };
+    // Сначала выгребаем кадры из карты в кольцо, потом разбираем их
+    // сетевым стеком уже вне контекста прерывания.
     unsafe { drain_rx_buffer(io_base); }
+    poll_deferred();
 }
 
 unsafe fn drain_rx_buffer(io_base: u16) {
@@ -251,7 +396,7 @@ unsafe fn drain_rx_buffer(io_base: u16) {
         }
 
         let mut offset = STATE.lock().rx_offset;
-        let rx_buf = core::ptr::addr_of!(RX_BUFFER) as *const u8;
+        let rx_buf = core::ptr::addr_of!(RX_BUFFER.bytes) as *const u8;
 
         // Заголовок пакета: 2 байта статус + 2 байта длина (включая заголовок).
         let header_ptr = rx_buf.add(offset) as *const u16;
@@ -270,6 +415,9 @@ unsafe fn drain_rx_buffer(io_base: u16) {
         let data_start = offset + 4;
         let data_len = packet_len - 4;
 
+        RX_PACKETS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        RX_BYTES.fetch_add(data_len as u64, core::sync::atomic::Ordering::Relaxed);
+
         // Копируем во временный стековый буфер, потому что данные в
         // кольцевом буфере физически могут "переворачиваться" через конец.
         let mut frame_buf = [0u8; 1600];
@@ -278,7 +426,9 @@ unsafe fn drain_rx_buffer(io_base: u16) {
             frame_buf[i] = *rx_buf.add(src_offset);
         }
 
-        crate::net::on_ethernet_frame(&frame_buf[..data_len]);
+        // Только постановка в кольцо: разбор Ethernet/IP/TCP делает
+        // poll_deferred уже вне контекста прерывания.
+        rx_ring_push(&frame_buf[..data_len]);
 
         // Сдвигаем offset на размер пакета + заголовок, выравнивая по 4 байта
         // (так требует спецификация RTL8139).

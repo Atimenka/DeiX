@@ -55,7 +55,7 @@ fn tcp_csum(src: &[u8;4], dst: &[u8;4], seg: &[u8]) -> u16 {
 fn send_seg(c: &TcpConn, flags: u8, data: &[u8]) {
     let mut hsz = TcpHdr::SZ;
     // MSS-опция в SYN: без неё сервер шлёт сегменты по 536 байт и передача
-    // большого OTA-пакета идёт в разы дольше. MSS=1460 (kind 2, len 4).
+    // большого файла идёт в разы дольше. MSS=1460 (kind 2, len 4).
     let mut opts: [u8; 4] = [2, 4, 0x05, 0xB4];
     if flags & SYN == 0 { opts = [0; 4]; }
     if flags & SYN != 0 { hsz += 4; }
@@ -116,7 +116,7 @@ pub fn connect(dip: [u8;4], dport: u16) -> bool {
             }
         }
         if crate::timer::uptime_ms()-t0 > 5000 { return false; }
-        unsafe { core::arch::asm!("hlt"); }
+        crate::sched::idle_wait();
     }
 }
 
@@ -159,7 +159,7 @@ pub fn recv(to: u64) -> Vec<u8> {
             }
         }
         if crate::timer::uptime_ms()-t0 > to { return Vec::new(); }
-        unsafe { core::arch::asm!("hlt"); }
+        crate::sched::idle_wait();
     }
 }
 

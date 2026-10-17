@@ -47,7 +47,7 @@ org 0x7c00
 STAGE2_SRC equ 0x7e00     ; где физически лежит stage2 после загрузки BIOS
 STAGE2_DST equ 0x10000    ; куда его нужно переместить (linker_stage2.ld)
 KERNEL_DST equ 0x11000    ; куда переместить kernel.bin (stage2 копирует его в 0x100000)
-; RAM-ДИСК: полный 10-МиБ образ диска (MBR+stage2+kernel+все разделы) лежит
+; RAM-ДИСК: полный 20-МиБ образ диска (MBR+stage2+kernel+все разделы) лежит
 ; в конце boot-образа; стаб копирует его в 0x2000000 (32 МиБ), а ядро
 ; читает ВСЕ разделы (BCB, /system, /OTA...) прямо из памяти — поэтому
 ; OS работает с ЛЮБОГО носителя (Ventoy/USB/CD) без драйверов диска.
@@ -105,7 +105,7 @@ protected_mode_start:
     mov ss, ax
     mov esp, 0x90000
 
-    ; ---- 0) RAM-диск (10 МиБ) -> 0x2000000 (ОБРАТНО: src-область ПЕРЕСЕКАЕТСЯ
+    ; ---- 0) RAM-диск (20 МиБ) -> 0x2000000 (ОБРАТНО: src-область ПЕРЕСЕКАЕТСЯ
     ;      с dst — копирование вперёд затирает источник!) ----
     ; src = STAGE2_SRC + stage2 + kernel (в boot-образе после kernel.bin).
     std
@@ -171,9 +171,9 @@ STAGE2_SIZE_DWORDS equ 100
 %ifndef KERNEL_SIZE_DWORDS
 KERNEL_SIZE_DWORDS equ 1000
 %endif
-; RAM-диск: 20480 секторов * 512 байт = 2621440 dword (образ 10 МиБ).
+; RAM-диск: 40960 секторов * 512 байт = 5242880 dword (образ 20 МиБ).
 %ifndef RAMDISK_SIZE_DWORDS
-RAMDISK_SIZE_DWORDS equ 2621440
+RAMDISK_SIZE_DWORDS equ 5242880
 %endif
 
 times 512-($-$$) db 0

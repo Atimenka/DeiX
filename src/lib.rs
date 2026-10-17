@@ -2,47 +2,41 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
-#![allow(dead_code)]
 
 extern crate alloc;
 
-mod adb;
 mod allocator;
 mod ata;
 mod ramdisk;
 mod auth;
 mod autostart;
-mod avb;
-mod bcb;
 mod bootlogo;
 mod bootchain;
 mod bugreport;
 mod cli;
 mod cp866;
-mod crashlog;
+mod cpuid;
 mod crypto;
 mod crypto_storage;
+mod devauth;
 mod devmode;
+mod diag;
 mod dialog;
 mod dinit;
-mod dsm;
+mod ds;
+mod duil;
 mod erofs;
 mod ext2;
-mod fastbootd_ui;
 mod font;
 mod font_cyrillic;
 mod font_full;
-mod fs;
 mod gpu;
 mod hal;
 mod hda;
 mod drivers;
 mod init_parser;
-mod inflate;
 mod install;
 mod interrupts;
-mod kexec;
-mod kernel_loader;
 mod keyboard;
 mod lang;
 mod linux;
@@ -54,27 +48,25 @@ mod module;
 mod mouse;
 mod microcode;
 mod net;
-mod ota;
-mod ota_store;
 mod nouveau;
 mod partition_map;
 mod pci;
 mod pkg;
+mod png;
 mod port;
-mod recovery_flash_engine;
+mod process;
 mod renderer;
 mod rng;
-mod recovery_ui;
+mod rtc;
 mod rtl8139;
 mod sched;
 mod security_monitor;
 mod serial;
 mod sound;
-mod syslog;
 mod spinlock;
 mod sync;
+mod sysfs;
 mod timer;
-mod tpm;
 mod ui;
 mod userfs;
 mod usermode;
@@ -82,23 +74,30 @@ mod vault;
 mod vbe;
 mod vga;
 mod vgaglobal;
+mod vfs;
 mod vmmouse;
 
 use core::panic::PanicInfo;
 
+/// Версия ядра. Единственный источник — остальные места берут её отсюда,
+/// чтобы в отчёте об отказе и в `about` не расходились версии.
+pub const KERNEL_VERSION: &str = "0.3.0-beta";
+
+/// Полная строка релиза: имя + версия + архитектура.
+pub const OS_RELEASE: &str = "DeiX 0.3.0-beta x86_64";
+
+/// Идентификатор сборки: архитектура и режим компиляции.
+pub const BUILD_ID: &str = "x86_64-unknown-deix (no_std, release)";
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    // Полный отладчик ошибок (как Android tombstone): сообщение паники
-    // уходит в serial, в кольцевой журнал (dmesg) и в crash-лог на диск
-    // (CRASHLOG.TXT на /system-томе), чтобы «Произошла ошибка» можно было
-    // посмотреть после перезагрузки (команда `crashlog`, recovery).
-    let msg = alloc::format!("[PANIC] {}", info);
-    crate::serial_println!("{}", msg);
-    crate::syslog::log_line(&msg);
-    crate::crashlog::record_crash(&msg);
-    loop {
-        unsafe { core::arch::asm!("hlt") };
-    }
+    // Отказ ядра обрабатывает система диагностики: она регистрирует событие
+    // в кольцевом буфере, собирает отчёт в статический буфер (куча может быть
+    // тем, что повреждено), пишет его сырыми секторами и рисует экран.
+    //
+    // Паник-хендлер вызывается и в ситуациях, когда diag ещё не готов
+    // (отказ до его инициализации), поэтому есть запасной путь в serial.
+    crate::diag::panic::rust_panic(info)
 }
 
 /// Точка входа, которую вызывает наш ассемблерный загрузчик
@@ -125,7 +124,7 @@ pub extern "C" fn kernel_main() -> ! {
     vgaglobal::with_writer(|w| w.clear_screen());
     crate::serial_println!("[deix] C: clear done");
 
-    println!("DeiX v0.2-beta - mini kernel booted successfully!");
+    println!("{} - mini kernel booted successfully!", OS_RELEASE);
     crate::serial_println!("[deix] D: println done");
     println!("Long mode: OK | Paging: OK | VGA text driver: OK");
     crate::serial_println!("[deix] E: long mode println");
@@ -165,6 +164,12 @@ pub extern "C" fn kernel_main() -> ! {
     println!("Heap allocator (16 MiB): OK");
     crate::serial_println!("[deix] I: heap ok");
 
+    // Система диагностики: с этого момента каждое существенное событие
+    // регистрируется в кольцевом буфере и уходит в serial. Постоянное
+    // хранилище подключается позже (diag::storage_ready), когда /userdata
+    // доступен — буфер до тех пор ничего не теряет.
+    diag::init();
+
     println!("PS/2 keyboard: OK (handled via IRQ1)");
 
     mouse::init(800, 600);
@@ -176,7 +181,8 @@ pub extern "C" fn kernel_main() -> ! {
         println!("ATA disk: not detected");
     }
 
-    if rtl8139::init() {
+    let net_ok = rtl8139::init();
+    if net_ok {
         println!(
             "Network: IP {}.{}.{}.{} (type 'ifconfig' for details)",
             net::my_ip()[0], net::my_ip()[1], net::my_ip()[2], net::my_ip()[3]
@@ -186,7 +192,9 @@ pub extern "C" fn kernel_main() -> ! {
     }
 
 
-    match gpu::detect() {
+    let gpu_info = gpu::detect();
+    let gpu_ok = gpu_info.is_some();
+    match gpu_info {
         Some(info) => {
             println!(
                 "GPU: {} detected (device ID {:#06x}). Type 'gpu info' for details.",
@@ -197,7 +205,8 @@ pub extern "C" fn kernel_main() -> ! {
         None => println!("GPU: no display controller found on PCI bus"),
     }
 
-    if hda::init() {
+    let audio_ok = hda::init();
+    if audio_ok {
         println!("Audio: Intel High Definition Audio (HDA) ready");
     } else {
         println!("Audio: PC Speaker (run QEMU with '-device intel-hda -device hda-duplex' for HDA)");
@@ -205,41 +214,15 @@ pub extern "C" fn kernel_main() -> ! {
 
     println!("Default language: English. Type 'lang ru' to switch to Russian.");
 
-    // BCB: одноразовый флажок загрузки. DSM > Fastbootd > Recovery > ОС.
-    // Вызывается ПОСЛЕ инициализации heap/шрифтов/GPU — оболочки получают
-    // полный GUI (framebuffer) и аллокатор. Если флажок установлен —
-    // запускаем оболочку и НЕ продолжаем обычную загрузку (оболочка
-    // «выше» ОС в запуске; AVB/логин и т.д. при этом не выполняются).
-    if crate::bcb::boot_flow() {
-        crate::serial_println!("[bcb] оболочка завершена — обычная ОС при следующей загрузке.");
-        loop {
-            unsafe { core::arch::asm!("hlt"); }
-        }
-    }
-
-    // ПОЛНАЯ ЦЕПОЧКА ЗАГРУЗКИ через все разделы (не пустышки!):
-    //   dsm -> init_boot -> vendor_boot -> boot -> kernel (kernel.tar.gz).
-    // Каждый раздел реально читается и верифицируется.
-    // КРИТИЧНО: если звено цепочки повреждено или стёрто (например,
-    // `dsm erase /kernel`), загрузка ОСТАНАВЛИВАЕТСЯ — система не должна
-    // стартовать без ядра (как Android RED state). Восстановление — через
-    // DSM/fastbootd прошивку раздела.
-    // Лого на экране, полный лог — в COM1.
     bootlogo::show("starting system...");
 
     bootlogo::set_status("verifying boot partitions...");
     match crate::bootchain::run_boot_chain() {
         Ok(summary) => crate::println!("{}", summary),
         Err(e) => {
-            crate::serial_println!("[bootchain] КРИТИЧЕСКАЯ ОШИБКА: {}", e);
-            crate::println!("  [bootchain] ЗАГРУЗКА ОСТАНОВЛЕНА: раздел загрузочной цепочки повреждён/стёрт.");
-            crate::println!("  [bootchain] Восстановление: прошейте раздел через DSM/fastbootd.");
-            loop {
-                unsafe { core::arch::asm!("hlt"); }
-            }
+            crate::println!("  [bootchain] Предупреждение: {}", e);
         }
     }
-
 
     bootlogo::set_status("initializing memory...");
     // Инициализируем менеджер памяти (физический + виртуальный).
@@ -247,30 +230,19 @@ pub extern "C" fn kernel_main() -> ! {
     println!("  [mm] Physical page allocator: OK");
     mm::print_stats();
 
-    // Загружаем метаданные файловой системы.
-    fs::load_meta_db();
-    println!("  [fs] File access control + TrustedInstaller: OK");
-
-    bootlogo::set_status("verifying system integrity (AVB)...");
-    // Verified Boot (AVB/vbmeta-аналог): проверка целостности системы.
-    // Green — обычная загрузка; Orange (dev) — предупреждение + 5 сек;
-    // Red — красный экран "Your device is corrupt...", загрузка запрещена.
-    avb::boot_verify();
-
-    // TPM / полнодисковое шифрование. ЕДИНЫЙ ПАРОЛЬ: пароль учётной
-    // записи пользователя является ключом шифрования диска (XTS-AES-256).
+    // Полнодисковое шифрование (XTS-AES-256). ЕДИНЫЙ ПАРОЛЬ: пароль учётной
+    // записи пользователя является ключом шифрования диска.
     // При заводской настройке диск не зашифрован; первая настройка
-    // (создание первого аккаунта в auth.rs) ВКЛЮЧАЕТ шифрование. При
-    // последующих загрузках разблокировка происходит на экране входа
-    // (crypto_storage::try_unlock). Скрытый раздел /TPM недоступен.
+    // (создание первого аккаунта) ВКЛЮЧАЕТ шифрование. При
+    // последующих загрузках разблокировка происходит на экране входа.
     match crate::crypto_storage::is_encryption_enabled() {
         true => {
-            crate::serial_println!("[tpm] Диск зашифрован (XTS-AES-256) — разблокировка при входе.");
-            crate::println!("  [tpm] Диск зашифрован (XTS-AES-256). Разблокировка — паролем аккаунта.");
+            crate::serial_println!("[crypto] Диск зашифрован (XTS-AES-256) — разблокировка при входе.");
+            crate::println!("  [crypto] Диск зашифрован (XTS-AES-256). Разблокировка — паролем аккаунта.");
         }
         false => {
-            crate::serial_println!("[tpm] Заводские настройки: диск не зашифрован. Первая настройка включит шифрование.");
-            crate::println!("  [tpm] Заводские настройки: диск не зашифрован. Первая настройка включит шифрование ключом = пароль аккаунта.");
+            crate::serial_println!("[crypto] Диск не зашифрован.");
+            crate::println!("  [crypto] Хранилище готово.");
         }
     }
 
@@ -279,13 +251,6 @@ pub extern "C" fn kernel_main() -> ! {
     // Модули расширяют функциональность ядра: сеть, графика, криптография.
     // Если модуль не найден на диске — система продолжает работу без него.
     module::load_boot_modules();
-
-    // Если это перезапуск через kexec — сообщаем поколение загрузки.
-    // Счётчик лежит вне .bss, поэтому переживает обнуление секции.
-    let gen = kexec::boot_generation();
-    if gen > 0 {
-        crate::println!("  [kexec] ЯДРО ЗАПУЩЕНО ИЗ РАЗДЕЛА /kernel_* (поколение {})", gen);
-    }
 
     // GDT/TSS ставим ПЕРВЫМИ: планировщик кладёт в начальный кадр задачи
     // SS=0x10 (kernel data), а в GDT загрузчика есть только null и
@@ -300,17 +265,14 @@ pub extern "C" fn kernel_main() -> ! {
     // упёрся в потолок 572 КиБ — буфер загрузчика на 0x11000 граничит
     // с видеопамятью VGA. Запустить вручную: 'threads test'.
 
-    // DeiX Security Subsystem (Ring 0 / Vault): стадия init_boot — проверка
-    // карты разделов и разбор скрипта init.deix процессом PID 1. Встроенный
-    // эталонный скрипт имитирует содержимое защищённого раздела /init_boot
-    // (EROFS, ReadOnly). Любая попытка rw-монтирования системного раздела
-    // вне прошивочных контекстов (Fastbootd/EDL/Recovery) вызывает panic! —
-    // ядро немедленно останавливается (см. init_parser.rs / vault.rs).
+    // DeiX Security Subsystem (Ring 0 / Vault): проверка карты разделов
+    // /system (EROFS RO) + /userdata (EXT2 RW) и разбор скрипта init.deix
+    // процессом PID 1 (Dinit).
     partition_map::validate_partition_map_report();
     init_parser::boot_report(init_parser::INIT_DEIX_SCRIPT);
     security_monitor::boot_selfcheck();
     crate::dinit::init();
-    crate::serial_println!("[deix] init_boot: Dinit (PID 1, Ring 0) запущен");
+    crate::serial_println!("[deix] Dinit (PID 1, Ring 0) запущен");
 
     // ВНИМАНИЕ: autostart::run() ПЕРЕНЕСЁН за экран входа (см. ниже).
     // Раньше он выполнялся здесь — до аутентификации, и любой, кто мог
@@ -318,22 +280,14 @@ pub extern "C" fn kernel_main() -> ! {
     // (например, строкой "gpu mode 800x600" можно было увести систему
     // в графику и не увидеть логин вовсе). Это дыра в безопасности.
 
-    // Отладчик ошибок: если предыдущий сеанс завершился паникой (crash-лог
-    // на диске, LBA 2048), сообщаем об этом при загрузке — как Android
-    // показывает уведомление о сбое. Полный дамп: 'crashlog'.
-    if crate::crashlog::has_disk_crash() {
-        crate::println!("  [debugger] ⚠ В прошлом сеансе произошла ошибка (crash-лог на диске).");
-        crate::println!("  [debugger] Посмотреть дамп: 'crashlog' | стереть: 'crashlog clear'.");
-        crate::serial_println!("[debugger] предыдущий сеанс завершился паникой (crash-лог на диске)");
-    }
+    // Контрольный список загрузки: каждая строка — реальная проверка
+    // подсистемы, сбой регистрируется в журнале со своим кодом DX-*.
+    diag::boot::screen(net_ok, audio_ok, gpu_ok);
 
-    // === OTA-уведомление + автоустановка ===
-    // Если OTA-пакет скачан (флаг pending в BCB) — сообщаем в терминале
-    // (со звуком) и ждём 5 минут; без ответа применяем автоматически.
-    // Весь цикл (уведомление, таймер, авто-apply из /OTA) — в ota.rs.
-    if crate::ota::ota_pending() {
-        crate::ota::ota_pending_flow();
-    }
+    // Если прошлая сессия завершилась отказом ядра (дамп в сырых секторах,
+    // LBA 2048), сообщаем об этом до входа. Плановая перезагрузка дампа
+    // не оставляет и диалога не вызывает.
+    diag::cli::announce_previous_failure();
 
     bootlogo::set_status("system ready");
 
@@ -359,19 +313,36 @@ pub extern "C" fn kernel_main() -> ! {
         dinit.register_user(uid, &username);
     }
 
-    // Профиль пользователя: /users/<имя>/files и /users/<имя>/configs.
+    // Профиль пользователя: /userdata/home/<имя>/{files,configs}.
     if let Err(e) = userfs::init_profile(&username) {
         crate::println!("  [userfs] профиль не создан: {}", e.message());
     }
 
-    // Базовый AUTOSTART.CFG (с gpu mode) — создаём при первом входе.
+    // /userdata доступен (и расшифрован, если включено шифрование) —
+    // подключаем постоянные журналы и сбрасываем в них всё, что накопил
+    // кольцевой буфер с начала загрузки. События до этой точки не теряются.
+    diag::storage_ready();
+    crate::serial_println!("[deix] J: storage_ready done ({} ms)", timer::uptime_ms());
+
+    // Канонический layout /userdata: недостающие каталоги создаются
+    // идемпотентно (mkdir_p) при каждом входе.
+    for d in [
+        "/userdata/home", "/userdata/config", "/userdata/apps", "/userdata/packages",
+        "/userdata/downloads", "/userdata/cache", "/userdata/update", "/userdata/log",
+    ] {
+        let _ = vfs::mkdir(d);
+    }
+
+    // Базовый /userdata/config/autostart.cfg — создаём при первом входе.
     autostart::ensure_default();
+    crate::serial_println!("[deix] K: autostart ensure_default done ({} ms)", timer::uptime_ms());
 
     // Автозапуск ТОЛЬКО после успешного входа: команды выполняются от
     // имени вошедшего пользователя, а не анонимно до аутентификации.
     autostart::run();
+    crate::serial_println!("[deix] L: autostart run done ({} ms)", timer::uptime_ms());
 
-    // UI-звуки (PC speaker, src/sound.rs; файлы *.dps в EROFS /super —
+    // UI-звуки (PC speaker, src/sound.rs; файлы *.dps в /system/media/audio/ui —
     // если в образе их нет, просто играем в тишине, как раньше).
     // Загрузка шла с USB-флешки (RAM-диск) — сигнал «носитель подключён»,
     // затем общий стартовый сигнал «система готова».
@@ -379,6 +350,7 @@ pub extern "C" fn kernel_main() -> ! {
         let _ = sound::play_ui(sound::UiSound::UsbConnect);
     }
     let _ = sound::play_ui(sound::UiSound::Startup);
+    crate::serial_println!("[deix] M: startup sound done ({} ms)", timer::uptime_ms());
 
     cli::run();
 }
@@ -392,14 +364,9 @@ pub fn reset_all_globals() {
     let _ = crate::vgaglobal::end_capture();
     crate::vgaglobal::early_init_writer();
     crate::module::reset_loaded_modules();
-    crate::fs::reset_fs_state();
     crate::renderer::reset_renderer();
-    crate::avb::reset_avb();
-    crate::crashlog::clear_current_crash();
-    crate::crashlog::clear_disk_crash();
-    crate::syslog::clear();
-    crate::recovery_ui::reset_recovery_state();
-    crate::fastbootd_ui::reset_fastbootd_state();
+    crate::diag::ring::clear();
+    crate::diag::panic::clear_previous_failure();
     crate::crypto_storage::lock();
     crate::linux::syscall::reset_stats();
     *crate::dinit::DINIT.lock() = None;

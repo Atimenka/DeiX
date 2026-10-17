@@ -169,7 +169,7 @@ def gen_cargo():
     """Генерирует Cargo.toml для Rust .mex-проекта."""
     cargo_toml = """[package]
 name = "mex-program"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 
 [[bin]]

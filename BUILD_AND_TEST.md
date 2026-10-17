@@ -1,182 +1,196 @@
-# DeiX — сборка и тестирование
+# DeiX 0.3.0-beta — build and test
 
-Ветка содержит всё, что сделано за сессии: настоящий EROFS, Ring 3,
-kexec и вытесняющую многозадачность.
+This document describes the current state of the branch. Everything listed
+here matches the code; known limitations are collected at the end.
 
-## 1. Зависимости
+## 1. Dependencies
 
 ```bash
-# Rust nightly + bare-metal target (нужен nightly: abi_x86_interrupt,
+# Rust nightly + bare-metal target (nightly is required: abi_x86_interrupt,
 # alloc_error_handler, naked-asm)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
     -y --default-toolchain nightly --profile minimal
 source "$HOME/.cargo/env"
 rustup target add x86_64-unknown-none
 
-# Ассемблер, эмулятор, утилиты EROFS
+# Assembler, emulator, EROFS utilities
 sudo pacman -S --needed nasm qemu-system-x86 erofs-utils   # Arch
 # sudo apt install -y nasm qemu-system-x86 erofs-utils     # Debian/Ubuntu
 ```
 
-`erofs-utils` не обязателен для сборки: `tools/make_deix_fs.py` умеет
-собирать EROFS сам на чистом Python. Но с `mkfs.erofs` образы получаются
-компактнее, а `fsck.erofs` позволяет их проверить.
+`erofs-utils` is optional: `tools/make_deix_fs.py` can build EROFS itself
+in pure Python. With `mkfs.erofs` the image is more compact, and
+`fsck.erofs` lets you verify it with a third-party tool.
 
-## 2. Сборка
+## 2. Build
 
 ```bash
 bash build.sh
 ```
 
-Результат: `build/deix_disk.img` (образ диска, 10 МиБ) и `build/deix.iso`.
+Result: `build/deix_disk.img` (20 MiB) and the release artifacts
+`build/deix-0.3.0-beta-x86_64.img` + `build/SHA256SUMS`.
 
-Шаги: nasm stage2 -> ld -> cargo build --release -> objcopy kernel.bin ->
-MBR -> пересборка stage2 с реальным KERNEL_SIZE -> склейка образа ->
-**форматирование разделов** (шаг 7b, `tools/make_deix_fs.py`) -> ISO.
+Steps: partition map check (`tools/check_partition_map.py`) -> nasm
+stage2/ramboot -> cargo build --release -> objcopy kernel.bin -> MBR ->
+rebuild of stage2/ramboot with the real kernel size and LBA -> image
+assembly -> partition formatting (`tools/make_deix_fs.py`: EROFS
+`/system`, ext2 `/userdata`, `DEIXKIMG` kernel descriptor).
 
-Только ядро, без образа: `cargo build --release`.
+Kernel only, no image: `cargo build --release`.
 
-## 3. Запуск
+## 3. Disk layout
+
+| Area | LBA | Sectors | Contents |
+|---|---|---|---|
+| MBR | 0 | 1 | boot sector + partition table |
+| boot | 1..2046 | ≤2046 | stage2 + ramboot + raw kernel.bin |
+| `DEIXKIMG` | 2047 | 1 | kernel descriptor: LBA, size, SHA-256 |
+| panic dump | 2048 | 64 | crash dump (`DEIXPNIC`), outside any FS |
+| `/system` | 4096 | 20480 | EROFS, read-only |
+| `/userdata` | 24576 | 16384 | ext2, read/write |
+
+Booting uses the raw kernel (MBR -> stage2 -> kernel.bin at LBA 1..2046);
+`/system/kernel/kernel.bin` is a copy of the same file inside EROFS. After
+startup the kernel compares both copies by size and SHA-256 via the
+`DEIXKIMG` descriptor; a mismatch is recorded as `DX-KRN-0013`.
+
+The single source of truth for geometry is `src/partition_map.rs`.
+`tools/check_partition_map.py` checks `tools/make_deix_fs.py`,
+`src/install.rs`, `src/ext2.rs`, `boot/boot_sector.asm`, and
+`src/diag/panic.rs` against it; it runs in `build.sh` and CI.
+
+## 4. Running
+
+`./run.sh` and `./run_debug.sh` already enable networking (slirp + RTL8139)
+and audio. Manually:
 
 ```bash
-# Headless, весь вывод в терминал (так снимались все логи ниже)
+# Headless, all output to the terminal
 qemu-system-x86_64 -drive file=build/deix_disk.img,format=raw,if=ide \
     -m 256M -display none -serial stdio -no-reboot
 
-# С окном VGA и сетью (RTL8139)
+# With a VGA window and networking (RTL8139)
 qemu-system-x86_64 -drive file=build/deix_disk.img,format=raw,if=ide \
     -m 256M -serial stdio -netdev user,id=n0 -device rtl8139,netdev=n0
 ```
 
-При первом запуске система попросит создать аккаунт (он же ключ
-шифрования диска XTS-AES-256). Дальше — CLI, `help` для списка команд.
+On first boot the system asks you to create an account (which is also the
+XTS-AES-256 disk encryption key). After that — the CLI; `help` lists the
+commands.
 
-## 4. Что проверять
+Successful-boot marker in the serial log:
+`=== DeiX boot: serial debug active ===`, then
+`DeiX 0.3.0-beta x86_64 - mini kernel booted successfully!`.
 
-Самопроверки идут автоматически при загрузке:
-
-```
-[sched]  запуск 4 задач: 3 счётчика без yield + 1 спящая
-[sched]  переключений контекста: 45
-[sched]  САМОПРОВЕРКА ПРОЙДЕНА: все задачи выполнялись одновременно
-[ring3]  Hello from Ring 3: syscall write works!
-[ring3]  CS=0x23 -> CPL=3
-[ring3]  САМОПРОВЕРКА ПРОЙДЕНА: вернулись в Ring 0 (CPL=0)
-```
-
-Команды в CLI:
-
-| Команда | Что делает |
-|---|---|
-| `threads list` | задачи планировщика и счётчик переключений |
-| `threads test` | перезапустить самопроверку многозадачности |
-| `kexec check` | прочитать и проверить ядро из `/kernel_a`, не запуская |
-| `kexec` | **перезапустить ядро из раздела** (загрузка пойдёт заново) |
-| `kexec b` | то же из слота B |
-| `ifconfig` | состояние сети (нужен `-device rtl8139`) |
-| `gpu info` | детект видеокарты |
-
-### Проверка EROFS сторонними утилитами
-
-Разделы содержат настоящий EROFS (магия `0xE0F5E1E2`), а не самоделку:
+## 5. Tests
 
 ```bash
-# /kernel_a: LBA 13313, 1023 секторов
-dd if=build/deix_disk.img of=/tmp/kernel_a.img bs=512 skip=13313 count=1023
-fsck.erofs --extract=/tmp/out /tmp/kernel_a.img && ls -l /tmp/out
-# -> kernel.tar.gz, 258568 байт
-
-dump.erofs /tmp/kernel_a.img | head -5
-# -> Filesystem magic number: 0xE0F5E1E2
+python3 tools/check_partition_map.py    # partition map check across all sources
+python3 tools/test_all_subsystems.py    # partition map + MEX toolchain (C/C++)
+python3 tools/qemu_scenario_reboot.py   # factory -> login -> reboot x2 (persistence)
+python3 tools/qemu_install_test.py      # install onto a second disk + boot from it
 ```
 
-Карта разделов (`src/partition_map.rs`), EROFS-разделы:
+Verifying EROFS with a third-party tool:
 
-| Раздел | LBA | Секторов |
-|---|---|---|
-| `/kernel_a` | 13313 | 1023 |
-| `/kernel_b` | 14337 | 1023 |
-| `/init_boot` | 15361 | 255 |
-| `/vendor_boot` | 15617 | 255 |
-| `/boot_a` | 15873 | 255 |
-| `/boot_b` | 16129 | 255 |
-| `/super` | 16385 | 255 |
-| `/dsm` | 16641 | 255 |
-| `/recovery` | 16897 | 255 |
-
-### Проверка kexec
-
-```
-kexec
-```
-В логе ядро стартует **дважды** (`=== DeiX boot: serial debug active ===`
-встретится 2 раза), во втором старте появится
-`[kexec] ЯДРО ЗАПУЩЕНО ИЗ РАЗДЕЛА /kernel_* (поколение 1)`.
-
-Счётчик поколений лежит по адресу `0x1360000` — вне `.bss`, поэтому
-переживает обнуление секции новым ядром.
-
-## 5. Карта памяти (важно при правках)
-
-```
-0x00100000  код+данные ядра        <- сюда kexec копирует новый образ
-0x00200000  .bss ядра (16 МиБ кучи), до ~0x121C000
-0x01300000  трамплин kexec
-0x01350000  стек трамплина
-0x01360000  маркер поколения загрузки
-0x01400000  страница Ring 3 (код + стек)
+```bash
+dd if=build/deix_disk.img of=/tmp/system.img bs=512 skip=4096 count=20480
+dump.erofs /tmp/system.img | head -5     # -> Filesystem magic number: 0xE0F5E1E2
+fsck.erofs --extract=/tmp/out /tmp/system.img && ls -R /tmp/out
 ```
 
-Не размещайте ничего в диапазоне `.bss` — на этом я уже обжёгся: первая
-версия Ring 3 писала свой код на 0x200000, прямо поверх кучи ядра.
+CLI commands for manual checks:
 
-## 6. Ключевые файлы
-
-| Файл | Содержимое |
+| Command | What it does |
 |---|---|
-| `src/erofs.rs` | EROFS v1: чтение (FLAT_PLAIN/FLAT_INLINE) и запись |
-| `src/sched.rs` | вытесняющая многозадачность, naked-заглушка IRQ0 |
-| `src/usermode.rs` | Ring 3: GDT+TSS, syscall/sysret, страницы USER |
-| `src/kexec.rs` | загрузка ядра из раздела, трамплин |
-| `src/bootchain.rs` | цепочка загрузки по разделам |
-| `tools/make_deix_fs.py` | разметка MBR, ext2 и EROFS-образы |
-| `REFACTOR_REPORT.md` | что и почему менялось, с доказательствами |
+| `threads list` | scheduler tasks and the context-switch counter |
+| `dinit status` | services: built-ins (Ring 0) and processes |
+| `ifconfig` / `ping` | networking (needs `-device rtl8139`) |
+| `dns <host>` | a real DNS query (A record over UDP/53) |
+| `gpu info` | GPU detection |
+| `error list` / `panic last` | diagnostics log and the last crash dump |
+| `install` | install the system onto a second disk (ATA Slave) |
 
-## 7. UI-звуки (PC speaker)
+### Internet in QEMU (user-mode networking, slirp)
 
-Системные звуковые эффекты лежат в `assets/*.wav` и **не зашиваются в
-kernel.bin** (лимит размера ядра). Конвейер:
-
-1. **build.sh [2e/8]** — `tools/wav2dps.py` гоняет WAV (44.1 кГц/16бит/стерео)
-   в DPS1 (8 кГц, u8, моно): `build/sounds/{start,error,lowbat,fullbat,usbcon,usbdisc}.dps`.
-2. **make_deix_fs.py** — пакует `*.dps` в EROFS-раздел `/super` (вместе с
-   `system.img`), как `/system/media/audio/ui` в Android.
-3. **Ядро (src/sound.rs)** — в рантайме читает нужный DPS из /super и играет
-   ШИМ-ом на PC speaker (порт 0x61, скважность ~ амплитуде сэмпла).
-
-Где звучит:
-
-| Звук | Событие |
-|---|---|
-| `start.dps` | после успешного входа, система готова (перед CLI) |
-| `error.dps` | неверный пароль / ошибка входа (GUI и текстовый логин) |
-| `usbcon.dps` | система загружена с USB-флешки (активен RAM-диск) |
-| `usbdisc.dps` | API готово; события нет — появится с USB-стеком |
-| `lowbat.dps` / `fullbat.dps` | API готово; события нет — появятся с ACPI |
-
-Ручная проверка из CLI:
+The guest gets a fixed configuration: IP `10.0.2.15/24`, gateway
+`10.0.2.2`, DNS `10.0.2.3` (defaults in `src/net/mod.rs`, changeable with
+`ifconfig <ip>` / `ifconfig dns <ip>`). Checking real internet access:
 
 ```
-sound            # список эффектов, [ok]/[--] — есть ли файл в образе
-sound start      # проиграть (псевдонимы: start error lowbat fullbat usbcon usbdisc)
-sound beep 880 200   # классический бипер (частота Гц, длительность мс)
+dns example.com          # A record through the host's slirp resolver
+ping 10.0.2.2            # ICMP to the slirp gateway
+gpu mode                 # then open https://example.com in the browser
 ```
 
-Нюансы реализации: ШИМ блокирующий (эффекты ограничены 10 с), на реальном
-железе запись в порт медленнее (~1 мкс), поэтому воспроизведение звучит
-примерно вдвое ниже/длиннее, чем в QEMU — для коротких сигналов приемлемо.
+The browser (GUI, "Web Browser") resolves names via DNS, opens a TCP
+connection, and performs an HTTP/1.1 GET with redirect following, chunked
+decoding, and gzip decompression (`src/net/inflate.rs`); `https://` works
+through our own TLS 1.3 client (`src/net/tls.rs`) with certificate
+verification (`src/net/x509.rs`: chain up to 23 Mozilla roots, validity
+dates via RTC, SAN hostname, CertificateVerify). Honest limits: TLS 1.3
+only (no 1.2), certificate revocation (OCSP/CRL) is not checked. To test:
+`https://example.com`, `https://www.google.com` (response body capped at
+1 MiB, 2 MiB after gzip decompression; beyond that the page is honestly
+truncated). Signature verification on an emulated CPU takes noticeable
+time — an RSA-4096 and two ECDSA checks can add 1-3 seconds to page load.
+Outbound ICMP does not pass through slirp — `ping 8.8.8.8` will not get a
+reply; that is a QEMU limitation, not the network stack's.
 
-**Замечание про /OTA:** сырым OTA-хранилищем ядро работает по
-`ota_store::OTA_PART_LBA` — значение должно совпадать с картой разделов
-(17664+2816; было исправлено с устаревшего 16128, которое затирало
-EROFS-разделы /vendor_boot../recovery).
+## 6. Memory map (important when making changes)
+
+```
+0x00100000  kernel code+data (up to 1 MiB — KERNEL_SECTORS=2048 limit)
+0x00300000  kernel .bss (16 MiB heap, ends ~0x1360000)
+0x01400000  Ring 3 (user program code and stack)
+0x03000000  MEX program region (Ring 3, fixed link address)
+```
+
+Do not place anything inside the `.bss` range — an early version of Ring 3
+wrote its code right over the kernel heap.
+
+## 7. UI sounds (PC speaker)
+
+Effects live in `assets/*.wav` and are not baked into kernel.bin:
+
+1. **build.sh [2e/8]** — `tools/wav2dps.py` converts WAV to DPS1 (8 kHz, u8, mono).
+2. **make_deix_fs.py** — puts `*.dps` into EROFS as `/system/media/audio/ui/`.
+3. **Kernel (src/sound.rs)** — reads DPS through the VFS (the `/system`
+   image is cached) and plays it via PWM on the PC speaker.
+
+```
+sound            # list of effects, [ok]/[--] — whether the file is in the image
+sound start      # play (start error lowbat fullbat usbcon usbdisc)
+sound beep 880 200
+```
+
+PWM playback is blocking (effects are capped at 10 s); on real hardware
+port writes are slower, so sound is roughly half the pitch/twice the
+length compared to QEMU.
+
+## 8. Known limitations
+
+- Single CPU; disks are ATA PIO only (~1.4 ms/KiB in QEMU) — avoid large
+  reads on interactive paths.
+- Ring 3 is MEX-only; one MEX process at a time (fixed link address
+  `0x03000000`).
+- Launching ELF processes is disabled (`DX-ELF-0009`): the loader and a
+  subset of Linux syscalls exist, but execution would happen in Ring 0.
+- `AddressSpace` is a bookkeeping structure, with no per-process page
+  tables (except the MEX region).
+- The physical page allocator is a bitmap, not buddy.
+- `getrandom` is not a cryptographic RNG.
+- Disk encryption is a custom "LUKS-inspired" format (XTS-AES-256),
+  incompatible with LUKS tooling.
+- DNS — A records over UDP/53 only (no AAAA/DNSSEC/TCP fallback); the IP
+  stack does not reassemble fragmented packets.
+- HTTP client — HTTP/1.1, GET only + Connection: close (no keep-alive);
+  chunked and gzip are supported. https:// uses TLS 1.3 with X.509 chain
+  verification up to 23 built-in Mozilla roots (no OCSP/CRL or Certificate
+  Transparency); TLS 1.2 is not supported.
+- No USB, SMP, AHCI/NVMe, or ACPI power management.
+
+Key files: `src/partition_map.rs` (geometry), `src/bootchain.rs`
+(kernel image cross-check), `src/vfs.rs` (unified FS), `src/diag/` (errors
+and crash dumps), `src/dinit/` (PID 1), `tools/make_deix_fs.py` (image).

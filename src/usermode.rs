@@ -76,8 +76,10 @@ static mut TSS: Tss = Tss::new();
 /// из Ring 3. Отдельный от основного, чтобы не зависеть от стека Ring 3.
 const KSTACK_SIZE: usize = 32 * 1024;
 #[repr(align(16))]
-struct KStack([u8; KSTACK_SIZE]);
-static mut KERNEL_STACK: KStack = KStack([0; KSTACK_SIZE]);
+struct KStack {
+    bytes: [u8; KSTACK_SIZE],
+}
+static mut KERNEL_STACK: KStack = KStack { bytes: [0; KSTACK_SIZE] };
 
 // ==================== GDT ====================
 
@@ -122,6 +124,7 @@ unsafe fn init_gdt() {
     let tss_high = (tss_addr >> 32) & 0xFFFF_FFFF;
 
     let gdt = &mut *(&raw mut GDT);
+    let _ = USER_CS;
     gdt[0] = 0;
     gdt[1] = segment(true, 0); // 0x08 kernel code
     gdt[2] = segment(false, 0); // 0x10 kernel data
@@ -215,6 +218,28 @@ unsafe fn make_user_accessible(addr: u64) {
     asm!("invlpg [{}]", in(reg) addr, options(nostack, preserves_flags));
 }
 
+/// Делает диапазон адресов доступным из Ring 3.
+///
+/// Открыта для загрузчика MEX: его образ, стек и shim-страница лежат в
+/// фиксированной области, которую загрузчик отобразил без бита USER.
+/// После правки битов TLB сбрасывается перезагрузкой CR3 — иначе процессор
+/// продолжит использовать закешированные записи без USER и Ring 3 получит
+/// #PF на первой же инструкции.
+///
+/// # Safety
+/// Меняет активные таблицы страниц. Диапазон обязан быть уже отображён.
+pub unsafe fn make_region_user(start: u64, end: u64) {
+    const HUGE_PAGE: u64 = 2 * 1024 * 1024;
+    let mut addr = start & !(HUGE_PAGE - 1);
+    while addr < end {
+        make_user_accessible(addr);
+        addr += HUGE_PAGE;
+    }
+    let cr3: u64;
+    asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags));
+    asm!("mov cr3, {}", in(reg) cr3, options(nostack, preserves_flags));
+}
+
 // ==================== Код пользователя ====================
 
 // Программа, исполняемая в Ring 3. Пишется на ассемблере и копируется
@@ -268,9 +293,9 @@ extern "C" {
 /// Адрес, куда копируется программа пользователя, и стек Ring 3.
 /// Берём вторую 2-МиБ huge-страницу (2..4 МиБ): она отображена
 /// загрузчиком и не пересекается с кодом ядра (ядро < 1 МиБ + heap).
-/// ВАЖНО: 0x200000 (2 МиБ) занимать НЕЛЬЗЯ — там начинается `.bss` ядра
+/// ВАЖНО: 0x300000 (3 МиБ) занимать НЕЛЬЗЯ — там начинается `.bss` ядра
 /// (см. boot/linker_kernel.ld), включая 16-МиБ `HEAP_STORAGE`. Секция
-/// тянется до ~0x121c000, поэтому пользовательскую страницу кладём на
+/// тянется до ~0x1360000, поэтому пользовательскую страницу кладём на
 /// 20 МиБ — выше кучи, но внутри первого гигабайта, отображённого
 /// загрузчиком. Раньше здесь стояло 0x200000, и Ring 3 писал свой код и
 /// стек прямо поверх кучи ядра.
@@ -299,9 +324,13 @@ global_asm!(
     "  push r14",
     "  push r15",
     // Перекладываем регистры соглашения syscall в соглашение System V C:
-    //   syscall: nr=rax, a1=rdi, a2=rsi, a3=rdx
-    //   C ABI:   arg1=rdi, arg2=rsi, arg3=rdx, arg4=rcx
+    //   syscall: nr=rax, a1=rdi, a2=rsi, a3=rdx, a4=r10, a5=r8
+    //            (4-й аргумент приходит в r10: rcx затирается самой
+    //             инструкцией syscall, и библиотечные стабы кладут его в r10)
+    //   C ABI:   arg1=rdi, arg2=rsi, arg3=rdx, arg4=rcx, arg5=r8, arg6=r9
     // Порядок важен, иначе значения затрут друг друга.
+    "  mov r9, r8",
+    "  mov r8, r10",
     "  mov rcx, rdx",
     "  mov rdx, rsi",
     "  mov rsi, rdi",
@@ -339,9 +368,35 @@ static mut RETURN_RSP: u64 = 0;
 /// Код возврата последней запущенной программы.
 static mut EXIT_CODE: i64 = 0;
 
+/// Исполняется ли сейчас программа в Ring 3 (между `enter_ring3` и выходом).
+pub fn user_program_active() -> bool {
+    unsafe { core::ptr::read_volatile(&raw const RETURN_RSP) != 0 }
+}
+
+/// Аварийно завершает программу Ring 3 из обработчика исключения.
+///
+/// Делает то же, что syscall `exit`: восстанавливает стек ядра, сохранённый
+/// `enter_ring3`, и возвращает управление коду, запустившему программу.
+/// Кадр исключения при этом отбрасывается — возвращаться в упавшую
+/// инструкцию бессмысленно.
+///
+/// # Safety
+/// Вызывать можно только когда `user_program_active()` — иначе RETURN_RSP
+/// не указывает на живой стек.
+pub unsafe fn abort_user_program(code: i64) -> ! {
+    EXIT_CODE = code;
+    USER_EXITED = true;
+    asm!("mov rsp, {rsp}", "jmp {rip}",
+        rsp = in(reg) RETURN_RSP,
+        rip = in(reg) (ring3_return as *const () as u64),
+        options(noreturn));
+}
+
 /// Диспетчер системных вызовов. Номера — как в Linux x86-64, чтобы
 /// поведение было предсказуемым: 1=write, 39=getpid, 60=exit, 40=uptime.
-extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
+/// Диапазон 0x4D58_xxxx («MX») зарезервирован под MEX API: его вызывают
+/// стабы, которые ядро кладёт в shim-страницу MEX-программы.
+extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
     match nr {
         1000 => {
             crate::println!(
@@ -359,8 +414,11 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
                     options(noreturn));
             }
         }
+        n if n & 0xFFFF_0000 == crate::mex::MEX_SYSCALL_BASE => {
+            crate::mex::ring3_dispatch((n & 0xFFFF) as usize, a1, a2, a3, a4)
+        }
         // Остальное — прослойка Linux (src/linux/syscall.rs).
-        _ => crate::linux::syscall::dispatch(nr, a1, a2, a3, 0, 0),
+        _ => crate::linux::syscall::dispatch(nr, a1, a2, a3, a4, a5),
     }
 }
 
@@ -373,7 +431,7 @@ pub fn init() {
         init_gdt();
 
         // Стек ядра для входов из Ring 3.
-        let kstack_top = (&raw const KERNEL_STACK as u64) + KSTACK_SIZE as u64;
+        let kstack_top = (core::ptr::addr_of!(KERNEL_STACK.bytes) as u64) + KSTACK_SIZE as u64;
         (*(&raw mut TSS)).rsp0 = kstack_top;
         (*(&raw mut CPU_LOCAL)).kernel_rsp = kstack_top;
 
@@ -405,6 +463,7 @@ pub fn init() {
         }
     }
     crate::println!("  [usermode] GDT (user CS/DS) + TSS + syscall MSR: OK");
+    selftest();
 }
 
 unsafe fn wrmsr(msr: u32, val: u64) {
@@ -462,6 +521,40 @@ unsafe fn enter_ring3(entry: u64, stack: u64) {
     );
 }
 
+/// Как `enter_ring3`, но перед `sysretq` кладёт `arg` в RDI —
+/// первый аргумент System V ABI для точки входа программы.
+///
+/// # Safety
+/// Те же требования, что у `enter_ring3`.
+#[inline(never)]
+unsafe fn enter_ring3_arg(entry: u64, stack: u64, arg: u64) {
+    asm!(
+        "lea rax, [rip + 4f]",
+        "push rax",
+        "push rbx",
+        "push rbp",
+        "push r12",
+        "push r13",
+        "push r14",
+        "push r15",
+        "mov [{ret_rsp}], rsp",
+        "swapgs",
+        "mov r11, {rflags}",
+        "mov rcx, {entry}",
+        "mov rdi, {arg}",
+        "mov rsp, {stack}",
+        "sysretq",
+        "4:",
+        ret_rsp = in(reg) &raw mut RETURN_RSP,
+        rflags = const 0x0202u64,
+        entry = in(reg) entry,
+        arg = in(reg) arg,
+        stack = in(reg) stack,
+        out("rax") _,
+        clobber_abi("sysv64"),
+    );
+}
+
 // Точка возврата из Ring 3: стек восстановлен обработчиком exit,
 // снимаем сохранённые регистры и возвращаемся по адресу с вершины стека.
 global_asm!(
@@ -502,6 +595,9 @@ pub fn selftest() {
         crate::println!("  [ring3] переход в CPL=3 (entry {:#x})...", USER_CODE);
         USER_EXITED = false;
         enter_ring3(USER_CODE, USER_STACK_TOP);
+        if selftest_ok() {
+            crate::println!("  [ring3] selftest OK: return from CPL=3 verified");
+        }
     }
 }
 
@@ -519,6 +615,21 @@ pub unsafe fn run_user_program(entry: u64, stack: u64) -> i64 {
     EXIT_CODE = 0;
     USER_EXITED = false;
     enter_ring3(entry, stack);
+    EXIT_CODE
+}
+
+/// Запускает программу в Ring 3, передав ей аргумент в RDI.
+///
+/// Нужен MEX-программам: их точка входа принимает указатель на таблицу
+/// MexApi первым аргументом System V ABI.
+///
+/// # Safety
+/// Как у `run_user_program`; `arg` должен указывать в память, доступную
+/// из Ring 3, иначе первое же обращение программы к таблице даст #PF.
+pub unsafe fn run_user_program_arg(entry: u64, stack: u64, arg: u64) -> i64 {
+    EXIT_CODE = 0;
+    USER_EXITED = false;
+    enter_ring3_arg(entry, stack, arg);
     EXIT_CODE
 }
 

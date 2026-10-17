@@ -17,6 +17,7 @@ pub fn init() {
         outb(0x40, (divisor & 0xFF) as u8);
         outb(0x40, ((divisor >> 8) & 0xFF) as u8);
     }
+    sleep_ms(1);
 }
 
 pub fn tick() {

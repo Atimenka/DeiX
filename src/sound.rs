@@ -1,11 +1,8 @@
-// ❗ЗАВИСИМОТИ: инит скрипт pid 1 который будет ограничивать пользовательский
-// ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0). Интеграция в существующий код
-// sound — АУДИО-ДРАЙВЕР (PC speaker через PIT-канал 2, порт 0x61).
-// Реализует beep() (звуковой сигнал заданной частоты/длительности),
-// предупреждающие сигналы: warn_triple(), ota_alert(),
-// и ПРОИГРЫВАТЕЛЬ ЦИФРОВЫХ UI-ЗВУКОВ (DPS1 через ШИМ на PC speaker):
-// файлы *.dps лежат в EROFS-разделе /super образа (как /system/media/audio/ui
-// в Android — неизменяемые системные ресурсы вне kernel.bin).
+// ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0).
+// sound — АУДИО-ДРАЙВЕР (PC speaker через PIT-канал 2, порт 0x61 и Intel HDA).
+// Реализует beep() (звуковой сигнал заданной частоты/длительности)
+// и проигрыватель цифровых UI-звуков (DPS1 через ШИМ на PC speaker):
+// файлы *.dps лежат в EROFS-разделе /system (/system/media/audio/ui).
 // no_std-совместимо: порты ввода-вывода + alloc (чтение раздела с диска).
 
 
@@ -39,10 +36,6 @@ pub fn get_sound_mode() -> SoundMode {
 const PIT_CMD: u16 = 0x43;
 const PIT_CH2: u16 = 0x42;
 const SPEAKER: u16 = 0x61;
-/// Порт 0x80 — запись в него исторически используется как короткая
-/// (~0.5–1 мкс) задержка шины ISA: нужна для ШИМ-воспроизведения, где
-/// микросекундный таймер ядра (timer::uptime_ms) слишком грубый.
-const SCRATCH: u16 = 0x80;
 
 /// Включает PC speaker (бит 1 порта 0x61).
 fn speaker_on() {
@@ -106,8 +99,8 @@ pub fn warn_triple() {
     }
 }
 
-/// Сигнал OTA-обновления: длинный высокий + короткий.
-pub fn ota_alert() {
+/// Сигнал системного уведомления: длинный высокий + короткий.
+pub fn alert() {
     beep(1320, 300);
     delay_ms(120);
     beep(1760, 200);
@@ -122,7 +115,7 @@ pub fn ota_alert() {
 // speaker не умеет DMA/PCM. Выход:
 //   1) на этапе сборки tools/wav2dps.py гоняет WAV -> DPS1 (8 кГц, u8,
 //      моно) — компактно и уже готово к проигрыванию;
-//   2) build.sh кладёт *.dps в EROFS-раздел /super (make_deix_fs.py);
+//   2) build.sh кладёт *.dps в /system/media/audio/ui (make_deix_fs.py);
 //   3) здесь ядро читает нужный файл с диска и отыгрывает ШИМ-ом:
 //      каждый сэмпл — одно «вкл/выкл» динамика, скважность ~ амплитуде.
 //
@@ -130,7 +123,7 @@ pub fn ota_alert() {
 //   0..4  магия "DPS1"; 4..8 u32 частота Гц; 8..12 u32 число сэмплов;
 //   далее — байты unsigned PCM (128 = тишина).
 
-/// Реестр системных звуковых эффектов. Файлы — в /super (EROFS).
+/// Реестр системных звуковых эффектов. Файлы — в /system/media/audio/ui (EROFS).
 #[derive(Copy, Clone)]
 pub enum UiSound {
     /// Вход в систему завершён, система готова (start.dps).
@@ -151,7 +144,7 @@ pub enum UiSound {
 }
 
 impl UiSound {
-    /// Имя DPS-файла в EROFS-разделе /super.
+    /// Имя DPS-файла в /system/media/audio/ui.
     pub fn dps_name(self) -> &'static str {
         match self {
             UiSound::Startup => "start.dps",
@@ -212,14 +205,12 @@ fn resolve_alias<'a>(name: &'a str) -> &'a str {
     }
 }
 
-/// Читает весь /super с диска и достаёт из его EROFS файл `name`.
+/// Читает звуковой файл DPS из /system/media/audio/ui/ (EROFS через VFS:
+/// образ раздела кешируется, повторные чтения не трогают диск).
 fn load_dps(name: &str) -> Result<Vec<u8>, &'static str> {
-    let layout = crate::partition_map::lookup_layout("/super")
-        .ok_or("sound: в карте разделов нет /super")?;
-    let image = crate::bootchain::read_partition_image(layout)
-        .map_err(|_| "sound: не удалось прочитать /super с диска")?;
-    crate::erofs::read_file(&image, name)
-        .map_err(|_| "sound: звука нет в образе (пересоберите: build.sh [2e/8])")
+    let path = alloc::format!("/system/media/audio/ui/{}", name);
+    crate::vfs::read_file(&path)
+        .map_err(|_| "sound: звук не найден в /system/media/audio/ui/")
 }
 
 /// Разбирает заголовок DPS1; возвращает (частота, сэмплы).
@@ -308,7 +299,7 @@ fn play_pcm8(samples: &[u8], rate: u32) {
     }
 }
 
-/// Играет системный эффект (читает DPS из /super при каждом вызове).
+/// Играет системный эффект (читает DPS из /system/media/audio/ui).
 /// Ошибки не фатальны: если звука нет в старом образе — тихо возвращаем Err,
 /// система продолжает работать беззвучно, как раньше.
 /// Приоритетно использует Intel HDA (если режим Auto/HDA); при отсутствии или режиме Speaker — ШИМ на PC speaker.
@@ -347,14 +338,9 @@ pub fn play_speaker_named(name: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Список файлов, реально присутствующих в EROFS /super (для `sound list`,
-/// чтобы CLI мог отметить недоступные эффекты в старых образах).
+/// Список файлов UI-звуков, реально присутствующих в /system/media/audio/ui.
 pub fn media_files() -> Result<Vec<String>, &'static str> {
-    let layout = crate::partition_map::lookup_layout("/super")
-        .ok_or("sound: в карте разделов нет /super")?;
-    let image = crate::bootchain::read_partition_image(layout)
-        .map_err(|_| "sound: не удалось прочитать /super с диска")?;
-    crate::erofs::list_files(&image)
-        .map(|v| v.into_iter().map(|(n, _)| n).collect())
-        .map_err(|_| "sound: /super не EROFS")
+    crate::vfs::readdir("/system/media/audio/ui")
+        .map(|v| v.into_iter().map(|e| e.name).collect())
+        .map_err(|_| "sound: каталог /system/media/audio/ui не прочитан")
 }

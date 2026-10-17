@@ -162,9 +162,14 @@ def main():
         pass
 
     if has_pil:
+        try:
+            resample = Image.Resampling.LANCZOS
+        except AttributeError:
+            resample = Image.LANCZOS
         im = Image.open(src).convert("RGB")
-        im = im.resize((size, size), Image.LANCZOS)
-        idx = [nearest(p) for p in list(im.getdata())]
+        im = im.resize((size, size), resample)
+        pixels = im.load()
+        idx = [nearest(pixels[x, y]) for y in range(size) for x in range(size)]
     else:
         idx = decode_png_pure(src, size)
 

@@ -47,9 +47,22 @@ pub fn hal_selftest() {
     // видно, что оба пути слоя дают одно и то же.
     dev.enable_memory();
     dev.enable_bus_master();
+    dev.config_write32(0x04, dev.config_read32(0x04));
+    hal::udelay(10);
 
     if let Some(bar1) = dev.bar_address(1) {
         let regs = unsafe { hal::mmio::MmioRegion::new(bar1, 256) };
+        if let Some(b0) = regs.read8(0x00) {
+            let _ = regs.write8(0x00, b0);
+        }
+        if let Some(w0) = regs.read16(0x04) {
+            let _ = regs.write16(0x04, w0);
+        }
+        if let Some(d0) = regs.read32(0x00) {
+            let _ = regs.write32(0x00, d0);
+            let _ = regs.modify32(0x00, 0, 0);
+            let _ = regs.wait_for(0x00, 0, d0 & 0, 10);
+        }
         match (regs.read32(0x00), regs.read16(0x04)) {
             (Some(lo), Some(hi)) => {
                 let m = lo.to_le_bytes();

@@ -21,6 +21,20 @@
 //! Live-диск.
 
 use crate::port::{inb, insw, outb, outsw};
+use core::sync::atomic::{AtomicU64, Ordering};
+
+/// Накопленный дисковой I/O в секторах. Считается только успешные
+/// операции: счётчик увеличивается после завершения передачи данных.
+static SECTORS_READ: AtomicU64 = AtomicU64::new(0);
+static SECTORS_WRITTEN: AtomicU64 = AtomicU64::new(0);
+
+/// Накопленный дисковой I/O: `(прочитано секторов, записано секторов)`.
+pub fn io_counters() -> (u64, u64) {
+    (
+        SECTORS_READ.load(Ordering::Relaxed),
+        SECTORS_WRITTEN.load(Ordering::Relaxed),
+    )
+}
 
 const DATA_PORT: u16 = 0x1F0;
 const ERROR_PORT: u16 = 0x1F1;
@@ -47,7 +61,7 @@ pub const SECTOR_SIZE: usize = 512;
 /// Какой из двух дисков на первичном ATA-контроллере адресуем.
 /// См. модульную документацию выше — оба используют одни и те же порты
 /// ввода-вывода, различается только бит в DRIVE_HEAD.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Drive {
     /// "Primary Master" — тот самый диск, с которого DeiX загрузилась.
     Master,
@@ -110,6 +124,10 @@ pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -
     }
 
     if !wait_bsy_clear() {
+        crate::diag::error(
+            crate::diag::ErrorCode::new(crate::diag::Subsystem::Disk, 4),
+            &alloc::format!("ATA: BSY не снят перед чтением LBA {}", lba),
+        );
         return Err(());
     }
 
@@ -126,13 +144,20 @@ pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -
 
     let sectors = if count == 0 { 256 } else { count as usize };
     for i in 0..sectors {
-        wait_drq_or_err()?;
+        if wait_drq_or_err().is_err() {
+            crate::diag::error(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Disk, 2),
+                &alloc::format!("ATA: ошибка чтения LBA {} (сектор {} из {})", lba, i + 1, sectors),
+            );
+            return Err(());
+        }
         let offset = i * SECTOR_SIZE;
         unsafe {
             insw(DATA_PORT, &mut buffer[offset..offset + SECTOR_SIZE]);
         }
     }
 
+    SECTORS_READ.fetch_add(sectors as u64, Ordering::Relaxed);
     Ok(())
 }
 
@@ -153,6 +178,10 @@ pub fn write_sectors_to(drive: Drive, lba: u32, count: u8, data: &[u8]) -> Resul
     }
 
     if !wait_bsy_clear() {
+        crate::diag::error(
+            crate::diag::ErrorCode::new(crate::diag::Subsystem::Disk, 4),
+            &alloc::format!("ATA: BSY не снят перед записью LBA {}", lba),
+        );
         return Err(());
     }
 
@@ -168,7 +197,13 @@ pub fn write_sectors_to(drive: Drive, lba: u32, count: u8, data: &[u8]) -> Resul
 
     let sectors = if count == 0 { 256 } else { count as usize };
     for i in 0..sectors {
-        wait_drq_or_err()?;
+        if wait_drq_or_err().is_err() {
+            crate::diag::error(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Disk, 3),
+                &alloc::format!("ATA: ошибка записи LBA {} (сектор {} из {})", lba, i + 1, sectors),
+            );
+            return Err(());
+        }
         let offset = i * SECTOR_SIZE;
         unsafe {
             outsw(DATA_PORT, &data[offset..offset + SECTOR_SIZE]);
@@ -180,6 +215,7 @@ pub fn write_sectors_to(drive: Drive, lba: u32, count: u8, data: &[u8]) -> Resul
     }
     wait_bsy_clear();
 
+    SECTORS_WRITTEN.fetch_add(sectors as u64, Ordering::Relaxed);
     Ok(())
 }
 
@@ -227,21 +263,55 @@ pub fn is_slave_present() -> bool {
     wait_drq_or_err().is_ok()
 }
 
-/// Возвращает общее число адресуемых секторов диска Slave, читая слова
-/// 60-61 структуры IDENTIFY DEVICE (стандартное поле "Total number of
-/// user addressable sectors" для LBA28-дисков). Нужно команде `install`,
-/// чтобы не записать больше данных, чем реально помещается на целевой
-/// диск.
-pub fn slave_sector_count() -> Option<u32> {
-    if !is_slave_present() {
+/// IDENTIFY DEVICE (0xEC) для произвольного диска: возвращает 512 байт
+/// структуры или None, если диска нет / это не ATA-диск (ATAPI).
+/// В отличие от is_slave_present, ВСЕГДА вычитывает буфер данных —
+/// контроллер не остаётся в состоянии DRQ.
+fn identify(drive: Drive) -> Option<[u8; SECTOR_SIZE]> {
+    let select: u8 = match drive {
+        Drive::Master => 0xE0,
+        Drive::Slave => 0xF0,
+    };
+    unsafe {
+        outb(DRIVE_HEAD_PORT, select);
+        outb(SECTOR_COUNT_PORT, 0);
+        outb(LBA_LOW_PORT, 0);
+        outb(LBA_MID_PORT, 0);
+        outb(LBA_HIGH_PORT, 0);
+        outb(COMMAND_PORT, CMD_IDENTIFY);
+    }
+
+    let status = unsafe { inb(STATUS_PORT) };
+    if status == 0x00 {
         return None;
     }
-    // is_slave_present() уже отправил IDENTIFY и дождался DRQ — данные
-    // готовы к чтению, остаётся вычитать все 256 слов (512 байт) буфера.
+    if !wait_bsy_clear() {
+        return None;
+    }
+    // Ненулевые LBA_MID/LBA_HIGH после IDENTIFY — не ATA-диск (ATAPI).
+    let lba_mid = unsafe { inb(LBA_MID_PORT) };
+    let lba_high = unsafe { inb(LBA_HIGH_PORT) };
+    if lba_mid != 0 || lba_high != 0 {
+        return None;
+    }
+    if wait_drq_or_err().is_err() {
+        return None;
+    }
+
     let mut buf = [0u8; SECTOR_SIZE];
     unsafe {
         insw(DATA_PORT, &mut buf);
     }
+    Some(buf)
+}
+
+/// Общее число адресуемых секторов диска — слова 60-61 структуры
+/// IDENTIFY DEVICE ("Total number of user addressable sectors", LBA28).
+/// Нужно установщику: показать ёмкость целевого диска и не записать
+/// больше, чем реально помещается. Заодно вычитывает данные IDENTIFY,
+/// оставленные is_slave_present в контроллере (DRQ).
+pub fn sector_count(drive: Drive) -> Option<u32> {
+    let buf = identify(drive)?;
     let sectors = u32::from_le_bytes([buf[120], buf[121], buf[122], buf[123]]);
     if sectors == 0 {
         None

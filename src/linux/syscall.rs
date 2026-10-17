@@ -261,7 +261,7 @@ fn sys_nanosleep(req: u64) -> i64 {
     let ms = sec.saturating_mul(1000) + nsec / 1_000_000;
     let until = crate::timer::uptime_ms() + ms.min(10_000);
     while crate::timer::uptime_ms() < until {
-        unsafe { core::arch::asm!("hlt") };
+        crate::sched::idle_wait();
     }
     0
 }

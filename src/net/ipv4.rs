@@ -18,6 +18,10 @@ pub struct Ipv4Header {
 }
 
 impl Ipv4Header {
+    pub fn version(&self) -> u8 {
+        self.version_ihl >> 4
+    }
+
     pub fn parse(data: &[u8]) -> Option<Ipv4Header> {
         if data.len() < MIN_HEADER_LEN {
             return None;
@@ -47,8 +51,8 @@ impl Ipv4Header {
 
 pub fn handle_packet(data: &[u8]) {
     let header = match Ipv4Header::parse(data) {
-        Some(h) => h,
-        None => return,
+        Some(h) if h.version() == 4 => h,
+        _ => return,
     };
 
     let my_ip = crate::net::my_ip();

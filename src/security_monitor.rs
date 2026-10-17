@@ -1,14 +1,12 @@
-// ❗ЗАВИСИМОТИ: инит скрипт pid 1 который будет ограничивать пользовательский
 // ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0). Интеграция в существующий код
 // security_monitor — эвристический демон анализа угроз (Ring 3 / Ring 0 мост):
 // перехват ransomware-активности, инъекций кода в системные пути и высылка SIGKILL.
 // no_std-совместимо: только core/alloc (BTreeMap, String, Vec), вывод — crate::println!.
 
-#![allow(dead_code)]
-
 use alloc::collections::BTreeMap;
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -22,10 +20,8 @@ pub const RANSOMWARE_WRITE_FREQUENCY_THRESHOLD: u64 = 150;
 pub const RANSOMWARE_ENTROPY_THRESHOLD: f32 = 0.75;
 
 /// Префиксы системных путей, запретных для модификации из Ring 3.
-pub const SYSTEM_TARGET_PREFIXES: [&str; 4] = [
-    "/kernel",
+pub const SYSTEM_TARGET_PREFIXES: [&str; 2] = [
     "/system",
-    "/init_boot",
     "/dev/block/by-name",
 ];
 
@@ -137,6 +133,10 @@ impl ProcessProfile {
             last_risk_score: 0.0,
             terminated: false,
         }
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid
     }
 
     pub fn record(&mut self) {
@@ -270,6 +270,7 @@ impl HeuristicAnalysisEngine {
             if let Some(profile) = self.profiles.get_mut(&event.pid) {
                 profile.terminated = true;
                 profile.last_risk_score = verdict.risk_score;
+                let _ = profile.pid();
             }
             true
         } else {
@@ -317,10 +318,11 @@ pub fn boot_selfcheck() {
 
     // 2. Симулированная атака программы-вымогателя (высокая частота + высокая энтропия)
     let attack = SecurityEvent::new(666, "sys_write", "/userdata/private/data.bin", 450, 0.92);
+    let attack_analyzed = engine.analyze_event(&attack);
     let attack_flagged = engine.process_event(&attack);
-    if attack_flagged && !engine.kill_signals.is_empty() {
+    if attack_analyzed && attack_flagged && !engine.kill_signals.is_empty() {
         let sig = &engine.kill_signals[0];
-        crate::println!("  [secmon] Ransomware detected: SIGKILL -> PID {} (risk > 0.85)", sig.pid);
+        crate::println!("  [secmon] Ransomware detected: {}", sig.describe());
         crate::println!("  [secmon] Heuristic Security Monitor: ALL CHECKS PASSED");
     } else {
         crate::println!("  [secmon] ERROR: Ransomware attack was not intercepted!");

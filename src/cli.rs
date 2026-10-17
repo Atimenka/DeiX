@@ -10,7 +10,8 @@ use crate::rtl8139;
 use crate::vga::Color;
 use crate::vgaglobal::with_writer;
 use crate::{ext2, gpu, keyboard, print, println, println_t, t, timer};
-use alloc::string::{String, ToString};
+use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::arch::asm;
 
@@ -18,6 +19,9 @@ const MAX_LINE: usize = 120;
 const MAX_HISTORY: usize = 32;
 
 pub fn run() -> ! {
+    // Фаза загрузки закончена: система диагностики перестаёт дублировать
+    // события на консоль — дальше журнал смотрят командами log/error.
+    crate::diag::log::finish_boot();
     println!();
     println!("{}", t!(
         en: "Welcome to DeiX CLI! Type 'help' for the command list.",
@@ -56,6 +60,10 @@ pub fn run() -> ! {
                     push_history(&mut history, cmd);
                 }
                 execute(cmd);
+                // Отложенная запись журналов: события, накопленные командой,
+                // уходят в /userdata/log. Дёшево: при пустом буфере выходит
+                // сразу по счётчику.
+                crate::diag::persist::flush();
                 len = 0;
                 history_cursor = None;
                 prompt();
@@ -170,6 +178,16 @@ pub fn set_cwd(dir: &str) {
     *CWD.lock() = alloc::string::String::from(dir);
 }
 
+/// Возвращает текущий рабочий каталог (для DS `pwd`).
+pub fn get_cwd() -> alloc::string::String {
+    let cwd = CWD.lock();
+    if cwd.is_empty() {
+        alloc::string::String::from("/")
+    } else {
+        cwd.clone()
+    }
+}
+
 
 pub fn execute(line: &str) {
     let line = line.trim();
@@ -247,13 +265,17 @@ pub fn execute(line: &str) {
         "ifconfig" => cmd_ifconfig(rest),
         "arp" => cmd_arp(),
         "ping" => cmd_ping(rest),
+        "dns" => cmd_dns(rest),
         "gpu" => cmd_gpu(rest),
         "sound" => cmd_sound(rest),
         "ls" => cmd_ls(),
         "cat" => cmd_cat(rest),
         "write" => cmd_write(rest),
+        "mkdir" => cmd_mkdir(rest),
         "rm" => cmd_rm(rest),
         "pkg" => cmd_pkg(rest),
+        "dialog" => cmd_dialog_test(),
+        "erofs" => cmd_erofs_test(),
         "run" => cmd_run(rest),
         "install" => crate::install::cmd_install(rest),
         "bigfile" => cmd_bigfile(rest),
@@ -272,77 +294,49 @@ pub fn execute(line: &str) {
                 crate::bugreport::cmd_crashlog();
             }
         }
-        "reboot" => {
-            // reboot recovery / reboot fastbootd / reboot dsm — одноразовый флажок.
-            match rest.trim() {
-                "recovery" => {
-                    crate::bcb::write_boot_mode(crate::bcb::BootMode::Recovery);
-                    println!("Перезагрузка в RECOVERY при следующей загрузке (флажок одноразовый).");
-                }
-                "fastbootd" | "fastboot" => {
-                    crate::bcb::write_boot_mode(crate::bcb::BootMode::Fastbootd);
-                    println!("Перезагрузка в FASTBOOTD при следующей загрузке (выше recovery).");
-                }
-                "dsm" => {
-                    crate::bcb::write_boot_mode(crate::bcb::BootMode::Dsm);
-                    println!("Перезагрузка в DSM (Download System Manager) при следующей загрузке (выше fastbootd).");
-                }
-                _ => cmd_reboot(),
-            }
-        }
-        "bcb" => {
-            let p: Vec<&str> = rest.split_whitespace().collect();
-            match p.first().copied().unwrap_or("") {
-                "recovery" => crate::bcb::write_boot_mode(crate::bcb::BootMode::Recovery),
-                "fastbootd" => crate::bcb::write_boot_mode(crate::bcb::BootMode::Fastbootd),
-                "dsm" => crate::bcb::write_boot_mode(crate::bcb::BootMode::Dsm),
-                "normal" | "clear" => crate::bcb::clear_boot_mode(),
-                "slot" => {
-                    match p.get(1).copied().unwrap_or("") {
-                        "a" => crate::bcb::write_slot(0),
-                        "b" => crate::bcb::write_slot(1),
-                        _ => println!("bcb slot <a|b> - switch active A/B slot"),
-                    }
-                }
-                _ => println!("bcb <recovery|fastbootd|dsm|normal|slot <a|b>> - boot flag / A/B slot"),
-            }
-        }
+        "reboot" => cmd_reboot(),
+        "poweroff" | "shutdown" => cmd_poweroff(),
         "halt" => cmd_halt(),
-        // Политика безопасности DeiX OS: эскалация привилегий ПОЛНОСТЬЮ
-        // запрещена. Пользователь Ring 3 не может выполнить su/sudo/root —
-        // система не имеет суперпользователя в пользовательском пространстве
-        // (все привилегированные операции выполняет PID 1 в Ring 0).
-        "ota" => crate::ota::cmd_ota(rest, &mut crate::avb::avb_mut()),
-        "adb" => crate::adb::cmd_adb(rest, &mut crate::avb::avb_mut()),
-        "adb-repl" => crate::adb::adb_repl(&mut crate::avb::avb_mut()),
+        "duil" => crate::duil::cmd_duil(rest),
+        "cli" => cmd_cli(rest),
+        "ds" => crate::ds::cmd_ds(rest),
+
+        "taskmgr" => crate::sched::cmd_threads(rest),
+        "ps" => crate::process::cmd_ps(),
+        "kill" => crate::process::cmd_kill(rest),
+        "lsmod" => cmd_lsmod(),
+        "kmod" => cmd_kmod(rest),
+        "log" => crate::diag::cli::cmd_log(rest),
+        "error" => crate::diag::cli::cmd_error(rest),
+        "panic" => crate::diag::cli::cmd_panic(rest),
+        "diagnostics" => crate::diag::cli::cmd_diagnostics(rest),
         "dev" => {
-            let mut a = crate::avb::avb_mut();
             match rest.trim() {
-                "on" => crate::devmode::enable_dev_mode(&mut a),
-                "off" => crate::devmode::disable_dev_mode(&mut a),
-                _ => crate::devmode::dev_status(&a),
+                "on" => crate::devmode::enable_dev_mode(),
+                "off" => crate::devmode::disable_dev_mode(),
+                "request" => crate::devauth::cmd_request(),
+                "revoke" => crate::devauth::cmd_revoke(),
+                _ => crate::devmode::dev_status(),
             }
         }
-        "recovery" => crate::recovery_ui::recovery_gui(),
-        "fastbootd" => crate::fastbootd_ui::fastbootd_gui(),
-        "dsm" => crate::dsm::dsm_gui(),
+        "sysfs" => crate::sysfs::cmd_sysfs(rest),
         "nvidia" => crate::drivers::nvidia::cmd_nvidia(rest),
         "microcode" => crate::microcode::cmd_microcode(rest),
         "hal" => crate::drivers::hal_selftest(),
         "crypt" => crate::luks::cmd_crypt(rest),
         "dinit" => crate::dinit::cmd_dinit(rest),
         "logo" => crate::bootlogo::cmd_logo(rest),
+        "wallpaper" => cmd_wallpaper(rest),
         "linux" => crate::linux::cmd_linux(rest),
         "profile" => crate::userfs::cmd_profile(rest, &current_user().unwrap_or_default()),
         "lock" => crate::loginui::cmd_lock(&current_user().unwrap_or_default()),
-        "kexec" => crate::kexec::cmd_kexec(rest),
         "threads" => crate::sched::cmd_threads(rest),
         "su" | "sudo" | "root" => {
             if crate::devmode::sudo_allowed() {
-                // Dev-режим: sudo доступен (гарантия OTA снята).
+                // Dev-режим: sudo доступен, гарантии целостности сняты.
                 println!("{}", t!(
-                    en: "SUDO: root shell in dev-mode. OTA guarantee is VOID.",
-                    ru: "SUDO: root-оболочка в dev-режиме. OTA-гарантия НЕ действует."
+                    en: "SUDO: root shell in dev-mode. System integrity guarantees are VOID.",
+                    ru: "SUDO: root-оболочка в dev-режиме. Гарантии целостности системы НЕ действуют."
                 ));
             } else {
                 println!("{}", t!(
@@ -360,13 +354,13 @@ pub fn execute(line: &str) {
 }
 
 /// sound [list|play <имя>|beep [hz ms]] — звуковые эффекты UI через
-/// PC speaker (DPS-файлы из EROFS-раздела /super, см. src/sound.rs).
+/// PC speaker (DPS-файлы из /system/media/audio/ui, см. src/sound.rs).
 /// Без подкоманды — список эффектов с отметкой наличия в образе.
 fn cmd_sound(rest: &str) {
     let mut it = rest.split_whitespace();
     match it.next() {
         None | Some("list") => {
-            println!("{}", t!(en: "UI sounds (PC speaker; files live in EROFS /super):", ru: "UI-звуки (PC speaker; файлы лежат в EROFS /super):"));
+            println!("{}", t!(en: "UI sounds (PC speaker; files live in /system/media/audio/ui):", ru: "UI-звуки (PC speaker; файлы в /system/media/audio/ui):"));
             let media = crate::sound::media_files().unwrap_or_default();
             for s in crate::sound::UI_SOUNDS {
                 let have = media.iter().any(|f| f == s.dps_name());
@@ -467,6 +461,8 @@ fn cmd_sound(rest: &str) {
                 }
             }
         }
+        Some("warn") => crate::sound::warn_triple(),
+        Some("alert") => crate::sound::alert(),
         Some("beep") => {
             let hz: u32 = it.next().and_then(|s| s.parse().ok()).unwrap_or(880);
             let ms: u64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(150);
@@ -499,16 +495,17 @@ fn cmd_help() {
     println!("  cpuid                   - {}", t!(en: "print CPU vendor string", ru: "вывести vendor string процессора"));
     println!("  mem <n>                 - {}", t!(en: "heap allocator test (Vec<u32> of n elements)", ru: "тест heap-аллокатора (Vec<u32> на n элементов)"));
     println!("  lang <en|ru>            - {}", t!(en: "switch interface language", ru: "переключить язык интерфейса"));
-    println!("  ifconfig [ip]           - {}", t!(en: "show/change network config", ru: "показать/сменить сетевую конфигурацию"));
+    println!("  ifconfig [ip|dns <ip>]  - {}", t!(en: "show/change network config (IP, DNS server)", ru: "показать/сменить сетевую конфигурацию (IP, DNS-сервер)"));
     println!("  arp                     - {}", t!(en: "show ARP cache", ru: "показать ARP-кэш"));
     println!("  ping <ip>               - {}", t!(en: "send ICMP echo request", ru: "отправить ICMP echo request"));
+    println!("  dns <host>              - {}", t!(en: "resolve a hostname via DNS (UDP/53)", ru: "разрешить имя хоста через DNS (UDP/53)"));
     println!("  threads [list|test]     - {}", t!(en: "preemptive multitasking: task list / selftest", ru: "вытесняющая многозадачность: список задач / самопроверка"));
-    println!("  kexec [a|b|check]       - {}", t!(en: "boot the kernel from /kernel_a|b partition", ru: "запустить ядро из раздела /kernel_a|b"));
     println!("  crypt <status|addpass|delpass|iter> - {}", t!(en: "volume password slots (LUKS-style)", ru: "пароли тома: слоты, как в LUKS"));
     println!("  dinit [status|services|mounts|users|audit|security|stage|reload] - {}", t!(en: "PID 1 supervisor: services, mounts, users, audit, secmon", ru: "супервизор PID 1: службы, монтирования, пользователи, аудит, монитор"));
     println!("  hal                     - {}", t!(en: "driver layer selftest on RTL8139", ru: "самопроверка прослойки драйверов на RTL8139"));
-    println!("  nvidia                  - {}", t!(en: "open NVIDIA driver: probe and identify GPU", ru: "открытый драйвер NVIDIA: поиск и опознание карты"));
+    println!("  nvidia                  - {}", t!(en: "NVIDIA hardware detection: probe and identify GPU (not an acceleration driver)", ru: "детект NVIDIA-железа: поиск и опознание карты (не драйвер ускорения)"));
     println!("  logo [show|info]        - {}", t!(en: "boot logo: show / info", ru: "загрузочное лого: показать / инфо"));
+    println!("  wallpaper <url|file>    - {}", t!(en: "download PNG/BMP and set as desktop wallpaper", ru: "скачать PNG/BMP и поставить обоями рабочего стола"));
     println!("  sound [list|play <имя>|beep [hz ms]] - {}", t!(en: "UI sound effects via PC speaker", ru: "звуковые эффекты UI через PC speaker"));
     println!("  linux <run|info> <файл> - {}", t!(en: "run a Linux ELF program", ru: "запустить ELF-программу Linux"));
     println!("  gpu info                - {}", t!(en: "show detected GPU info", ru: "показать инфо об обнаруженном GPU"));
@@ -521,6 +518,8 @@ fn cmd_help() {
     println!("  pkg <list|install|remove|info> - {}", t!(en: "local package manager (see 'pkg list')", ru: "локальный пакетный менеджер (см. 'pkg list')"));
     println!("  run <program.mex>       - {}", t!(en: "run a .mex program", ru: "запустить .mex программу"));
     println!("  install                 - {}", t!(en: "clone this disk onto a second physical disk (real HDD install)", ru: "клонировать этот диск на второй физический диск (установка на реальный HDD)"));
+    println!("  sysfs [status|convert]  - {}", t!(en: "convert /system from EROFS to ext2 (dev mode only)", ru: "конвертировать /system из EROFS в ext2 (только dev-режим)"));
+    println!("  dev [request|on|off|revoke] - {}", t!(en: "developer mode (server-side activation, see docs/DEVAUTH.md)", ru: "режим разработчика (серверная активация, см. docs/DEVAUTH.md)"));
     println!("  bigfile <size_kb>       - {}", t!(en: "test ext2 indirect blocks with a large file", ru: "проверить indirect-блоки ext2 большим файлом"));
     println!("  useradd <user> <pass>   - {}", t!(en: "create a new user account", ru: "создать новый аккаунт пользователя"));
     println!("  passwd <u> <old> <new>  - {}", t!(en: "change a user's password", ru: "сменить пароль пользователя"));
@@ -528,14 +527,32 @@ fn cmd_help() {
     println!("  users                   - {}", t!(en: "list registered user accounts", ru: "список зарегистрированных пользователей"));
     println!("  encrypt confirm <pass>  - {}", t!(en: "enable full-disk AES-256-XTS encryption (erases data!)", ru: "включить шифрование диска AES-256-XTS (стирает данные!)"));
     println!("  crash <divzero|bp|inv>  - {}", t!(en: "demonstrate exception handling", ru: "демонстрация обработки исключений"));
-    println!("  reboot                  - {}", t!(en: "reboot (via keyboard controller)", ru: "перезагрузка (через контроллер клавиатуры)"));
-    println!("  halt                    - {}", t!(en: "halt the CPU (cli; hlt)", ru: "остановить процессор (cli; hlt)"));
+    println!("  duil [run|calc]         - {}", t!(en: "DUIL declarative UI engine and calculator demo", ru: "декларативный UI-движок DUIL и калькулятор"));
+    println!("  ds [script.dxs|-i|-c]   - {}", t!(en: "DeiX Script interpreter and REPL shell", ru: "интерпретатор скриптов DeiX Script и REPL"));
+
+    println!("  taskmgr                 - {}", t!(en: "system task manager and process list", ru: "диспетчер задач и процессов"));
+    println!("  log [errors|boot|...]   - {}", t!(en: "system event log", ru: "журнал событий системы"));
+    println!("  error [show DX-...]     - {}", t!(en: "error list and code cards", ru: "список ошибок и карточки кодов"));
+    println!("  panic [last|clear]      - {}", t!(en: "last kernel panic report", ru: "последний отчёт об отказе ядра"));
+    println!("  diagnostics [mode on]   - {}", t!(en: "diagnostic summary / verbose mode", ru: "сводка диагностики / подробный режим"));
+    println!("  reboot                  - {}", t!(en: "reboot system", ru: "перезагрузка системы"));
+    println!("  poweroff / shutdown     - {}", t!(en: "power off system (ACPI / QEMU)", ru: "выключение системы (ACPI / QEMU)"));
+    println!("  halt                    - {}", t!(en: "halt CPU low-level (cli; hlt)", ru: "остановить процессор (cli; hlt)"));
     println!();
     println!("{}", t!(en: "Up/Down arrows browse command history.", ru: "Стрелки вверх/вниз - навигация по истории команд."));
 }
 
 fn cmd_about() {
-    println!("{}", t!(en: "DeiX v0.2-beta - mini kernel written in Rust", ru: "DeiX v0.2-beta - мини-ядро на Rust"));
+    let gui = if crate::ui::compositor_status() {
+        t!(en: "active", ru: "активен")
+    } else {
+        t!(en: "inactive", ru: "неактивен")
+    };
+    println!(
+        "{} - mini kernel written in Rust (GUI compositor: {})",
+        crate::OS_RELEASE,
+        gui
+    );
     println!(
         "{}",
         t!(
@@ -574,19 +591,42 @@ fn cmd_uptime() {
 }
 
 fn cmd_color(name: &str) {
-    let color = match name {
-        "green" => Some(Color::LightGreen),
-        "white" => Some(Color::White),
-        "red" => Some(Color::LightRed),
-        "cyan" => Some(Color::LightCyan),
+    let name_trimmed = name.trim();
+    let sub = name_trimmed.split_whitespace().next().unwrap_or("");
+    if matches!(
+        sub,
+        "opacity" | "alpha" | "transparency" | "blur" | "bg" | "background" | "valid" | "invalid" | "text" | "preset" | "reset"
+    ) || sub.starts_with("0x") || sub.starts_with('#') {
+        crate::ui::apps::terminal::cmd_terminal_color(name_trimmed);
+        return;
+    }
+    let _ = crate::renderer::Color::palette();
+    if let Ok(idx) = name_trimmed.parse::<u8>() {
+        let c = Color::from_index(idx);
+        with_writer(|w| w.set_color(c, Color::Black));
+        println!("{}", t!(en: "Color changed.", ru: "Цвет изменён."));
+        return;
+    }
+    let color = match name_trimmed {
+        "black" => Some(Color::Black),
+        "blue" => Some(Color::Blue),
+        "green" => Some(Color::Green),
+        "cyan" => Some(Color::Cyan),
+        "red" => Some(Color::Red),
+        "magenta" => Some(Color::Magenta),
+        "brown" => Some(Color::Brown),
+        "lightgray" => Some(Color::LightGray),
+        "darkgray" => Some(Color::DarkGray),
+        "lightblue" => Some(Color::LightBlue),
+        "lightgreen" => Some(Color::LightGreen),
+        "lightcyan" => Some(Color::LightCyan),
+        "lightred" => Some(Color::LightRed),
+        "pink" => Some(Color::Pink),
         "yellow" => Some(Color::Yellow),
+        "white" => Some(Color::White),
         "" => None,
         _ => {
-            println_t!(
-                en: "Unknown color '{}'. Available: green, white, red, cyan, yellow",
-                ru: "Неизвестный цвет '{}'. Доступно: green, white, red, cyan, yellow";
-                name
-            );
+            crate::ui::apps::terminal::cmd_terminal_color(name_trimmed);
             return;
         }
     };
@@ -603,30 +643,8 @@ fn cmd_color(name: &str) {
 }
 
 fn cmd_cpuid() {
-    // rbx зарезервирован LLVM для внутренних нужд и не может быть указан
-    // напрямую как выходной операнд inline asm, поэтому сохраняем/
-    // восстанавливаем его вручную через стек.
-    let (ebx, edx, ecx): (u32, u32, u32);
-    unsafe {
-        asm!(
-            "mov eax, 0",
-            "push rbx",
-            "cpuid",
-            "mov {ebx_out:e}, ebx",
-            "pop rbx",
-            ebx_out = out(reg) ebx,
-            out("edx") edx,
-            out("ecx") ecx,
-            out("eax") _,
-            options(nostack)
-        );
-    }
-    let mut vendor = [0u8; 12];
-    vendor[0..4].copy_from_slice(&ebx.to_le_bytes());
-    vendor[4..8].copy_from_slice(&edx.to_le_bytes());
-    vendor[8..12].copy_from_slice(&ecx.to_le_bytes());
-    let vendor_str = core::str::from_utf8(&vendor).unwrap_or("????????????");
-    println!("CPU vendor: {}", vendor_str);
+    println!("CPU vendor: {}", crate::cpuid::vendor_string());
+    println!("CPU: {}", crate::cpuid::describe());
 }
 
 fn cmd_mem(arg: &str) {
@@ -668,6 +686,37 @@ fn cmd_mem(arg: &str) {
             ru: "Vec автоматически освобождён (dealloc) при выходе из области видимости."
         )
     );
+}
+
+/// `wallpaper <url|/userdata/путь>` — скачивает PNG/BMP по http(s) или
+/// берёт файл с диска, уменьшает до лимита ext2 (268 КиБ), пишет в
+/// /userdata/wallpaper.bmp и переключает тему на стиль Custom.
+/// Вся логика — в ui::wallpaper (общая с браузером).
+fn cmd_wallpaper(arg: &str) {
+    let a = arg.trim();
+    if a.is_empty() {
+        let t = crate::ui::theme::get_theme();
+        let style = crate::ui::theme::WALLPAPER_STYLES
+            .get(t.wallpaper_style as usize)
+            .copied()
+            .unwrap_or("?");
+        println!("  {}", t!(en: "Usage: wallpaper <http(s)://url | /userdata/path.png|.bmp>", ru: "Использование: wallpaper <http(s)://url | /userdata/путь.png|.bmp>"));
+        println!("  {} {}", t!(en: "Current style:", ru: "Текущий стиль:"), style);
+        return;
+    }
+    let result = if a.starts_with("http://") || a.starts_with("https://") {
+        println!("  {} {}", t!(en: "Downloading", ru: "Скачиваю"), a);
+        crate::ui::wallpaper::set_from_url(a)
+    } else {
+        match crate::vfs::read_file(a) {
+            Ok(data) => crate::ui::wallpaper::set_from_bytes(&data),
+            Err(e) => Err(e.message()),
+        }
+    };
+    match result {
+        Ok(msg) => println!("  [wallpaper] {}", msg),
+        Err(e) => println!("  [wallpaper] {}: {}", t!(en: "error", ru: "ошибка"), e),
+    }
 }
 
 fn cmd_lang(arg: &str) {
@@ -722,20 +771,40 @@ fn cmd_ifconfig(arg: &str) {
     }
 
     if !arg.is_empty() {
-        match parse_ipv4(arg) {
-            Some(ip) => {
-                net::set_my_ip(ip);
-                println!("{}", t!(en: "IP address changed.", ru: "IP-адрес изменён."));
+        // `ifconfig dns <ip>` — сменить DNS-сервер, `ifconfig <ip>` — свой адрес.
+        if let Some(dns_arg) = arg.strip_prefix("dns ") {
+            match parse_ipv4(dns_arg.trim()) {
+                Some(ip) => {
+                    net::set_dns_ip(ip);
+                    println!("{}", t!(en: "DNS server changed.", ru: "DNS-сервер изменён."));
+                }
+                None => {
+                    println!(
+                        "{}",
+                        t!(
+                            en: "Invalid IP address. Format: ifconfig dns 10.0.2.3",
+                            ru: "Неверный IP-адрес. Формат: ifconfig dns 10.0.2.3"
+                        )
+                    );
+                    return;
+                }
             }
-            None => {
-                println!(
-                    "{}",
-                    t!(
-                        en: "Invalid IP address. Format: ifconfig 192.168.1.10",
-                        ru: "Неверный IP-адрес. Формат: ifconfig 192.168.1.10"
-                    )
-                );
-                return;
+        } else {
+            match parse_ipv4(arg) {
+                Some(ip) => {
+                    net::set_my_ip(ip);
+                    println!("{}", t!(en: "IP address changed.", ru: "IP-адрес изменён."));
+                }
+                None => {
+                    println!(
+                        "{}",
+                        t!(
+                            en: "Invalid IP address. Format: ifconfig 192.168.1.10",
+                            ru: "Неверный IP-адрес. Формат: ifconfig 192.168.1.10"
+                        )
+                    );
+                    return;
+                }
             }
         }
     }
@@ -750,6 +819,23 @@ fn cmd_ifconfig(arg: &str) {
     );
     println!("IP:      {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
     println!("Gateway: {}.{}.{}.{}", gw[0], gw[1], gw[2], gw[3]);
+    let dns = net::dns_ip();
+    println!("DNS:     {}.{}.{}.{}", dns[0], dns[1], dns[2], dns[3]);
+
+    // Реальные счётчики драйвера, а не «оценка нагрузки».
+    let (rxp, rxb, txp, txb) = rtl8139::traffic_counters();
+    println!("RX:      {} пакетов, {} байт", rxp, rxb);
+    println!("TX:      {} пакетов, {} байт", txp, txb);
+    let drops = rtl8139::rx_drops();
+    if drops > 0 {
+        println_t!(
+            en: "RX drops: {} (ring overflow — worker did not keep up)",
+            ru: "Потери RX: {} (переполнение кольца — рабочий поток не успевал)";
+            drops
+        );
+    } else {
+        println!("RX drops: 0");
+    }
 }
 
 fn cmd_arp() {
@@ -762,6 +848,51 @@ fn cmd_arp() {
     }
     println!("{}", t!(en: "ARP cache:", ru: "ARP-кэш:"));
     crate::net::arp::print_cache();
+}
+
+fn cmd_dns(arg: &str) {
+    if !rtl8139::is_ready() {
+        println!(
+            "{}",
+            t!(en: "No network card detected.", ru: "Сетевая карта не найдена.")
+        );
+        return;
+    }
+    let host = arg.trim();
+    if host.is_empty() {
+        println!(
+            "{}",
+            t!(
+                en: "Usage: dns <hostname> — resolve an A record via UDP/53",
+                ru: "Использование: dns <имя хоста> — разрешить A-запись по UDP/53"
+            )
+        );
+        return;
+    }
+    if parse_ipv4(host).is_some() {
+        println!(
+            "{}",
+            t!(
+                en: "This is already an IPv4 address, nothing to resolve.",
+                ru: "Это уже IPv4-адрес, разрешать нечего."
+            )
+        );
+        return;
+    }
+    let server = net::dns_ip();
+    println_t!(
+        en: "Querying DNS server {}.{}.{}.{} ...",
+        ru: "Запрос к DNS-серверу {}.{}.{}.{} ...";
+        server[0], server[1], server[2], server[3]
+    );
+    match crate::net::dns::resolve_a(host) {
+        Some(ip) => println!("{}: {}.{}.{}.{}", host, ip[0], ip[1], ip[2], ip[3]),
+        None => println_t!(
+            en: "Could not resolve '{}' (timeout, NXDOMAIN or no network).",
+            ru: "Не удалось разрешить '{}' (таймаут, NXDOMAIN или нет сети).";
+            host
+        ),
+    }
 }
 
 fn cmd_ping(arg: &str) {
@@ -883,6 +1014,11 @@ fn cmd_gpu_nvinfo() {
     let nv = crate::nouveau::detect(info.device);
 
     println_t!(
+        en: "NVIDIA PCI device {:02x}:{:02x}.{}, BAR0 MMIO {:#010x}",
+        ru: "PCI устройство NVIDIA {:02x}:{:02x}.{}, BAR0 MMIO {:#010x}";
+        nv.device.bus, nv.device.slot, nv.device.function, nv.bar0_mmio
+    );
+    println_t!(
         en: "NVIDIA chipset ID: {:#04x} (read from NV_PMC_BOOT_0, an open/documented register)",
         ru: "ID чипа NVIDIA: {:#04x} (прочитан из NV_PMC_BOOT_0, открытого/задокументированного регистра)";
         nv.chipset_id
@@ -939,6 +1075,13 @@ fn cmd_gpu_nvinfo() {
 }
 
 fn cmd_gpu_info() {
+    if let Some(fb) = crate::vbe::get_framebuffer() {
+        println_t!(
+            en: "Framebuffer active: {}x{} @ {} bpp",
+            ru: "Активный framebuffer: {}x{} @ {} bpp";
+            fb.width, fb.height, fb.bpp()
+        );
+    }
     match gpu::detect() {
         Some(info) => {
             println_t!(
@@ -1047,6 +1190,11 @@ fn enter_graphics_mode(gpu_device: &crate::pci::PciDevice, width: u32, height: u
         width, height
     );
 
+    // Back buffer старого режима освобождается до установки нового:
+    // два полноэкранных буфера одновременно не помещаются в кучу при
+    // переходе на большие разрешения (см. renderer::set_active_framebuffer).
+    crate::renderer::reset_renderer();
+
     match crate::vbe::set_mode(gpu_device, width, height, crate::vbe::BPP_32) {
         Some(fb) => {
             // Абсолютный курсор мыши (VMware/QEMU backdoor, см.
@@ -1058,7 +1206,14 @@ fn enter_graphics_mode(gpu_device: &crate::pci::PciDevice, width: u32, height: u
             crate::renderer::set_active_framebuffer(fb);
             true
         }
-        None => false,
+        None => {
+            // VBE уже выключен/перепрограммирован: без восстановления
+            // текстового режима пользователь остался бы на чёрном
+            // экране с невидимой консолью.
+            crate::vbe::restore_text_mode();
+            crate::font::restore_full_font();
+            false
+        }
     }
 }
 
@@ -1444,15 +1599,119 @@ fn cmd_encrypt(arg: &str) {
 
 fn cmd_rm(name: &str) {
     if name.is_empty() {
-        println!("{}", t!(en: "Usage: rm <filename>", ru: "Использование: rm <имя_файла>"));
+        println!("{}", t!(en: "Usage: rm <path>", ru: "Использование: rm <путь>"));
         return;
     }
-    match ext2::delete_file(name) {
-        Ok(()) => println_t!(en: "Deleted '{}'.", ru: "Удалено '{}'."; name),
-        Err(ext2::Ext2Error::FileNotFound) => {
+    let path = resolve_user_path(name);
+    match crate::vfs::remove(&path) {
+        Ok(()) => println_t!(en: "Deleted '{}'.", ru: "Удалено '{}'."; path),
+        Err(crate::vfs::VfsError::NotFound { .. }) => {
             println!("{}", t!(en: "File not found.", ru: "Файл не найден."))
         }
-        Err(_) => println!("{}", t!(en: "Failed to delete file.", ru: "Не удалось удалить файл.")),
+        Err(e) => println!("{}", e.message()),
+    }
+}
+
+/// Приводит путь к абсолютному пути VFS. Относительные имена считаются
+/// от `/userdata` — единственного раздела, доступного на запись.
+fn resolve_user_path(name: &str) -> String {
+    let name = name.trim();
+    if name.starts_with('/') {
+        return String::from(name);
+    }
+    alloc::format!("/userdata/{}", name)
+}
+
+fn cmd_mkdir(name: &str) {
+    if name.is_empty() {
+        println!("{}", t!(en: "Usage: mkdir <path>", ru: "Использование: mkdir <путь>"));
+        return;
+    }
+    let path = resolve_user_path(name);
+    match crate::vfs::mkdir(&path) {
+        Ok(()) => println_t!(en: "Created '{}'.", ru: "Создано '{}'."; path),
+        Err(e) => println!("{}", e.message()),
+    }
+}
+
+/// `lsmod` — реально загруженные модули ядра.
+///
+/// Показывает только то, что действительно прошло загрузчик `.kmod`.
+/// Встроенные подсистемы ядра сюда не попадают: они не являются
+/// загруженными модулями, и выдавать их за таковые нельзя.
+fn cmd_lsmod() {
+    let mods = crate::module::get_loaded_modules();
+    if mods.is_empty() {
+        println!(
+            "{}",
+            t!(
+                en: "No kernel modules loaded (none found on /system).",
+                ru: "Модули ядра не загружены (на /system ничего не найдено)."
+            )
+        );
+        return;
+    }
+    println!("  NAME        VER    ADDR       SIZE      STATUS");
+    for m in mods.iter() {
+        let status = match m.status {
+            crate::module::ModuleStatus::Initialized => "работает",
+            crate::module::ModuleStatus::Failed => "сбой init()",
+            crate::module::ModuleStatus::Quarantined => "в карантине",
+        };
+        println!(
+            "  {:<11} {}.{}   {:#010x} {:>7} B {}",
+            m.name,
+            m.version.0,
+            m.version.1,
+            m.load_addr,
+            m.body_size,
+            status
+        );
+    }
+    println!("  Всего: {}", mods.len());
+}
+
+/// `kmod load <path>` — загрузить модуль вручную.
+fn cmd_kmod(arg: &str) {
+    let mut parts = arg.splitn(2, ' ');
+    let action = parts.next().unwrap_or("").trim();
+    let rest = parts.next().unwrap_or("").trim();
+    match action {
+        "" | "help" => println!(
+            "{}",
+            t!(
+                en: "Usage: kmod load <path> | lsmod",
+                ru: "Использование: kmod load <путь> | lsmod"
+            )
+        ),
+        "load" => {
+            if rest.is_empty() {
+                println!("{}", t!(en: "Usage: kmod load <path>", ru: "Использование: kmod load <путь>"));
+                return;
+            }
+            match crate::module::load_module(rest) {
+                Ok(()) => println_t!(en: "Module '{}' loaded.", ru: "Модуль '{}' загружен."; rest),
+                Err(e) => println!("{}", module_error_str(&e)),
+            }
+        }
+        "list" => cmd_lsmod(),
+        _ => println!(
+            "{}",
+            t!(
+                en: "Unknown action. Available: load, list",
+                ru: "Неизвестное действие. Доступно: load, list"
+            )
+        ),
+    }
+}
+
+fn module_error_str(e: &crate::module::ModuleError) -> String {
+    use crate::module::ModuleError as E;
+    match e {
+        E::NotFound => String::from("модуль не найден"),
+        E::BadFormat => String::from("неверный формат .kmod"),
+        E::InitFailed(code) => alloc::format!("init() вернул код {}", code),
+        E::TooLarge => String::from("модуль слишком большой"),
     }
 }
 
@@ -1500,6 +1759,18 @@ fn cmd_run(arg: &str) {
 }
 
 fn cmd_crash(kind: &str) {
+    // Команда намеренно вызывает исключения CPU (вплоть до отказа ядра) —
+    // доступна только в dev-режиме, чтобы не уронить систему случайно.
+    if !crate::devmode::sudo_allowed() {
+        println!(
+            "{}",
+            t!(
+                en: "'crash' intentionally triggers CPU faults and is available only in dev mode ('dev on').",
+                ru: "'crash' намеренно вызывает исключения CPU и доступна только в dev-режиме ('dev on')."
+            )
+        );
+        return;
+    }
     match kind {
         "divzero" => {
             println!("{}", t!(en: "Triggering division by zero...", ru: "Вызываем деление на ноль..."));
@@ -1580,6 +1851,40 @@ pub fn cmd_reboot() {
     }
 }
 
+pub fn cmd_poweroff() {
+    println!("{}", t!(en: "Powering off system...", ru: "Выключение системы..."));
+    crate::crypto_storage::lock();
+    unsafe {
+        crate::port::outw(0x604, 0x2000);
+        crate::port::outw(0xB004, 0x2000);
+        crate::port::outw(0x4004, 0x3400);
+        asm!("cli");
+        loop {
+            asm!("hlt");
+        }
+    }
+}
+
+pub fn cmd_dialog_test() {
+    let ok = crate::dialog::confirm("Continue?");
+    println!("confirm: {}", ok);
+    let line = crate::dialog::prompt_line("Enter text");
+    println!("prompt_line: {}", line);
+    let masked = crate::dialog::prompt_masked("Enter password");
+    println!("prompt_masked length: {}", masked.len());
+    let items = [String::from("Option 1"), String::from("Option 2")];
+    if let Some(idx) = crate::dialog::choose("Select item", &items) {
+        println!("selected: {}", idx);
+    }
+}
+
+pub fn cmd_erofs_test() {
+    let dummy = crate::erofs::build_image(&[("hello.txt", b"hello world\n")]);
+    if crate::erofs::is_erofs(&dummy) {
+        println!("  [erofs] build_image and is_erofs OK ({} bytes)", dummy.len());
+    }
+}
+
 pub fn cmd_halt() {
     println!("{}", t!(en: "Halting the CPU. Goodbye!", ru: "Остановка процессора. До свидания!"));
     // См. комментарий в cmd_reboot() — та же самая гарантия зануления
@@ -1589,6 +1894,167 @@ pub fn cmd_halt() {
         asm!("cli");
         loop {
             asm!("hlt");
+        }
+    }
+}
+
+pub const VALID_COMMANDS: &[&str] = &[
+    "help", "about", "echo", "clear", "uptime", "color", "cpuid", "mem", "lang",
+    "ifconfig", "arp", "ping", "dns", "threads", "crypt", "dinit", "hal", "gpu", "sound",
+    "ls", "cat", "write", "mkdir", "rm", "pkg", "dialog", "erofs", "run", "install",
+    "bigfile", "useradd", "passwd", "whoami", "users", "encrypt", "crash",
+    "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",
+    "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "dev", "profile",
+    "ps", "kill", "log", "error", "panic", "diagnostics", "wallpaper", "sysfs"
+];
+
+pub fn is_valid_command(name: &str) -> bool {
+    let first = name.trim().split_whitespace().next().unwrap_or("");
+    if first.is_empty() {
+        return true;
+    }
+    VALID_COMMANDS.contains(&first)
+}
+
+fn cmd_cli(rest: &str) {
+    match rest.trim() {
+        "new" | "duil" => run_duil_terminal(),
+        "legacy" | "text" | "old" => println!("{}", t!(en: "Already in legacy text CLI.", ru: "Уже в классическом CLI.")),
+        _ => {
+            println!("  cli new | duil    - {}", t!(en: "switch to DUIL syntax-highlighting terminal", ru: "переключиться в DUIL терминал с подсветкой синтаксиса"));
+            println!("  cli legacy | text - {}", t!(en: "standard text CLI", ru: "классический текстовый CLI"));
+        }
+    }
+}
+
+pub fn run_duil_terminal() {
+    println!();
+    println!("{}", t!(
+        en: "=== DeiX DUIL Interactive Terminal v2.0 ===",
+        ru: "=== Интерактивный терминал DeiX DUIL v2.0 ==="
+    ));
+    println!("{}", t!(
+        en: "Syntax highlighting enabled (Green = Valid command, Red = Unknown command).",
+        ru: "Подсветка синтаксиса включена (Зелёный = Верная команда, Красный = Неизвестная)."
+    ));
+    println!("{}", t!(
+        en: "Type 'color opacity|blur|bg|preset' to customize colors and transparency.",
+        ru: "Введи 'color opacity|blur|bg|preset' для настройки цветов и прозрачности."
+    ));
+    println!("{}", t!(
+        en: "Type 'cli legacy' or 'exit' to return to standard text CLI.",
+        ru: "Введи 'cli legacy' или 'exit' для возврата в классический CLI."
+    ));
+
+    let mut line_buf = [0u8; MAX_LINE];
+    let mut len = 0usize;
+    let mut history: Vec<String> = Vec::new();
+    let mut history_cursor: Option<usize> = None;
+    let prev_printed_len = core::sync::atomic::AtomicUsize::new(0);
+
+    let print_duil_prompt = |input: &str| {
+        print!("\r");
+        with_writer(|w| w.set_color(Color::LightCyan, Color::Black));
+        print!("deix [DUIL]> ");
+        let first_word = input.trim_start().split_whitespace().next().unwrap_or("");
+        if first_word.is_empty() {
+            with_writer(|w| w.set_color(Color::White, Color::Black));
+            print!("{}", input);
+        } else if is_valid_command(first_word) {
+            with_writer(|w| w.set_color(Color::LightGreen, Color::Black));
+            print!("{}", first_word);
+            with_writer(|w| w.set_color(Color::White, Color::Black));
+            if input.len() > first_word.len() {
+                print!("{}", &input[first_word.len()..]);
+            }
+        } else {
+            with_writer(|w| w.set_color(Color::LightRed, Color::Black));
+            print!("{}", input);
+            with_writer(|w| w.set_color(Color::White, Color::Black));
+        }
+
+        let cur_len = 13 + input.len();
+        let prev = prev_printed_len.swap(cur_len, core::sync::atomic::Ordering::Relaxed);
+        if prev > cur_len {
+            let diff = prev - cur_len;
+            for _ in 0..diff {
+                print!(" ");
+            }
+            for _ in 0..diff {
+                print!("\x08");
+            }
+        }
+    };
+
+    print_duil_prompt("");
+
+    loop {
+        let c: u8 = if crate::serial::is_data_ready() {
+            crate::serial::read_byte()
+        } else {
+            match keyboard::try_read_char() {
+                Some(c) => c,
+                None => continue,
+            }
+        };
+
+        match c {
+            b'\n' => {
+                print!("\n");
+                with_writer(|w| w.set_color(Color::White, Color::Black));
+                let cmd = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+                let trimmed = cmd.trim();
+                if trimmed == "exit" || trimmed == "cli legacy" || trimmed == "cli text" {
+                    println!("{}", t!(en: "Returning to legacy CLI...", ru: "Возврат в классический CLI..."));
+                    break;
+                }
+                if !trimmed.is_empty() {
+                    push_history(&mut history, cmd);
+                }
+                execute(cmd);
+                len = 0;
+                history_cursor = None;
+                prev_printed_len.store(0, core::sync::atomic::Ordering::Relaxed);
+                print_duil_prompt("");
+            }
+            0x08 => {
+                if len > 0 {
+                    len -= 1;
+                    let current = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+                    print_duil_prompt(current);
+                }
+            }
+            b'\t' => {
+                let current = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+                let first = current.trim_start();
+                if !first.is_empty() {
+                    if let Some(&match_cmd) = VALID_COMMANDS.iter().find(|&&cmd| cmd.starts_with(first)) {
+                        let bytes = match_cmd.as_bytes();
+                        let copy_len = bytes.len().min(MAX_LINE);
+                        line_buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
+                        len = copy_len;
+                        print_duil_prompt(match_cmd);
+                    }
+                }
+            }
+            keyboard::ARROW_UP => {
+                navigate_history(&history, &mut history_cursor, &mut line_buf, &mut len, -1);
+                let current = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+                print_duil_prompt(current);
+            }
+            keyboard::ARROW_DOWN => {
+                navigate_history(&history, &mut history_cursor, &mut line_buf, &mut len, 1);
+                let current = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+                print_duil_prompt(current);
+            }
+            byte => {
+                if len < MAX_LINE {
+                    line_buf[len] = byte;
+                    len += 1;
+                    let current = core::str::from_utf8(&line_buf[..len]).unwrap_or("");
+                    print_duil_prompt(current);
+                }
+            }
         }
     }
 }

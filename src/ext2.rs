@@ -1,55 +1,52 @@
-//! Драйвер ext2 — настоящая, официально совместимая файловая система
-//! (Second Extended Filesystem), поверх драйвера ATA PIO (см. ata.rs).
-//!
-//! В отличие от fat16.rs (который мы оставляем нетронутым для обратной
-//! совместимости со старыми образами), ext2 — это классическая Unix
-//! файловая система на inode: суперблок с метаданными тома, таблица
-//! групп блоков, битовые карты свободных блоков/инодов, таблица инодов
-//! и настоящие Unix-права/владелец/группа у каждого файла.
-//!
-//! Формат СОЗНАТЕЛЬНО упрощён до совместимого подмножества:
-//!   - revision 0 (fixed 128-byte inodes, без extended полей суперблока,
-//!     без UUID/volume label в динамических полях) — это тот же формат,
-//!     что использовал Linux до середины 90-х, и он полностью читается
-//!     современным `mount`/`e2fsck` (проверено: см. tools/ext2_prototype_full.py
-//!     и его комментарии — каждый шаг этого формата validated настоящим
-//!     `e2fsck -f` и смонтирован через `mount -o loop` перед портированием
-//!     сюда);
-//!   - ровно ОДНА группа блоков (Block Group) — для тома в несколько
-//!     мегабайт этого достаточно, а код становится сильно проще (не
-//!     нужно решать, в какую из нескольких групп класть новый инод/файл);
-//!   - каталоги — только корневой (без mkdir/подкаталогов пользователя);
-//!     `lost+found` создаётся при форматировании как обычный ext2-том
-//!     того требует (e2fsck ищет его при проверке).
-//!
-//! ФАЙЛЫ БОЛЬШОГО РАЗМЕРА (indirect-блоки) — раньше здесь было честное
-//! ограничение "только 12 прямых указателей, максимум 12 КиБ на файл".
-//! Теперь реализован ОДИНАРНЫЙ indirect-блок (offset 88..91 в inode,
-//! block_ptrs[12] в терминах этого файла) — это тот же самый механизм,
-//! который использует настоящий ext2: блок №13 указателя на самом деле
-//! не хранит данные файла, а хранит ещё BLOCK_SIZE/4 = 256 указателей на
-//! блоки данных. Это увеличивает максимальный размер файла с 12 КиБ до
-//! 12 КиБ + 256 * 1 КиБ = 268 КиБ — с большим запасом хватает для .mex
-//! программ, текстовых файлов и небольших изображений. Doubly-/triply-
-//! indirect (offset 92..99, block_ptrs[13]/[14]) сознательно НЕ
-//! реализованы — для мини-ОС 268 КиБ на файл более чем достаточно, а
-//! тройная косвенность потребовала бы рекурсивного кода без явной
-//! практической необходимости прямо сейчас.
-//!
-//! Что НЕ упрощено, а сделано по-настоящему: суперблок, group descriptor,
-//! битовые карты, формат inode (включая теперь и indirect-блок) и
-//! directory entry — это байт-в-байт то, что ожидает читать настоящий
-//! Linux-код ext2 (fs/ext2/*). Если примонтировать наш образ диска в
-//! Linux (`mount -o loop`), он примонтируется и будет полностью
-//! работоспособен для чтения и записи, включая файлы, использующие
-//! indirect-блок.
+// ЯДЕРНЫЙ МОДУЛЬ DeiX OS (src/lib.rs, Ring 0).
+// ext2 — драйвер файловой системы ext2 revision 0 (чтение и запись).
+//
+// Формат на диске байт-в-байт совместим с настоящим Linux-кодом ext2
+// (fs/ext2/*): суперблок, таблица дескрипторов групп, битовые карты,
+// inode (включая одинарный indirect-блок) и directory entry. Образ,
+// отформатированный этим драйвером, монтируется в Linux (`mount -o loop`)
+// и проходит e2fsck.
+//
+// ## Тома
+//
+// Драйвер обслуживает НЕСКОЛЬКО томов ext2 одновременно:
+//   * /userdata (VolId::Userdata) — раздел P2, LBA 24576, чтение/запись,
+//     прозрачное шифрование XTS (crypto_storage.rs);
+//   * /system   (VolId::System)   — раздел P1, LBA 4096; используется
+//     ТОЛЬКО после конверсии EROFS→ext2 (утилита sysfs, dev-режим),
+//     без шифрования (загрузчик читает раздел открытым);
+//   * произвольный том на другом диске (установщик: format_raw /
+//     write_file_raw) — прямой доступ к целевому диску мимо RAM-диска
+//     и шифрования.
+//
+// ## Геометрия
+//
+// Геометрия тома (размер, блоков на группу, инодов на группу) читается
+// из суперблока при монтировании, а не зашита константами — поэтому один
+// и тот же драйвер работает и со штатным томом 8 МиБ (одна группа), и с
+// томом произвольного размера, созданным установщиком (много групп).
+//
+// Раскладка группы g (блок 1024 байта, first_data_block = 1):
+//   base(g) = 1 + g*blocks_per_group
+//   base+0                — суперблок (g=0: основной, g>0: резервная копия)
+//   base+1 .. base+gdtb   — таблица дескрипторов групп (копия в каждой группе)
+//   base+1+gdtb           — битовая карта блоков (1 блок, поэтому bpg<=8192)
+//   base+2+gdtb           — битовая карта инодов
+//   base+3+gdtb ..        — таблица инодов (itb блоков)
+//   далее                 — данные
+//
+// Резервные копии суперблока и GDT пишутся при форматировании в КАЖДОЙ
+// группе (как положено revision 0) и далее не обновляются на каждую
+// операцию — так же поступает настоящий ext2 (копии освежает e2fsck).
 
-use crate::ata;
+use crate::ata::{self, Drive};
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::spinlock::SpinLock;
+
 pub const BLOCK_SIZE: usize = 1024;
-pub const SECTOR_SIZE: usize = 512;
+const SECTOR_SIZE: usize = 512;
 const SECTORS_PER_BLOCK: u32 = (BLOCK_SIZE / SECTOR_SIZE) as u32;
 const INODE_SIZE: usize = 128;
 const EXT2_MAGIC: u16 = 0xEF53;
@@ -61,31 +58,36 @@ const FIRST_NON_RESERVED_INO: u32 = 11; // revision 0: inode 1..10 зарезе�
 /// Сколько ПРЯМЫХ блочных указателей хранится в inode — стандартное
 /// поле формата ext2 (offset 40..87, 12 указателей по 4 байта).
 const MAX_DIRECT_BLOCKS: usize = 12;
-/// Индекс единственного indirect-указателя в массиве block_ptrs
+/// Индекс одинарного indirect-указателя в массиве block_ptrs
 /// (offset 88..91 в структуре inode — сразу после 12 прямых).
 const INDIRECT_BLOCK_INDEX: usize = 12;
+/// Индекс двойного indirect-указателя (offset 92..95): блок, содержащий
+/// 256 указателей на indirect-блоки — стандартное поле i_block[13].
+const DOUBLE_INDIRECT_BLOCK_INDEX: usize = 13;
 /// Сколько указателей на блоки данных помещается в один indirect-блок:
 /// BLOCK_SIZE байт / 4 байта на указатель = 256 указателей при блоке
 /// 1024 байта — это ровно то же вычисление, что делает настоящий ext2.
 const PTRS_PER_INDIRECT_BLOCK: usize = BLOCK_SIZE / 4;
-/// Максимальный размер файла с прямыми + одинарным indirect блоком.
-const MAX_FILE_BLOCKS: usize = MAX_DIRECT_BLOCKS + PTRS_PER_INDIRECT_BLOCK;
+/// Максимальный размер файла: 12 прямых + 256 через одинарный indirect
+/// + 256*256 через двойной (~64 МиБ) — хватает для kernel.bin и любых
+/// файлов /system при конверсии EROFS→ext2.
+const MAX_FILE_BLOCKS: usize =
+    MAX_DIRECT_BLOCKS + PTRS_PER_INDIRECT_BLOCK + PTRS_PER_INDIRECT_BLOCK * PTRS_PER_INDIRECT_BLOCK;
 
-/// Начало тома ext2 на диске — тот же принцип, что и у fat16 (2 МиБ
-/// отступ после загрузчика/ядра с запасом на рост).
-pub const FS_START_LBA: u32 = 4096;
-/// Размер тома в секторах (совпадает с прежним объёмом, выделенным под
-/// fat16, — 4 МиБ), см. build.sh, где образ диска дополняется нулями
-/// до достаточного размера.
-const TOTAL_SECTORS: u32 = 8192;
-const TOTAL_BLOCKS: u32 = TOTAL_SECTORS / SECTORS_PER_BLOCK;
+/// Начало тома ext2 /userdata на диске (раздел P2).
+pub const FS_START_LBA: u32 = 24576;
+/// Размер тома /userdata по умолчанию (штатный образ: 16384 секторов =
+/// 8 МиБ). Реальный размер читается из таблицы разделов MBR; эта
+/// константа — запасной вариант, когда MBR не читается.
+const TOTAL_SECTORS_DEFAULT: u32 = 16384;
 
+/// Номер блока суперблока (при блоке 1024 суперблок лежит в блоке 1).
 const SB_BLOCK: u32 = 1;
+/// Первый блок основной таблицы дескрипторов групп.
 const GDT_BLOCK: u32 = SB_BLOCK + 1;
-const BLOCK_BITMAP_BLOCK: u32 = GDT_BLOCK + 1;
-const INODE_BITMAP_BLOCK: u32 = BLOCK_BITMAP_BLOCK + 1;
-const INODE_TABLE_START: u32 = INODE_BITMAP_BLOCK + 1;
-
+/// Блоков на группу: битовая карта блоков занимает ровно один блок
+/// (1024 байта * 8 бит), поэтому больше 8192 блоков в группе не бывает.
+const BLOCKS_PER_GROUP: u32 = 8192;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ext2Error {
@@ -104,196 +106,386 @@ pub struct FileEntry {
     pub is_directory: bool,
 }
 
-// ---------------- геометрия тома (вычисляется из фиксированных констант,
-// т.к. у нас всегда один и тот же размер тома — в отличие от настоящего
-// mke2fs, который считает это динамически под любой размер диска) ----------------
+// ==================== тома ====================
 
-fn inodes_count() -> u32 {
-    // То же правило, что использует mke2fs по умолчанию (~1 инод на
-    // 4096 байт данных), округлённое вверх до кратности 8 (чтобы битовая
-    // карта инодов укладывалась в целое число байт без дробных остатков).
-    let raw = core::cmp::max(32, (TOTAL_BLOCKS as u64 * BLOCK_SIZE as u64) / 4096) as u32;
-    (raw + 7) / 8 * 8
+/// Какой из смонтированных томов использовать.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VolId {
+    /// /userdata (P2): чтение/запись, с шифрованием (если включено).
+    Userdata,
+    /// /system (P1) ПОСЛЕ конверсии в ext2: без шифрования.
+    System,
 }
 
-fn inode_table_blocks() -> u32 {
-    let bytes = inodes_count() as u64 * INODE_SIZE as u64;
-    ((bytes + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64) as u32
+/// Путь ввода-вывода тома.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VolIo {
+    /// ata::read_sectors / write_sectors — Master с учётом RAM-диска.
+    Standard,
+    /// Прямой доступ к конкретному диску (установщик пишет на целевой
+    /// диск мимо RAM-диска и шифрования).
+    Raw(Drive),
 }
 
-fn data_start_block() -> u32 {
-    INODE_TABLE_START + inode_table_blocks()
+/// Смонтированный том: геометрия прочитана из суперблока.
+#[derive(Debug, Clone, Copy)]
+struct Vol {
+    io: VolIo,
+    /// Пропускать ли секторы через crypto_storage (только /userdata).
+    encrypted: bool,
+    start_lba: u32,
+    total_blocks: u32,
+    /// Блоков на группу (s_blocks_per_group).
+    bpg: u32,
+    /// Инодов на группу (s_inodes_per_group).
+    ipg: u32,
+    groups: u32,
+    /// Блоков в таблице дескрипторов групп.
+    gdt_blocks: u32,
 }
 
-fn root_dir_block() -> u32 {
-    data_start_block()
+/// Кеш смонтированных стандартных томов (индекс = VolId).
+/// Сбрасывается при форматировании/конверсии.
+static VOL_CACHE: SpinLock<[Option<Vol>; 2]> = SpinLock::new([None, None]);
+
+fn cache_idx(id: VolId) -> usize {
+    match id {
+        VolId::Userdata => 0,
+        VolId::System => 1,
+    }
 }
 
-fn lost_found_block() -> u32 {
-    data_start_block() + 1
+/// Сбрасывает закешированную геометрию тома (после format/convert).
+pub fn invalidate_cache(id: VolId) {
+    VOL_CACHE.lock()[cache_idx(id)] = None;
 }
 
-/// Последний физический номер блока, занятого метаданными/начальными
-/// каталогами (всё с блока 1 по этот номер включительно занято сразу
-/// после форматирования).
-fn reserved_meta_blocks() -> u32 {
-    lost_found_block()
+/// Размер раздела /userdata в секторах из таблицы разделов MBR.
+/// Установщик может создать /userdata любого размера — реальный размер
+/// знает только MBR; суперблок затем обязан с ним согласовываться.
+fn userdata_partition_sectors() -> u32 {
+    let mut sec = [0u8; SECTOR_SIZE];
+    if ata::read_sectors(0, 1, &mut sec).is_ok() && sec[510] == 0x55 && sec[511] == 0xAA {
+        // Запись P2 — смещение 462 в MBR.
+        let start = u32::from_le_bytes([sec[470], sec[471], sec[472], sec[473]]);
+        let count = u32::from_le_bytes([sec[474], sec[475], sec[476], sec[477]]);
+        if start == FS_START_LBA && count >= 1024 {
+            return count;
+        }
+    }
+    TOTAL_SECTORS_DEFAULT
 }
 
-/// Валидных (физически существующих) блоков в единственной группе:
-/// блок 0 не входит в группу (first_data_block=1 для блоков размером
-/// 1024 байта), поэтому валидны номера 1..(TOTAL_BLOCKS-1).
-fn valid_blocks_in_group() -> u32 {
-    TOTAL_BLOCKS - 1
+/// Параметры стандартного тома: (io, шифрование, начальный LBA,
+/// максимальный размер в секторах).
+fn vol_params(id: VolId) -> (VolIo, bool, u32, u32) {
+    match id {
+        VolId::Userdata => (VolIo::Standard, true, FS_START_LBA, userdata_partition_sectors()),
+        VolId::System => {
+            let layout = crate::partition_map::lookup_layout("/system");
+            let (start, sectors) = match layout {
+                Some(l) => (l.start_lba, l.sectors),
+                None => (4096, 20480),
+            };
+            (VolIo::Standard, false, start, sectors)
+        }
+    }
+}
+
+/// Монтирует том: читает суперблок и проверяет, что геометрия
+/// соответствует раскладке, которую понимает драйвер.
+fn load_vol(io: VolIo, encrypted: bool, start_lba: u32, max_sectors: u32) -> Result<Vol, Ext2Error> {
+    let sb = blk_read(io, encrypted, start_lba, SB_BLOCK)?;
+    if u16::from_le_bytes([sb[56], sb[57]]) != EXT2_MAGIC {
+        return Err(Ext2Error::NotFormatted);
+    }
+
+    let inodes = u32::from_le_bytes(sb[0..4].try_into().unwrap());
+    let total_blocks = u32::from_le_bytes(sb[4..8].try_into().unwrap());
+    let first_data_block = u32::from_le_bytes(sb[20..24].try_into().unwrap());
+    let log_block_size = u32::from_le_bytes(sb[24..28].try_into().unwrap());
+    let bpg = u32::from_le_bytes(sb[32..36].try_into().unwrap());
+    let ipg = u32::from_le_bytes(sb[40..44].try_into().unwrap());
+
+    // Поддерживается только блок 1024 и first_data_block = 1 — ровно то,
+    // что пишут format()/установщик/tools/make_deix_fs.py.
+    if log_block_size != 0 || first_data_block != 1 {
+        return Err(Ext2Error::NotFormatted);
+    }
+    if total_blocks < 8 || total_blocks.saturating_mul(SECTORS_PER_BLOCK) > max_sectors {
+        return Err(Ext2Error::NotFormatted);
+    }
+    if bpg == 0 || bpg > BLOCKS_PER_GROUP || ipg < 8 || ipg > BLOCK_SIZE as u32 * 8 {
+        return Err(Ext2Error::NotFormatted);
+    }
+
+    let groups = (total_blocks - 1).div_ceil(bpg);
+    if groups == 0 || groups > 1024 || inodes != groups.saturating_mul(ipg) {
+        return Err(Ext2Error::NotFormatted);
+    }
+    let gdt_blocks = (groups * 32).div_ceil(BLOCK_SIZE as u32);
+
+    let vol = Vol { io, encrypted, start_lba, total_blocks, bpg, ipg, groups, gdt_blocks };
+
+    // Дескриптор группы 0 обязан указывать туда, где драйвер ожидает
+    // метаданные (раскладка из заголовка файла) — иначе том создан не
+    // нашим форматтером и работать с ним по арифметической раскладке
+    // нельзя.
+    let gdt = read_block(&vol, GDT_BLOCK)?;
+    let bbm = u32::from_le_bytes(gdt[0..4].try_into().unwrap());
+    let ibm = u32::from_le_bytes(gdt[4..8].try_into().unwrap());
+    let itable = u32::from_le_bytes(gdt[8..12].try_into().unwrap());
+    let (want_bbm, want_ibm, want_it) = group_meta(&vol, 0);
+    if bbm != want_bbm || ibm != want_ibm || itable != want_it {
+        return Err(Ext2Error::NotFormatted);
+    }
+
+    Ok(vol)
+}
+
+/// Возвращает смонтированный стандартный том (из кеша или с диска).
+fn vol(id: VolId) -> Result<Vol, Ext2Error> {
+    if let Some(v) = VOL_CACHE.lock()[cache_idx(id)] {
+        return Ok(v);
+    }
+    let (io, encrypted, start_lba, max_sectors) = vol_params(id);
+    let v = load_vol(io, encrypted, start_lba, max_sectors)?;
+    VOL_CACHE.lock()[cache_idx(id)] = Some(v);
+    Ok(v)
+}
+
+// ==================== геометрия группы ====================
+
+/// Первый блок группы g (в группе 0 это суперблок, блок 1).
+fn group_base(v: &Vol, g: u32) -> u32 {
+    1 + g * v.bpg
+}
+
+/// Блоки метаданных группы g: (битовая карта блоков, битовая карта
+/// инодов, первый блок таблицы инодов). Раскладка одинаковая во всех
+/// группах: копия суперблока + копия GDT есть в каждой.
+fn group_meta(v: &Vol, g: u32) -> (u32, u32, u32) {
+    let bbm = group_base(v, g) + 1 + v.gdt_blocks;
+    (bbm, bbm + 1, bbm + 2)
+}
+
+/// Сколько блоков реально принадлежит группе g (последняя группа может
+/// быть неполной).
+fn group_block_count(v: &Vol, g: u32) -> u32 {
+    let base = group_base(v, g);
+    core::cmp::min(v.bpg, v.total_blocks - base)
+}
+
+/// Положение дескриптора группы g в ОСНОВНОЙ таблице (блок, смещение).
+fn gdt_locate(g: u32) -> (u32, usize) {
+    let byte = g as usize * 32;
+    (GDT_BLOCK + (byte / BLOCK_SIZE) as u32, byte % BLOCK_SIZE)
 }
 
 // ---------------- низкоуровневый ввод-вывод блоков ----------------
 
-/// Читает один ext2-блок (BLOCK_SIZE=1024 байта = 2 физических
-/// 512-байтных ATA-сектора) и, если сквозное шифрование диска включено
-/// (см. crypto_storage.rs), прозрачно расшифровывает КАЖДЫЙ из этих
-/// 2 физических секторов независимо, используя его собственный
-/// абсолютный LBA-номер как XTS tweak — именно так поступает настоящий
-/// dm-crypt (каждый физический сектор шифруется отдельно со своим
-/// номером, а не весь блок целиком одним tweak-ом). Сама файловая
-/// система (весь остальной код ext2.rs) не подозревает о шифровании —
-/// получает уже расшифрованные обычные байты, как если бы диска
-/// шифрования вовсе не было.
-fn read_block(block: u32) -> Result<[u8; BLOCK_SIZE], Ext2Error> {
+/// Читает один ext2-блок (2 физических сектора). Для шифрованного тома
+/// каждый 512-байтный сектор расшифровывается независимо, с его
+/// абсолютным LBA как XTS tweak — так же, как делает dm-crypt. Остальной
+/// код драйвера о шифровании не знает: получает открытые байты.
+fn blk_read(io: VolIo, encrypted: bool, start_lba: u32, block: u32) -> Result<[u8; BLOCK_SIZE], Ext2Error> {
     let mut buf = [0u8; BLOCK_SIZE];
-    let lba = FS_START_LBA + block * SECTORS_PER_BLOCK;
-    ata::read_sectors(lba, SECTORS_PER_BLOCK as u8, &mut buf).map_err(|_| Ext2Error::DiskError)?;
+    let lba = start_lba + block * SECTORS_PER_BLOCK;
+    let res = match io {
+        VolIo::Standard => ata::read_sectors(lba, SECTORS_PER_BLOCK as u8, &mut buf),
+        VolIo::Raw(drive) => ata::read_sectors_from(drive, lba, SECTORS_PER_BLOCK as u8, &mut buf),
+    };
+    res.map_err(|_| Ext2Error::DiskError)?;
 
-    for i in 0..SECTORS_PER_BLOCK {
-        let sector_lba = lba + i;
-        let start = (i as usize) * SECTOR_SIZE;
-        let end = start + SECTOR_SIZE;
-        crate::crypto_storage::decrypt_sector_after_read(sector_lba, &mut buf[start..end]);
+    if encrypted {
+        for i in 0..SECTORS_PER_BLOCK {
+            let sector_lba = lba + i;
+            let start = (i as usize) * SECTOR_SIZE;
+            let end = start + SECTOR_SIZE;
+            crate::crypto_storage::decrypt_sector_after_read(sector_lba, &mut buf[start..end]);
+        }
     }
 
     Ok(buf)
 }
 
-fn write_block(block: u32, data: &[u8; BLOCK_SIZE]) -> Result<(), Ext2Error> {
-    let lba = FS_START_LBA + block * SECTORS_PER_BLOCK;
+fn blk_write(io: VolIo, encrypted: bool, start_lba: u32, block: u32, data: &[u8; BLOCK_SIZE]) -> Result<(), Ext2Error> {
+    let lba = start_lba + block * SECTORS_PER_BLOCK;
 
-    // Шифруем в отдельном буфере (не трогая переданные данные вызывающей
-    // стороны — write_block принимает &[u8; BLOCK_SIZE] по ссылке, а не
-    // мутабельно, поэтому все остальные функции ext2.rs продолжают
-    // работать с незашифрованными байтами в своей памяти, как и раньше;
-    // шифрование существует только "на пути к диску").
-    let mut encrypted = *data;
-    for i in 0..SECTORS_PER_BLOCK {
-        let sector_lba = lba + i;
-        let start = (i as usize) * SECTOR_SIZE;
-        let end = start + SECTOR_SIZE;
-        crate::crypto_storage::encrypt_sector_for_write(sector_lba, &mut encrypted[start..end]);
+    // Шифруем в отдельном буфере: вызывающая сторона продолжает работать
+    // с открытыми байтами, шифрование существует только "на пути к диску".
+    let mut out = *data;
+    if encrypted {
+        for i in 0..SECTORS_PER_BLOCK {
+            let sector_lba = lba + i;
+            let start = (i as usize) * SECTOR_SIZE;
+            let end = start + SECTOR_SIZE;
+            crate::crypto_storage::encrypt_sector_for_write(sector_lba, &mut out[start..end]);
+        }
     }
 
-    ata::write_sectors(lba, SECTORS_PER_BLOCK as u8, &encrypted).map_err(|_| Ext2Error::DiskError)
+    let res = match io {
+        VolIo::Standard => ata::write_sectors(lba, SECTORS_PER_BLOCK as u8, &out),
+        VolIo::Raw(drive) => ata::write_sectors_to(drive, lba, SECTORS_PER_BLOCK as u8, &out),
+    };
+    res.map_err(|_| Ext2Error::DiskError)
 }
 
-fn write_block_partial(block: u32, offset: usize, data: &[u8]) -> Result<(), Ext2Error> {
-    let mut buf = read_block(block)?;
+fn read_block(v: &Vol, block: u32) -> Result<[u8; BLOCK_SIZE], Ext2Error> {
+    blk_read(v.io, v.encrypted, v.start_lba, block)
+}
+
+fn write_block(v: &Vol, block: u32, data: &[u8; BLOCK_SIZE]) -> Result<(), Ext2Error> {
+    blk_write(v.io, v.encrypted, v.start_lba, block, data)
+}
+
+fn write_block_partial(v: &Vol, block: u32, offset: usize, data: &[u8]) -> Result<(), Ext2Error> {
+    let mut buf = read_block(v, block)?;
     buf[offset..offset + data.len()].copy_from_slice(data);
-    write_block(block, &buf)
+    write_block(v, block, &buf)
 }
 
 // ---------------- проверка форматирования ----------------
 
-pub fn is_formatted() -> bool {
-    match read_block(SB_BLOCK) {
+fn probe_formatted(id: VolId) -> bool {
+    let (io, encrypted, start_lba, _) = vol_params(id);
+    match blk_read(io, encrypted, start_lba, SB_BLOCK) {
         Ok(sb) => u16::from_le_bytes([sb[56], sb[57]]) == EXT2_MAGIC,
         Err(_) => false,
     }
 }
 
-// ---------------- битовые карты ----------------
-
-fn bitmap_get(block: u32, bit: u32) -> Result<bool, Ext2Error> {
-    let buf = read_block(block)?;
-    let byte = buf[(bit / 8) as usize];
-    Ok((byte >> (bit % 8)) & 1 != 0)
+pub fn is_formatted() -> bool {
+    probe_formatted(VolId::Userdata)
 }
 
-fn bitmap_set(block: u32, bit: u32, value: bool) -> Result<(), Ext2Error> {
-    let mut buf = read_block(block)?;
+pub fn is_formatted_vol(id: VolId) -> bool {
+    probe_formatted(id)
+}
+
+// ---------------- битовые карты и счётчики ----------------
+
+fn bitmap_set(v: &Vol, block: u32, bit: u32, value: bool) -> Result<(), Ext2Error> {
+    let mut buf = read_block(v, block)?;
     let idx = (bit / 8) as usize;
     if value {
         buf[idx] |= 1 << (bit % 8);
     } else {
         buf[idx] &= !(1 << (bit % 8));
     }
-    write_block(block, &buf)
+    write_block(v, block, &buf)
 }
 
-fn adjust_free_blocks(delta: i32) -> Result<(), Ext2Error> {
-    let mut sb = read_block(SB_BLOCK)?;
-    let val = u32::from_le_bytes(sb[12..16].try_into().unwrap());
+/// Правит 16-битный счётчик в дескрипторе группы g (field — смещение
+/// внутри 32-байтного дескриптора: 12 = свободные блоки, 14 = свободные
+/// иноды, 16 = каталоги).
+fn gdt_adjust_u16(v: &Vol, g: u32, field: usize, delta: i32) -> Result<(), Ext2Error> {
+    let (blk, off) = gdt_locate(g);
+    let mut buf = read_block(v, blk)?;
+    let cur = u16::from_le_bytes(buf[off + field..off + field + 2].try_into().unwrap());
+    let newv = (cur as i32 + delta) as u16;
+    buf[off + field..off + field + 2].copy_from_slice(&newv.to_le_bytes());
+    write_block(v, blk, &buf)
+}
+
+/// Правит 32-битный счётчик в суперблоке (field: 12 = свободные блоки,
+/// 16 = свободные иноды).
+fn sb_adjust_u32(v: &Vol, field: usize, delta: i32) -> Result<(), Ext2Error> {
+    let mut sb = read_block(v, SB_BLOCK)?;
+    let val = u32::from_le_bytes(sb[field..field + 4].try_into().unwrap());
     let new_val = (val as i64 + delta as i64) as u32;
-    sb[12..16].copy_from_slice(&new_val.to_le_bytes());
-    write_block(SB_BLOCK, &sb)?;
-
-    let mut gdt = read_block(GDT_BLOCK)?;
-    let val = u16::from_le_bytes(gdt[12..14].try_into().unwrap());
-    let new_val = (val as i32 + delta) as u16;
-    gdt[12..14].copy_from_slice(&new_val.to_le_bytes());
-    write_block(GDT_BLOCK, &gdt)
+    sb[field..field + 4].copy_from_slice(&new_val.to_le_bytes());
+    write_block(v, SB_BLOCK, &sb)
 }
 
-fn adjust_free_inodes(delta: i32) -> Result<(), Ext2Error> {
-    let mut sb = read_block(SB_BLOCK)?;
-    let val = u32::from_le_bytes(sb[16..20].try_into().unwrap());
-    let new_val = (val as i64 + delta as i64) as u32;
-    sb[16..20].copy_from_slice(&new_val.to_le_bytes());
-    write_block(SB_BLOCK, &sb)?;
-
-    let mut gdt = read_block(GDT_BLOCK)?;
-    let val = u16::from_le_bytes(gdt[14..16].try_into().unwrap());
-    let new_val = (val as i32 + delta) as u16;
-    gdt[14..16].copy_from_slice(&new_val.to_le_bytes());
-    write_block(GDT_BLOCK, &gdt)
+fn adjust_free_blocks(v: &Vol, g: u32, delta: i32) -> Result<(), Ext2Error> {
+    sb_adjust_u32(v, 12, delta)?;
+    gdt_adjust_u16(v, g, 12, delta)
 }
 
-fn alloc_block() -> Result<u32, Ext2Error> {
-    for bit in 0..valid_blocks_in_group() {
-        if !bitmap_get(BLOCK_BITMAP_BLOCK, bit)? {
-            bitmap_set(BLOCK_BITMAP_BLOCK, bit, true)?;
-            adjust_free_blocks(-1)?;
-            return Ok(bit + 1); // физический номер = first_data_block(1) + bit
+fn adjust_free_inodes(v: &Vol, g: u32, delta: i32) -> Result<(), Ext2Error> {
+    sb_adjust_u32(v, 16, delta)?;
+    gdt_adjust_u16(v, g, 14, delta)
+}
+
+/// Выделяет свободный блок. Группы перебираются по счётчику свободных
+/// блоков в дескрипторе; битовая карта выбранной группы читается ОДИН
+/// раз и сканируется в памяти.
+fn alloc_block(v: &Vol) -> Result<u32, Ext2Error> {
+    for g in 0..v.groups {
+        let (gblk, goff) = gdt_locate(g);
+        let gbuf = read_block(v, gblk)?;
+        let free = u16::from_le_bytes(gbuf[goff + 12..goff + 14].try_into().unwrap());
+        if free == 0 {
+            continue;
+        }
+        let (bbm, _, _) = group_meta(v, g);
+        let mut buf = read_block(v, bbm)?;
+        for bit in 0..group_block_count(v, g) {
+            let idx = (bit / 8) as usize;
+            let mask = 1u8 << (bit % 8);
+            if buf[idx] & mask == 0 {
+                buf[idx] |= mask;
+                write_block(v, bbm, &buf)?;
+                adjust_free_blocks(v, g, -1)?;
+                return Ok(group_base(v, g) + bit);
+            }
         }
     }
     Err(Ext2Error::NoSpace)
 }
 
-fn free_block(block_num: u32) -> Result<(), Ext2Error> {
-    let bit = block_num - 1;
-    bitmap_set(BLOCK_BITMAP_BLOCK, bit, false)?;
-    adjust_free_blocks(1)
+fn free_block(v: &Vol, block_num: u32) -> Result<(), Ext2Error> {
+    if block_num < 1 || block_num >= v.total_blocks {
+        return Err(Ext2Error::DiskError);
+    }
+    let g = (block_num - 1) / v.bpg;
+    let bit = block_num - group_base(v, g);
+    let (bbm, _, _) = group_meta(v, g);
+    bitmap_set(v, bbm, bit, false)?;
+    adjust_free_blocks(v, g, 1)
 }
 
-fn alloc_inode() -> Result<u32, Ext2Error> {
-    for bit in 0..inodes_count() {
-        if !bitmap_get(INODE_BITMAP_BLOCK, bit)? {
-            bitmap_set(INODE_BITMAP_BLOCK, bit, true)?;
-            adjust_free_inodes(-1)?;
-            return Ok(bit + 1);
+fn alloc_inode(v: &Vol) -> Result<u32, Ext2Error> {
+    for g in 0..v.groups {
+        let (gblk, goff) = gdt_locate(g);
+        let gbuf = read_block(v, gblk)?;
+        let free = u16::from_le_bytes(gbuf[goff + 14..goff + 16].try_into().unwrap());
+        if free == 0 {
+            continue;
+        }
+        let (_, ibm, _) = group_meta(v, g);
+        let mut buf = read_block(v, ibm)?;
+        for bit in 0..v.ipg {
+            let idx = (bit / 8) as usize;
+            let mask = 1u8 << (bit % 8);
+            if buf[idx] & mask == 0 {
+                buf[idx] |= mask;
+                write_block(v, ibm, &buf)?;
+                adjust_free_inodes(v, g, -1)?;
+                return Ok(g * v.ipg + bit + 1);
+            }
         }
     }
     Err(Ext2Error::NoSpace)
 }
 
-fn free_inode(ino: u32) -> Result<(), Ext2Error> {
-    bitmap_set(INODE_BITMAP_BLOCK, ino - 1, false)?;
-    adjust_free_inodes(1)
+fn free_inode(v: &Vol, ino: u32) -> Result<(), Ext2Error> {
+    let g = (ino - 1) / v.ipg;
+    let bit = (ino - 1) % v.ipg;
+    let (_, ibm, _) = group_meta(v, g);
+    bitmap_set(v, ibm, bit, false)?;
+    adjust_free_inodes(v, g, 1)
 }
 
 // ---------------- чтение/запись inode ----------------
 
-fn inode_location(ino: u32) -> (u32, usize) {
-    let index = ino - 1;
-    let containing_block = INODE_TABLE_START + (index * INODE_SIZE as u32) / BLOCK_SIZE as u32;
-    let offset_in_block = ((index as usize) * INODE_SIZE) % BLOCK_SIZE;
+fn inode_location(v: &Vol, ino: u32) -> (u32, usize) {
+    let g = (ino - 1) / v.ipg;
+    let idx = ((ino - 1) % v.ipg) as usize;
+    let (_, _, itable) = group_meta(v, g);
+    let containing_block = itable + ((idx * INODE_SIZE) / BLOCK_SIZE) as u32;
+    let offset_in_block = (idx * INODE_SIZE) % BLOCK_SIZE;
     (containing_block, offset_in_block)
 }
 
@@ -304,9 +496,9 @@ struct Inode {
     block_ptrs: [u32; 15],
 }
 
-fn read_inode(ino: u32) -> Result<Inode, Ext2Error> {
-    let (block, offset) = inode_location(ino);
-    let buf = read_block(block)?;
+fn read_inode(v: &Vol, ino: u32) -> Result<Inode, Ext2Error> {
+    let (block, offset) = inode_location(v, ino);
+    let buf = read_block(v, block)?;
     let raw = &buf[offset..offset + INODE_SIZE];
 
     let mode = u16::from_le_bytes([raw[0], raw[1]]);
@@ -327,12 +519,10 @@ fn read_inode(ino: u32) -> Result<Inode, Ext2Error> {
 /// + 1 сам indirect-блок + сколько бы блоков данных ни было перечислено
 /// внутри него. i_blocks в ext2 всегда означает "сколько 512-байтных
 /// секторов реально выделено под этот файл на диске, включая метаданные
-/// косвенной адресации", а НЕ "сколько указателей ненулевые" — это была
-/// изначальная ошибка (обнаружена через e2fsck: "i_blocks is 26, should
-/// be 130" для файла с indirect-блоком, где 26 — это 13 указателей * 2
-/// сектора на блок, а не реальные 65 занятых блоков).
-fn write_inode(ino: u32, mode: u16, size: u32, links_count: u16, block_ptrs: &[u32], used_blocks: u32) -> Result<(), Ext2Error> {
-    let (block, offset) = inode_location(ino);
+/// косвенной адресации" (обнаружено через e2fsck: "i_blocks is 26,
+/// should be 130" для файла с indirect-блоком).
+fn write_inode(v: &Vol, ino: u32, mode: u16, size: u32, links_count: u16, block_ptrs: &[u32], used_blocks: u32) -> Result<(), Ext2Error> {
+    let (block, offset) = inode_location(v, ino);
     let mut raw = [0u8; INODE_SIZE];
 
     raw[0..2].copy_from_slice(&mode.to_le_bytes());
@@ -345,22 +535,19 @@ fn write_inode(ino: u32, mode: u16, size: u32, links_count: u16, block_ptrs: &[u
         raw[o..o + 4].copy_from_slice(&ptr.to_le_bytes());
     }
 
-    write_block_partial(block, offset, &raw)
+    write_block_partial(v, block, offset, &raw)
 }
 
 /// Обнуляет структуру inode на диске и выставляет dtime (offset 20) —
-/// КРИТИЧЕСКИ важно при удалении файла, помимо очистки битов в bitmap.
-/// Без этого шага e2fsck находит в таблице инодов "живую на вид"
-/// структуру (ненулевые mode/блочные указатели), не связанную ни с одной
-/// directory entry, и считает её потерянным файлом ("unattached inode") —
-/// именно так и проявлялся баг при разработке (см. историю в
-/// tools/ext2_prototype_full.py). Настоящий Linux (fs/ext2/inode.c)
-/// поступает точно так же при удалении инода.
-fn clear_inode(ino: u32, dtime: u32) -> Result<(), Ext2Error> {
-    let (block, offset) = inode_location(ino);
+/// обязательный шаг при удалении файла, помимо очистки битов в bitmap:
+/// без него e2fsck находит в таблице инодов "живую на вид" структуру,
+/// не связанную ни с одной directory entry ("unattached inode").
+/// Настоящий Linux (fs/ext2/inode.c) поступает так же.
+fn clear_inode(v: &Vol, ino: u32, dtime: u32) -> Result<(), Ext2Error> {
+    let (block, offset) = inode_location(v, ino);
     let mut raw = [0u8; INODE_SIZE];
     raw[20..24].copy_from_slice(&dtime.to_le_bytes());
-    write_block_partial(block, offset, &raw)
+    write_block_partial(v, block, offset, &raw)
 }
 
 // ---------------- directory entries ----------------
@@ -405,37 +592,34 @@ fn dir_block_ptrs(inode: &Inode) -> impl Iterator<Item = u32> + '_ {
 }
 
 /// Читает индексный (indirect) блок и возвращает его как массив из 256
-/// u32-указателей — то же самое, что делает ядро Linux в
-/// fs/ext2/inode.c при обращении к ind-блоку. Возвращает все нули, если
-/// indirect-блок ещё не выделен (в inode стоит 0) — вызывающий код
-/// интерпретирует такие нули как "блок не выделен", как и для обычных
-/// прямых указателей.
-fn read_indirect_block(indirect_block_num: u32) -> Result<[u32; PTRS_PER_INDIRECT_BLOCK], Ext2Error> {
+/// u32-указателей. Возвращает все нули, если indirect-блок ещё не
+/// выделен (в inode стоит 0).
+fn read_indirect_block(v: &Vol, indirect_block_num: u32) -> Result<[u32; PTRS_PER_INDIRECT_BLOCK], Ext2Error> {
     let mut ptrs = [0u32; PTRS_PER_INDIRECT_BLOCK];
     if indirect_block_num == 0 {
         return Ok(ptrs);
     }
-    let raw = read_block(indirect_block_num)?;
+    let raw = read_block(v, indirect_block_num)?;
     for (i, chunk) in raw.chunks_exact(4).enumerate() {
         ptrs[i] = u32::from_le_bytes(chunk.try_into().unwrap());
     }
     Ok(ptrs)
 }
 
-fn write_indirect_block(indirect_block_num: u32, ptrs: &[u32; PTRS_PER_INDIRECT_BLOCK]) -> Result<(), Ext2Error> {
+fn write_indirect_block(v: &Vol, indirect_block_num: u32, ptrs: &[u32; PTRS_PER_INDIRECT_BLOCK]) -> Result<(), Ext2Error> {
     let mut raw = [0u8; BLOCK_SIZE];
     for (i, &ptr) in ptrs.iter().enumerate() {
         raw[i * 4..i * 4 + 4].copy_from_slice(&ptr.to_le_bytes());
     }
-    write_block(indirect_block_num, &raw)
+    write_block(v, indirect_block_num, &raw)
 }
 
-/// Возвращает ПОЛНЫЙ список блоков данных файла — сначала до 12 прямых
-/// указателей, затем (если файл больше 12 КиБ) содержимое indirect-
-/// блока. В отличие от dir_block_ptrs (используется только для
-/// каталогов, которые у нас никогда не превышают 12 КиБ, поэтому им
-/// indirect не нужен), эта функция — общий путь для файлов.
-fn file_block_list(inode: &Inode) -> Result<Vec<u32>, Ext2Error> {
+/// Возвращает ПОЛНЫЙ список блоков ДАННЫХ файла в порядке записи:
+/// 12 прямых указателей, затем содержимое одинарного indirect-блока,
+/// затем блоки, перечисленные в indirect-блоках двойного. Сами
+/// индексные блоки (indirect/dindirect) в список не входят — они
+/// метаданные, их освобождает free_file_blocks отдельно.
+fn file_block_list(v: &Vol, inode: &Inode) -> Result<Vec<u32>, Ext2Error> {
     let mut blocks: Vec<u32> = inode.block_ptrs[..MAX_DIRECT_BLOCKS]
         .iter()
         .copied()
@@ -444,17 +628,26 @@ fn file_block_list(inode: &Inode) -> Result<Vec<u32>, Ext2Error> {
 
     let indirect = inode.block_ptrs[INDIRECT_BLOCK_INDEX];
     if indirect != 0 {
-        let ptrs = read_indirect_block(indirect)?;
+        let ptrs = read_indirect_block(v, indirect)?;
         blocks.extend(ptrs.iter().copied().filter(|&p| p != 0));
+    }
+
+    let dind = inode.block_ptrs[DOUBLE_INDIRECT_BLOCK_INDEX];
+    if dind != 0 {
+        let ind_list = read_indirect_block(v, dind)?;
+        for &ind in ind_list.iter().filter(|&&p| p != 0) {
+            let ptrs = read_indirect_block(v, ind)?;
+            blocks.extend(ptrs.iter().copied().filter(|&p| p != 0));
+        }
     }
 
     Ok(blocks)
 }
 
-fn find_in_dir(dir_ino: u32, name: &str) -> Result<Option<(u32, usize, u32)>, Ext2Error> {
-    let dir_inode = read_inode(dir_ino)?;
+fn find_in_dir(v: &Vol, dir_ino: u32, name: &str) -> Result<Option<(u32, usize, u32)>, Ext2Error> {
+    let dir_inode = read_inode(v, dir_ino)?;
     for block_num in dir_block_ptrs(&dir_inode) {
-        let buf = read_block(block_num)?;
+        let buf = read_block(v, block_num)?;
         let mut offset = 0usize;
         while let Some(entry) = dirent_at(&buf, offset) {
             if entry.ino != 0 && dirent_name(&buf, &entry) == name {
@@ -466,17 +659,17 @@ fn find_in_dir(dir_ino: u32, name: &str) -> Result<Option<(u32, usize, u32)>, Ex
     Ok(None)
 }
 
-fn add_dirent(dir_ino: u32, name: &str, new_ino: u32) -> Result<(), Ext2Error> {
+fn add_dirent(v: &Vol, dir_ino: u32, name: &str, new_ino: u32) -> Result<(), Ext2Error> {
     if name.is_empty() || name.len() > 55 {
         return Err(Ext2Error::InvalidName);
     }
     let needed_len = (((8 + name.len()) + 3) / 4 * 4) as u16;
 
-    let dir_inode = read_inode(dir_ino)?;
+    let dir_inode = read_inode(v, dir_ino)?;
     let block_list: Vec<u32> = dir_block_ptrs(&dir_inode).collect();
 
     for block_num in &block_list {
-        let mut buf = read_block(*block_num)?;
+        let mut buf = read_block(v, *block_num)?;
         let mut offset = 0usize;
         while let Some(entry) = dirent_at(&buf, offset) {
             let actual_len = if entry.ino != 0 {
@@ -488,7 +681,7 @@ fn add_dirent(dir_ino: u32, name: &str, new_ino: u32) -> Result<(), Ext2Error> {
 
             if entry.ino == 0 && entry.rec_len >= needed_len {
                 make_dirent(&mut buf, entry.offset, new_ino, name, entry.rec_len);
-                write_block(*block_num, &buf)?;
+                write_block(v, *block_num, &buf)?;
                 return Ok(());
             }
             if entry.ino != 0 && free_in_entry >= needed_len {
@@ -496,7 +689,7 @@ fn add_dirent(dir_ino: u32, name: &str, new_ino: u32) -> Result<(), Ext2Error> {
                 let new_offset = entry.offset + actual_len as usize;
                 let new_rec_len = entry.rec_len - actual_len;
                 make_dirent(&mut buf, new_offset, new_ino, name, new_rec_len);
-                write_block(*block_num, &buf)?;
+                write_block(v, *block_num, &buf)?;
                 return Ok(());
             }
             offset += entry.rec_len as usize;
@@ -512,28 +705,28 @@ fn add_dirent(dir_ino: u32, name: &str, new_ino: u32) -> Result<(), Ext2Error> {
         None => return Err(Ext2Error::DirectoryFull),
     };
 
-    let new_block = alloc_block()?;
+    let new_block = alloc_block(v)?;
     let mut buf = [0u8; BLOCK_SIZE];
     make_dirent(&mut buf, 0, new_ino, name, BLOCK_SIZE as u16);
-    write_block(new_block, &buf)?;
+    write_block(v, new_block, &buf)?;
 
     new_ptrs[slot] = new_block;
     let new_size = dir_inode.size + BLOCK_SIZE as u32;
     // Каталоги используют только прямые блоки (см. dir_block_ptrs) —
     // used_blocks здесь всегда равен числу ненулевых прямых указателей.
     let used_blocks = new_ptrs[..MAX_DIRECT_BLOCKS].iter().filter(|&&p| p != 0).count() as u32;
-    write_inode(dir_ino, dir_inode.mode, new_size, dir_inode.links_count, &new_ptrs, used_blocks)
+    write_inode(v, dir_ino, dir_inode.mode, new_size, dir_inode.links_count, &new_ptrs, used_blocks)
 }
 
-fn remove_dirent(dir_ino: u32, name: &str) -> Result<bool, Ext2Error> {
-    let dir_inode = read_inode(dir_ino)?;
+fn remove_dirent(v: &Vol, dir_ino: u32, name: &str) -> Result<bool, Ext2Error> {
+    let dir_inode = read_inode(v, dir_ino)?;
     for block_num in dir_block_ptrs(&dir_inode) {
-        let mut buf = read_block(block_num)?;
+        let mut buf = read_block(v, block_num)?;
         let mut offset = 0usize;
         while let Some(entry) = dirent_at(&buf, offset) {
             if entry.ino != 0 && dirent_name(&buf, &entry) == name {
                 buf[entry.offset..entry.offset + 4].copy_from_slice(&0u32.to_le_bytes());
-                write_block(block_num, &buf)?;
+                write_block(v, block_num, &buf)?;
                 return Ok(true);
             }
             offset += entry.rec_len as usize;
@@ -542,38 +735,119 @@ fn remove_dirent(dir_ino: u32, name: &str) -> Result<bool, Ext2Error> {
     Ok(false)
 }
 
-// ---------------- форматирование ----------------
+// ==================== форматирование ====================
 
-/// Текущее "время" ядра в секундах — у нас нет RTC-драйвера, поэтому
-/// используем аптайм с момента загрузки как приближение (не настоящий
-/// Unix-таймstamp, но ext2 не требует, чтобы время было "настоящим" для
-/// корректности структуры — e2fsck не проверяет правдоподобность самих
-/// значений времени, только их наличие).
+/// Текущее "время" ядра в секундах — RTC-драйвера для таймстампов нет,
+/// используется аптайм с момента загрузки. e2fsck не проверяет
+/// правдоподобность значений времени, только их наличие.
 fn fake_timestamp() -> u32 {
     (crate::timer::uptime_ms() / 1000) as u32
 }
 
-pub fn format() -> Result<(), Ext2Error> {
-    let now = fake_timestamp();
-    let inodes = inodes_count();
-    let reserved = reserved_meta_blocks();
-    let valid_blocks = valid_blocks_in_group();
-    let free_blocks_count = valid_blocks - reserved;
-    let free_inodes_count = inodes - (FIRST_NON_RESERVED_INO - 1) - 1;
+/// План форматирования: геометрия будущего тома. Считается один раз,
+/// затем группы записываются по одной (format_group) — это позволяет
+/// установщику показывать честный прогресс по группам.
+pub struct FormatPlan {
+    io: VolIo,
+    encrypted: bool,
+    start_lba: u32,
+    total_blocks: u32,
+    bpg: u32,
+    ipg: u32,
+    pub groups: u32,
+    gdt_blocks: u32,
+    itb_blocks: u32,
+}
 
-    // ---- Superblock ----
+impl FormatPlan {
+    /// Служебные блоки одной группы: SB(копия) + GDT + 2 битовые карты +
+    /// таблица инодов.
+    fn overhead(&self) -> u32 {
+        1 + self.gdt_blocks + 2 + self.itb_blocks
+    }
+
+    fn as_vol(&self) -> Vol {
+        Vol {
+            io: self.io,
+            encrypted: self.encrypted,
+            start_lba: self.start_lba,
+            total_blocks: self.total_blocks,
+            bpg: self.bpg,
+            ipg: self.ipg,
+            groups: self.groups,
+            gdt_blocks: self.gdt_blocks,
+        }
+    }
+
+    fn group_count_blocks(&self, g: u32) -> u32 {
+        let base = 1 + g * self.bpg;
+        core::cmp::min(self.bpg, self.total_blocks - base)
+    }
+
+    fn group_free_blocks(&self, g: u32) -> u32 {
+        let mut free = self.group_count_blocks(g) - self.overhead();
+        if g == 0 {
+            free -= 2; // корневой каталог + lost+found
+        }
+        free
+    }
+
+    fn group_free_inodes(&self, g: u32) -> u32 {
+        if g == 0 {
+            self.ipg - FIRST_NON_RESERVED_INO
+        } else {
+            self.ipg
+        }
+    }
+}
+
+fn plan_format(io: VolIo, encrypted: bool, start_lba: u32, total_sectors: u32) -> Result<FormatPlan, Ext2Error> {
+    let mut total_blocks = total_sectors / SECTORS_PER_BLOCK;
+    if total_blocks < 64 {
+        return Err(Ext2Error::NoSpace);
+    }
+    let bpg = BLOCKS_PER_GROUP;
+    // Плотность инодов как у mke2fs по умолчанию: ~1 инод на 4096 байт,
+    // кратно 8 (битовая карта — целое число байт). Для полной группы
+    // 8192 блоков это 2048 инодов на группу.
+    let ipg = ((core::cmp::max(32, core::cmp::min(total_blocks, bpg) / 4) + 7) / 8) * 8;
+    let itb_blocks = (ipg * INODE_SIZE as u32).div_ceil(BLOCK_SIZE as u32);
+
+    loop {
+        let groups = (total_blocks - 1).div_ceil(bpg);
+        let gdt_blocks = (groups * 32).div_ceil(BLOCK_SIZE as u32);
+        let overhead = 1 + gdt_blocks + 2 + itb_blocks;
+        let last_base = 1 + (groups - 1) * bpg;
+        let last_count = total_blocks - last_base;
+        // Хвостовая группа, в которую не помещаются даже метаданные и
+        // немного данных, отрезается (mke2fs делает так же).
+        if groups > 1 && last_count < overhead + 16 {
+            total_blocks = last_base;
+            continue;
+        }
+        if last_count < overhead + 2 {
+            return Err(Ext2Error::NoSpace);
+        }
+        return Ok(FormatPlan { io, encrypted, start_lba, total_blocks, bpg, ipg, groups, gdt_blocks, itb_blocks });
+    }
+}
+
+/// Собирает содержимое суперблока. В резервных копиях (g>0) поле
+/// s_block_group_nr (offset 90) хранит номер группы копии.
+fn build_superblock(plan: &FormatPlan, group_nr: u32, free_blocks: u32, free_inodes: u32, now: u32) -> [u8; BLOCK_SIZE] {
+    let inodes = plan.groups * plan.ipg;
     let mut sb = [0u8; BLOCK_SIZE];
     sb[0..4].copy_from_slice(&inodes.to_le_bytes());
-    sb[4..8].copy_from_slice(&TOTAL_BLOCKS.to_le_bytes());
+    sb[4..8].copy_from_slice(&plan.total_blocks.to_le_bytes());
     sb[8..12].copy_from_slice(&0u32.to_le_bytes()); // reserved blocks for superuser
-    sb[12..16].copy_from_slice(&free_blocks_count.to_le_bytes());
-    sb[16..20].copy_from_slice(&free_inodes_count.to_le_bytes());
-    sb[20..24].copy_from_slice(&SB_BLOCK.to_le_bytes()); // first data block
-    sb[24..28].copy_from_slice(&0u32.to_le_bytes()); // log2(block size) - 10 => 1024 << 0
+    sb[12..16].copy_from_slice(&free_blocks.to_le_bytes());
+    sb[16..20].copy_from_slice(&free_inodes.to_le_bytes());
+    sb[20..24].copy_from_slice(&1u32.to_le_bytes()); // first data block
+    sb[24..28].copy_from_slice(&0u32.to_le_bytes()); // log2(block size) - 10 => 1024
     sb[28..32].copy_from_slice(&0u32.to_le_bytes()); // log2(fragment size) - 10
-    sb[32..36].copy_from_slice(&TOTAL_BLOCKS.to_le_bytes()); // blocks per group (одна группа)
-    sb[36..40].copy_from_slice(&TOTAL_BLOCKS.to_le_bytes()); // fragments per group
-    sb[40..44].copy_from_slice(&inodes.to_le_bytes()); // inodes per group
+    sb[32..36].copy_from_slice(&plan.bpg.to_le_bytes());
+    sb[36..40].copy_from_slice(&plan.bpg.to_le_bytes()); // fragments per group
+    sb[40..44].copy_from_slice(&plan.ipg.to_le_bytes());
     sb[44..48].copy_from_slice(&0u32.to_le_bytes()); // last mount time
     sb[48..52].copy_from_slice(&now.to_le_bytes()); // last write time
     sb[52..54].copy_from_slice(&0u16.to_le_bytes()); // mount count
@@ -584,71 +858,167 @@ pub fn format() -> Result<(), Ext2Error> {
     sb[62..64].copy_from_slice(&0u16.to_le_bytes()); // minor version
     sb[64..68].copy_from_slice(&now.to_le_bytes()); // last check time
     sb[68..72].copy_from_slice(&0u32.to_le_bytes()); // check interval
-    sb[72..76].copy_from_slice(&0u32.to_le_bytes()); // creator OS: Linux (для совместимости с fsck/mount)
+    sb[72..76].copy_from_slice(&0u32.to_le_bytes()); // creator OS: Linux
     sb[76..80].copy_from_slice(&0u32.to_le_bytes()); // major version: 0 (revision 0)
-    write_block(SB_BLOCK, &sb)?;
+    sb[90..92].copy_from_slice(&(group_nr as u16).to_le_bytes());
+    sb
+}
 
-    // ---- Group Descriptor Table ----
-    let mut gdt = [0u8; BLOCK_SIZE];
-    gdt[0..4].copy_from_slice(&BLOCK_BITMAP_BLOCK.to_le_bytes());
-    gdt[4..8].copy_from_slice(&INODE_BITMAP_BLOCK.to_le_bytes());
-    gdt[8..12].copy_from_slice(&INODE_TABLE_START.to_le_bytes());
-    gdt[12..14].copy_from_slice(&(free_blocks_count as u16).to_le_bytes());
-    gdt[14..16].copy_from_slice(&(free_inodes_count as u16).to_le_bytes());
-    gdt[16..18].copy_from_slice(&2u16.to_le_bytes()); // число каталогов: root + lost+found
-    write_block(GDT_BLOCK, &gdt)?;
+/// Собирает полную таблицу дескрипторов групп (одинакова во всех копиях).
+fn build_gdt(plan: &FormatPlan) -> Vec<u8> {
+    let mut gdt = alloc::vec![0u8; plan.gdt_blocks as usize * BLOCK_SIZE];
+    for g in 0..plan.groups {
+        let base = 1 + g * plan.bpg;
+        let bbm = base + 1 + plan.gdt_blocks;
+        let off = g as usize * 32;
+        gdt[off..off + 4].copy_from_slice(&bbm.to_le_bytes());
+        gdt[off + 4..off + 8].copy_from_slice(&(bbm + 1).to_le_bytes());
+        gdt[off + 8..off + 12].copy_from_slice(&(bbm + 2).to_le_bytes());
+        gdt[off + 12..off + 14].copy_from_slice(&(plan.group_free_blocks(g) as u16).to_le_bytes());
+        gdt[off + 14..off + 16].copy_from_slice(&(plan.group_free_inodes(g) as u16).to_le_bytes());
+        let dirs: u16 = if g == 0 { 2 } else { 0 }; // root + lost+found
+        gdt[off + 16..off + 18].copy_from_slice(&dirs.to_le_bytes());
+    }
+    gdt
+}
 
-    // ---- Block bitmap ----
+/// Записывает метаданные одной группы: суперблок (основной или копию),
+/// GDT, битовые карты и обнулённую таблицу инодов.
+pub fn format_group(plan: &FormatPlan, g: u32) -> Result<(), Ext2Error> {
+    let v = plan.as_vol();
+    let now = fake_timestamp();
+    let base = group_base(&v, g);
+    let count = plan.group_count_blocks(g);
+    let total_free_blocks: u32 = (0..plan.groups).map(|gg| plan.group_free_blocks(gg)).sum();
+    let total_free_inodes: u32 = (0..plan.groups).map(|gg| plan.group_free_inodes(gg)).sum();
+
+    // Суперблок (в группе 0 — основной).
+    let sb = build_superblock(plan, g, total_free_blocks, total_free_inodes, now);
+    write_block(&v, base, &sb)?;
+
+    // Таблица дескрипторов групп.
+    let gdt = build_gdt(plan);
+    for i in 0..plan.gdt_blocks {
+        let mut blk = [0u8; BLOCK_SIZE];
+        let s = i as usize * BLOCK_SIZE;
+        blk.copy_from_slice(&gdt[s..s + BLOCK_SIZE]);
+        write_block(&v, base + 1 + i, &blk)?;
+    }
+
+    let (bbm, ibm, itable) = group_meta(&v, g);
+
+    // Битовая карта блоков: заняты метаданные (в группе 0 — ещё корневой
+    // каталог и lost+found), биты за пределами группы — единицы.
+    let mut used = plan.overhead();
+    if g == 0 {
+        used += 2;
+    }
     let mut block_bitmap = [0u8; BLOCK_SIZE];
-    for b in 0..reserved {
+    for b in 0..used {
         block_bitmap[(b / 8) as usize] |= 1 << (b % 8);
     }
-    for b in valid_blocks..(BLOCK_SIZE as u32 * 8) {
+    for b in count..(BLOCK_SIZE as u32 * 8) {
         block_bitmap[(b / 8) as usize] |= 1 << (b % 8);
     }
-    write_block(BLOCK_BITMAP_BLOCK, &block_bitmap)?;
+    write_block(&v, bbm, &block_bitmap)?;
 
-    // ---- Inode bitmap ----
+    // Битовая карта инодов: в группе 0 заняты зарезервированные 1..10 и
+    // lost+found (11); биты за пределами ipg — единицы.
     let mut inode_bitmap = [0u8; BLOCK_SIZE];
-    for i in 0..FIRST_NON_RESERVED_INO {
+    if g == 0 {
+        for i in 0..FIRST_NON_RESERVED_INO {
+            inode_bitmap[(i / 8) as usize] |= 1 << (i % 8);
+        }
+    }
+    for i in plan.ipg..(BLOCK_SIZE as u32 * 8) {
         inode_bitmap[(i / 8) as usize] |= 1 << (i % 8);
     }
-    inode_bitmap[((LOST_AND_FOUND_INO - 1) / 8) as usize] |= 1 << ((LOST_AND_FOUND_INO - 1) % 8);
-    for i in inodes..(BLOCK_SIZE as u32 * 8) {
-        inode_bitmap[(i / 8) as usize] |= 1 << (i % 8);
+    write_block(&v, ibm, &inode_bitmap)?;
+
+    // Таблица инодов: нули.
+    let zero = [0u8; BLOCK_SIZE];
+    for i in 0..plan.itb_blocks {
+        write_block(&v, itable + i, &zero)?;
     }
-    write_block(INODE_BITMAP_BLOCK, &inode_bitmap)?;
-
-    // ---- Root directory (inode 2) ----
-    let mut root_block = [0u8; BLOCK_SIZE];
-    make_dirent(&mut root_block, 0, ROOT_INO, ".", 12);
-    make_dirent(&mut root_block, 12, ROOT_INO, "..", 12);
-    make_dirent(&mut root_block, 24, LOST_AND_FOUND_INO, "lost+found", (BLOCK_SIZE - 24) as u16);
-    write_block(root_dir_block(), &root_block)?;
-
-    let mut root_ptrs = [0u32; 15];
-    root_ptrs[0] = root_dir_block();
-    write_inode(ROOT_INO, 0o040755, BLOCK_SIZE as u32, 3, &root_ptrs, 1)?;
-
-    // ---- lost+found (inode 11) ----
-    let mut lf_block = [0u8; BLOCK_SIZE];
-    make_dirent(&mut lf_block, 0, LOST_AND_FOUND_INO, ".", 12);
-    make_dirent(&mut lf_block, 12, ROOT_INO, "..", (BLOCK_SIZE - 12) as u16);
-    write_block(lost_found_block(), &lf_block)?;
-
-    let mut lf_ptrs = [0u32; 15];
-    lf_ptrs[0] = lost_found_block();
-    write_inode(LOST_AND_FOUND_INO, 0o040700, BLOCK_SIZE as u32, 2, &lf_ptrs, 1)?;
 
     Ok(())
 }
 
+/// Завершает форматирование: корневой каталог и lost+found в группе 0.
+pub fn format_finish(plan: &FormatPlan) -> Result<(), Ext2Error> {
+    let v = plan.as_vol();
+    let (_, _, itable) = group_meta(&v, 0);
+    let root_block = itable + plan.itb_blocks;
+    let lf_block = root_block + 1;
+
+    let mut root = [0u8; BLOCK_SIZE];
+    make_dirent(&mut root, 0, ROOT_INO, ".", 12);
+    make_dirent(&mut root, 12, ROOT_INO, "..", 12);
+    make_dirent(&mut root, 24, LOST_AND_FOUND_INO, "lost+found", (BLOCK_SIZE - 24) as u16);
+    write_block(&v, root_block, &root)?;
+
+    let mut root_ptrs = [0u32; 15];
+    root_ptrs[0] = root_block;
+    write_inode(&v, ROOT_INO, 0o040755, BLOCK_SIZE as u32, 3, &root_ptrs, 1)?;
+
+    let mut lf = [0u8; BLOCK_SIZE];
+    make_dirent(&mut lf, 0, LOST_AND_FOUND_INO, ".", 12);
+    make_dirent(&mut lf, 12, ROOT_INO, "..", (BLOCK_SIZE - 12) as u16);
+    write_block(&v, lf_block, &lf)?;
+
+    let mut lf_ptrs = [0u32; 15];
+    lf_ptrs[0] = lf_block;
+    write_inode(&v, LOST_AND_FOUND_INO, 0o040700, BLOCK_SIZE as u32, 2, &lf_ptrs, 1)?;
+
+    Ok(())
+}
+
+fn format_volume(io: VolIo, encrypted: bool, start_lba: u32, total_sectors: u32) -> Result<(), Ext2Error> {
+    let plan = plan_format(io, encrypted, start_lba, total_sectors)?;
+    for g in 0..plan.groups {
+        format_group(&plan, g)?;
+    }
+    format_finish(&plan)
+}
+
+/// Форматирует том /userdata. Размер берётся из таблицы разделов MBR —
+/// на диске, подготовленном установщиком, /userdata может быть любого
+/// размера; на штатном образе это 16384 секторов.
+pub fn format() -> Result<(), Ext2Error> {
+    let sectors = userdata_partition_sectors();
+    let r = format_volume(VolIo::Standard, true, FS_START_LBA, sectors);
+    invalidate_cache(VolId::Userdata);
+    r
+}
+
+/// Форматирует раздел /system в ext2 (утилита sysfs, dev-режим).
+/// Без шифрования: загрузчик и vfs читают раздел открытым.
+pub fn format_system() -> Result<(), Ext2Error> {
+    let (io, encrypted, start_lba, sectors) = vol_params(VolId::System);
+    let r = format_volume(io, encrypted, start_lba, sectors);
+    invalidate_cache(VolId::System);
+    r
+}
+
+/// План форматирования тома на ПРОИЗВОЛЬНОМ диске (установщик) —
+/// прямой доступ, без шифрования и RAM-диска.
+pub fn plan_format_raw(drive: Drive, start_lba: u32, total_sectors: u32) -> Result<FormatPlan, Ext2Error> {
+    plan_format(VolIo::Raw(drive), false, start_lba, total_sectors)
+}
+
+/// Записывает файл в корень ext2-тома на произвольном диске (установщик:
+/// USERS.DB на целевой диск). Том должен быть уже отформатирован.
+pub fn write_file_raw(drive: Drive, start_lba: u32, max_sectors: u32, name: &str, data: &[u8]) -> Result<(), Ext2Error> {
+    let v = load_vol(VolIo::Raw(drive), false, start_lba, max_sectors)?;
+    validate_name(name)?;
+    write_file_at(&v, ROOT_INO, name, data)
+}
+
 // ---------------- имена файлов ----------------
 
-/// ext2 (в отличие от FAT) не требует формата 8.3 — имена произвольной
-/// длины (до 55 символов в нашей реализации directory entry, см.
-/// add_dirent). Единственное ограничение — недопустимость '/' и NUL
-/// (обычные ограничения Unix-путей).
+/// ext2 не требует формата 8.3 — имена произвольной длины (до 55
+/// символов в нашей реализации directory entry, см. add_dirent).
+/// Ограничение — недопустимость '/' и NUL.
 fn validate_name(name: &str) -> Result<(), Ext2Error> {
     if name.is_empty() || name.len() > 55 {
         return Err(Ext2Error::InvalidName);
@@ -659,350 +1029,19 @@ fn validate_name(name: &str) -> Result<(), Ext2Error> {
     Ok(())
 }
 
-// ---------------- публичное API (совместимое по духу с fat16.rs) ----------------
+// ==================== операции внутри тома ====================
 
-pub fn list_root() -> Result<Vec<FileEntry>, Ext2Error> {
-    if !is_formatted() {
-        return Err(Ext2Error::NotFormatted);
-    }
-
-    let dir_inode = read_inode(ROOT_INO)?;
+fn list_dir_ino(v: &Vol, dir_ino: u32, skip_lost_found: bool) -> Result<Vec<FileEntry>, Ext2Error> {
+    let dir_inode = read_inode(v, dir_ino)?;
     let mut entries = Vec::new();
-
     for block_num in dir_block_ptrs(&dir_inode) {
-        let buf = read_block(block_num)?;
+        let buf = read_block(v, block_num)?;
         let mut offset = 0usize;
         while let Some(entry) = dirent_at(&buf, offset) {
             if entry.ino != 0 {
                 let name = dirent_name(&buf, &entry);
-                if name != "." && name != ".." && name != "lost+found" {
-                    let file_inode = read_inode(entry.ino)?;
-                    let is_directory = (file_inode.mode & 0xF000) == 0x4000;
-                    entries.push(FileEntry {
-                        name,
-                        size: file_inode.size,
-                        is_directory,
-                    });
-                }
-            }
-            offset += entry.rec_len as usize;
-        }
-    }
-
-    Ok(entries)
-}
-
-/// Читает содержимое файла по номеру инода.
-pub fn read_inode_data(ino: u32) -> Result<Vec<u8>, Ext2Error> {
-    let inode = read_inode(ino)?;
-    if inode.size > 8 * 1024 * 1024 {
-        return Err(Ext2Error::DiskError);
-    }
-    let mut data = Vec::with_capacity(inode.size as usize);
-    let mut left = inode.size as usize;
-    for block_num in dir_block_ptrs(&inode) {
-        if left == 0 {
-            break;
-        }
-        let buf = read_block(block_num)?;
-        let take = left.min(BLOCK_SIZE);
-        data.extend_from_slice(&buf[..take]);
-        left -= take;
-    }
-    Ok(data)
-}
-
-pub fn read_file(name: &str) -> Result<Vec<u8>, Ext2Error> {
-    if !is_formatted() {
-        return Err(Ext2Error::NotFormatted);
-    }
-    validate_name(name)?;
-
-    let found = find_in_dir(ROOT_INO, name)?;
-    let (_, _, ino) = found.ok_or(Ext2Error::FileNotFound)?;
-
-    let inode = read_inode(ino)?;
-    if inode.size > 8 * 1024 * 1024 {
-        return Err(Ext2Error::DiskError);
-    }
-    let mut data = Vec::with_capacity(inode.size as usize);
-    let mut remaining = inode.size as usize;
-
-    // file_block_list() уже возвращает блоки в правильном порядке:
-    // сначала 12 прямых, затем (если файл больше 12 КиБ) блоки,
-    // перечисленные в indirect-блоке — то есть ровно та
-    // последовательность, в которой были записаны данные файла.
-    for ptr in file_block_list(&inode)? {
-        if remaining == 0 {
-            break;
-        }
-        let block_data = read_block(ptr)?;
-        let take = remaining.min(BLOCK_SIZE);
-        data.extend_from_slice(&block_data[..take]);
-        remaining -= take;
-    }
-
-    Ok(data)
-}
-
-fn free_file_blocks(ino: u32) -> Result<(), Ext2Error> {
-    let inode = read_inode(ino)?;
-
-    // Освобождаем блоки данных (прямые + перечисленные в indirect-блоке).
-    for ptr in file_block_list(&inode)? {
-        free_block(ptr)?;
-    }
-
-    // Сам indirect-блок — это ТОЖЕ занятый блок на диске (в нём хранятся
-    // указатели, а не данные файла), поэтому его нужно освободить
-    // отдельно, а не только блоки, на которые он указывает — иначе
-    // e2fsck найдёт "утёкший" блок, который значится занятым в bitmap,
-    // но ни на что не ссылается ни один живой inode.
-    let indirect = inode.block_ptrs[INDIRECT_BLOCK_INDEX];
-    if indirect != 0 {
-        free_block(indirect)?;
-    }
-
-    free_inode(ino)?;
-    clear_inode(ino, fake_timestamp())
-}
-
-pub fn write_file(name: &str, data: &[u8]) -> Result<(), Ext2Error> {
-    write_file_in(ROOT_INO, name, data)
-}
-
-/// Запись файла в ПРОИЗВОЛЬНЫЙ каталог (по иноду). Вся логика прямых и
-/// indirect-блоков общая с корневой записью — дублировать её нельзя,
-/// иначе две реализации разъедутся.
-pub fn write_file_in(dir_ino: u32, name: &str, data: &[u8]) -> Result<(), Ext2Error> {
-    if !is_formatted() {
-        return Err(Ext2Error::NotFormatted);
-    }
-    validate_name(name)?;
-
-    if let Some((_, _, existing_ino)) = find_in_dir(dir_ino, name)? {
-        free_file_blocks(existing_ino)?;
-        remove_dirent(dir_ino, name)?;
-    }
-
-    let blocks_needed = data.len().div_ceil(BLOCK_SIZE).max(if data.is_empty() { 0 } else { 1 });
-    if blocks_needed > MAX_FILE_BLOCKS {
-        return Err(Ext2Error::FileTooLarge);
-    }
-
-    let mut block_ptrs = [0u32; 15];
-
-    // Сначала заполняем до MAX_DIRECT_BLOCKS прямых указателей — точно
-    // так же, как раньше.
-    let direct_blocks = blocks_needed.min(MAX_DIRECT_BLOCKS);
-    for i in 0..direct_blocks {
-        let b = alloc_block()?;
-        let start = i * BLOCK_SIZE;
-        let end = (start + BLOCK_SIZE).min(data.len());
-        let mut block_buf = [0u8; BLOCK_SIZE];
-        block_buf[..end - start].copy_from_slice(&data[start..end]);
-        write_block(b, &block_buf)?;
-        block_ptrs[i] = b;
-    }
-
-    // used_blocks считает РЕАЛЬНО занятые на диске блоки — для файла с
-    // indirect-адресацией это прямые блоки + блоки данных за
-    // indirect-указателем + САМ indirect-блок (он тоже физически занят,
-    // хоть и не содержит данных файла напрямую).
-    let mut used_blocks = direct_blocks as u32;
-
-    // Если файл больше 12 КиБ — остаток данных уходит в блоки,
-    // перечисленные через indirect-блок (тот же механизм, что и в
-    // настоящем ext2: block_ptrs[12] указывает не на данные, а на блок,
-    // целиком состоящий из ещё 256 указателей на блоки данных).
-    if blocks_needed > MAX_DIRECT_BLOCKS {
-        let indirect_data_blocks = blocks_needed - MAX_DIRECT_BLOCKS;
-        let mut indirect_ptrs = [0u32; PTRS_PER_INDIRECT_BLOCK];
-
-        for i in 0..indirect_data_blocks {
-            let b = alloc_block()?;
-            let start = (MAX_DIRECT_BLOCKS + i) * BLOCK_SIZE;
-            let end = (start + BLOCK_SIZE).min(data.len());
-            let mut block_buf = [0u8; BLOCK_SIZE];
-            block_buf[..end - start].copy_from_slice(&data[start..end]);
-            write_block(b, &block_buf)?;
-            indirect_ptrs[i] = b;
-        }
-
-        let indirect_block_num = alloc_block()?;
-        write_indirect_block(indirect_block_num, &indirect_ptrs)?;
-        block_ptrs[INDIRECT_BLOCK_INDEX] = indirect_block_num;
-
-        // + indirect_data_blocks блоков данных, + 1 сам indirect-блок.
-        used_blocks += indirect_data_blocks as u32 + 1;
-    }
-
-    let ino = alloc_inode()?;
-    write_inode(ino, 0o100644, data.len() as u32, 1, &block_ptrs, used_blocks)?;
-    add_dirent(dir_ino, name, ino)?;
-
-    Ok(())
-}
-
-pub fn delete_file(name: &str) -> Result<(), Ext2Error> {
-    if !is_formatted() {
-        return Err(Ext2Error::NotFormatted);
-    }
-    validate_name(name)?;
-
-    let found = find_in_dir(ROOT_INO, name)?;
-    let (_, _, ino) = found.ok_or(Ext2Error::FileNotFound)?;
-
-    free_file_blocks(ino)?;
-    remove_dirent(ROOT_INO, name)?;
-
-    Ok(())
-}
-
-// ==================== КАТАЛОГИ И ПУТИ ====================
-//
-// Менять файловую систему на ext4/NTFS ради подкаталогов не нужно:
-// ext2 поддерживает иерархию с самого начала. В томе уже лежит
-// настоящий каталог `lost+found` (inode 11, режим 0o040700) — его
-// создаёт format(). Не хватало только публичного API: создания
-// каталогов в рантайме и разбора путей вида "/users/ivan/files".
-//
-// ext4 отличается от ext2 экстентами, журналом и 64-битными полями —
-// для наших задач это не даёт ничего, кроме объёма кода. NTFS вообще
-// закрытый формат, его свободные реализации (ntfs-3g) — это десятки
-// тысяч строк под FUSE.
-
-/// Максимальная глубина вложенности — защита от циклов и переполнения
-/// стека при разборе пути.
-const MAX_PATH_DEPTH: usize = 16;
-
-/// Создаёт подкаталог `name` внутри каталога с инодом `parent_ino`.
-///
-/// Делает ровно то же, что format() делает для `lost+found`:
-/// выделяет инод и блок, кладёт в блок записи "." и "..", отмечает
-/// тип каталога в режиме инода и увеличивает счётчик ссылок родителя.
-pub fn mkdir_in(parent_ino: u32, name: &str) -> Result<u32, Ext2Error> {
-    if !is_formatted() {
-        return Err(Ext2Error::NotFormatted);
-    }
-    validate_name(name)?;
-
-    // Уже существует — возвращаем его инод (идемпотентность).
-    if let Some((_, _, ino)) = find_in_dir(parent_ino, name)? {
-        let existing = read_inode(ino)?;
-        if (existing.mode & 0xF000) == 0x4000 {
-            return Ok(ino);
-        }
-        return Err(Ext2Error::InvalidName); // имя занято обычным файлом
-    }
-
-    let new_ino = alloc_inode()?;
-    let block = alloc_block()?;
-
-    // Тело каталога: "." на себя, ".." на родителя.
-    let mut buf = [0u8; BLOCK_SIZE];
-    make_dirent(&mut buf, 0, new_ino, ".", 12);
-    make_dirent(&mut buf, 12, parent_ino, "..", (BLOCK_SIZE - 12) as u16);
-    write_block(block, &buf)?;
-
-    let mut ptrs = [0u32; 15];
-    ptrs[0] = block;
-    // 0o040755 — бит 0x4000 помечает инод как каталог.
-    write_inode(new_ino, 0o040755, BLOCK_SIZE as u32, 2, &ptrs, 1)?;
-
-    // Ссылка из родителя + его nlink растёт из-за ".." в потомке.
-    add_dirent(parent_ino, name, new_ino)?;
-    let parent = read_inode(parent_ino)?;
-    let pptrs: Vec<u32> = parent.block_ptrs.to_vec();
-    let pused = pptrs.iter().filter(|p| **p != 0).count() as u32;
-    write_inode(
-        parent_ino,
-        parent.mode,
-        parent.size,
-        parent.links_count.saturating_add(1),
-        &pptrs,
-        pused,
-    )?;
-
-    // В группе стало на один каталог больше.
-    if let Ok(mut gdt) = read_block(GDT_BLOCK) {
-        let dirs = u16::from_le_bytes([gdt[16], gdt[17]]).saturating_add(1);
-        gdt[16..18].copy_from_slice(&dirs.to_le_bytes());
-        let _ = write_block(GDT_BLOCK, &gdt);
-    }
-
-    Ok(new_ino)
-}
-
-/// Разбирает путь и возвращает инод каталога и имя последнего элемента.
-///
-/// `"/users/ivan/notes.txt"` -> `(инод каталога /users/ivan, "notes.txt")`.
-/// Если `create` = true, отсутствующие промежуточные каталоги создаются
-/// (поведение `mkdir -p`).
-pub fn resolve_parent(path: &str, create: bool) -> Result<(u32, alloc::string::String), Ext2Error> {
-    let trimmed = path.trim_start_matches('/');
-    let parts: Vec<&str> = trimmed.split('/').filter(|p| !p.is_empty()).collect();
-
-    if parts.is_empty() {
-        return Err(Ext2Error::InvalidName);
-    }
-    if parts.len() > MAX_PATH_DEPTH {
-        return Err(Ext2Error::InvalidName);
-    }
-
-    let mut dir = ROOT_INO;
-    for component in &parts[..parts.len() - 1] {
-        match find_in_dir(dir, component)? {
-            Some((_, _, ino)) => {
-                let node = read_inode(ino)?;
-                if (node.mode & 0xF000) != 0x4000 {
-                    // На пути оказался обычный файл — дальше идти некуда.
-                    return Err(Ext2Error::InvalidName);
-                }
-                dir = ino;
-            }
-            None => {
-                if !create {
-                    return Err(Ext2Error::FileNotFound);
-                }
-                dir = mkdir_in(dir, component)?;
-            }
-        }
-    }
-    Ok((dir, alloc::string::String::from(parts[parts.len() - 1])))
-}
-
-/// `mkdir -p`: создаёт всю цепочку каталогов пути.
-pub fn mkdir_p(path: &str) -> Result<u32, Ext2Error> {
-    let (parent, last) = resolve_parent(path, true)?;
-    mkdir_in(parent, &last)
-}
-
-/// Список содержимого каталога по пути (`"/"` — корень).
-pub fn list_dir_path(path: &str) -> Result<Vec<FileEntry>, Ext2Error> {
-    if !is_formatted() {
-        return Err(Ext2Error::NotFormatted);
-    }
-    let dir_ino = if path.trim_matches('/').is_empty() {
-        ROOT_INO
-    } else {
-        let (parent, last) = resolve_parent(path, false)?;
-        match find_in_dir(parent, &last)? {
-            Some((_, _, ino)) => ino,
-            None => return Err(Ext2Error::FileNotFound),
-        }
-    };
-
-    let dir_inode = read_inode(dir_ino)?;
-    let mut entries = Vec::new();
-    for block_num in dir_block_ptrs(&dir_inode) {
-        let buf = read_block(block_num)?;
-        let mut offset = 0usize;
-        while let Some(entry) = dirent_at(&buf, offset) {
-            if entry.ino != 0 {
-                let name = dirent_name(&buf, &entry);
-                if name != "." && name != ".." {
-                    let node = read_inode(entry.ino)?;
+                if name != "." && name != ".." && !(skip_lost_found && name == "lost+found") {
+                    let node = read_inode(v, entry.ino)?;
                     entries.push(FileEntry {
                         name,
                         size: node.size,
@@ -1022,46 +1061,394 @@ pub fn list_dir_path(path: &str) -> Result<Vec<FileEntry>, Ext2Error> {
     Ok(entries)
 }
 
-// ---------------- файловые операции по ПУТИ ----------------
+/// Читает содержимое файла по номеру инода.
+fn read_inode_data(v: &Vol, ino: u32) -> Result<Vec<u8>, Ext2Error> {
+    let inode = read_inode(v, ino)?;
+    if inode.size > 8 * 1024 * 1024 {
+        return Err(Ext2Error::DiskError);
+    }
+    let mut data = Vec::with_capacity(inode.size as usize);
+    let mut remaining = inode.size as usize;
+    // file_block_list возвращает блоки в порядке записи: 12 прямых,
+    // затем блоки из indirect-блока.
+    for ptr in file_block_list(v, &inode)? {
+        if remaining == 0 {
+            break;
+        }
+        let block_data = read_block(v, ptr)?;
+        let take = remaining.min(BLOCK_SIZE);
+        data.extend_from_slice(&block_data[..take]);
+        remaining -= take;
+    }
+    Ok(data)
+}
+
+fn free_file_blocks(v: &Vol, ino: u32) -> Result<(), Ext2Error> {
+    let inode = read_inode(v, ino)?;
+
+    // Блоки данных (прямые + перечисленные в indirect-блоке).
+    for ptr in file_block_list(v, &inode)? {
+        free_block(v, ptr)?;
+    }
+
+    // Индексные блоки — тоже занятые блоки на диске (в них хранятся
+    // указатели): без их освобождения e2fsck найдёт "утёкшие" блоки.
+    let indirect = inode.block_ptrs[INDIRECT_BLOCK_INDEX];
+    if indirect != 0 {
+        free_block(v, indirect)?;
+    }
+    let dind = inode.block_ptrs[DOUBLE_INDIRECT_BLOCK_INDEX];
+    if dind != 0 {
+        let ind_list = read_indirect_block(v, dind)?;
+        for &ind in ind_list.iter().filter(|&&p| p != 0) {
+            free_block(v, ind)?;
+        }
+        free_block(v, dind)?;
+    }
+
+    free_inode(v, ino)?;
+    clear_inode(v, ino, fake_timestamp())
+}
+
+/// Запись файла в каталог (по иноду). Общая логика прямых и indirect-
+/// блоков для всех томов.
+fn write_file_at(v: &Vol, dir_ino: u32, name: &str, data: &[u8]) -> Result<(), Ext2Error> {
+    validate_name(name)?;
+
+    if let Some((_, _, existing_ino)) = find_in_dir(v, dir_ino, name)? {
+        free_file_blocks(v, existing_ino)?;
+        remove_dirent(v, dir_ino, name)?;
+    }
+
+    let blocks_needed = data.len().div_ceil(BLOCK_SIZE).max(if data.is_empty() { 0 } else { 1 });
+    if blocks_needed > MAX_FILE_BLOCKS {
+        return Err(Ext2Error::FileTooLarge);
+    }
+
+    let mut block_ptrs = [0u32; 15];
+
+    let direct_blocks = blocks_needed.min(MAX_DIRECT_BLOCKS);
+    for i in 0..direct_blocks {
+        let b = alloc_block(v)?;
+        let start = i * BLOCK_SIZE;
+        let end = (start + BLOCK_SIZE).min(data.len());
+        let mut block_buf = [0u8; BLOCK_SIZE];
+        block_buf[..end - start].copy_from_slice(&data[start..end]);
+        write_block(v, b, &block_buf)?;
+        block_ptrs[i] = b;
+    }
+
+    // used_blocks считает РЕАЛЬНО занятые на диске блоки — для файла с
+    // indirect-адресацией это прямые блоки + блоки данных за indirect-
+    // указателем + сам indirect-блок.
+    let mut used_blocks = direct_blocks as u32;
+
+    if blocks_needed > MAX_DIRECT_BLOCKS {
+        let indirect_data_blocks =
+            (blocks_needed - MAX_DIRECT_BLOCKS).min(PTRS_PER_INDIRECT_BLOCK);
+        let mut indirect_ptrs = [0u32; PTRS_PER_INDIRECT_BLOCK];
+
+        for i in 0..indirect_data_blocks {
+            let b = alloc_block(v)?;
+            let start = (MAX_DIRECT_BLOCKS + i) * BLOCK_SIZE;
+            let end = (start + BLOCK_SIZE).min(data.len());
+            let mut block_buf = [0u8; BLOCK_SIZE];
+            block_buf[..end - start].copy_from_slice(&data[start..end]);
+            write_block(v, b, &block_buf)?;
+            indirect_ptrs[i] = b;
+        }
+
+        let indirect_block_num = alloc_block(v)?;
+        write_indirect_block(v, indirect_block_num, &indirect_ptrs)?;
+        block_ptrs[INDIRECT_BLOCK_INDEX] = indirect_block_num;
+
+        used_blocks += indirect_data_blocks as u32 + 1;
+    }
+
+    // Файл больше 12 + 256 блоков: остаток уходит через двойной
+    // indirect-блок (i_block[13]) — блок из 256 указателей на обычные
+    // indirect-блоки, каждый из которых адресует до 256 блоков данных.
+    let single_limit = MAX_DIRECT_BLOCKS + PTRS_PER_INDIRECT_BLOCK;
+    if blocks_needed > single_limit {
+        let mut remaining = blocks_needed - single_limit;
+        let mut next_block = single_limit; // индекс следующего блока данных в файле
+        let mut dind_ptrs = [0u32; PTRS_PER_INDIRECT_BLOCK];
+        let mut chunk = 0usize;
+
+        while remaining > 0 {
+            let in_chunk = remaining.min(PTRS_PER_INDIRECT_BLOCK);
+            let mut indirect_ptrs = [0u32; PTRS_PER_INDIRECT_BLOCK];
+            for i in 0..in_chunk {
+                let b = alloc_block(v)?;
+                let start = (next_block + i) * BLOCK_SIZE;
+                let end = (start + BLOCK_SIZE).min(data.len());
+                let mut block_buf = [0u8; BLOCK_SIZE];
+                block_buf[..end - start].copy_from_slice(&data[start..end]);
+                write_block(v, b, &block_buf)?;
+                indirect_ptrs[i] = b;
+            }
+            let ind_block = alloc_block(v)?;
+            write_indirect_block(v, ind_block, &indirect_ptrs)?;
+            dind_ptrs[chunk] = ind_block;
+
+            used_blocks += in_chunk as u32 + 1;
+            next_block += in_chunk;
+            remaining -= in_chunk;
+            chunk += 1;
+        }
+
+        let dind_block = alloc_block(v)?;
+        write_indirect_block(v, dind_block, &dind_ptrs)?;
+        block_ptrs[DOUBLE_INDIRECT_BLOCK_INDEX] = dind_block;
+        used_blocks += 1;
+    }
+
+    let ino = alloc_inode(v)?;
+    write_inode(v, ino, 0o100644, data.len() as u32, 1, &block_ptrs, used_blocks)?;
+    add_dirent(v, dir_ino, name, ino)?;
+
+    Ok(())
+}
+
+// ==================== каталоги и пути ====================
 //
-// Старые read_file/write_file/delete_file работают только с корнем.
-// Эти версии принимают путь вида "/users/ivan/files/notes.txt" и
-// выполняют операцию в нужном подкаталоге.
+// ext2 поддерживает иерархию с самого начала: lost+found (inode 11,
+// режим 0o040700) создаёт уже format(). Здесь — создание каталогов в
+// рантайме и разбор путей вида "/users/ivan/files".
+
+/// Максимальная глубина вложенности — защита от циклов и переполнения
+/// стека при разборе пути.
+const MAX_PATH_DEPTH: usize = 16;
+
+/// Создаёт подкаталог `name` внутри каталога с инодом `parent_ino`.
+fn mkdir_at(v: &Vol, parent_ino: u32, name: &str) -> Result<u32, Ext2Error> {
+    validate_name(name)?;
+
+    // Уже существует — возвращаем его инод (идемпотентность).
+    if let Some((_, _, ino)) = find_in_dir(v, parent_ino, name)? {
+        let existing = read_inode(v, ino)?;
+        if (existing.mode & 0xF000) == 0x4000 {
+            return Ok(ino);
+        }
+        return Err(Ext2Error::InvalidName); // имя занято обычным файлом
+    }
+
+    let new_ino = alloc_inode(v)?;
+    let block = alloc_block(v)?;
+
+    // Тело каталога: "." на себя, ".." на родителя.
+    let mut buf = [0u8; BLOCK_SIZE];
+    make_dirent(&mut buf, 0, new_ino, ".", 12);
+    make_dirent(&mut buf, 12, parent_ino, "..", (BLOCK_SIZE - 12) as u16);
+    write_block(v, block, &buf)?;
+
+    let mut ptrs = [0u32; 15];
+    ptrs[0] = block;
+    // 0o040755 — бит 0x4000 помечает инод как каталог.
+    write_inode(v, new_ino, 0o040755, BLOCK_SIZE as u32, 2, &ptrs, 1)?;
+
+    // Ссылка из родителя + его nlink растёт из-за ".." в потомке.
+    add_dirent(v, parent_ino, name, new_ino)?;
+    let parent = read_inode(v, parent_ino)?;
+    let pptrs: Vec<u32> = parent.block_ptrs.to_vec();
+    let pused = pptrs.iter().filter(|p| **p != 0).count() as u32;
+    write_inode(
+        v,
+        parent_ino,
+        parent.mode,
+        parent.size,
+        parent.links_count.saturating_add(1),
+        &pptrs,
+        pused,
+    )?;
+
+    // В группе нового инода стало на один каталог больше.
+    let g = (new_ino - 1) / v.ipg;
+    let _ = gdt_adjust_u16(v, g, 16, 1);
+
+    Ok(new_ino)
+}
+
+/// Разбирает путь и возвращает инод каталога и имя последнего элемента.
+/// `"/users/ivan/notes.txt"` -> `(инод каталога /users/ivan, "notes.txt")`.
+/// Если `create` = true, отсутствующие промежуточные каталоги создаются
+/// (поведение `mkdir -p`).
+fn resolve_parent_at(v: &Vol, path: &str, create: bool) -> Result<(u32, String), Ext2Error> {
+    let trimmed = path.trim_start_matches('/');
+    let parts: Vec<&str> = trimmed.split('/').filter(|p| !p.is_empty()).collect();
+
+    if parts.is_empty() || parts.len() > MAX_PATH_DEPTH {
+        return Err(Ext2Error::InvalidName);
+    }
+
+    let mut dir = ROOT_INO;
+    for component in &parts[..parts.len() - 1] {
+        match find_in_dir(v, dir, component)? {
+            Some((_, _, ino)) => {
+                let node = read_inode(v, ino)?;
+                if (node.mode & 0xF000) != 0x4000 {
+                    // На пути оказался обычный файл — дальше идти некуда.
+                    return Err(Ext2Error::InvalidName);
+                }
+                dir = ino;
+            }
+            None => {
+                if !create {
+                    return Err(Ext2Error::FileNotFound);
+                }
+                dir = mkdir_at(v, dir, component)?;
+            }
+        }
+    }
+    Ok((dir, String::from(parts[parts.len() - 1])))
+}
+
+fn list_dir_path_at(v: &Vol, path: &str) -> Result<Vec<FileEntry>, Ext2Error> {
+    let dir_ino = if path.trim_matches('/').is_empty() {
+        ROOT_INO
+    } else {
+        let (parent, last) = resolve_parent_at(v, path, false)?;
+        match find_in_dir(v, parent, &last)? {
+            Some((_, _, ino)) => ino,
+            None => return Err(Ext2Error::FileNotFound),
+        }
+    };
+    list_dir_ino(v, dir_ino, false)
+}
+
+fn read_file_path_at(v: &Vol, path: &str) -> Result<Vec<u8>, Ext2Error> {
+    let (dir_ino, name) = resolve_parent_at(v, path, false)?;
+    let found = find_in_dir(v, dir_ino, &name)?;
+    let (_, _, ino) = found.ok_or(Ext2Error::FileNotFound)?;
+    read_inode_data(v, ino)
+}
+
+fn write_file_path_at(v: &Vol, path: &str, data: &[u8]) -> Result<(), Ext2Error> {
+    let (dir_ino, name) = resolve_parent_at(v, path, true)?;
+    write_file_at(v, dir_ino, &name, data)
+}
+
+fn delete_file_path_at(v: &Vol, path: &str) -> Result<(), Ext2Error> {
+    let (dir_ino, name) = resolve_parent_at(v, path, false)?;
+    let found = find_in_dir(v, dir_ino, &name)?;
+    let (_, _, ino) = found.ok_or(Ext2Error::FileNotFound)?;
+
+    let node = read_inode(v, ino)?;
+    if (node.mode & 0xF000) == 0x4000 {
+        // Каталог: освобождаем его блоки и инод.
+        for b in dir_block_ptrs(&node) {
+            let _ = free_block(v, b);
+        }
+        free_inode(v, ino)?;
+        clear_inode(v, ino, fake_timestamp())?;
+        remove_dirent(v, dir_ino, &name)?;
+        return Ok(());
+    }
+
+    free_file_blocks(v, ino)?;
+    remove_dirent(v, dir_ino, &name)?;
+    Ok(())
+}
+
+// ==================== публичное API: /userdata ====================
+
+pub fn list_root() -> Result<Vec<FileEntry>, Ext2Error> {
+    let v = vol(VolId::Userdata)?;
+    list_dir_ino(&v, ROOT_INO, true)
+}
+
+pub fn read_file(name: &str) -> Result<Vec<u8>, Ext2Error> {
+    let v = vol(VolId::Userdata)?;
+    validate_name(name)?;
+    let found = find_in_dir(&v, ROOT_INO, name)?;
+    let (_, _, ino) = found.ok_or(Ext2Error::FileNotFound)?;
+    read_inode_data(&v, ino)
+}
+
+pub fn write_file(name: &str, data: &[u8]) -> Result<(), Ext2Error> {
+    let v = vol(VolId::Userdata)?;
+    write_file_at(&v, ROOT_INO, name, data)
+}
+
+pub fn delete_file(name: &str) -> Result<(), Ext2Error> {
+    let v = vol(VolId::Userdata)?;
+    validate_name(name)?;
+    let found = find_in_dir(&v, ROOT_INO, name)?;
+    let (_, _, ino) = found.ok_or(Ext2Error::FileNotFound)?;
+    free_file_blocks(&v, ino)?;
+    remove_dirent(&v, ROOT_INO, name)?;
+    Ok(())
+}
+
+/// `mkdir -p`: создаёт всю цепочку каталогов пути.
+pub fn mkdir_p(path: &str) -> Result<u32, Ext2Error> {
+    let v = vol(VolId::Userdata)?;
+    let (parent, last) = resolve_parent_at(&v, path, true)?;
+    mkdir_at(&v, parent, &last)
+}
+
+/// `mkdir`: алиас для `mkdir_p`.
+pub fn mkdir(path: &str) -> Result<u32, Ext2Error> {
+    mkdir_p(path)
+}
+
+/// Список содержимого каталога по пути (`"/"` — корень).
+pub fn list_dir_path(path: &str) -> Result<Vec<FileEntry>, Ext2Error> {
+    let v = vol(VolId::Userdata)?;
+    list_dir_path_at(&v, path)
+}
 
 /// Записывает файл по пути, создавая недостающие каталоги (mkdir -p).
 pub fn write_file_path(path: &str, data: &[u8]) -> Result<(), Ext2Error> {
-    let (dir_ino, name) = resolve_parent(path, true)?;
-    if dir_ino == ROOT_INO {
-        return write_file(&name, data);
-    }
-    write_file_in(dir_ino, &name, data)
+    let v = vol(VolId::Userdata)?;
+    write_file_path_at(&v, path, data)
 }
 
 /// Читает файл по пути.
 pub fn read_file_path(path: &str) -> Result<Vec<u8>, Ext2Error> {
-    let (dir_ino, name) = resolve_parent(path, false)?;
-    if dir_ino == ROOT_INO {
-        return read_file(&name);
-    }
-    let found = find_in_dir(dir_ino, &name)?;
-    let (_, _, ino) = found.ok_or(Ext2Error::FileNotFound)?;
-    read_inode_data(ino)
+    let v = vol(VolId::Userdata)?;
+    read_file_path_at(&v, path)
 }
 
 /// Удаляет файл по пути.
 pub fn delete_file_path(path: &str) -> Result<(), Ext2Error> {
-    let (dir_ino, name) = resolve_parent(path, false)?;
-    if dir_ino == ROOT_INO {
-        return delete_file(&name);
-    }
-    let found = find_in_dir(dir_ino, &name)?;
-    let (_, _, ino) = found.ok_or(Ext2Error::FileNotFound)?;
+    let v = vol(VolId::Userdata)?;
+    delete_file_path_at(&v, path)
+}
 
-    let inode = read_inode(ino)?;
-    for b in dir_block_ptrs(&inode) {
-        let _ = free_block(b);
-    }
-    free_inode(ino)?;
-    remove_dirent(dir_ino, &name)?;
-    Ok(())
+// ==================== публичное API: произвольный том ====================
+
+pub fn list_dir_path_vol(id: VolId, path: &str) -> Result<Vec<FileEntry>, Ext2Error> {
+    let v = vol(id)?;
+    list_dir_path_at(&v, path)
+}
+
+pub fn read_file_path_vol(id: VolId, path: &str) -> Result<Vec<u8>, Ext2Error> {
+    let v = vol(id)?;
+    read_file_path_at(&v, path)
+}
+
+pub fn write_file_path_vol(id: VolId, path: &str, data: &[u8]) -> Result<(), Ext2Error> {
+    let v = vol(id)?;
+    write_file_path_at(&v, path, data)
+}
+
+pub fn delete_file_path_vol(id: VolId, path: &str) -> Result<(), Ext2Error> {
+    let v = vol(id)?;
+    delete_file_path_at(&v, path)
+}
+
+pub fn mkdir_p_vol(id: VolId, path: &str) -> Result<u32, Ext2Error> {
+    let v = vol(id)?;
+    let (parent, last) = resolve_parent_at(&v, path, true)?;
+    mkdir_at(&v, parent, &last)
+}
+
+/// Сводка тома: (всего блоков, свободных блоков, групп). Для `sysfs
+/// status` и экрана установщика.
+pub fn volume_stats(id: VolId) -> Result<(u32, u32, u32), Ext2Error> {
+    let v = vol(id)?;
+    let sb = read_block(&v, SB_BLOCK)?;
+    let free = u32::from_le_bytes(sb[12..16].try_into().unwrap());
+    Ok((v.total_blocks, free, v.groups))
 }

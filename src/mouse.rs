@@ -28,8 +28,6 @@ struct MouseState {
     x: i32,
     y: i32,
     left_button: bool,
-    right_button: bool,
-    middle_button: bool,
     packet: [u8; 3],
     packet_index: usize,
     screen_width: i32,
@@ -40,8 +38,6 @@ static STATE: SpinLock<MouseState> = SpinLock::new(MouseState {
     x: 0,
     y: 0,
     left_button: false,
-    right_button: false,
-    middle_button: false,
     packet: [0; 3],
     packet_index: 0,
     screen_width: 640,
@@ -177,9 +173,9 @@ pub fn on_data_byte(byte: u8) {
             dy -= 256;
         }
 
+        // Биты 0x02 (правая) и 0x04 (средняя) не сохраняются:
+        // интерфейс пока реагирует только на левую кнопку.
         state.left_button = flags & 0x01 != 0;
-        state.right_button = flags & 0x02 != 0;
-        state.middle_button = flags & 0x04 != 0;
 
         // PS/2 мышь считает Y вверх положительным — экранные координаты
         // растут вниз, поэтому инвертируем.
@@ -201,8 +197,6 @@ fn on_absolute_event() {
         state.x = scaled_x as i32;
         state.y = scaled_y as i32;
         state.left_button = packet.buttons & vmmouse::LEFT_BUTTON != 0;
-        state.right_button = packet.buttons & vmmouse::RIGHT_BUTTON != 0;
-        state.middle_button = packet.buttons & vmmouse::MIDDLE_BUTTON != 0;
     }
 }
 
@@ -224,8 +218,6 @@ pub struct MouseSnapshot {
     pub x: i32,
     pub y: i32,
     pub left_button: bool,
-    pub right_button: bool,
-    pub middle_button: bool,
 }
 
 pub fn snapshot() -> MouseSnapshot {
@@ -235,8 +227,6 @@ pub fn snapshot() -> MouseSnapshot {
             x: state.x,
             y: state.y,
             left_button: state.left_button,
-            right_button: state.right_button,
-            middle_button: state.middle_button,
         }
     })
 }

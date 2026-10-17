@@ -2,7 +2,7 @@
 ; Зачем: ядро в long mode не может вызывать BIOS int13 и читает разделы через
 ; ATA PIO (порты 0x1F0) — это работает для внутреннего SATA, но НЕ для USB /
 ; Ventoy (виртуальный диск). Поэтому до перехода в long mode мы читаем весь
-; образ (10 МиБ) через int13 и кладём его в RAM по адресу RAMDISK_DST, а ядро
+; образ (20 МиБ) через int13 и кладём его в RAM по адресу RAMDISK_DST, а ядро
 ; обращается к разделам как к памяти (см. src/ramdisk.rs).
 ;
 ; РАЗМЕЩЕНИЕ: код в НИЗКОЙ памяти 0x9000 (org 0x7E00, DS=0). Это позволяет
@@ -16,12 +16,14 @@
 ;            в буфер 0x11000, переключается в 32-битный PM, rep movsd в
 ;            RAMDISK_DST (0x2000000), возвращается в RM, повторяет;
 ;            затем в PM копирует kernel.bin (KERNEL_SECTORS сект) из
-;            RAMDISK_DST+LBA3*512 в 0x11000 (KERNEL_SRC для stage2);
+;            RAMDISK_DST + KERNEL_LBA*512 в память ядра;
 ;            jmp STAGE2_ADDR (0x10000) — stage2 (32-бит PM, плоский).
 ;
 ; Константы (nasm -D, см. build.sh):
 ;   RAMDISK_SECTORS — сколько секторов образа читать в RAM (весь .img);
-;   KERNEL_SECTORS  — сколько секторов kernel.bin копировать в 0x11000;
+;   KERNEL_SECTORS  — сколько секторов kernel.bin копировать;
+;   KERNEL_LBA      — стартовый сектор kernel.bin внутри образа
+;                     (= 1 + секторы stage2 + 1 сектор ramboot);
 ;   RAMDISK_DST     — куда копировать RAM-диск (0x2000000 = 32 МиБ);
 ;   STAGE2_ADDR     — куда прыгнуть (0x10000).
 
@@ -29,7 +31,7 @@ bits 16
 org 0x7E00
 
 %ifndef RAMDISK_SECTORS
-RAMDISK_SECTORS equ 20480
+RAMDISK_SECTORS equ 40960
 %endif
 %ifndef KERNEL_SECTORS
 KERNEL_SECTORS equ 2048
@@ -47,7 +49,12 @@ KERNEL_LBA equ 3
 KERNEL_SRC equ 0x800000   ; см. пояснение в boot/stage2.asm
 %endif
 
-CHUNK_SECTORS equ 64
+; 120 секторов за вызов int13 (вместо прежних 64): для 20-МиБ образа это
+; 342 чтения вместо 640 — каждое чтение сопровождается переходом
+; RM→PM→RM, так что загрузка заметно быстрее. Буфер 0x11000..0x20000
+; (120*512 = 0xF000) не пересекает границу сегмента и остаётся ниже
+; стека 0x9FC00 и EBDA; 120 < 127 — лимит на передачу у части BIOS.
+CHUNK_SECTORS equ 120
 BUF_SEG       equ 0x1100          ; буфер чтения 0x11000
 
 start:
@@ -195,7 +202,7 @@ pm_copy_kernel:
     mov ds, ax
     mov es, ax
     mov esi, RAMDISK_DST + (KERNEL_LBA * 512)
-    mov edi, KERNEL_SRC
+    mov edi, 0x100000         ; KERNEL_DST (1 МиБ)
     mov ecx, KERNEL_SECTORS * 512 / 4
     rep movsd
 

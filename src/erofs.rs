@@ -69,6 +69,8 @@ pub enum ErofsError {
     BadBlockSize { bits: u8 },
     /// Структура образа повреждена (ссылка за пределы).
     Corrupt,
+    /// Путь или имя не найдено в образе.
+    NotFound,
 }
 
 impl ErofsError {
@@ -84,6 +86,7 @@ impl ErofsError {
                 alloc::format!("EROFS: неподдерживаемый blkszbits={}", bits)
             }
             ErofsError::Corrupt => "EROFS: повреждённая структура".into(),
+            ErofsError::NotFound => "EROFS: файл или каталог не найден".into(),
         }
     }
 }
@@ -121,7 +124,15 @@ pub struct Superblock {
 
 impl Superblock {
     pub fn block_size(&self) -> usize {
-        1usize << self.blkszbits
+        if self.blkszbits == EROFS_BLOCK_BITS {
+            EROFS_BLOCK_SIZE
+        } else {
+            1usize << self.blkszbits
+        }
+    }
+
+    pub fn inos_and_blocks(&self) -> (u64, u32) {
+        (self.inos, self.blocks)
     }
 
     /// Смещение инода по его nid.
@@ -144,13 +155,15 @@ pub fn parse_superblock(img: &[u8]) -> Result<Superblock, ErofsError> {
     if !(9..=16).contains(&blkszbits) {
         return Err(ErofsError::BadBlockSize { bits: blkszbits });
     }
-    Ok(Superblock {
+    let res = Superblock {
         blkszbits,
         root_nid: rd_u16(sb, 14).ok_or(ErofsError::TooSmall)? as u64,
         inos: rd_u64(sb, 16).ok_or(ErofsError::TooSmall)?,
         blocks: rd_u32(sb, 36).ok_or(ErofsError::TooSmall)?,
         meta_blkaddr: rd_u32(sb, 40).ok_or(ErofsError::TooSmall)?,
-    })
+    };
+    let _ = res.inos_and_blocks();
+    Ok(res)
 }
 
 /// Инод EROFS (нужные нам поля; поддержаны compact и extended).
@@ -322,6 +335,37 @@ pub fn read_dir(img: &[u8], sb: &Superblock, nid: u64) -> Result<Vec<DirEntry>, 
     Ok(out)
 }
 
+/// Ищет обычный файл по пути (например "kernel/kernel.bin" или "kernel.bin") и возвращает его инод.
+pub fn lookup_path(img: &[u8], path: &str) -> Result<Inode, ErofsError> {
+    let sb = parse_superblock(img)?;
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    if parts.is_empty() {
+        return Err(ErofsError::Corrupt);
+    }
+
+    let mut current_nid = sb.root_nid;
+    for (i, part) in parts.iter().enumerate() {
+        let is_last = i == parts.len() - 1;
+        let entries = read_dir(img, &sb, current_nid)?;
+        let mut found = false;
+        for e in entries {
+            if e.name == *part {
+                if is_last {
+                    return read_inode(img, &sb, e.nid);
+                } else if e.file_type == EROFS_FT_DIR {
+                    current_nid = e.nid;
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if !found && !is_last {
+            return Err(ErofsError::Corrupt);
+        }
+    }
+    Err(ErofsError::Corrupt)
+}
+
 /// Ищет обычный файл в корне и возвращает его инод.
 pub fn lookup(img: &[u8], name: &str) -> Result<Inode, ErofsError> {
     let sb = parse_superblock(img)?;
@@ -333,25 +377,62 @@ pub fn lookup(img: &[u8], name: &str) -> Result<Inode, ErofsError> {
     Err(ErofsError::Corrupt)
 }
 
-/// Список обычных файлов корня: `(имя, размер)`.
-pub fn list_files(img: &[u8]) -> Result<Vec<(String, usize)>, ErofsError> {
+/// Читает содержимое файла из образа по имени или пути.
+pub fn read_file(img: &[u8], path: &str) -> Result<Vec<u8>, ErofsError> {
     let sb = parse_superblock(img)?;
-    let mut out = Vec::new();
-    for e in read_dir(img, &sb, sb.root_nid)? {
-        if e.file_type != EROFS_FT_REG_FILE {
+    let ino = lookup_path(img, path).or_else(|_| lookup(img, path))?;
+    inode_data(img, &sb, &ino)
+}
+
+/// Запись списка каталога: имя, признак каталога, размер в байтах.
+#[derive(Debug, Clone)]
+pub struct DirListing {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+/// Возвращает nid каталога по пути. Пустой путь и "/" дают корень.
+fn resolve_dir_nid(img: &[u8], sb: &Superblock, path: &str) -> Result<u64, ErofsError> {
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let mut nid = sb.root_nid;
+    for part in parts {
+        let entries = read_dir(img, sb, nid)?;
+        let next = entries
+            .into_iter()
+            .find(|e| e.name == part && e.file_type == EROFS_FT_DIR)
+            .ok_or(ErofsError::NotFound)?;
+        nid = next.nid;
+    }
+    Ok(nid)
+}
+
+/// Содержимое каталога по пути. Служебные "." и ".." отбрасываются.
+pub fn list_dir(img: &[u8], path: &str) -> Result<Vec<DirListing>, ErofsError> {
+    let sb = parse_superblock(img)?;
+    let nid = resolve_dir_nid(img, &sb, path)?;
+    let mut out: Vec<DirListing> = Vec::new();
+    for e in read_dir(img, &sb, nid)? {
+        if e.name == "." || e.name == ".." {
             continue;
         }
-        let ino = read_inode(img, &sb, e.nid)?;
-        out.push((e.name, ino.size as usize));
+        let is_dir = e.file_type == EROFS_FT_DIR;
+        let size = match read_inode(img, &sb, e.nid) {
+            Ok(ino) => ino.size,
+            Err(_) => 0,
+        };
+        out.push(DirListing {
+            name: e.name,
+            is_dir,
+            size,
+        });
     }
     Ok(out)
 }
 
-/// Читает содержимое файла из образа (FLAT_PLAIN и FLAT_INLINE).
-pub fn read_file(img: &[u8], name: &str) -> Result<Vec<u8>, ErofsError> {
-    let sb = parse_superblock(img)?;
-    let ino = lookup(img, name)?;
-    inode_data(img, &sb, &ino)
+/// Проверяет существование пути (файла или каталога) и возвращает инод.
+pub fn stat(img: &[u8], path: &str) -> Result<Inode, ErofsError> {
+    lookup_path(img, path)
 }
 
 // ==================== ЗАПИСЬ (mkfs) ====================

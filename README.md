@@ -1,116 +1,254 @@
-# 🪐 DeiX OS (v0.2-beta · Release)
+# 🪐 DeiX OS (0.3.0-beta · x86_64)
 
-A modern, highly-secure 64-bit Operating System written from scratch in **Rust** and **Assembly** for the `x86_64` architecture. Developed in a unique collaboration between a Human Architect and an AI Agent.
+A modern, fast, and secure 64-bit operating system written from scratch in **Rust** and **Assembly** for the `x86_64` architecture. Small core, immutable system partition, writable user space.
 
-Операционная система нового поколения, написанная с нуля на **Rust** и **Ассемблере** под `x86_64`. Релиз **v0.2-beta** включает супервизор **Dinit (PID 1, Ring 0)**, эвристический монитор безопасности **Security Monitor**, полноценный звуковой драйвер **Intel High Definition Audio (HDA)** с кольцевым DMA-буфером, сжатый загрузочный логотип **DXLG**, полнодисковое шифрование **TPM 2.0 / LUKS**, графический вход, вытесняющую многозадачность и A/B OTA-обновления.
+A next-generation OS for `x86_64` with a modular graphical shell, an immutable **EROFS** system partition (`/system`), and an **ext2/4** user space (`/userdata`).
 
-**Ядро:** ~0.7 МБ (Rust `#![no_std]` + NASM stage2) · **Лимит ядра:** 1 МиБ (2048 секторов) · **Образ диска:** 10 МиБ · **Код:** ~28 000 строк Rust, 102 файла · реальное железо и QEMU.
-
----
-
-## ⚡ Новое в версии v0.2-beta
-
-### 🛡️ Dinit — Супервизор PID 1 (Ring 0)
-Корневой инит-процесс и супервизор (`src/dinit/`), исполняемый в привилегированном режиме ядра:
-- **Управление жизненным циклом служб:** состояния `Stopped`, `Starting`, `Running`, `Restarting`, `Failed`, `Terminated`, `Crashed`, `Disabled`.
-- **Политики перезапуска с backoff:** политики `Always`, `OnFailure`, `Never`, `UnlessStopped` с экспоненциальной задержкой (`restart_backoff_ms`) и защитой от циклического падения (`max_restarts`).
-- **Разделение по кольцам:** раздельный запуск служб ядра (Ring 0) и системных демонов пользователя (Ring 3).
-- **Исполнение сценариев `init.deix`:** парсинг декларативного конфига и переключение стадий загрузки (`InitBoot` → `VendorBoot` → `Boot`).
-- **Каталог точек монтирования:** контроль и динамический опрос точек монтирования `/kernel`, `/init_boot`, `/system`, `/userdata`, `/dev`, `/proc`.
-- **Изоляция пространств имён и Capabilities:** битовые привилегии (`CAP_MOUNT`, `CAP_REBOOT`, `CAP_KILL`, `CAP_AUDIT`, `CAP_SETUID`, `CAP_RAW_IO`, `CAP_NET_ADMIN`, `CAP_SYS_ADMIN`, `CAP_PTRACE`, `CAP_CHROOT`) и лимиты ресурсов `ResourceLimits`.
-- **Централизованная матрица авторизации (`authorize.rs`):** изоляция профилей пользователей (`/users/<user>`), аппаратная изоляция enclava `/TPM` (запрещён абсолютно всем, включая UID 0).
-- **Кольцевой журнал аудита (`audit.rs`):** буфер на 1024 события с фиксацией операций, нарушений, предупреждений и ликвидаций процессов.
-- **Управление через CLI:** команды `dinit status`, `dinit services`, `dinit mounts`, `dinit users`, `dinit audit`, `dinit security`, `dinit stage`, `dinit reload`.
-
-### 🚨 Эвристический монитор безопасности (Security Monitor)
-Интегрированный в ядро движок предотвращения вторжений (`src/security_monitor.rs`) с порогом риска 0.85:
-- **Ransomware-детектор:** отслеживание лавинообразной записи (`sys_write` с частотой > 150) и высокой энтропии данных (> 0.75) с нелинейным ростом риска.
-- **Защита от инъекций кода:** блокировка вызовов `sys_mmap` и `sys_ptrace`, направленных на системные разделы (`/kernel`, `/system`, `/init_boot`), с присвоением максимального риска 1.0.
-- **Ликвидация угроз:** мгновенная генерация `KillSignal(SIGKILL)` и принудительное уничтожение процесса через планировщик ядра (`sched::terminate`).
-- **Самоконтроль при старте:** этап `boot_selfcheck()` проверяет работу детектора на легитимных и вредоносных событиях во время загрузки.
-
-### 🔊 Intel High Definition Audio (HDA) + PC Speaker
-Полноценная аудиоподсистема (`src/hda.rs` и `src/sound.rs`):
-- **Драйвер контроллера Intel HDA (PCI):** инициализация колец CORB/RIRB, Immediate Command Interface (ICW), обнаружение аудио-узлов AFG, DAC и Output Pin.
-- **DMA-воспроизведение 48 кГц / 16-бит стерео:** кольцевой 4-периодный буфер на 64 КиБ, плавное воспроизведение без прерываний и задержек, потокобезопасный неблокирующий вывод.
-- **Линейный ресемплер:** передискретизация DPS-звуков с фиксированной точкой 16.16 в 48 000 Гц.
-- **Гибридный вывод:** автоматическое переключение HDA / PC Speaker (ШИМ), команды CLI `sound hda info|play|beep` и `sound mode hda|speaker`.
-- **Утилиты конвертации:** `tools/wav2dps.py`, корневые скрипты `wav2dps.py` и `dps2wav.py` для двустороннего преобразования WAV ↔ DPS1.
-
-### 🖼️ Загрузочное лого DXLG и графический вход
-- **Компактный формат DXLG:** 128x128 пикселей, 5-цветная оптимизированная палитра, RLE-сжатие в 21 раз (2.3 КиБ вместо 48 КиБ сырого RGB).
-- **Чистый сборщик `make_logo.py`:** встроенный декодер PNG (zlib + struct) работает автономно без внешних библиотек (Pillow опционален).
-- **Плавный индикатор прогресса:** отображение этапов инициализации ядра (партиции, память, AVB, TPM, Dinit) с масштабированным шрифтом.
-- **Логотип в окне авторизации:** рендеринг эмблемы DeiX над графической панелью входа.
-- **Интерактивный просмотрщик:** команда CLI `logo show` с возвратом по Esc/Enter/Space.
-
-### 🔐 TPM 2.0 / LUKS полнодисковое шифрование
-- Поддержка LUKS-подобных слотов паролей, деривация ключей `PBKDF2-HMAC-SHA512` (100 000 итераций).
-- Шифрование диска по умолчанию алгоритмом XTS-AES-256.
-- Запрос пароля при старте через PS/2 клавиатуру или COM1 serial.
-
-### 💾 Расширение лимита ядра до 1 МиБ
-- Лимит `KERNEL_SECTORS` расширен с 1400 до 2048 секторов (1 048 576 байт), `KERNEL_SIZE_DWORDS` = 262 144.
-- Ядро чисто компилируется без ошибок и предупреждений с флагом `#![allow(dead_code)]`.
+**Kernel:** ~0.9 MB (Rust `#![no_std]` + NASM stage2) · **Raw kernel limit:** LBA 1..2046 (~1 MiB) · **Disk image:** 20 MiB · **Code:** ~32,000 lines of Rust · runs on real hardware and QEMU.
 
 ---
 
-## ⚡ Базовые возможности ядра
+## 🏛️ System architecture
 
-- **🦀 Pure Rust `#![no_std]`**, старт в long mode: `boot_sector` (MBR) → `stage2` (32-бит → long mode) → `kernel.bin` @ 0x100000.
-- **🛡 Ring 3 + syscall/sysret** — аппаратная изоляция (GDT + TSS).
-- **🧵 Вытесняющая многозадачность** — планировщик с переключением по прерыванию IRQ0 PIT (`threads list/test`).
-- **🔁 kexec** — запуск нового ядра из `/kernel_a|b` без перезагрузки BIOS (`kexec check/a/b`).
-- **📦 A/B-слоты + OTA** — разделы `/kernel_a|b`, `/boot_a|b`, активный слот в BCB; команды `ota check/fetch/apply/rollback`.
-- **🧾 Настоящий EROFS** (магия `0xE0F5E1E2`, валидируется `fsck.erofs`) на всех системных разделах.
-- **🔒 Верифицированная загрузка (AVB)** — проверка цепочки разделов `/dsm` → `/init_boot` → `/vendor_boot` → `/boot` → `/kernel`.
-- **🥽 Режимы BCB**: **DSM** (аварийный COM1-прошивальщик), **fastbootd** (графический прошивальщик), **recovery** (TWRP-подобное меню).
-- **🐧 Совместимость с Linux** — загрузчик ELF64 + слой системных вызовов Linux ABI (`src/linux/`).
-- **🎨 Графика и UI** — VBE до 1280x1024, мышь, кириллический шрифт (VGA Plane 2), локализация en/ru (`lang`).
-- **🌐 Сеть** — RTL8139 + ARP + IPv4 + ICMP + TCP + HTTP (`ifconfig`, `ping`).
-- **📦 MEX-приложения** — собственный формат бинарников DeiX (`run`, `pkg`, `mexcc`).
+```text
+Disk
+│
+├── boot          MBR + stage2 loader
+├── /system       EROFS RO (kernel, modules, libraries)
+└── /userdata     EXT2/4 RW (users, configs, packages)
+```
+
+```text
+                    DeiX OS
+                       │
+                ┌──────┴──────┐
+                │   Kernel    │
+                └──────┬──────┘
+                       │
+       ┌───────────────┼────────────────┐
+       │               │                │
+     Memory          Scheduler         VFS
+       │               │                │
+       └───────────────┼────────────────┘
+                       │
+                  Process Manager
+                       │
+          ┌────────────┼────────────┐
+          │            │            │
+        Dinit        Syscalls     Loaders
+                                      │
+                                 ┌────┴────┐
+                               ELF        MEX
+```
+
+- **Immutable kernel and subsystems (`/system`)**: the system partition is mounted read-only with integrity verification.
+- **User data (`/userdata`)**: user database (`/userdata/users.db`), user files and configuration.
+- **DeiX Fluent graphical compositor**: event-driven rendering, surface caching, damage tracking, and an adaptive UI.
+- **DUIL declarative GUI framework & DeiX Script**: compact tools for describing graphical interfaces and scripting.
+
+### 🗂️ VFS — unified file system (`src/vfs.rs`)
+
+All kernel subsystems access files through the VFS rather than talking to
+partition drivers directly. One mount point, one permission check, one set
+of error codes.
+
+```text
+VFS
+├── /system    → EROFS, read-only
+└── /userdata  → EXT2,  read/write
+```
+
+API: `read_file` / `write_file` / `mkdir` / `remove` / `stat` / `readdir` /
+`exists`. Writing to `/system` returns `ReadOnly` without ever reaching the
+disk. The `/system` image is read from disk once and cached in the heap.
+
+### 🧬 Process manager (`src/process.rs`)
+
+A single structure for everything that executes:
+
+```text
+Process
+ ├── PID / UID / parent
+ ├── AddressSpace (image, stack, heap)
+ ├── file descriptor table + cwd
+ ├── capabilities
+ └── scheduler slot
+```
+
+`spawn()` creates the process record, `exec()` loads the image and creates a
+scheduler task bound to the PID. Thread termination is reported back through
+`notify_exit`, so a dead thread never leaves its process stuck in Running.
+
+**MEX executes in Ring 3.** The program receives a pointer to the MexApi
+table in RDI, but the pointers inside it do not point into the kernel — they
+point to stubs on a shim page inside the program's region: every API call is
+a `syscall` with number `0x4D58xxxx`, which the kernel dispatches back to the
+real implementation. Pointers passed by the program are checked to lie within
+its region; a program crash (page fault, invalid instruction) terminates the
+process and is recorded in the log — the kernel keeps running.
+
+**MEX format limitation.** `tools/mex.ld` links `.mex` binaries to the fixed
+address `0x03000000`, and the image is not position-independent. A MEX
+program is therefore loaded strictly at its link address, and running more
+than one MEX process at a time is forbidden (`MEX_IN_USE`) — per-process
+isolation for this format will only arrive together with PIC builds or true
+per-process page mapping.
+
+### 🚨 Unified error and diagnostics system (`src/diag/`)
+
+```text
+event (any subsystem, including pre-GUI)
+   ↓
+ring buffer (512 records, .bss, no heap on the critical path)
+   ├── serial console (machine-readable key=value lines)
+   ├── text console (during boot only)
+   └── /userdata/log/{system,error,boot,dinit,kmod,panic}.log (deferred)
+```
+
+- **`DX-<SUBSYSTEM>-<NNNN>` codes** — a registry of 100+ codes with cause
+  descriptions and recommended actions (`error show DX-NET-0007`).
+- **Severity scale** TRACE…FATAL; TRACE/DEBUG are enabled with
+  `diagnostics mode on`.
+- **Kernel failure**: a report (CPU state, process, modules, mount points,
+  RBP backtrace, last 256 events) is written as raw sectors at LBA 2048 —
+  independent of file system state — and shown after reboot
+  (the «ПРЕДЫДУЩИЙ СБОЙ СИСТЕМЫ» dialog, `panic last`).
+- **Ring 3 cannot take down the kernel**: a user program exception
+  terminates the process, is recorded with a code (e.g. `DX-MEM-0008`), and
+  shows an APPLICATION CRASH dialog; the system keeps running.
+- **Module quarantine**: if the previous session's failure happened inside a
+  `.kmod` region, that module is not loaded on the next boot (`DX-KMD-0005`).
+- **Aggregation**: a repeated identical failure within a 2 s window bumps the
+  record's counter instead of adding new lines.
+- **Cause chains**: an EXT2 error following an ATA failure references the
+  root-cause record (`DX-DISK-*` → `DX-EXT-0006`).
+- **Error Center** — a GUI application (Start menu): counters, a list, and a
+  card with a copyable identifier like `DX-GFX-0008-20261006-083154`
+  (date comes from the CMOS RTC driver, `src/rtc.rs`).
+
+### 📜 DeiX Script language (`src/ds.rs`)
+- A full interpreter with `if`/`else`/`fi` branching, `while`/`done` loops, and `fn`/`end` functions.
+- Variable substitution (`$var`), system variables (`PATH`, `HOME`, `SHELL`), arithmetic (`expr $a + $b`), and comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`).
+- ext2 file system commands (`cat`, `write`, `append`, `mkdir`, `rm`, `ls`, `cd`, `pwd`) and an interactive REPL (`ds -i`).
+
+### 🛠️ Freestanding C/C++ SDK MEX v1.2
+- The `tools/include/deix/mex.h` header includes basic memory functions (`memset`, `memcpy`, `memmove`, `memcmp`) with the `weak` attribute for building C/C++ programs without `glibc`.
+- The `mexcc.cpp` driver supports cascading resource lookup via `locate_resource()` (`mex.ld`, `mex_pack.py`, `include/`).
+
+### 🏛️ Contents of the `/system` partition (EROFS, read-only)
+- `kernel/kernel.bin` — kernel image.
+- `etc/init.deix` — init script.
+- `services/dinit.cfg` — Dinit service configuration.
+- `media/audio/ui/*.dps` — shell sound assets.
+
+Only real files go into the image. Placeholder `libdeix_*.so` and
+`kmod/*.kmod` files are not created: `module.rs` expects a `.kmod` to have a
+valid header and an executable body, so placeholder bytes could only ever
+load as a corrupted module. A module that does not exist is not in the image.
+
+Kernel modules (`.kmod`) are a separate mechanism: they are loaded from disk
+through `module.rs` and show up in `lsmod`. Built-in kernel subsystems are
+not loaded modules and do not appear in that list.
+
+### ⚡ Boot speed optimizations
+- `Ramboot`: the INT 13h transfer block size was increased to 127 sectors (half as many BIOS calls and mode switches, ~40% faster reads).
+- `Bootchain`: direct-load reads of EROFS files (`/system/kernel/kernel.bin`) straight into memory with no intermediate unpacking.
+
+### 🧪 End-to-end test suite (`tools/test_all_subsystems.py`)
+- An automated script testing the partition map and C++ application cross-compilation.
 
 ---
 
-## 🗂️ Карта разделов (10 МиБ, 13 разделов)
+## ⚡ Core kernel features
 
-| Раздел | LBA | Секторов | ФС | Назначение |
+- **🦀 Pure Rust `#![no_std]`**, long-mode boot: `boot_sector` (MBR) → `stage2` (32-bit → long mode) → `kernel.bin` @ 0x100000.
+- **🛡 Dinit (PID 1, Ring 0)** — supervisor for services, mount points, and auditing.
+- **🚨 Security Monitor** — heuristic monitor for suspicious file activity (experimental).
+- **🔊 Intel HDA + PC Speaker** — DMA 48 kHz / 16-bit stereo playback + PC Speaker PWM.
+- **🖼️ DXLG & VBE** — VBE 32bpp graphics with a Cyrillic font.
+- **🛡 Ring 3 + syscall/sysret** — hardware isolation for MEX programs (GDT + TSS); all other subsystems run in Ring 0.
+- **🧵 Preemptive multitasking** — scheduler driven by the IRQ0 PIT interrupt (`threads list/test`).
+- **🧾 Real EROFS** (magic `0xE0F5E1E2`, validated by `fsck.erofs`) on the `/system` partition.
+- **🐧 Linux compatibility groundwork** — a parser/validator for static ELF64 and a subset of Linux ABI syscalls (`src/linux/`). Launching ELF binaries as processes is disabled in this release: the scheduler still executes code in Ring 0 only, and calling that a user process would be dishonest (`DX-ELF-0009`).
+- **🌐 Networking** — RTL8139 + ARP + IPv4 + ICMP + UDP + TCP; a real DNS
+  client (A records over UDP/53, TTL-aware cache) and an HTTP/1.1 client:
+  redirects, Transfer-Encoding: chunked, gzip/DEFLATE decompression
+  (RFC 1951/1952) with CRC-32 verification (`ifconfig`, `ping`, `dns`,
+  GUI browser).
+- **🔐 TLS 1.3** — our own client (RFC 8446): X25519 + HKDF-SHA256 +
+  AES-128-GCM, written from scratch and checked against NIST/RFC test
+  vectors; the browser opens `https://` sites. **Server certificates are
+  verified**: X.509/DER parsing, RSA (PKCS#1 v1.5, PSS) and ECDSA
+  (P-256/P-384) signatures, chain validation up to built-in roots
+  (23 current CAs from the Mozilla bundle), validity dates via RTC,
+  hostname via SAN, CertificateVerify signature.
+- **📦 MEX applications** — DeiX's own binary format (`run`, `pkg`, `mexcc`).
+
+---
+
+## 🗂️ Partition map
+
+| Partition | LBA | Sectors | FS | Purpose |
 |---|---|---|---|---|
-| `/system` | 4096 | 8192 | ext2 rw | рабочий том ядра (USERS.DB, AUTOSTART.CFG, профили) |
-| `/TPM` | 12288 | 512 | скрытый 0xDA | аппаратно изолированный маркер TPM |
-| `/userdata` | 12800 | 512 | ext2/ext4 rw | пользовательские данные и пакеты Ring 3 |
-| `/kernel_a` | 13313 | 1279 | EROFS ro | слот A: `kernel.tar.gz` (gzip, inflate в ядре) |
-| `/kernel_b` | 14593 | 1279 | EROFS ro | слот B |
-| `/init_boot` | 15873 | 255 | EROFS ro | сценарий `init.deix`, `bootloader.bin` |
-| `/vendor_boot` | 16129 | 255 | EROFS ro | `vendor.bin` (HAL, прошивки) |
-| `/boot_a` | 16385 | 255 | EROFS ro | слот A ядра ОС |
-| `/boot_b` | 16641 | 255 | EROFS ro | слот B ядра ОС |
-| `/super` | 16897 | 255 | EROFS ro | системный образ + **UI-звуки (`*.dps`)** |
-| `/dsm` | 17153 | 255 | EROFS ro | аварийный модуль DSM |
-| `/recovery` | 17409 | 255 | EROFS ro | среда восстановления TWRP |
-| `/OTA` | 17664 | 2816 | ext2 | хранилище скачанных OTA-пакетов |
+| `/system` | 4096 | 20480 | EROFS ro | System partition (kernel `kernel.bin`, libraries, `.kmod` modules, services) |
+| `/userdata` | 24576 | 16384 | ext2 rw | User data, programs, packages |
+
+Service areas outside partitions: LBA 0 — MBR; 1..2046 — stage2 + ramboot + raw kernel;
+2047 — `DEIXKIMG` descriptor (kernel LBA/size/SHA-256, checked against `/system/kernel/kernel.bin`);
+2048..2111 — crash dump area (`DEIXPNIC`). All geometry sources are cross-checked by
+`tools/check_partition_map.py` (runs in `build.sh` and CI).
 
 ---
 
-## 💻 Команды CLI
+## 💻 CLI commands
 
 ```
 help about echo clear uptime color cpuid mem lang
-ifconfig arp ping gpu [info|nvinfo|mode] sound [list|play|beep|mode|hda]
+ifconfig [ip|dns <ip>] arp ping dns <host> gpu [info|nvinfo|mode] sound [list|play|beep|mode|hda]
 dinit [status|services|mounts|users|audit|security|stage|reload]
-ls cat write rm pkg run install bigfile
-useradd passwd whoami users encrypt crypt
-nvidia hal microcode logo linux profile lock
-threads kexec crash bugreport dmesg crashlog
-reboot [normal|recovery|fastbootd|dsm] bcb ota adb dev root halt
+duil [run|calc] ds [script.dxs|-i|-c] taskmgr ls cat write mkdir rm pkg run install bigfile
+useradd passwd whoami users encrypt crypt nvidia hal microcode logo linux profile lock
+threads crash bugreport dmesg crashlog dev root reboot poweroff shutdown halt
+ps kill kmod [load|list] lsmod
+log [list|errors|warnings|critical|kernel|boot|dinit|kmod|flush|clear]
+error [list|show DX-XXX-NNNN] panic [last|clear]
+diagnostics [summary|mode on|mode off]
 ```
 
 ---
 
-## 🚀 Быстрый старт
+## ⚠️ Known limitations (v0.3.0-beta)
 
-### Сборка
-Требуются: `nasm`, `rustup nightly` с таргетом `x86_64-unknown-none`, `python3`, `qemu-system-x86_64`.
+- Single CPU (no SMP); disks are ATA PIO only (no AHCI/NVMe), reads are slow (~1.4 ms/KiB in QEMU).
+- Ring 3 is available to MEX programs only; one MEX process at a time
+  (the format links to the fixed address `0x03000000`).
+- Launching ELF processes is disabled — the loader and a subset of Linux
+  syscalls exist, but the scheduler would execute them in Ring 0.
+- Process `AddressSpace` is a bookkeeping structure, not full page-table isolation.
+- The physical memory allocator is a bitmap (not buddy).
+- `getrandom` is not a cryptographic RNG (jitter/rdtsc entropy with no strict guarantees).
+- Disk encryption is a custom "LUKS-inspired" format (XTS-AES-256), incompatible with LUKS.
+- The browser is a limited text-mode HTTP/HTTPS client. TLS 1.3 only
+  (servers without it get an honest error). Certificates are verified
+  against a chain up to 23 built-in Mozilla roots, but WITHOUT revocation
+  (OCSP/CRL) or Certificate Transparency; sites whose root is outside the
+  set get an honest error. HTTP/1.1 is GET-only with Connection: close
+  (no keep-alive); the response body is capped at 1 MiB (2 MiB after gzip
+  decompression) — a limit of the 16-MiB kernel heap; beyond that the page
+  is honestly truncated. Rendering is text-only: script/style contents are
+  skipped and HTML entities are decoded, but there is no CSS layout, no
+  JavaScript, and no images.
+- DNS — A records over UDP/53 only: no IPv6 (AAAA), DNSSEC, or TCP fallback
+  for responses over 512 bytes; no IP fragment reassembly.
+- NVIDIA: PCI hardware detection and info output, not an acceleration driver.
+- No USB, no ACPI power management; audio is PC Speaker plus basic Intel HDA (tones/PCM).
+
+---
+
+## 🚀 Quick start
+
+### Build
+Requirements: `nasm`, `rustup nightly` with the `x86_64-unknown-none` target, `python3`, `qemu-system-x86_64`.
 
 ```bash
 git clone https://github.com/Atimenka/DeiX.git
@@ -118,21 +256,21 @@ cd DeiX
 ./build.sh
 ```
 
-### Запуск в QEMU
+### Run in QEMU
 
 ```bash
-# Стандартный запуск с графикой и звуком Intel HDA:
+# Standard run with graphics and Intel HDA audio:
 ./run_full.sh
 
-# Быстрый запуск (VGA):
+# Quick run (VGA):
 ./run.sh
 
-# Загрузка с ISO-образа:
+# Boot from the ISO image:
 ./run_iso.sh
 ```
 
 ```bash
-# Ручной запуск с HDA-аудио и сетевой картой RTL8139:
+# Manual run with HDA audio and an RTL8139 network card:
 qemu-system-x86_64 -drive file=build/deix_disk.img,format=raw,if=ide \
   -m 512M -serial stdio \
   -netdev user,id=n0 -device rtl8139,netdev=n0 \
@@ -142,62 +280,15 @@ qemu-system-x86_64 -drive file=build/deix_disk.img,format=raw,if=ide \
 
 ---
 
-## 🧪 Тестирование
+## 🧪 Testing
 
 ```bash
-python3 tools/check_partition_map.py    # проверка синхронизации 13 разделов
+python3 tools/test_all_subsystems.py    # end-to-end test of all subsystems and the toolchain
+python3 tools/check_partition_map.py    # partition map consistency check (2 partitions)
 python3 tools/make_logo.py assets/logo.png build/logo.dxlg 128
 python3 tools/wav2dps.py assets/start.wav build/sounds/start.dps 8000
-python3 dps2wav.py build/sounds/start.dps build/sounds/test.wav
-python3 tools/qemu_mode_test.py os      # сквозной QEMU-тест
+python3 tools/make_deix_fs.py build/deix_disk.img   # factory image build
 ```
-
----
-
-## 📂 Структура проекта
-
-```
-DeiX/
-├── boot/                # Ассемблер: boot_sector, stage2, long_mode_init, ramboot, линкеры
-├── src/                 # Ядро Rust (102 файла, ~28k строк кода)
-│   ├── dinit/           # PID 1 Ring 0 супервизор: службы, монтирование, namespaces, аудит, авторизация
-│   ├── security_monitor.rs # Эвристический монитор угроз (ransomware / code-injection)
-│   ├── hda.rs           # Драйвер Intel High Definition Audio (HDA) с DMA-стримингом
-│   ├── sound.rs         # Аудиоподсистема: HDA + PC Speaker (ШИМ), UiSound
-│   ├── bootlogo.rs      # Рендерер DXLG-логотипа и статус загрузки
-│   ├── loginui.rs       # Графический экран входа (VBE) с эмблемой DeiX
-│   ├── init_parser.rs   # Движок разбора сценариев init.deix
-│   ├── vault.rs         # KERNEL SECURITY VAULT (защита системных разделов)
-│   ├── crypto/          # AES, SHA-256/512, PBKDF2-HMAC, XTS
-│   ├── drivers/ + hal/  # Драйверный уровень HAL и NVIDIA nouveau
-│   ├── linux/           # Загрузчик ELF64 и эмуляция Linux syscall ABI
-│   ├── mm/              # Физическая память (Buddy Allocator), куча 16 МиБ
-│   ├── net/             # RTL8139, ARP, IPv4, ICMP, TCP, HTTP
-│   └── sched.rs / usermode.rs / kexec.rs / ext2.rs / erofs.rs / ...
-├── tools/               # make_deix_fs.py, make_logo.py, wav2dps.py, dps2wav.py, check_partition_map.py
-├── assets/              # logo.png, logo.dxlg, UI-звуки (*.wav)
-├── docs/                # Техническая документация, спецификации форматов и бут-логи
-└── security/            # master_spec — спецификация архитектуры безопасности
-```
-
----
-
-## 🗺️ Roadmap
-
-- [x] Dinit (PID 1, Ring 0 supervisor) с супервизией служб и namespaces
-- [x] Эвристический монитор угроз (Heuristic Security Monitor, SIGKILL)
-- [x] Intel High Definition Audio (HDA) с кольцевым DMA и ресемплером
-- [x] Компактный формат логотипа DXLG + автономный конвертер
-- [x] Расширение лимита ядра до 1 МиБ (2048 секторов)
-- [x] Настоящий EROFS во всех системных разделах + ext2/ext4 `/userdata`
-- [x] LUKS-слоты + PBKDF2-HMAC-SHA512 + TPM 2.0 полнодисковое шифрование
-- [x] Графический экран входа, профили пользователей, блокировка экрана
-- [x] TCP + HTTP/1.0 (OTA-обновления по воздуху)
-- [x] Открытый драйвер NVIDIA (HAL + MMIO)
-- [x] USB-загрузка (ramboot / Ventoy)
-- [ ] ACPI + мониторинг питания и батареи
-- [ ] USB-стек устройств (HID мышь/клавиатура)
-- [ ] Многоядерность (SMP / APIC)
 
 ---
 

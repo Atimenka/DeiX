@@ -1,47 +1,40 @@
 //! DINIT — Подсистема PID 1 для DeiX OS (Ring 0).
 //!
-//! Dinit живёт в пространстве ядра (Ring 0), является корневым супервизором системы,
-//! обладает собственным изолированным пространством имён (DinitNamespace) и управляет:
-//!   - Запуском и перезапуском системных служб (Ring 0 / Ring 3) с экспоненциальным backoff.
-//!   - Точками монтирования файловых систем с валидацией через KERNEL SECURITY VAULT.
-//!   - Пользовательскими сессиями и изоляцией каталогов (/users/<username> vs /system).
+//! Dinit живёт в пространстве ядра (Ring 0), является корневым супервизором системы
+//! и управляет:
+//!   - Учётом встроенных служб (подсистемы ядра: supervisor, security monitor,
+//!     сетевой стек, сброс журналов, аутентификация, журналирование).
+//!   - Запуском и перезапуском Process-служб с экспоненциальным backoff;
+//!     служба без существующего исполняемого файла не запускается (DX-DIN-0008).
+//!   - Точками монтирования файловых систем с валидацией источника и режима.
 //!   - Журналом аудита безопасности (AuditLog на 1024 записи).
-//!   - Эвристическим монитором угроз (перехват ransomware и code injection -> SIGKILL).
-//!   - Разбором и исполнением декларативного сценария init.deix (стадии BootStage).
-//!
-//! Иерархия контроля:
-//!   Загрузчик -> Ядро -> Dinit (PID 1, Ring 0) -> Пользовательские процессы (Ring 3).
+//!   - Эвристическим монитором угроз (ликвидация по kill_signals).
+//!   - Разбором декларативного сценария init.deix (стадии early_boot, boot).
 
 pub mod namespace;
 pub mod user;
 pub mod service;
 pub mod mount;
-pub mod authorize;
 pub mod audit;
-pub mod api;
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use crate::spinlock::SpinLock;
 
-use namespace::{Capabilities, DinitNamespace};
+use namespace::DinitNamespace;
 use user::UserState;
-use service::{ServiceDescriptor, ServiceStatus, RestartPolicy};
+use service::{ServiceDescriptor, ServiceKind, ServiceStatus, RestartPolicy};
 use mount::{MountPoint, MountCmd};
-use authorize::{FileOp, AccessError, check_permission};
 use audit::{AuditLog, AuditOp, AuditResult};
 use crate::init_parser::{BootStage, Command, InitParser, INIT_DEIX_SCRIPT};
-use crate::security_monitor::{HeuristicAnalysisEngine, SecurityEvent};
+use crate::security_monitor::HeuristicAnalysisEngine;
 
 /// Состояние супервизора Dinit
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DinitState {
     Initializing,
     Running,
-    Suspended,
-    Stopped,
-    Faulted,
 }
 
 impl DinitState {
@@ -49,9 +42,6 @@ impl DinitState {
         match self {
             DinitState::Initializing => "initializing",
             DinitState::Running => "running",
-            DinitState::Suspended => "suspended",
-            DinitState::Stopped => "stopped",
-            DinitState::Faulted => "faulted",
         }
     }
 }
@@ -69,19 +59,17 @@ pub struct Dinit {
     pub security: HeuristicAnalysisEngine,
     pub start_time: u64,
     pub supervisor_ticks: u64,
-    pub next_pid: u32,
 }
 
 impl Dinit {
     pub fn new() -> Self {
-        let caps = Capabilities::default_dinit();
-        let ns = DinitNamespace::new(1, "root_supervisor", caps);
+        let ns = DinitNamespace::new("root_supervisor");
         let sec = HeuristicAnalysisEngine::new("dinit_secmon_ring0");
 
         Self {
             pid: 1,
             state: DinitState::Initializing,
-            stage: BootStage::InitBoot,
+            stage: BootStage::Boot,
             namespace: ns,
             services: BTreeMap::new(),
             mounts: BTreeMap::new(),
@@ -90,7 +78,6 @@ impl Dinit {
             security: sec,
             start_time: crate::timer::uptime_ms(),
             supervisor_ticks: 0,
-            next_pid: 2,
         }
     }
 
@@ -113,62 +100,25 @@ impl Dinit {
         );
 
         // 2. Регистрация точек монтирования по умолчанию
-        self.mount_internal("/dev/block/by-name/kernel", "/kernel", "erofs", true, now);
-        self.mount_internal("/dev/block/by-name/init_boot", "/init_boot", "erofs", true, now);
-        self.mount_internal("/dev/block/by-name/super", "/system", "erofs", true, now);
-        self.mount_internal("/dev/block/by-name/userdata", "/userdata", "ext4", false, now);
-        self.mount_internal("devfs", "/dev", "devfs", false, now);
-        self.mount_internal("procfs", "/proc", "procfs", true, now);
+        self.mount_internal("/dev/block/by-name/system", "/system", "erofs", true);
+        self.mount_internal("/dev/block/by-name/userdata", "/userdata", "ext2", false);
+        self.mount_internal("devfs", "/dev", "devfs", false);
+        self.mount_internal("procfs", "/proc", "procfs", true);
 
-        // 3. Регистрация стандартных системных служб DeiX OS
-        self.register_core_service(
-            "pid1_core",
-            "/bin/pid1_core",
-            0,
-            RestartPolicy::Always,
-            true,
-        );
-        self.register_core_service(
-            "security_monitor",
-            "/bin/security_monitor",
-            3,
-            RestartPolicy::Always,
-            true,
-        );
-        self.register_core_service(
-            "net_daemon",
-            "/bin/net_daemon",
-            3,
-            RestartPolicy::UnlessStopped,
-            false,
-        );
-        self.register_core_service(
-            "vfs_flusher",
-            "/bin/vfs_flusher",
-            0,
-            RestartPolicy::Always,
-            false,
-        );
-        self.register_core_service(
-            "auth_broker",
-            "/bin/auth_broker",
-            0,
-            RestartPolicy::Always,
-            true,
-        );
-        self.register_core_service(
-            "syslogd",
-            "/bin/syslogd",
-            0,
-            RestartPolicy::Always,
-            false,
-        );
+        // 3. Регистрация встроенных служб: эти подсистемы живут внутри ядра,
+        //    отдельных исполняемых файлов и PID у них нет.
+        self.register_builtin_service("pid1_core", RestartPolicy::Always, true);
+        self.register_builtin_service("security_monitor", RestartPolicy::Always, true);
+        self.register_builtin_service("net_daemon", RestartPolicy::UnlessStopped, false);
+        self.register_builtin_service("vfs_flusher", RestartPolicy::Always, false);
+        self.register_builtin_service("auth_broker", RestartPolicy::Always, true);
+        self.register_builtin_service("syslogd", RestartPolicy::Always, false);
 
         // 4. Разбор и применение декларативного init.deix сценария
         self.apply_init_script(INIT_DEIX_SCRIPT);
 
-        // 5. Переход по стадиям загрузки: InitBoot -> VendorBoot -> Boot
-        self.advance_stage(BootStage::VendorBoot);
+        // 5. Переход по стадиям загрузки: EarlyBoot -> Boot
+        self.advance_stage(BootStage::EarlyBoot);
         self.advance_stage(BootStage::Boot);
 
         // 6. Запуск служб стадии Boot
@@ -182,29 +132,43 @@ impl Dinit {
         );
     }
 
-    fn mount_internal(
-        &mut self,
-        src: &str,
-        target: &str,
-        fs_type: &str,
-        read_only: bool,
-        now: u64,
-    ) {
-        let pt = MountPoint::new(target, src, fs_type, read_only, now);
+    fn mount_internal(&mut self, src: &str, target: &str, fs_type: &str, read_only: bool) {
+        let pt = MountPoint::new(target, src, fs_type, read_only);
         self.mounts.insert(String::from(target), pt);
+        self.audit.record(
+            crate::timer::uptime_ms(),
+            self.pid,
+            0,
+            AuditOp::Mount,
+            target,
+            AuditResult::Allowed,
+            if read_only { "Зарегистрирована точка монтирования (ro)" } else { "Зарегистрирована точка монтирования (rw)" },
+        );
     }
 
-    fn register_core_service(
-        &mut self,
-        name: &str,
-        path: &str,
-        ring: u8,
-        policy: RestartPolicy,
-        critical: bool,
-    ) {
-        let mut desc = ServiceDescriptor::with_policy(name, path, ring, policy, critical);
+    fn register_builtin_service(&mut self, name: &str, policy: RestartPolicy, critical: bool) {
+        let mut desc = ServiceDescriptor::builtin(name, policy, critical);
         desc.auto_start = true;
         self.services.insert(String::from(name), desc);
+    }
+
+    /// Жива ли подсистема ядра, стоящая за встроенной службой.
+    /// Возвращает Ok(()) или причину, по которой служба не активна.
+    fn builtin_probe(name: &str) -> Result<(), &'static str> {
+        match name {
+            // Сетевой стек активен только при наличии инициализированного адаптера.
+            "net_daemon" => {
+                if crate::rtl8139::is_ready() {
+                    Ok(())
+                } else {
+                    Err("сетевой адаптер RTL8139 не обнаружен")
+                }
+            }
+            // Остальные подсистемы (супервизор, монитор безопасности, сброс
+            // журналов, аутентификация, журналирование) входят в состав ядра
+            // и активны с момента его инициализации.
+            _ => Ok(()),
+        }
     }
 
     /// Разбор сценария init.deix и наполнение таблиц
@@ -231,7 +195,7 @@ impl Dinit {
                             );
                             continue;
                         }
-                        self.mount_internal(&m.src, &m.dst, &m.fs_type, read_only, crate::timer::uptime_ms());
+                        self.mount_internal(&m.src, &m.dst, &m.fs_type, read_only);
                     }
                     Command::Service(s) => {
                         if !self.services.contains_key(&s.name) {
@@ -252,7 +216,7 @@ impl Dinit {
             now,
             1,
             0,
-            AuditOp::ServiceSpawn,
+            AuditOp::StageAdvance,
             new_stage.as_token(),
             AuditResult::Allowed,
             "Переход на новую стадию загрузки",
@@ -260,27 +224,32 @@ impl Dinit {
         crate::serial_println!("[dinit] Фаза загрузки изменена на: {}", new_stage.as_token());
     }
 
-    /// Запуск всех служб, отмеченных для автозапуска
+    /// Запуск всех служб, отмеченных для автозапуска.
+    ///
+    /// Служба, образ которой не найден или не загрузился, остаётся
+    /// остановленной и печатает причину — статус Running ей не ставится.
     pub fn autostart_services(&mut self) {
-        let now = crate::timer::uptime_ms();
         let names: Vec<String> = self.services.keys().cloned().collect();
         for name in names {
-            if let Some(desc) = self.services.get_mut(&name) {
-                if desc.auto_start && desc.status == ServiceStatus::Stopped {
-                    let pid = self.next_pid;
-                    self.next_pid += 1;
-                    desc.mark_started(pid, None, now);
-                    self.namespace.attach_process(pid);
-                    self.audit.record(
-                        now,
-                        pid,
-                        0,
-                        AuditOp::ServiceSpawn,
-                        &desc.name,
-                        AuditResult::Allowed,
-                        "Автозапуск системной службы",
-                    );
-                    crate::serial_println!("[dinit] Служба '{}' запущена с PID {}", desc.name, pid);
+            let wanted = self
+                .services
+                .get(&name)
+                .map(|d| d.auto_start && d.status == ServiceStatus::Stopped)
+                .unwrap_or(false);
+            if !wanted {
+                continue;
+            }
+            let kind = self.services.get(&name).map(|d| d.kind).unwrap_or(ServiceKind::Process);
+            match self.spawn_service(&name, "Автозапуск системной службы") {
+                Ok(pid) => {
+                    if kind == ServiceKind::Builtin {
+                        crate::serial_println!("[dinit] Встроенная служба '{}' активна (подсистема ядра)", name);
+                    } else {
+                        crate::serial_println!("[dinit] Служба '{}' запущена с PID {}", name, pid);
+                    }
+                }
+                Err(e) => {
+                    crate::serial_println!("[dinit] Служба '{}' НЕ запущена: {}", name, e);
                 }
             }
         }
@@ -291,7 +260,98 @@ impl Dinit {
         self.supervisor_ticks += 1;
         let now = crate::timer::uptime_ms();
 
-        // 1. Проверка состояния и перезапуск упавших служб
+        // Актуализация состояния встроенных служб по живости их подсистем
+        // (например, net_daemon активируется после инициализации адаптера).
+        for (name, desc) in self.services.iter_mut() {
+            if desc.kind != ServiceKind::Builtin {
+                continue;
+            }
+            let alive = Self::builtin_probe(name).is_ok();
+            if alive && desc.status == ServiceStatus::Stopped && desc.auto_start {
+                desc.mark_builtin_running(now);
+            } else if !alive && desc.status == ServiceStatus::Running {
+                desc.mark_stopped();
+            }
+        }
+
+        // 0. Обнаружение падений Process-служб: служба числится Running,
+        //    а её процесс уже мёртв или исчез из таблицы. Это и есть
+        //    heartbeat супервизора — без него RestartPolicy не на что
+        //    реагировать. Встроенные службы пропускаются: у них нет PID.
+        for (name, desc) in self.services.iter_mut() {
+            if desc.kind == ServiceKind::Builtin || desc.status != ServiceStatus::Running {
+                continue;
+            }
+            let Some(pid) = desc.pid else { continue };
+            let dead = match crate::process::info(pid) {
+                Ok(info) => {
+                    info.state == crate::process::ProcessState::Zombie
+                        || info.state == crate::process::ProcessState::Reaped
+                }
+                Err(_) => true,
+            };
+            if !dead {
+                continue;
+            }
+            let exit_code = crate::process::info(pid).ok().and_then(|i| i.exit_code).unwrap_or(-1);
+
+            // Штатное завершение (код 0) при политике без принудительного
+            // перезапуска — это не авария.
+            if exit_code == 0
+                && matches!(desc.restart_policy, RestartPolicy::OnFailure)
+            {
+                desc.mark_exited(0);
+                let _ = crate::process::reap(pid);
+                crate::serial_println!(
+                    "[dinit] Служба '{}' (pid {}) завершилась штатно (код 0)",
+                    name, pid
+                );
+                continue;
+            }
+
+            let will_restart = desc.mark_crashed(exit_code, now);
+            let _ = crate::process::reap(pid);
+            self.audit.record(
+                now,
+                pid,
+                0,
+                AuditOp::ServiceCrash,
+                name,
+                AuditResult::Failed,
+                "Процесс службы завершился аварийно",
+            );
+
+            if will_restart {
+                crate::diag::error_with(
+                    crate::diag::ErrorCode::new(crate::diag::Subsystem::Dinit, 2),
+                    crate::diag::Action::Retry,
+                    &alloc::format!(
+                        "служба {} (pid {}) завершилась аварийно (код {}), перезапуск через {} мс",
+                        name, pid, exit_code, desc.restart_backoff_ms
+                    ),
+                );
+            } else if desc.is_critical {
+                crate::diag::critical_with(
+                    crate::diag::ErrorCode::new(crate::diag::Subsystem::Dinit, 6),
+                    crate::diag::Action::DegradeSubsystem,
+                    &alloc::format!(
+                        "критическая служба {} падала {} раз — перезапуски прекращены",
+                        name, desc.crash_count
+                    ),
+                );
+            } else {
+                crate::diag::error_with(
+                    crate::diag::ErrorCode::new(crate::diag::Subsystem::Dinit, 6),
+                    crate::diag::Action::DegradeSubsystem,
+                    &alloc::format!(
+                        "служба {} падала {} раз — перезапуски прекращены",
+                        name, desc.crash_count
+                    ),
+                );
+            }
+        }
+
+        // 1. Перезапуск служб, у которых подошёл backoff
         let mut to_restart = Vec::new();
         for (name, desc) in self.services.iter() {
             if desc.status == ServiceStatus::Restarting && desc.can_restart(now) {
@@ -300,26 +360,38 @@ impl Dinit {
         }
 
         for name in to_restart {
-            let pid = self.next_pid;
-            self.next_pid += 1;
-            if let Some(desc) = self.services.get_mut(&name) {
-                desc.mark_started(pid, None, now);
-                self.namespace.attach_process(pid);
-                self.audit.record(
-                    now,
-                    pid,
-                    0,
-                    AuditOp::ServiceRestart,
-                    &desc.name,
-                    AuditResult::Allowed,
-                    "Автоматический перезапуск службы по политике супервизора",
-                );
-                crate::serial_println!("[dinit] Служба '{}' перезапущена (новый PID {})", desc.name, pid);
+            match self.spawn_service(&name, "Автоматический перезапуск службы по политике супервизора") {
+                Ok(pid) => {
+                    self.audit.record(
+                        now,
+                        pid,
+                        0,
+                        AuditOp::ServiceRestart,
+                        &name,
+                        AuditResult::Allowed,
+                        "Служба перезапущена по политике супервизора",
+                    );
+                    crate::serial_println!(
+                        "[dinit] Служба '{}' перезапущена (новый PID {})",
+                        name, pid
+                    );
+                }
+                Err(e) => {
+                    crate::diag::error(
+                        crate::diag::ErrorCode::new(crate::diag::Subsystem::Dinit, 1),
+                        &alloc::format!("dinit: служба {} не перезапущена: {}", name, e),
+                    );
+                }
             }
         }
 
         // 2. Обработка очереди сигналов ликвидации от Security Monitor
         while let Some(kill) = self.security.kill_signals.pop() {
+            crate::diag::critical_with(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Security, 5),
+                crate::diag::Action::TerminateProcess,
+                &alloc::format!("security: ликвидация pid {} — {}", kill.pid, kill.reason),
+            );
             crate::serial_println!("[dinit:security] ИСПОЛНЕНИЕ: {}", kill.describe());
             self.audit.record(
                 now,
@@ -359,57 +431,70 @@ impl Dinit {
         crate::serial_println!("[dinit] Пользователь '{}' (UID {}) зарегистрирован", username, uid);
     }
 
-    /// Завершение пользовательской сессии
-    pub fn unregister_user(&mut self, uid: u32) {
+    /// Запуск службы.
+    ///
+    /// Для встроенной службы процесс не создаётся: проверяется живость
+    /// подсистемы ядра, и служба помечается активной (PID: kernel).
+    ///
+    /// Для Process-службы создаётся процесс в менеджере процессов,
+    /// загружается образ и создаётся задача планировщика, привязанная
+    /// к PID. Служба, образ которой отсутствует или не загрузился,
+    /// запущенной НЕ считается.
+    ///
+    /// Возвращает PID при успехе (0 для встроенных служб).
+    fn spawn_service(&mut self, name: &str, reason: &str) -> Result<u32, String> {
         let now = crate::timer::uptime_ms();
-        if let Some(user) = self.users.remove(&uid) {
-            self.audit.record(
-                now,
-                self.pid,
-                uid,
-                AuditOp::Logout,
-                &user.username,
-                AuditResult::Allowed,
-                "Выход пользователя из системы",
-            );
-            crate::serial_println!("[dinit] Пользователь '{}' отключён", user.username);
-        }
-    }
 
-    /// Проверка прав доступа через центральную матрицу
-    pub fn check_permission(
-        &mut self,
-        uid: u32,
-        username: &str,
-        op: FileOp,
-        path: &str,
-    ) -> Result<(), AccessError> {
-        let res = check_permission(uid, username, op, path);
-        if let Err(err) = res {
-            let now = crate::timer::uptime_ms();
-            self.audit.record(
-                now,
-                self.pid,
-                uid,
-                AuditOp::Violation,
-                path,
-                AuditResult::Denied,
-                err.as_str(),
-            );
-        }
-        res
-    }
+        let (kind, binary_path) = {
+            let desc = self.services.get(name).ok_or_else(|| String::from("Служба не найдена"))?;
+            (desc.kind, desc.binary_path.clone())
+        };
 
-    /// Запуск службы по имени
-    pub fn start_service(&mut self, name: &str) -> Result<u32, &'static str> {
-        let now = crate::timer::uptime_ms();
-        let desc = self.services.get_mut(name).ok_or("Служба не найдена")?;
-        if desc.status.is_active() {
-            return Err("Служба уже запущена");
+        if kind == ServiceKind::Builtin {
+            Self::builtin_probe(name).map_err(String::from)?;
+            if let Some(desc) = self.services.get_mut(name) {
+                desc.mark_builtin_running(now);
+            }
+            self.audit.record(now, self.pid, 0, AuditOp::ServiceSpawn, name, AuditResult::Allowed, reason);
+            return Ok(0);
         }
-        let pid = self.next_pid;
-        self.next_pid += 1;
-        desc.mark_started(pid, None, now);
+
+        if binary_path.is_empty() {
+            return Err(String::from("у службы не задан путь к бинарнику"));
+        }
+        if !crate::vfs::exists(&binary_path) {
+            crate::diag::error_with(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Dinit, 8),
+                crate::diag::Action::DegradeSubsystem,
+                &alloc::format!("служба {}: исполняемый файл {} отсутствует", name, binary_path),
+            );
+            return Err(alloc::format!("образ службы не найден: {}", binary_path));
+        }
+
+        let req = crate::process::SpawnRequest {
+            name: String::from(name),
+            // Службы Dinit исполняются от имени супервизора (UID 0).
+            uid: 0,
+            parent: self.pid,
+            caps: crate::process::cap::SYSTEM,
+            cwd: String::from("/userdata"),
+            image_path: binary_path,
+        };
+
+        let pid = crate::process::spawn(&req).map_err(|e| e.message())?;
+
+        match crate::process::exec(pid) {
+            Ok(()) => {}
+            Err(e) => {
+                let _ = crate::process::kill(pid, -1);
+                let _ = crate::process::reap(pid);
+                return Err(alloc::format!("образ не запущен: {}", e.message()));
+            }
+        }
+
+        if let Some(desc) = self.services.get_mut(name) {
+            desc.mark_started(pid, now);
+        }
         self.namespace.attach_process(pid);
         self.audit.record(
             now,
@@ -418,20 +503,41 @@ impl Dinit {
             AuditOp::ServiceSpawn,
             name,
             AuditResult::Allowed,
-            "Ручной запуск службы",
+            reason,
         );
         Ok(pid)
     }
 
+    /// Запуск службы по имени
+    pub fn start_service(&mut self, name: &str) -> Result<u32, String> {
+        {
+            let desc = self.services.get(name).ok_or_else(|| String::from("Служба не найдена"))?;
+            if desc.status.is_active() {
+                return Err(String::from("Служба уже запущена"));
+            }
+        }
+        self.spawn_service(name, "Ручной запуск службы")
+    }
+
     /// Остановка службы по имени
-    pub fn stop_service(&mut self, name: &str) -> Result<(), &'static str> {
+    pub fn stop_service(&mut self, name: &str) -> Result<(), String> {
         let now = crate::timer::uptime_ms();
-        let desc = self.services.get_mut(name).ok_or("Служба не найдена")?;
+        let desc = self
+            .services
+            .get_mut(name)
+            .ok_or_else(|| String::from("Служба не найдена"))?;
+        if desc.kind == ServiceKind::Builtin {
+            return Err(String::from(
+                "встроенная служба является подсистемой ядра и не может быть остановлена",
+            ));
+        }
         let old_pid = desc.pid;
         desc.mark_stopped();
         if let Some(p) = old_pid {
             self.namespace.detach_process(p);
-            crate::sched::terminate(p as usize);
+            // Снимаем и процесс, и его задачу планировщика.
+            let _ = crate::process::kill(p, 0);
+            let _ = crate::process::reap(p);
         }
         self.audit.record(
             now,
@@ -446,28 +552,11 @@ impl Dinit {
     }
 
     /// Перезапуск службы по имени
-    pub fn restart_service(&mut self, name: &str) -> Result<u32, &'static str> {
+    pub fn restart_service(&mut self, name: &str) -> Result<u32, String> {
         self.stop_service(name)?;
         self.start_service(name)
     }
 
-    /// Анализ события безопасности эвристическим движком
-    pub fn report_security_event(&mut self, event: &SecurityEvent) -> bool {
-        let flagged = self.security.process_event(event);
-        if flagged {
-            let now = crate::timer::uptime_ms();
-            self.audit.record(
-                now,
-                event.pid,
-                0,
-                AuditOp::ThreatAlert,
-                &event.target_path,
-                AuditResult::Terminated,
-                "Эвристический монитор зафиксировал критическую угрозу",
-            );
-        }
-        flagged
-    }
 }
 
 /// Глобальный экземпляр супервизора ядра
@@ -485,6 +574,19 @@ pub fn init() {
 
 /// Периодический тик супервизора
 pub fn tick() {
+    // Квант супервизора не чаще раза в 500 мс: детект упавших служб не
+    // требует частоты цикла событий GUI, а каждый tick обходит все
+    // службы с проверками живости — гонять его сотни раз в секунду
+    // значит зря жечь процессор.
+    static LAST_TICK_MS: core::sync::atomic::AtomicU64 =
+        core::sync::atomic::AtomicU64::new(0);
+    let now = crate::timer::uptime_ms();
+    let last = LAST_TICK_MS.load(core::sync::atomic::Ordering::Relaxed);
+    if now.saturating_sub(last) < 500 {
+        return;
+    }
+    LAST_TICK_MS.store(now, core::sync::atomic::Ordering::Relaxed);
+
     if let Some(mut lock) = DINIT.try_lock() {
         if let Some(dinit) = lock.as_mut() {
             dinit.supervisor_tick();
@@ -520,8 +622,15 @@ pub fn cmd_dinit(line: &str) {
                 dinit.services.len());
             crate::println!("  Точек монтирования: {}", dinit.mounts.len());
             crate::println!("  Пользовательских сессий: {}", dinit.users.len());
-            crate::println!("  Записей аудита:    {} (нарушений: {}, угроз ликвидировано: {})",
+            crate::println!("  Процессов под супервизией ({}): {}",
+                dinit.namespace.name,
+                dinit.namespace.active_pids.len());
+            crate::println!("  Записей аудита:    {} (всего событий: {}, разрешено: {}, отказано: {})",
                 dinit.audit.len(),
+                dinit.audit.stats.total_events,
+                dinit.audit.stats.allowed_events,
+                dinit.audit.stats.denied_events);
+            crate::println!("  Нарушений: {}, угроз ликвидировано: {}",
                 dinit.audit.stats.violations,
                 dinit.audit.stats.threats_intercepted);
             crate::println!("  Security Monitor:  порог риска {:.2}, проанализировано событий: {}",
@@ -541,6 +650,7 @@ pub fn cmd_dinit(line: &str) {
                 "start" => {
                     if let Some(name) = parts.next() {
                         match dinit.start_service(name) {
+                            Ok(0) => crate::println!("  [dinit] Встроенная служба '{}' активна (подсистема ядра)", name),
                             Ok(pid) => crate::println!("  [dinit] Служба '{}' запущена с PID {}", name, pid),
                             Err(e) => crate::println!("  [dinit] Ошибка запуска: {}", e),
                         }
@@ -561,6 +671,7 @@ pub fn cmd_dinit(line: &str) {
                 "restart" => {
                     if let Some(name) = parts.next() {
                         match dinit.restart_service(name) {
+                            Ok(0) => crate::println!("  [dinit] Встроенная служба '{}' активна (подсистема ядра)", name),
                             Ok(pid) => crate::println!("  [dinit] Служба '{}' перезапущена с PID {}", name, pid),
                             Err(e) => crate::println!("  [dinit] Ошибка перезапуска: {}", e),
                         }
@@ -636,7 +747,7 @@ pub fn cmd_dinit(line: &str) {
                 }
             } else {
                 crate::println!("  Текущая стадия: {}", dinit.stage.as_token());
-                crate::println!("  Допустимые: init_boot, vendor_boot, boot, recovery, fastbootd, edl");
+                crate::println!("  Допустимые: early_boot, boot");
             }
         }
 

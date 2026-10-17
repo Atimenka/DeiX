@@ -1,0 +1,76 @@
+# Применяет supabase/migrations/*.sql к базе проекта Supabase.
+#
+# Запускается вручную (workflow_dispatch). Пароль БД берётся из секрета
+# SUPABASE_DB_PASSWORD (Settings -> Secrets and variables -> Actions);
+# в коде, логах и метаданных запуска пароль не появляется.
+#
+# Прямое подключение db.<ref>.supabase.co:5432 у новых проектов
+# доступно только по IPv6, которого нет у раннеров GitHub, поэтому при
+# неудаче перебираются IPv4-пулеры (session mode, порт 5432) по
+# регионам — европейские первыми.
+
+name: Supabase migrate (dev_unlocks)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply dev_unlocks migration
+        env:
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          PGSSLMODE: require
+          PGCONNECT_TIMEOUT: "6"
+          REF: xtsrvmwfnsxunvwuaplz
+        run: |
+          set -u
+          if [ -z "${PGPASSWORD:-}" ]; then
+            echo "::error::Secret SUPABASE_DB_PASSWORD is not set (repo Settings -> Secrets and variables -> Actions -> New repository secret)."
+            exit 1
+          fi
+
+          try() { psql -h "$1" -p "$2" -U "$3" -d postgres -tAc "select 1" >/dev/null 2>&1; }
+
+          HOST=""; PORT=""; DBUSER=""
+          echo "probing direct connection db.$REF.supabase.co:5432 ..."
+          if try "db.$REF.supabase.co" 5432 postgres; then
+            HOST="db.$REF.supabase.co"; PORT=5432; DBUSER=postgres
+          else
+            echo "direct connection failed (IPv6-only project or rotated password); probing IPv4 poolers..."
+            for pfx in aws-0 aws-1; do
+              for r in eu-central-1 eu-central-2 eu-west-1 eu-west-2 eu-west-3 eu-north-1 \
+                       us-east-1 us-east-2 us-west-1 us-west-2 \
+                       ap-southeast-1 ap-southeast-2 ap-northeast-1 ap-northeast-2 ap-south-1 \
+                       sa-east-1 ca-central-1; do
+                h="$pfx-$r.pooler.supabase.com"
+                if try "$h" 5432 "postgres.$REF"; then
+                  HOST="$h"; PORT=5432; DBUSER="postgres.$REF"
+                  break 2
+                fi
+              done
+            done
+          fi
+
+          if [ -z "$HOST" ]; then
+            echo "::error::Database unreachable: either the password in the secret is wrong (rotated?) or the pooler region is not in the probe list."
+            exit 1
+          fi
+          echo "connected via $HOST:$PORT as $DBUSER"
+
+          EXISTS=$(psql -h "$HOST" -p "$PORT" -U "$DBUSER" -d postgres -tAc \
+            "select coalesce(to_regclass('public.dev_unlocks')::text, '')")
+          if [ "$EXISTS" = "public.dev_unlocks" ]; then
+            echo "table public.dev_unlocks already exists - migration skipped"
+          else
+            psql -h "$HOST" -p "$PORT" -U "$DBUSER" -d postgres \
+              -v ON_ERROR_STOP=1 -f supabase/migrations/20261017120000_dev_unlocks.sql
+            echo "migration applied"
+          fi
+
+          echo "--- verification: RLS policies on dev_unlocks ---"
+          psql -h "$HOST" -p "$PORT" -U "$DBUSER" -d postgres -tAc \
+            "select policyname from pg_policies where schemaname='public' and tablename='dev_unlocks'"

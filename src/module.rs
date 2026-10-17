@@ -14,43 +14,21 @@
 //!    - `gfx.kmod`    — графическая подсистема (VBE, рендерер, UI)
 //!    - `crypto.kmod` — криптография (AES, SHA, шифрование диска)
 //!
-//! Каждый модуль — это плоский бинарник (как .mex), загружаемый в
-//! фиксированную область памяти, с функцией инициализации. Модуль
-//! регистрирует свои сервисы через KernelApi.
-//!
-//! ## Формат .kmod (бинарный, little-endian)
-//!
-//! Смещение  Размер  Поле
-//! 0x00      4       magic        = "KMOD" (0x444F4D4B)
-//! 0x04      2       version_major = 1
-//! 0x06      2       version_minor = 0
-//! 0x08      4       header_size   = 44
-//! 0x0C      4       init_offset   (смещение init() от начала тела)
-//! 0x10      4       body_size
-//! 0x14      4       bss_size
-//! 0x18      4       name_len
-//! 0x1C      28      name (ASCII, null-terminated, добито нулями)
-//! 0x38      ...     body (плоский машинный код + данные)
-//!
-//! ## API ядра для модулей (KernelApi)
-//!
-//! Модуль получает указатель на KernelApi через аргумент своей init():
-//!
-//!   extern "C" fn kmod_init(api: *const KernelApi) -> i64;
-//!
-//! Возвращает 0 при успехе, отрицательное значение при ошибке.
+//! Каждому модулю выделяется уникальная непересекающаяся область памяти (динамический базис от KMOD_LOAD_BASE).
+//! Модуль регистрирует свои сервисы через KernelApi.
 
 use crate::ext2;
 use crate::{print, println};
-use alloc::string::{String, ToString};
+use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 
 const KMOD_MAGIC: u32 = 0x444F_4D4B; // "KMOD" LE
 const KMOD_HEADER_SIZE: usize = 44;   // 0x2C
-const KMOD_LOAD_BASE: usize = 0x0080_0000; // 8 МиБ — выше кучи и .mex-области
+const KMOD_LOAD_BASE: usize = 0x0080_0000; // 8 МиБ — базис динамического выделения регионов модулей
 
 /// Максимальный размер одного модуля.
-const KMOD_MAX_SIZE: usize = 2 * 1024 * 1024; // 2 МиБ
+const KMOD_MAX_SIZE: usize = 2 * 1024 * 1024; // 2 МиБ регион под модуль
 
 /// Информация о загруженном модуле.
 #[derive(Clone)]
@@ -64,9 +42,13 @@ pub struct LoadedModule {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ModuleStatus {
-    Loaded,
+    /// Модуль загружен и init() вернул 0.
     Initialized,
+    /// init() вернул ошибку — модуль в памяти, но не работает.
     Failed,
+    /// Модуль изолирован после сбоя во время работы: его сервисы
+    /// отключены, ядро продолжает работу без него.
+    Quarantined,
 }
 
 #[repr(C)]
@@ -79,62 +61,39 @@ struct KmodHeader {
     body_size: u32,
     bss_size: u32,
     name_len: u32,
-    // name follows inline (28 bytes padded)
 }
 
 /// Реестр загруженных модулей.
 static LOADED_MODULES: crate::spinlock::SpinLock<Vec<LoadedModule>> =
     crate::spinlock::SpinLock::new(Vec::new());
 
-/// Список модулей, которые ядро попытается загрузить при старте
-/// (в порядке загрузки).
+/// Список модулей, которые ядро попытается загрузить при старте (в порядке загрузки).
 const BOOT_MODULES: &[&str] = &[
     "NET.KMOD",
     "CRYPTO.KMOD",
     "GFX.KMOD",
 ];
 
-/// Таблица сервисов ядра, доступных модулям. Расширяется по мере
-/// необходимости — модуль проверяет version_major/minor чтобы понять,
-/// какие поля доступны.
+/// Таблица сервисов ядра, доступных модулям.
 #[repr(C)]
 pub struct KernelApi {
-    /// Версия API ядра (major << 16 | minor).
     pub api_version: u32,
-
-    // --- Базовый ввод/вывод ---
     pub kprint: extern "C" fn(ptr: *const u8, len: usize),
     pub kprintln: extern "C" fn(ptr: *const u8, len: usize),
-
-    // --- Работа с памятью ---
-    /// Выделяет `size` байт из кучи ядра, возвращает указатель или null.
     pub kalloc: extern "C" fn(size: usize) -> *mut u8,
-    /// Освобождает ранее выделенный блок.
     pub kfree: extern "C" fn(ptr: *mut u8, size: usize),
-
-    // --- Файловая система ---
     pub kread_file: extern "C" fn(name_ptr: *const u8, name_len: usize, out_ptr: *mut u8, out_cap: usize) -> i64,
     pub kwrite_file: extern "C" fn(name_ptr: *const u8, name_len: usize, data_ptr: *const u8, data_len: usize) -> i64,
-
-    // --- Регистрация оборудования ---
-    /// Зарегистрировать PCI-устройство (vendor_id, device_id) и получить
-    /// его в ответ для дальнейшей работы.
-    pub kpci_find: extern "C" fn(vendor: u16, device: u16) -> i64, // возвращает bar0 или -1
-
-    // --- Порты ввода-вывода ---
+    pub kpci_find: extern "C" fn(vendor: u16, device: u16) -> i64,
     pub koutb: extern "C" fn(port: u16, value: u8),
     pub kinb: extern "C" fn(port: u16) -> u8,
     pub koutw: extern "C" fn(port: u16, value: u16),
     pub kinw: extern "C" fn(port: u16) -> u16,
     pub koutl: extern "C" fn(port: u16, value: u32),
     pub kinl: extern "C" fn(port: u16) -> u32,
-
-    // --- Таймер ---
     pub kuptime_ms: extern "C" fn() -> u64,
     pub ksleep_ms: extern "C" fn(ms: u64),
 }
-
-// ==================== Реализация KernelApi ====================
 
 extern "C" fn kapi_print(ptr: *const u8, len: usize) {
     if ptr.is_null() || len == 0 || len > 4096 {
@@ -167,7 +126,6 @@ extern "C" fn kapi_free(ptr: *mut u8, size: usize) {
     }
     unsafe {
         let _v = Vec::from_raw_parts(ptr, size, size);
-        // _v дропается здесь — память возвращается в кучу.
     }
 }
 
@@ -214,7 +172,6 @@ extern "C" fn kapi_write_file(name_ptr: *const u8, name_len: usize, data_ptr: *c
 extern "C" fn kapi_pci_find(vendor: u16, device: u16) -> i64 {
     match crate::pci::find_device(vendor, device) {
         Some(_dev) => {
-            // Return BAR0 I/O base for found device
             match crate::pci::read_bar0_io(_dev.bus, _dev.slot, _dev.function) {
                 Some(io_base) => io_base as i64,
                 None => -1,
@@ -225,20 +182,25 @@ extern "C" fn kapi_pci_find(vendor: u16, device: u16) -> i64 {
 }
 
 extern "C" fn kapi_outb(port: u16, value: u8) {
-    unsafe { crate::port::outb(port, value); }
+    unsafe { crate::port::outb(port, value) };
 }
+
 extern "C" fn kapi_inb(port: u16) -> u8 {
     unsafe { crate::port::inb(port) }
 }
+
 extern "C" fn kapi_outw(port: u16, value: u16) {
-    unsafe { crate::port::outw(port, value); }
+    unsafe { crate::port::outw(port, value) };
 }
+
 extern "C" fn kapi_inw(port: u16) -> u16 {
     unsafe { crate::port::inw(port) }
 }
+
 extern "C" fn kapi_outl(port: u16, value: u32) {
-    unsafe { crate::port::outl(port, value); }
+    unsafe { crate::port::outl(port, value) };
 }
+
 extern "C" fn kapi_inl(port: u16) -> u32 {
     unsafe { crate::port::inl(port) }
 }
@@ -248,15 +210,15 @@ extern "C" fn kapi_uptime_ms() -> u64 {
 }
 
 extern "C" fn kapi_sleep_ms(ms: u64) {
-    let target = crate::timer::uptime_ms() + ms;
-    while crate::timer::uptime_ms() < target {
-        unsafe { core::arch::asm!("hlt") };
+    let t0 = crate::timer::uptime_ms();
+    while crate::timer::uptime_ms() - t0 < ms {
+        crate::sched::idle_wait();
     }
 }
 
 fn build_kernel_api() -> KernelApi {
     KernelApi {
-        api_version: (1u32 << 16) | 0, // v1.0
+        api_version: 0x0001_0000,
         kprint: kapi_print,
         kprintln: kapi_println,
         kalloc: kapi_alloc,
@@ -275,32 +237,70 @@ fn build_kernel_api() -> KernelApi {
     }
 }
 
-// ==================== Загрузчик модулей ====================
-
-/// Вызывается при старте ядра. Проходит по BOOT_MODULES и пытается
-/// загрузить каждый из них с ext2-диска. Модули, которых нет на диске
-/// (например, система только что установлена и модули ещё не скопированы)
-/// — просто пропускаются с предупреждением.
 pub fn load_boot_modules() {
-    if !ext2::is_formatted() {
-        println!("  [module] ext2 not formatted yet — skipping module loading.");
-        return;
-    }
+    use crate::diag::{self, ErrorCode, Subsystem};
+
+    // Карантин по итогам прошлой сессии: если отказ ядра произошёл внутри
+    // региона модуля (RIP из отчёта попал в его диапазон), модуль не
+    // загружается повторно. Порядок BOOT_MODULES фиксирован, поэтому
+    // адреса регионов воспроизводятся между загрузками.
+    let crashed_module = crate::diag::panic::previous_failure()
+        .map(|p| p.module)
+        .filter(|m| m != "ядро");
 
     for &name in BOOT_MODULES {
+        if let Some(bad) = crashed_module.as_deref() {
+            if name.eq_ignore_ascii_case(bad)
+                || name.to_lowercase().trim_end_matches(".kmod") == bad.to_lowercase()
+            {
+                diag::critical_with(
+                    ErrorCode::new(Subsystem::Kmod, 5),
+                    crate::diag::Action::QuarantineModule,
+                    &alloc::format!(
+                        "KMOD: {} в карантине — прошлая сессия упала внутри его кода",
+                        name
+                    ),
+                );
+                LOADED_MODULES.lock().push(LoadedModule {
+                    name: String::from(name),
+                    version: (0, 0),
+                    load_addr: 0,
+                    body_size: 0,
+                    status: ModuleStatus::Quarantined,
+                });
+                continue;
+            }
+        }
         match load_module(name) {
-            Ok(()) => {} // успех уже напечатан в load_module
+            Ok(()) => {
+                diag::info(diag::NONE, &alloc::format!("KMOD: {} загружен", name));
+            }
             Err(ModuleError::NotFound) => {
-                println!("  [module] {} not found on disk (skipped — system will work without it).", name);
+                // Отсутствие необязательного модуля — не ошибка: система
+                // заявлена работоспособной и без него.
+                diag::notice(
+                    diag::NONE,
+                    &alloc::format!("KMOD: {} отсутствует в /system/kmod — пропущен", name),
+                );
             }
             Err(ModuleError::BadFormat) => {
-                println!("  [module] {} has invalid format — skipped.", name);
+                diag::error(
+                    ErrorCode::new(Subsystem::Kmod, 2),
+                    &alloc::format!("KMOD: {} имеет повреждённый заголовок", name),
+                );
             }
             Err(ModuleError::InitFailed(code)) => {
-                println!("  [module] {} init() returned error code {}.", name, code);
+                diag::error_with(
+                    ErrorCode::new(Subsystem::Kmod, 4),
+                    crate::diag::Action::QuarantineModule,
+                    &alloc::format!("KMOD: {} init() вернул код {}", name, code),
+                );
             }
             Err(ModuleError::TooLarge) => {
-                println!("  [module] {} is too large — skipped.", name);
+                diag::error(
+                    ErrorCode::new(Subsystem::Kmod, 3),
+                    &alloc::format!("KMOD: {} превышает предел {} МиБ", name, KMOD_MAX_SIZE / 1024 / 1024),
+                );
             }
         }
     }
@@ -314,12 +314,32 @@ pub enum ModuleError {
     TooLarge,
 }
 
-/// Загружает один .kmod-файл с диска и инициализирует его.
-fn load_module(filename: &str) -> Result<(), ModuleError> {
-    let data = ext2::read_file(filename).map_err(|e| match e {
-        ext2::Ext2Error::FileNotFound | ext2::Ext2Error::NotFormatted => ModuleError::NotFound,
-        _ => ModuleError::NotFound,
-    })?;
+fn read_kmod_data(filename: &str) -> Result<Vec<u8>, ModuleError> {
+    if crate::diag::passes(crate::diag::Severity::Debug) {
+        crate::diag::debug(
+            crate::diag::NONE,
+            &alloc::format!("KMOD: поиск {} в /system/kmod", filename),
+        );
+    }
+    // Через VFS: образ /system кеширован там в ОДНОМ экземпляре (а после
+    // конверсии раздела в ext2 vfs сам выбирает нужный драйвер). Прежний
+    // путь читал весь раздел заново на каждый модуль — с ростом /system
+    // до 10 МиБ вторая копия рядом с кешем vfs не помещалась в кучу
+    // (16 МиБ) и роняла ядро нехваткой памяти.
+    let in_kmod = alloc::format!("/system/kmod/{}", filename.to_lowercase());
+    if let Ok(data) = crate::vfs::read_file(&in_kmod) {
+        return Ok(data);
+    }
+    let in_root = alloc::format!("/system/{}", filename);
+    if let Ok(data) = crate::vfs::read_file(&in_root) {
+        return Ok(data);
+    }
+    ext2::read_file(filename).map_err(|_| ModuleError::NotFound)
+}
+
+/// Загружает один `.kmod` с диска и инициализирует его.
+pub fn load_module(filename: &str) -> Result<(), ModuleError> {
+    let data = read_kmod_data(filename)?;
 
     if data.len() < KMOD_HEADER_SIZE {
         return Err(ModuleError::BadFormat);
@@ -343,13 +363,16 @@ fn load_module(filename: &str) -> Result<(), ModuleError> {
         return Err(ModuleError::BadFormat);
     }
 
-    // Копируем тело в память модуля.
-    let load_addr = KMOD_LOAD_BASE as *mut u8;
+    // Динамический вызов выделения уникального региона под загружаемый модуль
+    let loaded_count = LOADED_MODULES.lock().len();
+    let module_load_addr = KMOD_LOAD_BASE + loaded_count * KMOD_MAX_SIZE;
+    let load_ptr = module_load_addr as *mut u8;
+
     unsafe {
-        core::ptr::write_bytes(load_addr, 0, total);
+        core::ptr::write_bytes(load_ptr, 0, total);
         core::ptr::copy_nonoverlapping(
             data[KMOD_HEADER_SIZE..KMOD_HEADER_SIZE + body_size].as_ptr(),
-            load_addr,
+            load_ptr,
             body_size,
         );
     }
@@ -361,12 +384,11 @@ fn load_module(filename: &str) -> Result<(), ModuleError> {
         .to_string();
 
     println!(
-        "  [module] Loading {} v{}.{} ({} bytes)...",
-        name, header.version_major, header.version_minor, body_size
+        "  [module] Loading {} v{}.{} @ {:#010X} ({} bytes)...",
+        name, header.version_major, header.version_minor, module_load_addr, body_size
     );
 
-    // Вызываем init()
-    let init_addr = KMOD_LOAD_BASE + header.init_offset as usize;
+    let init_addr = module_load_addr + header.init_offset as usize;
     let api = build_kernel_api();
 
     type KmodInitFn = extern "C" fn(*const KernelApi) -> i64;
@@ -378,7 +400,7 @@ fn load_module(filename: &str) -> Result<(), ModuleError> {
         modules.push(LoadedModule {
             name: name.clone(),
             version: (header.version_major, header.version_minor),
-            load_addr: KMOD_LOAD_BASE,
+            load_addr: module_load_addr,
             body_size,
             status: ModuleStatus::Failed,
         });
@@ -389,12 +411,12 @@ fn load_module(filename: &str) -> Result<(), ModuleError> {
     modules.push(LoadedModule {
         name: name.clone(),
         version: (header.version_major, header.version_minor),
-        load_addr: KMOD_LOAD_BASE,
+        load_addr: module_load_addr,
         body_size,
         status: ModuleStatus::Initialized,
     });
 
-    println!("  [module] {} initialized OK.", name);
+    println!("  [module] {} initialized OK @ {:#010X}.", name, module_load_addr);
     Ok(())
 }
 
@@ -418,9 +440,14 @@ fn parse_kmod_header(data: &[u8]) -> Option<KmodHeader> {
     })
 }
 
-
-/// Сброс списка загруженных модулей (для install: .data копируется как
-/// есть, живые heap-указатели нельзя переносить на устанавливаемый диск).
 pub fn reset_loaded_modules() {
     *LOADED_MODULES.lock() = alloc::vec::Vec::new();
 }
+
+/// Возвращает список текущих загруженных модулей ядра.
+pub fn get_loaded_modules() -> Vec<LoadedModule> {
+    LOADED_MODULES.lock().clone()
+}
+
+
+

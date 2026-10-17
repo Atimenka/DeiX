@@ -1,0 +1,61 @@
+# Серверная активация dev-режима (Supabase)
+
+Dev-режим DeiX (`dev on`) активируется через серверный реестр
+устройств: заявка с машины → одобрение администратором → ключ
+разблокировки. Сервер — проект Supabase, ОС ходит в него по HTTPS
+(PostgREST + anon-ключ) собственным TLS/HTTP-стеком.
+
+## Разовая настройка сервера
+
+На машине разработчика (не в ОС):
+
+```sh
+supabase login
+supabase link --project-ref xtsrvmwfnsxunvwuaplz
+supabase db push          # применит supabase/migrations/*_dev_unlocks.sql
+```
+
+Альтернатива без CLI: открыть Dashboard → SQL Editor и выполнить
+содержимое `supabase/migrations/20261017120000_dev_unlocks.sql`.
+
+ОС собирается с двумя публичными константами (`src/devauth.rs`):
+URL проекта и anon-ключ (Dashboard → Settings → API → `anon public`).
+Anon-ключ публичен по дизайну; `service_role` и пароль Postgres в ОС
+не попадают никогда.
+
+## Поток активации
+
+1. **ОС**: `dev request` — генерирует `device_id` (32 hex-символа,
+   хранится в `/userdata/etc/device.id`) и отправляет
+   `POST /rest/v1/dev_unlocks` с `{device_id, hostname}`.
+2. **Администратор**: одобряет заявку в SQL Editor:
+
+   ```sql
+   update public.dev_unlocks
+   set status = 'approved',
+       unlock_key = encode(gen_random_bytes(16), 'hex'),
+       decided_at = now()
+   where device_id = '<device_id из заявки>';
+   ```
+
+   (или правит строку в Table Editor; отказ — `status = 'denied'`).
+3. **ОС**: `dev on` — читает
+   `GET /rest/v1/dev_unlocks?device_id=eq.<id>&select=status,unlock_key`.
+   При `approved` сохраняет ключ в `/userdata/etc/dev_unlock.key`,
+   включает dev-режим и дальше работает офлайн: при наличии ключа
+   `dev on` не требует сети.
+
+`dev off` выключает режим, но ключ не удаляет; `dev revoke` удаляет
+локальный ключ (повторная активация снова потребует сервера).
+
+## Честные границы (§42)
+
+* Это **реестр устройств**, а не защита от владельца машины: исходники
+  ОС открыты, любой может пропатчить проверку или выставить флаг в
+  памяти. Никаких заявлений о «невзламываемости» код и документация
+  не делают.
+* Anon-ключ публичный: подать заявку и прочитать список заявок может
+  любой, у кого он есть. Одобрение — только у владельца проекта.
+* Пароль Postgres и `service_role` дают полный контроль над базой —
+  они не встраиваются в ОС, не публикуются и не передаются по каналам
+  связи (пароль, однажды попавший в чат/лог, подлежит ротации).

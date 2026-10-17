@@ -8,9 +8,15 @@
 #                         читает kernel.bin с диска через ATA PIO)
 #   Секторы (1+K)..M   — kernel.bin (ядро: long_mode_init + Rust, база 0x100000)
 # Загрузчик в real mode грузит только маленький stage2 (несколько секторов);
-# само ядро stage2 дочитывает уже в 64-битном режиме в память 0x100000 —
-# поэтому размер ядра больше не ограничен 1 МиБ/real mode (до ~2 МиБ,
-# секторы 1..4095 до ext2-тома).
+# само ядро stage2 дочитывает уже в 64-битном режиме в память 0x100000.
+#
+# Служебные области и разделы (источник истины — src/partition_map.rs):
+#   LBA 0           — MBR (boot_sector.bin)
+#   LBA 1..2046     — stage2 + ramboot + сырой kernel.bin
+#   LBA 2047        — дескриптор образа ядра DEIXKIMG (LBA/размер/SHA-256)
+#   LBA 2048..2111  — область аварийного дампа (DEIXPNIC, src/diag/panic.rs)
+#   LBA 4096..24575 — /system   (EROFS RO, 20480 сект)
+#   LBA 24576..40959 — /userdata (EXT2 RW, 16384 сект)
 set -euo pipefail
 
 source "$HOME/.cargo/env" 2>/dev/null || true
@@ -42,7 +48,8 @@ KERNEL_LBA=$(( 1 + STAGE2_SECTORS + RAMBOOT_SECTORS ))
 echo "    kernel.bin LBA: $KERNEL_LBA"
 
 echo "==> [1c/8] Собираем ramboot (RAM-диск: дочитывает весь образ в 0x2000000)"
-nasm -f bin -D RAMDISK_SECTORS=20480 -D RAMDISK_DST=0x2000000 -D KERNEL_SECTORS=2048 \
+nasm -f bin -D RAMDISK_SECTORS=40960 -D RAMDISK_DST=0x2000000 \
+    -D KERNEL_SECTORS=2048 -D KERNEL_LBA=$KERNEL_LBA \
     boot/ramboot.asm -o "$BUILD/ramboot.bin"
 RAMBOOT_SIZE=$(stat -c%s "$BUILD/ramboot.bin")
 if [ "$RAMBOOT_SIZE" -ne 512 ]; then
@@ -99,8 +106,8 @@ fi
 
 echo "==> [2e/8] Конвертируем UI-звуки (assets/*.wav -> DPS 8 кГц, u8 моно)"
 # Звуки НЕ зашиваются в kernel.bin (лимит размера ядра): они кладутся
-# в EROFS-раздел /super образа (шаг 7b, make_deix_fs.py), а ядро читает
-# их с диска в рантайме и играет через PC speaker (ШИМ, src/sound.rs).
+# в /system/media/audio/ui/ (EROFS, шаг 7b, make_deix_fs.py), а ядро
+# читает их с диска в рантайме и играет через PC speaker (src/sound.rs).
 SND="$BUILD/sounds"
 mkdir -p "$SND"
 conv_snd() {  # $1 = входной wav, $2 = имя dps
@@ -128,6 +135,8 @@ if [ ! -f "$KERNEL_LIB" ]; then
 fi
 
 echo "==> [4/8] Линкуем kernel.bin (long_mode_init + ядро, база 0x100000)"
+# Права сегментов (text R+X, rodata R, data/bss R+W) заданы в PHDRS
+# линкер-скрипта — RWX-сегментов нет, предупреждать ld не о чем.
 ld -n --gc-sections -T boot/linker_kernel.ld -o "$BUILD/kernel.elf" \
     "$BUILD/long_mode_init.o" \
     "$KERNEL_LIB"
@@ -143,6 +152,15 @@ KERNEL_MAX_SECTORS=2048
 if [ "$KERNEL_SECTORS" -gt "$KERNEL_MAX_SECTORS" ]; then
     echo "ОШИБКА: kernel.bin ($KERNEL_SECTORS сект) > лимита ($KERNEL_MAX_SECTORS)."
     echo "Увеличьте KERNEL_SECTORS в boot/boot_sector.asm и boot/ramboot.asm."
+    exit 1
+fi
+
+# Сырое ядро не должно доставать до дескриптора DEIXKIMG (LBA 2047)
+# и области аварийного дампа (LBA 2048..2111, src/diag/panic.rs).
+KIMG_INFO_LBA=2047
+if [ $(( KERNEL_LBA + KERNEL_SECTORS )) -gt "$KIMG_INFO_LBA" ]; then
+    echo "ОШИБКА: kernel.bin (LBA $KERNEL_LBA + $KERNEL_SECTORS сект) пересекает"
+    echo "дескриптор ядра (LBA $KIMG_INFO_LBA) / область дампа (LBA 2048)."
     exit 1
 fi
 
@@ -173,10 +191,14 @@ if [ "$STAGE2_SECTORS2" -ne "$STAGE2_SECTORS" ]; then
     ld -n --gc-sections -T boot/linker_stage2.ld -o "$BUILD/stage2.elf" "$BUILD/stage2.o"
     strip --strip-all "$BUILD/stage2.elf" -o "$BUILD/stage2.stripped.elf"
     objcopy -O binary "$BUILD/stage2.stripped.elf" "$BUILD/stage2.bin"
+    # KERNEL_LBA изменился — пересобираем ramboot с новым значением.
+    nasm -f bin -D RAMDISK_SECTORS=40960 -D RAMDISK_DST=0x2000000 \
+        -D KERNEL_SECTORS=2048 -D KERNEL_LBA=$KERNEL_LBA \
+        boot/ramboot.asm -o "$BUILD/ramboot.bin"
 fi
 echo "    stage2.bin (финальный): $(stat -c%s "$BUILD/stage2.bin") байт, kernel LBA=$KERNEL_LBA"
 
-echo "==> [6b/8] Сверяем карту разделов (partition_map, make_deix_fs, deix_ota)"
+echo "==> [6b/8] Сверяем карту разделов (partition_map, make_deix_fs)"
 python3 tools/check_partition_map.py
 
 echo "==> [7/8] Склеиваем итоговый образ диска"
@@ -197,10 +219,9 @@ else
 fi
 cat "$BUILD/boot_sector.bin" "$BUILD/stage2.pad.bin" "$BUILD/ramboot.bin" "$BUILD/kernel.bin" > "$DISK_IMG"
 
-# Дополняем образ нулями до размера, кратного 512, а затем до размера,
-# достаточного для ext2-тома (см. src/ext2.rs: FS_START_LBA=4096,
-# TOTAL_SECTORS=8192 -> том занимает секторы [4096, 12288), оставляем
-# небольшой запас сверху).
+# Дополняем образ нулями до размера, кратного 512, а затем до большего из:
+#   - конца последнего раздела (/userdata: LBA 24576 + 16384 = 40960 сект);
+#   - окна RAM-диска (ramboot/boot_sector_iso читают ровно 40960 сект = 20 МиБ).
 python3 - "$DISK_IMG" <<'PYEOF'
 import sys, os
 path = sys.argv[1]
@@ -210,8 +231,9 @@ if pad:
     with open(path, "ab") as f:
         f.write(b"\x00" * pad)
 
-MIN_SECTORS = 20480  # образ 10 МиБ: RAM-диск читает ровно 20480 секторов
-min_size = MIN_SECTORS * 512
+PARTITIONS_END = 24576 + 16384  # сверяется tools/check_partition_map.py
+RAMDISK_WINDOW = 40960          # boot/ramboot.asm RAMDISK_SECTORS
+min_size = max(PARTITIONS_END, RAMDISK_WINDOW) * 512
 size = os.path.getsize(path)
 if size < min_size:
     with open(path, "ab") as f:
@@ -219,27 +241,38 @@ if size < min_size:
 PYEOF
 
 echo "==> [7b/8] Форматируем разделы: MBR + ext2 + НАСТОЯЩИЙ EROFS"
-# Без этого шага системные разделы (/dsm, /init_boot, /kernel_a, ...)
-# оставались нулями, и bootchain честно останавливал загрузку.
 # make_deix_fs.py пишет реальную MBR-разметку, ext2-том и EROFS-образы
 # (магия 0xE0F5E1E2, проходят fsck.erofs).
-python3 tools/make_deix_fs.py "$DISK_IMG"
+python3 tools/make_deix_fs.py "$DISK_IMG" --kernel-lba=$KERNEL_LBA
 
-echo "==> [8/8] Компилируем ISO-загрузчик (RAM-диск 10 МиБ)"
+echo "==> [8/8] Компилируем ISO-загрузчик (RAM-диск 20 МиБ)"
 # Отдельный маленький загрузчик (boot/boot_sector_iso.asm): BIOS грузит
 # весь boot-образ по 0x7c00, стаб копирует stage2 на 0x10000, kernel.bin
-# на 0x100000 и ПОЛНЫЙ 10-МиБ образ диска (RAM-диск) на 0x2000000 — ядро
+# на 0x100000 и ПОЛНЫЙ 20-МиБ образ диска (RAM-диск) на 0x2000000 — ядро
 # читает все разделы из памяти и работает с любого носителя (Ventoy/USB).
 STAGE2_PAD_SIZE=$(stat -c%s "$BUILD/stage2.pad.bin")
 KERNEL_SIZE=$(stat -c%s "$BUILD/kernel.bin")
 STAGE2_DWORDS=$(( STAGE2_PAD_SIZE / 4 ))
 KERNEL_DWORDS=$(( (KERNEL_SIZE + 3) / 4 ))
 nasm -f bin -D STAGE2_SIZE_DWORDS=$STAGE2_DWORDS -D KERNEL_SIZE_DWORDS=$KERNEL_DWORDS \
-    -D RAMDISK_SIZE_DWORDS=2621440 \
+    -D RAMDISK_SIZE_DWORDS=5242880 \
     boot/boot_sector_iso.asm -o "$BUILD/boot_sector_iso.bin"
 
-# ИТОГОВЫЙ .iso с RAM-диском собирается ПОСЛЕ make_deix_fs.py
-# (нужен полный 10-МиБ образ с разделами): tools/build_iso_ramdisk.py
+echo "==> [8b] Релизные артефакты (DeiX 0.3.0-beta x86_64)"
+DEIX_VERSION="0.3.0-beta"
+cp "$DISK_IMG" "$BUILD/deix-$DEIX_VERSION-x86_64.img"
+if [ -f "$BUILD/deix.iso" ]; then
+    cp "$BUILD/deix.iso" "$BUILD/deix-$DEIX_VERSION-x86_64.iso"
+fi
+(
+    cd "$BUILD"
+    : > SHA256SUMS
+    for f in deix-$DEIX_VERSION-x86_64.img deix-$DEIX_VERSION-x86_64.iso kernel.bin boot_sector.bin stage2.bin ramboot.bin; do
+        [ -f "$f" ] && sha256sum "$f" >> SHA256SUMS
+    done
+    echo "    SHA256SUMS:"
+    sed 's/^/      /' SHA256SUMS
+)
 
 echo ""
 echo "==> Готово! Образ диска: $DISK_IMG"
