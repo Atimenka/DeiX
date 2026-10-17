@@ -5,23 +5,18 @@ pub mod desktop;
 pub mod metrics;
 pub mod surface;
 pub mod taskbar;
+pub mod text;
 pub mod theme;
 pub mod window;
 
 pub use desktop::run_desktop_session;
 
-pub struct KernelGuiCompositorService {
-    pub active: bool,
-    pub frame_rate: u32,
+/// Статус графической подсистемы: активен ли программный композитор
+/// (framebuffer установлен, рендерер работает). FPS не сообщается:
+/// рабочий стол перерисовывается по damage-событиям, а не с фиксированной
+/// частотой, и измерителя кадров нет — раньше здесь лежала статическая
+/// заглушка `active: true, 30 FPS`, которая врала даже в текстовом режиме.
+pub fn compositor_status() -> bool {
+    crate::renderer::has_active_framebuffer()
 }
 
-static COMPOSITOR_SERVICE: crate::spinlock::SpinLock<KernelGuiCompositorService> =
-    crate::spinlock::SpinLock::new(KernelGuiCompositorService {
-        active: true,
-        frame_rate: 30,
-    });
-
-pub fn compositor_status() -> (bool, u32) {
-    let c = COMPOSITOR_SERVICE.lock();
-    (c.active, c.frame_rate)
-}

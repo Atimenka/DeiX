@@ -565,7 +565,7 @@ pub fn parse_html_to_browser_lines(resp: &crate::net::http::HttpResponse) -> Vec
                         break;
                     }
                     // жёсткий разрез сверхдлинного слова по границе символа
-                    let cut = char_prefix_len(rest, WRAP);
+                    let cut = crate::ui::text::char_byte_index(rest, WRAP);
                     line.push_str(&rest[..cut]);
                     lines.push(core::mem::take(&mut line));
                     rest = &rest[cut..];
@@ -717,14 +717,6 @@ fn decode_entity(cs: &[char], pos: usize) -> (char, usize) {
     }
 }
 
-/// Длина (в байтах) префикса строки из не более max символов.
-fn char_prefix_len(s: &str, max: usize) -> usize {
-    match s.char_indices().nth(max) {
-        Some((idx, _)) => idx,
-        None => s.len(),
-    }
-}
-
 pub fn load_partition_entries(partition: &str, path: &str) -> (Vec<FileViewEntry>, Option<String>) {
     match partition {
         "/userdata" => {
@@ -805,7 +797,11 @@ pub fn draw_window(
     );
 
     let title_color = if is_focused { theme.text_primary } else { theme.text_secondary };
-    r.draw_text(w.x + 12, w.y + 6, &w.title, title_color, None);
+    // Длинный заголовок (имя файла в редакторе) не должен заезжать под
+    // кнопки: слева отступ 12, справа зона кнопок начинается на width-62.
+    let max_title_cells = ((w.width as i32 - 80) / 8).max(4) as usize;
+    let title = crate::ui::text::truncate_to_cells(&w.title, max_title_cells).0;
+    r.draw_text(w.x + 12, w.y + 6, title, title_color, None);
 
     // Кнопки — строго по прямоугольникам WindowFrame (теми же
     // пользуется обработчик кликов в desktop.rs).

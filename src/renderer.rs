@@ -616,11 +616,18 @@ impl Renderer {
         }
     }
 
+    /// Рисует строку UTF-8. Разложение символов в глифы — единое для
+    /// всей системы (`ui::text::glyph_cells`): ширина на экране всегда
+    /// совпадает с `ui::text::text_cells(text) * 8`. Итерация по БАЙТАМ,
+    /// как было раньше, превращала каждый кириллический символ в два
+    /// глифа псевдографики.
     pub fn draw_text(&mut self, x: i32, y: i32, text: &str, fg: Color, bg: Option<Color>) {
         let mut cursor_x = x;
-        for byte in text.bytes() {
-            self.draw_char(cursor_x, y, byte, fg, bg);
-            cursor_x += 8;
+        for ch in text.chars() {
+            crate::ui::text::glyph_cells(ch, &mut |b| {
+                self.draw_char(cursor_x, y, b, fg, bg);
+                cursor_x += 8;
+            });
         }
     }
 }

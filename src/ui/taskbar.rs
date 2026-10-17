@@ -9,6 +9,7 @@ use crate::renderer::{Color, IconType, Rect, Renderer};
 use crate::timer;
 use crate::ui::desktop::Desktop;
 use crate::ui::metrics::UiMetrics;
+use crate::ui::text::truncate_to_cells;
 use crate::ui::theme::UiTheme;
 
 #[derive(Clone, Copy)]
@@ -136,7 +137,13 @@ pub fn draw_taskbar(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen
         }
 
         let label_color = if w.minimized { Color::GRAY } else { theme.text_primary };
-        r.draw_text(item_x + 8, y + (taskbar_h - 16) / 2, truncate(&w.title, 14), label_color, None);
+        r.draw_text(
+            item_x + 8,
+            y + (taskbar_h - 16) / 2,
+            truncate_to_cells(&w.title, 14).0,
+            label_color,
+            None,
+        );
     }
 
     // Сеть: иконка отражает реальное наличие устройства, а не всегда
@@ -163,7 +170,7 @@ pub fn draw_start_menu(r: &mut Renderer, theme: &UiTheme, _screen_w: i32, screen
         let item = l.app_items[i];
         r.fill_rounded_rect(item.x, item.y, item.w, item.h, 4, theme.titlebar_inactive);
         r.draw_icon(item.x + 6, item.y + 8, *icon, theme.accent);
-        r.draw_text(item.x + 26, item.y + 6, truncate(label, 11), theme.text_primary, None);
+        r.draw_text(item.x + 26, item.y + 6, truncate_to_cells(label, 11).0, theme.text_primary, None);
     }
 
     let sep_y = l.menu.y + l.menu.h as i32 - 38;
@@ -237,15 +244,3 @@ pub fn draw_cursor(r: &mut Renderer) {
     r.fill_rect(x + 1, y + 1, 4, 8, color);
 }
 
-fn truncate(s: &str, max_chars: usize) -> &str {
-    if s.chars().count() <= max_chars {
-        s
-    } else {
-        let mut char_indices = s.char_indices();
-        if let Some((idx, _)) = char_indices.nth(max_chars) {
-            &s[..idx]
-        } else {
-            s
-        }
-    }
-}

@@ -536,8 +536,16 @@ fn cmd_help() {
 }
 
 fn cmd_about() {
-    let (comp_active, comp_fps) = crate::ui::compositor_status();
-    println!("{} - mini kernel written in Rust (Compositor active: {}, {} FPS)", crate::OS_RELEASE, comp_active, comp_fps);
+    let gui = if crate::ui::compositor_status() {
+        t!(en: "active", ru: "активен")
+    } else {
+        t!(en: "inactive", ru: "неактивен")
+    };
+    println!(
+        "{} - mini kernel written in Rust (GUI compositor: {})",
+        crate::OS_RELEASE,
+        gui
+    );
     println!(
         "{}",
         t!(

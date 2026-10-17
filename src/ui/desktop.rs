@@ -9,6 +9,7 @@ use crate::ui::apps::files as files_ui;
 use crate::ui::apps::settings as settings_ui;
 use crate::ui::metrics::UiMetrics;
 use crate::ui::surface::WallpaperSurface;
+use crate::ui::text as text_util;
 use crate::ui::taskbar::{
     clock_key, control_center_rect, draw_control_center, draw_cursor, draw_start_menu,
     draw_taskbar, start_menu_layout, StartMenuAction, START_MENU_APPS,
@@ -692,35 +693,54 @@ impl Desktop {
                                     if *cursor_row < *scroll {
                                         *scroll = *cursor_row;
                                     }
+                                    let max_col = lines
+                                        .get(*cursor_row)
+                                        .map(|l| l.chars().count())
+                                        .unwrap_or(0);
+                                    *cursor_col = (*cursor_col).min(max_col);
                                 }
                                 keyboard::ARROW_DOWN => {
                                     if *cursor_row + 1 < lines.len() {
                                         *cursor_row += 1;
                                     }
+                                    let max_col = lines
+                                        .get(*cursor_row)
+                                        .map(|l| l.chars().count())
+                                        .unwrap_or(0);
+                                    *cursor_col = (*cursor_col).min(max_col);
                                 }
                                 keyboard::ARROW_LEFT => {
                                     *cursor_col = cursor_col.saturating_sub(1);
                                 }
                                 keyboard::ARROW_RIGHT => {
                                     if let Some(line) = lines.get(*cursor_row) {
-                                        if *cursor_col < line.len() {
+                                        if *cursor_col < line.chars().count() {
                                             *cursor_col += 1;
                                         }
                                     }
                                 }
+                                // cursor_col — номер СИМВОЛА. String::remove/
+                                // insert/split_off принимают байтовые индексы,
+                                // и байтовый индекс внутри UTF-8-последовательности
+                                // (кириллица в файле) — это паника ядра, поэтому
+                                // границу даёт char_byte_index.
                                 0x08 => {
                                     if !*read_only && *cursor_col > 0 {
                                         if let Some(line) = lines.get_mut(*cursor_row) {
-                                            line.remove(*cursor_col - 1);
-                                            *cursor_col -= 1;
-                                            *modified = true;
+                                            if *cursor_col <= line.chars().count() {
+                                                let bi = text_util::char_byte_index(line, *cursor_col - 1);
+                                                line.remove(bi);
+                                                *cursor_col -= 1;
+                                                *modified = true;
+                                            }
                                         }
                                     }
                                 }
                                 b'\n' | b'\r' => {
                                     if !*read_only {
                                         if let Some(line) = lines.get_mut(*cursor_row) {
-                                            let rest = line.split_off((*cursor_col).min(line.len()));
+                                            let bi = text_util::char_byte_index(line, *cursor_col);
+                                            let rest = line.split_off(bi);
                                             lines.insert(*cursor_row + 1, rest);
                                             *cursor_row += 1;
                                             *cursor_col = 0;
@@ -731,8 +751,8 @@ impl Desktop {
                                 b if b >= 0x20 && b < 0x7F => {
                                     if !*read_only {
                                         if let Some(line) = lines.get_mut(*cursor_row) {
-                                            let idx = (*cursor_col).min(line.len());
-                                            line.insert(idx, b as char);
+                                            let bi = text_util::char_byte_index(line, *cursor_col);
+                                            line.insert(bi, b as char);
                                             *cursor_col += 1;
                                             *modified = true;
                                         }

@@ -103,10 +103,13 @@ pub fn draw_error_center(
         if rec.occurrences > 1 {
             msg.push_str(&format!(" (x{})", rec.occurrences));
         }
-        let max_chars = ((w.width as i32 - 190) / 8).max(8) as usize;
-        if msg.chars().count() > max_chars {
-            msg = msg.chars().take(max_chars - 1).collect();
-            msg.push('…');
+        // Ширина в ячейках шрифта — тем же разложением, каким рисует
+        // draw_text (кириллица в сообщениях диагностики занимает одну
+        // ячейку на букву, а не на байт).
+        let max_cells = ((w.width as i32 - 190) / 8).max(8) as usize;
+        if crate::ui::text::text_cells(&msg) > max_cells {
+            let (prefix, _) = crate::ui::text::truncate_to_cells(&msg, max_cells.saturating_sub(2));
+            msg = alloc::format!("{}..", prefix);
         }
         let fg = if is_sel { theme.accent } else { theme.text_primary };
         r.draw_text(w.x + 176, ty + 2, &msg, fg, None);
