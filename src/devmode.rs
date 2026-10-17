@@ -73,7 +73,7 @@ pub fn dev_status() {
     for line in crate::devauth::status_lines() {
         crate::println!("{}", line);
     }
-    crate::println!("  команды: dev request | dev on | dev off | dev revoke");
+    crate::println!("  команды: dev id | dev request | dev on | dev off | dev revoke");
 }
 
 /// Чтение строки с клавиатуры или COM1.

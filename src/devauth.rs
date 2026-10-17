@@ -12,11 +12,13 @@
 //   dev revoke  — удаляет локальный ключ (повторная активация — снова
 //                 через сервер).
 //
-// Сервер — Supabase PostgREST (таблица public.dev_unlocks, см.
-// supabase/migrations). ОС ходит туда по HTTPS с publishable-ключом:
-// он ПУБЛИЧНЫЙ по дизайну, RLS-политики позволяют ему только подать
-// заявку и прочитать статус. Одобряет заявки владелец проекта из
-// дашборда; service-ключи и пароль БД в ОС не встраиваются.
+// Сервер — Supabase PostgREST (см. supabase/migrations). ОС ходит туда
+// по HTTPS с publishable-ключом: он ПУБЛИЧНЫЙ по дизайну и дает право
+// вызвать ровно две функции — request_dev_unlock (подать заявку) и
+// claim_dev_unlock (узнать статус и забрать одобренный токен; токен
+// выдается один раз). К таблицам у этого ключа доступа нет. Заявки
+// одобряет владелец проекта в админ-панели сайта (web/);
+// service-ключи и пароль БД в ОС не встраиваются.
 //
 // Честная граница (§42): это реестр устройств, а не защита от владельца
 // машины — исходники открыты, проверку можно пропатчить. Никаких других
@@ -106,44 +108,51 @@ enum ServerStatus {
     /// Строки нет: заявка не подавалась.
     NotRequested,
     Pending,
-    /// approved + unlock_key (пустая строка, если администратор ключ
-    /// не заполнил — одобрение всё равно действительно).
+    /// Одобрено: одноразовый токен, который сервер отдал сейчас и
+    /// больше не вернёт.
     Approved(String),
     Denied,
+    /// Токен по этой заявке уже был выдан ранее.
+    Used,
+}
+
+fn rpc(name: &str, body: &str) -> Result<crate::net::http::HttpBytes, String> {
+    let url = format!("{}/rest/v1/rpc/{}", SUPABASE_URL, name);
+    crate::net::http::request_bytes(
+        "POST",
+        &url,
+        &[
+            ("apikey", ANON_KEY),
+            ("Content-Type", "application/json"),
+        ],
+        body.as_bytes(),
+    )
 }
 
 fn server_status(id: &str) -> Result<ServerStatus, String> {
-    let url = format!(
-        "{}/rest/v1/dev_unlocks?device_id=eq.{}&select=status,unlock_key",
-        SUPABASE_URL, id
-    );
-    let resp = crate::net::http::request_bytes(
-        "GET",
-        &url,
-        &[("apikey", ANON_KEY)],
-        &[],
-    )?;
+    let body = format!("{{\"p_device_id\":\"{}\"}}", id);
+    let resp = rpc("claim_dev_unlock", &body)?;
     if resp.status != 200 {
         return Err(http_error("status check", resp.status, &resp.body));
     }
-    let body = String::from_utf8_lossy(&resp.body).into_owned();
-    let trimmed = body.trim();
-    if trimmed == "[]" {
-        return Ok(ServerStatus::NotRequested);
-    }
-    match json_str_field(trimmed, "status").as_deref() {
-        Some("approved") => Ok(ServerStatus::Approved(
-            json_str_field(trimmed, "unlock_key").unwrap_or_default(),
-        )),
+    let text = String::from_utf8_lossy(&resp.body).into_owned();
+    let text = text.trim();
+    match json_str_field(text, "status").as_deref() {
+        Some("none") => Ok(ServerStatus::NotRequested),
         Some("pending") => Ok(ServerStatus::Pending),
+        Some("approved") => match json_str_field(text, "unlock_key") {
+            Some(key) if !key.is_empty() => Ok(ServerStatus::Approved(key)),
+            _ => Err(String::from("server approved the request but sent no token")),
+        },
         Some("denied") => Ok(ServerStatus::Denied),
-        _ => Err(format!("unexpected server response: {}", clip(trimmed, 120))),
+        Some("consumed") => Ok(ServerStatus::Used),
+        _ => Err(format!("unexpected server response: {}", clip(text, 120))),
     }
 }
 
 enum RequestError {
-    /// Заявка с таким device_id уже есть (HTTP 409).
-    Duplicate,
+    /// Заявка с таким device_id уже есть; внутри — её статус.
+    Duplicate(String),
     /// До сервера не достучались: DNS, TCP, TLS, таймаут.
     Unreachable(String),
     /// Сервер ответил отказом: заявка в таблицу не попала.
@@ -151,27 +160,28 @@ enum RequestError {
 }
 
 fn server_request(id: &str) -> Result<(), RequestError> {
-    let url = format!("{}/rest/v1/dev_unlocks", SUPABASE_URL);
     let body = format!(
-        "{{\"device_id\":\"{}\",\"hostname\":\"{}\"}}",
+        "{{\"p_device_id\":\"{}\",\"p_hostname\":\"{}\",\"p_source\":\"os\"}}",
         id,
         crate::OS_RELEASE
     );
-    let resp = crate::net::http::request_bytes(
-        "POST",
-        &url,
-        &[
-            ("apikey", ANON_KEY),
-            ("Content-Type", "application/json"),
-            ("Prefer", "return=minimal"),
-        ],
-        body.as_bytes(),
-    )
-    .map_err(RequestError::Unreachable)?;
-    match resp.status {
-        201 => Ok(()),
-        409 => Err(RequestError::Duplicate),
-        status => Err(RequestError::Rejected(describe_rejection(status, &resp.body))),
+    let resp = rpc("request_dev_unlock", &body).map_err(RequestError::Unreachable)?;
+    if resp.status != 200 {
+        return Err(RequestError::Rejected(describe_rejection(
+            resp.status,
+            &resp.body,
+        )));
+    }
+    let text = String::from_utf8_lossy(&resp.body).into_owned();
+    match json_str_field(&text, "result").as_deref() {
+        Some("created") => Ok(()),
+        Some("exists") => Err(RequestError::Duplicate(
+            json_str_field(&text, "status").unwrap_or_default(),
+        )),
+        _ => Err(RequestError::Rejected(format!(
+            "unexpected server response: {}",
+            clip(text.trim(), 120)
+        ))),
     }
 }
 
@@ -181,8 +191,8 @@ fn describe_rejection(status: u16, body: &[u8]) -> String {
     let text = String::from_utf8_lossy(body).into_owned();
     let message = json_str_field(&text, "message").unwrap_or_else(|| clip(text.trim(), 160));
     let hint = match status {
-        404 => " - table public.dev_unlocks not found on this project: apply the SQL from docs/DEVAUTH.md",
-        401 | 403 => " - the anon key or the RLS policy 'os can request' rejected the insert",
+        404 => " - function request_dev_unlock not found on this project: apply supabase/migrations (see docs/DEVAUTH.md)",
+        401 | 403 => " - the project rejected the anon key",
         _ => "",
     };
     format!("HTTP {}: {}{}", status, clip(&message, 160), hint)
@@ -210,12 +220,13 @@ fn clip(s: &str, limit: usize) -> String {
 }
 
 /// Значение строкового поля в JSON-ответе PostgREST. Общего парсера нет
-/// намеренно: ответы dev_unlocks — плоский объект с ASCII-значениями
-/// (hex-ключи и статусы) без экранирования.
+/// намеренно: ответы — плоский объект с ASCII-значениями (hex-токены,
+/// статусы) без экранирования; пробелы вокруг `:` допускаются, их
+/// ставит сериализатор jsonb.
 fn json_str_field(obj: &str, key: &str) -> Option<String> {
-    let pat = format!("\"{}\":", key);
+    let pat = format!("\"{}\"", key);
     let start = obj.find(&pat)? + pat.len();
-    let rest = obj[start..].trim_start();
+    let rest = obj[start..].trim_start().strip_prefix(':')?.trim_start();
     let inner = rest.strip_prefix('"')?;
     let end = inner.find('"')?;
     Some(inner[..end].to_string())
@@ -239,9 +250,21 @@ pub fn ensure_unlocked() -> Result<&'static str, String> {
             "request is still pending approval on the server",
         )),
         ServerStatus::Denied => Err(String::from("request was denied on the server")),
+        ServerStatus::Used => Err(String::from(
+            "the one-time token was already issued and is not stored here - run 'dev request' again",
+        )),
         ServerStatus::NotRequested => Err(String::from(
             "no request on the server - run 'dev request' first",
         )),
+    }
+}
+
+/// `dev id`: печатает device_id (создаёт его при первом вызове), чтобы
+/// подать заявку на сайте проекта вместо `dev request`.
+pub fn cmd_id() {
+    match device_id() {
+        Ok(id) => println!("  [devauth] device id: {}", id),
+        Err(e) => println!("  [devauth] cannot create device id: {}", e),
     }
 }
 
@@ -264,15 +287,22 @@ pub fn cmd_request() {
     match server_request(&id) {
         Ok(()) => {
             println!("  [devauth] request sent, connection closed.");
-            println!("  [devauth] Ask the project owner to approve this device id.");
+            println!("  [devauth] The project owner approves requests in the site admin panel.");
             notify::push(
                 Kind::Info,
                 "Dev access requested",
                 "Request sent. Waiting for the project owner to approve this device.",
             );
         }
-        Err(RequestError::Duplicate) => {
-            println!("  [devauth] request for this device id is already on the server.");
+        Err(RequestError::Duplicate(status)) => {
+            println!(
+                "  [devauth] a request for this device id is already on the server (status: {}).",
+                status
+            );
+            if status == "denied" {
+                println!("  [devauth] the project owner denied it earlier.");
+                return;
+            }
         }
         Err(RequestError::Unreachable(e)) => {
             println!("  [devauth] server unreachable: {}", e);
@@ -366,6 +396,14 @@ fn check_pending() {
                 Kind::Error,
                 "Dev access denied",
                 "The project owner denied this device request.",
+            );
+        }
+        Ok(ServerStatus::Used) => {
+            PENDING.store(false, Ordering::Relaxed);
+            announce(
+                Kind::Warning,
+                "Dev access",
+                "The one-time token was already issued. Run 'dev request' for a new one.",
             );
         }
         Ok(ServerStatus::NotRequested) => {

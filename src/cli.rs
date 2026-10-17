@@ -319,6 +319,7 @@ pub fn execute(line: &str) {
                 "on" => crate::devmode::enable_dev_mode(),
                 "off" => crate::devmode::disable_dev_mode(),
                 "request" => crate::devauth::cmd_request(),
+                "id" => crate::devauth::cmd_id(),
                 "revoke" => crate::devauth::cmd_revoke(),
                 _ => crate::devmode::dev_status(),
             }
