@@ -17,3 +17,13 @@ serverless-функции в `api/` (Node 22).
 `docs/DEVAUTH.md`; тесты API: `npm test` (без сети, база подменена).
 
 Root Directory проекта Vercel — `web`.
+
+## Настройки проекта Vercel
+
+* Root Directory `web`, Output Directory `public`, Install/Build Command —
+  заглушки `echo ...` (сборки нет; пресет Framework выбран `Vite` только
+  ради этого: API Vercel не принимает первый деплой проекта без пресета).
+* Deployment Protection → Vercel Authentication должна быть **выключена**,
+  иначе `*.vercel.app` просит вход в Vercel и сайт недоступен посетителям.
+* Первый деплой сделан из ветки `arena/5fde79b0-deix`; автодеплой по
+  push включается в Settings → Git (Create deployments).
