@@ -85,6 +85,10 @@ pub struct TlsStream {
     server: Keys,
     rx: Vec<u8>,
     closed: bool,
+    /// Причина, по которой `recv` последний раз вернул пустой результат.
+    last_error: Option<String>,
+    /// Принято TLS-записей после рукопожатия.
+    records: u32,
 }
 
 /// HKDF-Expand-Label (RFC 8446 §7.1).
@@ -586,6 +590,8 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
         server: Keys::from_secret(&s_ap),
         rx,
         closed: false,
+        last_error: None,
+        records: 0,
     })
 }
 
@@ -602,7 +608,8 @@ impl TlsStream {
     }
 
     /// Возвращает очередную порцию расшифрованных данных приложения.
-    /// Пустой Vec — таймаут либо соединение закрыто (как у tcp::recv).
+    /// Пустой Vec — таймаут либо соединение закрыто (как у tcp::recv);
+    /// причина сохраняется и доступна через `diagnosis`.
     pub fn recv(&mut self, timeout_ms: u64) -> Vec<u8> {
         if self.closed {
             return Vec::new();
@@ -611,8 +618,12 @@ impl TlsStream {
         loop {
             let (rtype, payload) = match read_record(&mut self.rx, deadline) {
                 Ok(r) => r,
-                Err(_) => return Vec::new(), // таймаут/обрыв
+                Err(e) => {
+                    self.last_error = Some(format!("{} ({})", e, tcp::last_end()));
+                    return Vec::new();
+                }
             };
+            self.records += 1;
             match rtype {
                 CONTENT_APPDATA => match open_record(&mut self.server, &payload) {
                     Ok((CONTENT_APPDATA, plain)) => {
@@ -627,24 +638,49 @@ impl TlsStream {
                             continue;
                         }
                     }
-                    // alert (включая close_notify), неизвестный тип или
-                    // ошибка расшифровки — соединение закрывается.
-                    _ => {
+                    Ok((CONTENT_ALERT, plain)) => {
+                        self.last_error = Some(alert_text(&plain));
+                        self.closed = true;
+                        return Vec::new();
+                    }
+                    Ok((other, _)) => {
+                        self.last_error = Some(format!("неожиданный inner type {}", other));
+                        self.closed = true;
+                        return Vec::new();
+                    }
+                    Err(e) => {
+                        self.last_error = Some(e);
                         self.closed = true;
                         return Vec::new();
                     }
                 },
                 CONTENT_ALERT => {
+                    self.last_error = Some(alert_text(&payload));
                     self.closed = true;
                     return Vec::new();
                 }
                 CONTENT_CCS => {}
-                _ => {
+                other => {
+                    self.last_error = Some(format!("неожиданный record {}", other));
                     self.closed = true;
                     return Vec::new();
                 }
             }
         }
+    }
+
+    /// Человекочитаемая причина отсутствия данных.
+    pub fn diagnosis(&self) -> String {
+        let why = match &self.last_error {
+            Some(e) => e.clone(),
+            None => String::from(tcp::last_end()),
+        };
+        format!(
+            "{}; TCP принято {} байт, TLS-записей после рукопожатия {}",
+            why,
+            tcp::rx_bytes(),
+            self.records
+        )
     }
 
     /// Отправляет close_notify и закрывает TCP.

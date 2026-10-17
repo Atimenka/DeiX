@@ -6,10 +6,11 @@ use crate::rtl8139;
 use crate::spinlock::SpinLock;
 use alloc::vec::Vec;
 use alloc::collections::VecDeque;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 const TCP_PROTO: u8 = 6;
 const FIN: u8 = 0x01; const SYN: u8 = 0x02;
-const PSH: u8 = 0x08; const ACK: u8 = 0x10;
+const RST: u8 = 0x04; const PSH: u8 = 0x08; const ACK: u8 = 0x10;
 
 #[repr(C, packed)] #[derive(Clone, Copy)]
 struct TcpHdr { src: u16, dst: u16, seq: u32, ack: u32, off_flags: u16, win: u16, csum: u16, urg: u16 }
@@ -24,6 +25,21 @@ impl TcpHdr {
 pub struct TcpConn { pub state: u8, sport: u16, dip: [u8;4], dport: u16, seq: u32, ack: u32 }
 static CONN: SpinLock<Option<TcpConn>> = SpinLock::new(None);
 static NPORT: SpinLock<u16> = SpinLock::new(1024);
+
+// Диагностика приёма: почему recv вернул пустой результат и сколько
+// байт данных принято с начала текущего соединения.
+static LAST_END: SpinLock<&'static str> = SpinLock::new("данных ещё не ждали");
+static RX_BYTES: AtomicU32 = AtomicU32::new(0);
+
+/// Причина последнего пустого результата `recv`.
+pub fn last_end() -> &'static str {
+    *LAST_END.lock()
+}
+
+/// Сколько байт TCP-данных принято в текущем соединении.
+pub fn rx_bytes() -> u32 {
+    RX_BYTES.load(Ordering::Relaxed)
+}
 
 // Очередь принятых TCP-пакетов (наполняется из обработчика прерываний).
 static RX_QUEUE: SpinLock<VecDeque<Vec<u8>>> = SpinLock::new(VecDeque::new());
@@ -107,6 +123,8 @@ pub fn connect(dip: [u8;4], dport: u16) -> bool {
     let sp = { let mut p = NPORT.lock(); let v = *p; *p = if *p>=65535 {1024} else {*p+1}; v };
     let isn: u32 = 0xDEADBEEF;
     let mut c = TcpConn { state:0, sport:sp, dip, dport, seq:isn, ack:0 };
+    RX_BYTES.store(0, Ordering::Relaxed);
+    *LAST_END.lock() = "данных ещё не ждали";
     send_seg(&c, SYN, &[]);
     let t0 = crate::timer::uptime_ms();
     loop {
@@ -145,6 +163,10 @@ pub fn recv(to: u64) -> Vec<u8> {
             let cl = CONN.lock();
             if let Some(ref c) = *cl {
                 if let Some((f, _, s)) = parse_tcp(&pkt, c.sport, c.dport) {
+                    if f&RST != 0 {
+                        *LAST_END.lock() = "сервер сбросил соединение (RST)";
+                        return Vec::new();
+                    }
                     if f&(PSH|ACK) != 0 {
                         let p = tcp_payload(&pkt);
                         if !p.is_empty() {
@@ -154,16 +176,23 @@ pub fn recv(to: u64) -> Vec<u8> {
                             let mut nc = *c;
                             nc.ack = new_ack;
                             drop(cl);
+                            RX_BYTES.fetch_add(p.len() as u32, Ordering::Relaxed);
                             *CONN.lock() = Some(nc);
                             send_seg(&nc, ACK, &[]);
                             return p;
                         }
                     }
-                    if f&FIN != 0 { return Vec::new(); }
+                    if f&FIN != 0 {
+                        *LAST_END.lock() = "сервер закрыл TCP-соединение (FIN)";
+                        return Vec::new();
+                    }
                 }
             }
         }
-        if crate::timer::uptime_ms()-t0 > to { return Vec::new(); }
+        if crate::timer::uptime_ms()-t0 > to {
+            *LAST_END.lock() = "таймаут: от сервера нет данных";
+            return Vec::new();
+        }
         crate::sched::idle_wait();
     }
 }

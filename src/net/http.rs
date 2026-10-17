@@ -19,6 +19,8 @@ use crate::net::{dns, inflate, tcp, tls};
 
 const MAX_REDIRECTS: u32 = 3;
 const MAX_BODY: usize = 1024 * 1024;
+/// Сколько ждать ответ на один запрос целиком.
+const RESPONSE_TIMEOUT_MS: u64 = 10_000;
 
 /// Ответ HTTP-запроса после всех redirect, байты тела как приняты
 /// (текстовые потребители сами делают from_utf8_lossy; бинарные —
@@ -99,6 +101,13 @@ impl Conn {
         match self {
             Conn::Plain => tcp::recv(timeout_ms),
             Conn::Tls(t) => t.recv(timeout_ms),
+        }
+    }
+
+    fn diagnosis(&self) -> String {
+        match self {
+            Conn::Plain => format!("{}; TCP принято {} байт", tcp::last_end(), tcp::rx_bytes()),
+            Conn::Tls(t) => t.diagnosis(),
         }
     }
 
@@ -190,14 +199,15 @@ fn request_once(
                 }
             }
         }
-        if crate::timer::uptime_ms() - t0 > 4000 {
+        if crate::timer::uptime_ms() - t0 > RESPONSE_TIMEOUT_MS {
             break;
         }
     }
+    let diagnosis = conn.diagnosis();
     conn.close();
 
     if raw.is_empty() {
-        return Err("Сервер не прислал ответа".into());
+        return Err(format!("Сервер не прислал ответа: {}", diagnosis));
     }
 
     let body_offset = find_header_end(&raw).unwrap_or(0);
