@@ -424,6 +424,52 @@ impl Renderer {
         }
     }
 
+    /// Контур прямоугольника со скруглёнными углами: прямые стороны +
+    /// дуги по midpoint-алгоритму. Используется для рамок акриловых
+    /// панелей и подсветки выбранного пункта меню — совпадает по форме
+    /// с fill_rounded_rect того же радиуса.
+    pub fn draw_rounded_rect_outline(&mut self, x: i32, y: i32, w: u32, h: u32, radius: i32, color: Color, alpha: u8) {
+        let wi = w as i32;
+        let hi = h as i32;
+        if wi <= 0 || hi <= 0 {
+            return;
+        }
+        let rad = radius.min(wi / 2).min(hi / 2).max(0);
+        for px in (x + rad)..(x + wi - rad) {
+            self.put_pixel_alpha(px, y, color, alpha);
+            self.put_pixel_alpha(px, y + hi - 1, color, alpha);
+        }
+        for py in (y + rad)..(y + hi - rad) {
+            self.put_pixel_alpha(x, py, color, alpha);
+            self.put_pixel_alpha(x + wi - 1, py, color, alpha);
+        }
+        if rad > 0 {
+            let (lx, ty) = (x + rad, y + rad);
+            let (rx, by) = (x + wi - 1 - rad, y + hi - 1 - rad);
+            let mut dx = rad;
+            let mut dy = 0;
+            let mut err = 1 - rad;
+            while dx >= dy {
+                self.put_pixel_alpha(rx + dx, by + dy, color, alpha);
+                self.put_pixel_alpha(rx + dy, by + dx, color, alpha);
+                self.put_pixel_alpha(lx - dx, by + dy, color, alpha);
+                self.put_pixel_alpha(lx - dy, by + dx, color, alpha);
+                self.put_pixel_alpha(lx - dx, ty - dy, color, alpha);
+                self.put_pixel_alpha(lx - dy, ty - dx, color, alpha);
+                self.put_pixel_alpha(rx + dx, ty - dy, color, alpha);
+                self.put_pixel_alpha(rx + dy, ty - dx, color, alpha);
+                dy += 1;
+                if err < 0 {
+                    err += 2 * dy + 1;
+                } else {
+                    dx -= 1;
+                    err += 2 * (dy - dx) + 1;
+                }
+            }
+        }
+        self.add_damage(Rect::new(x, y, w, h));
+    }
+
     pub fn draw_rect_outline_alpha(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color, alpha: u8) {
         for px in x..x + w as i32 {
             self.put_pixel_alpha(px, y, color, alpha);

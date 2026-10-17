@@ -86,16 +86,20 @@ pub fn work_area(screen_w: i32, screen_h: i32) -> Rect {
 
 pub fn draw_top_panel(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen_w: i32) {
     let p = panel_rect(screen_w);
-    r.fill_rect(p.x, p.y, p.w, p.h, theme.titlebar_active);
-    r.draw_hline(0, p.y + p.h as i32 - 1, p.w, theme.accent);
+    // Акриловая полоса: в Performance opacity форсируется в 255 и
+    // уходит в быстрый путь без смешивания.
+    r.fill_rect_alpha(p.x, p.y, p.w, p.h, theme.titlebar_active, theme.opacity);
+    r.fill_rect_alpha(p.x, p.y + p.h as i32 - 1, p.w, 1, Color::BLACK, 90);
 
-    // Кнопка меню.
+    // Кнопка меню — чип внутри той же hitbox-области panel_menu_button_rect.
     let btn = panel_menu_button_rect();
+    let (chip_x, chip_y) = (btn.x + 4, btn.y + 3);
+    let (chip_w, chip_h) = (btn.w - 8, btn.h - 6);
     if desktop.start_menu_open {
-        r.fill_rect(btn.x, btn.y, btn.w, btn.h, theme.accent);
+        r.fill_rounded_rect(chip_x, chip_y, chip_w, chip_h, 6, theme.accent);
     }
     let btn_fg = if desktop.start_menu_open { Color::WHITE } else { theme.accent };
-    r.draw_text(btn.x + 8, btn.y + 4, "DeiX", btn_fg, None);
+    r.draw_text(btn.x + 12, btn.y + 4, "DeiX", btn_fg, None);
 
     // Заголовок активного окна — реальное состояние, не украшение.
     if let Some(title) = desktop.focused_title() {
@@ -195,39 +199,77 @@ pub fn dock_layout(desktop: &Desktop, screen_w: i32, screen_h: i32) -> DockLayou
 
 pub fn draw_dock(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen_w: i32, screen_h: i32) {
     let dl = dock_layout(desktop, screen_w, screen_h);
-    r.fill_rounded_rect_alpha(dl.dock.x, dl.dock.y, dl.dock.w, dl.dock.h, 10, theme.window_bg, 225);
-    r.draw_rect_outline_alpha(dl.dock.x, dl.dock.y, dl.dock.w, dl.dock.h, theme.titlebar_active, 180);
+    let fx = crate::ui::effects::current();
 
-    for item in dl.items.iter() {
+    // Стеклянная подложка: blur обоев (только Quality), мягкая тень,
+    // акрил и две кромки — светлая сверху, тёмная по контуру.
+    if theme.enable_blur && fx.blur_enabled() {
+        r.apply_blur_rect(dl.dock.x, dl.dock.y, dl.dock.w, dl.dock.h, 2);
+    }
+    if fx.shadows_enabled() {
+        r.draw_drop_shadow(dl.dock.x, dl.dock.y, dl.dock.w, dl.dock.h, 3);
+    }
+    r.fill_rounded_rect_alpha(dl.dock.x, dl.dock.y, dl.dock.w, dl.dock.h, 14, theme.window_bg, theme.opacity);
+    r.draw_rounded_rect_outline(dl.dock.x, dl.dock.y, dl.dock.w, dl.dock.h, 14, Color::BLACK, 120);
+    r.draw_rounded_rect_outline(
+        dl.dock.x + 1,
+        dl.dock.y + 1,
+        dl.dock.w - 2,
+        dl.dock.h - 2,
+        13,
+        Color::WHITE,
+        26,
+    );
+
+    let dot_y = dl.dock.y + dl.dock.h as i32 - 5;
+    let mut seen_window_item = false;
+
+    for (i, item) in dl.items.iter().enumerate() {
         let rc = item.rect;
+        let hovered = desktop.dock_hover == Some(i);
         match item.action {
             DockAction::Overview => {
-                let bg = if desktop.overview_open { theme.accent } else { theme.titlebar_inactive };
-                r.fill_rounded_rect(rc.x, rc.y, rc.w, rc.h, 8, bg);
+                if desktop.overview_open {
+                    r.fill_rounded_rect(rc.x, rc.y, rc.w, rc.h, 10, theme.accent);
+                } else if hovered {
+                    r.fill_rounded_rect_alpha(rc.x, rc.y, rc.w, rc.h, 10, theme.surface_alt, 230);
+                }
                 let fg = if desktop.overview_open { Color::WHITE } else { theme.text_primary };
                 r.draw_icon(rc.x + 10, rc.y + 10, IconType::Grid, fg);
             }
             DockAction::Launch(i) => {
-                r.fill_rounded_rect(rc.x, rc.y, rc.w, rc.h, 8, theme.titlebar_inactive);
-                r.draw_icon(rc.x + 10, rc.y + 10, START_MENU_APPS[i].2, theme.accent);
+                if hovered {
+                    r.fill_rounded_rect_alpha(rc.x, rc.y, rc.w, rc.h, 10, theme.surface_alt, 230);
+                }
+                let fg = if hovered { theme.accent_hover } else { theme.accent };
+                r.draw_icon(rc.x + 10, rc.y + 10, START_MENU_APPS[i].2, fg);
                 // Точка «запущено» — только если такое окно реально открыто.
                 let running = desktop
                     .windows
                     .iter()
                     .any(|w| launch_matches(START_MENU_APPS[i].1, &w.content));
                 if running {
-                    r.fill_rect(rc.x + rc.w as i32 / 2 - 2, rc.y + rc.h as i32 + 1, 4, 3, theme.accent);
+                    r.fill_circle(rc.x + rc.w as i32 / 2, dot_y, 2, theme.accent);
                 }
             }
             DockAction::Window(id) => {
+                if !seen_window_item {
+                    seen_window_item = true;
+                    // Разделитель между закреплёнными и открытыми окнами.
+                    r.fill_rect_alpha(rc.x - 6, dl.dock.y + 10, 1, dl.dock.h - 20, Color::WHITE, 46);
+                }
                 if let Some(w) = desktop.windows.iter().find(|w| w.id == id) {
                     let focused = desktop.focused_id == Some(id);
-                    let bg = if focused { theme.titlebar_active } else { theme.titlebar_inactive };
-                    r.fill_rounded_rect(rc.x, rc.y, rc.w, rc.h, 8, bg);
+                    if focused {
+                        r.fill_rounded_rect_alpha(rc.x, rc.y, rc.w, rc.h, 10, theme.titlebar_active, 240);
+                        r.draw_rounded_rect_outline(rc.x, rc.y, rc.w, rc.h, 10, theme.accent, 150);
+                    } else if hovered {
+                        r.fill_rounded_rect_alpha(rc.x, rc.y, rc.w, rc.h, 10, theme.surface_alt, 230);
+                    }
                     let fg = if w.minimized { Color::GRAY } else { theme.text_primary };
                     r.draw_icon(rc.x + 10, rc.y + 10, w.content.icon(), fg);
                     if focused {
-                        r.draw_hline(rc.x + 6, rc.y + rc.h as i32 + 2, rc.w - 12, theme.accent);
+                        r.fill_rounded_rect(rc.x + 10, dot_y - 1, rc.w - 20, 3, 1, theme.accent);
                     }
                 }
             }
@@ -246,27 +288,27 @@ pub struct StartMenuLayout {
     pub shutdown: Rect,
 }
 
+/// Меню Пуск: поиск сверху, одна колонка приложений (как в концепте
+/// Aurora), футер с пользователем и кнопками питания. Высота подобрана
+/// так, чтобы меню не перекрывало Dock даже на 640x480.
 pub fn start_menu_layout(_screen_h: i32) -> StartMenuLayout {
     let m = UiMetrics::fluent();
-    let menu_w = 260i32;
-    let menu_h = 236i32;
-    let mx = 4i32;
-    let my = m.top_panel_height + 4;
+    let menu_w = 288i32;
+    let menu_h = 386i32;
+    let mx = 6i32;
+    let my = m.top_panel_height + 6;
 
-    let col_w = (menu_w - 24) / 2;
     let mut app_items = [Rect::new(0, 0, 0, 0); START_MENU_APPS.len()];
     for (i, slot) in app_items.iter_mut().enumerate() {
-        let col = (i % 2) as i32;
-        let row = (i / 2) as i32;
-        *slot = Rect::new(mx + 8 + col * col_w, my + 42 + row * 36, (col_w - 4) as u32, 32);
+        *slot = Rect::new(mx + 12, my + 66 + i as i32 * 34, (menu_w - 24) as u32, 30);
     }
 
     StartMenuLayout {
         menu: Rect::new(mx, my, menu_w as u32, menu_h as u32),
-        search: Rect::new(mx + 8, my + 8, (menu_w - 16) as u32, 24),
+        search: Rect::new(mx + 12, my + 10, (menu_w - 24) as u32, 28),
         app_items,
-        restart: Rect::new(mx + menu_w - 156, my + menu_h - 30, 72, 22),
-        shutdown: Rect::new(mx + menu_w - 78, my + menu_h - 30, 72, 22),
+        restart: Rect::new(mx + menu_w - 88, my + menu_h - 34, 36, 24),
+        shutdown: Rect::new(mx + menu_w - 48, my + menu_h - 34, 36, 24),
     }
 }
 
@@ -303,60 +345,80 @@ fn contains_ascii_ci(hay: &str, needle: &str) -> bool {
 
 pub fn draw_start_menu(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen_h: i32) {
     let l = start_menu_layout(screen_h);
+    let fx = crate::ui::effects::current();
 
-    r.fill_rounded_rect(l.menu.x, l.menu.y, l.menu.w, l.menu.h, theme.corner_radius, theme.window_bg);
-    r.draw_rect_outline_alpha(l.menu.x, l.menu.y, l.menu.w, l.menu.h, theme.titlebar_active, 180);
+    // Акриловая панель: blur обоев (Quality), тень, стеклянные кромки.
+    if theme.enable_blur && fx.blur_enabled() {
+        r.apply_blur_rect(l.menu.x, l.menu.y, l.menu.w, l.menu.h, 2);
+    }
+    if fx.shadows_enabled() {
+        r.draw_drop_shadow(l.menu.x, l.menu.y, l.menu.w, l.menu.h, 3);
+    }
+    r.fill_rounded_rect_alpha(l.menu.x, l.menu.y, l.menu.w, l.menu.h, 12, theme.window_bg, theme.opacity);
+    r.draw_rounded_rect_outline(l.menu.x, l.menu.y, l.menu.w, l.menu.h, 12, Color::BLACK, 120);
+    r.draw_rounded_rect_outline(l.menu.x + 1, l.menu.y + 1, l.menu.w - 2, l.menu.h - 2, 11, Color::WHITE, 26);
 
     // Поиск — реальное поле: ввод идёт с клавиатуры, Enter запускает
-    // первый результат.
-    r.fill_rounded_rect(l.search.x, l.search.y, l.search.w, l.search.h, 4, theme.titlebar_inactive);
-    r.draw_icon(l.search.x + 4, l.search.y + 4, IconType::Search, theme.text_secondary);
+    // выбранный пункт.
+    r.fill_rounded_rect(l.search.x, l.search.y, l.search.w, l.search.h, 13, theme.titlebar_inactive);
+    r.draw_rounded_rect_outline(l.search.x, l.search.y, l.search.w, l.search.h, 13, Color::WHITE, 20);
+    r.draw_icon(l.search.x + 8, l.search.y + 6, IconType::Search, theme.text_secondary);
     if desktop.menu_search.is_empty() {
-        r.draw_text(l.search.x + 24, l.search.y + 4, "Search apps...", theme.text_secondary, None);
+        r.draw_text(l.search.x + 30, l.search.y + 6, "Search applications...", theme.text_secondary, None);
     } else {
-        let q = truncate_to_cells(&desktop.menu_search, 24).0;
-        r.draw_text(l.search.x + 24, l.search.y + 4, q, theme.text_primary, None);
+        let q = truncate_to_cells(&desktop.menu_search, 26).0;
+        r.draw_text(l.search.x + 30, l.search.y + 6, q, theme.text_primary, None);
         r.draw_text(
-            l.search.x + 24 + crate::ui::text::text_cells(q) as i32 * 8,
-            l.search.y + 4,
+            l.search.x + 30 + crate::ui::text::text_cells(q) as i32 * 8,
+            l.search.y + 6,
             "_",
             theme.accent,
             None,
         );
     }
 
+    r.draw_text(l.menu.x + 14, l.menu.y + 48, "APPLICATIONS", theme.text_secondary, None);
+
     let mut idx = [0usize; START_MENU_APPS.len()];
     let n = filtered_app_indices(&desktop.menu_search, &mut idx);
     for k in 0..n {
         let (label, _, icon) = START_MENU_APPS[idx[k]];
         let item = l.app_items[k];
-        // Пункт, выбранный стрелками (Enter запустит именно его),
-        // подсвечен акцентной рамкой.
+        // Пункт, выбранный стрелками или наведением (Enter запустит
+        // именно его), подсвечен акцентной рамкой со «свечением».
         let is_sel = n > 0 && k == desktop.menu_sel.min(n - 1);
-        let bg = if is_sel { theme.titlebar_active } else { theme.titlebar_inactive };
-        r.fill_rounded_rect(item.x, item.y, item.w, item.h, 4, bg);
         if is_sel {
-            r.draw_rect(item.x, item.y, item.w, item.h, theme.accent);
+            r.fill_rounded_rect_alpha(item.x, item.y, item.w, item.h, 8, theme.surface_alt, 235);
+            r.draw_rounded_rect_outline(item.x, item.y, item.w, item.h, 8, theme.accent, 235);
+            r.draw_rounded_rect_outline(item.x - 1, item.y - 1, item.w + 2, item.h + 2, 9, theme.accent, 80);
+            r.draw_rounded_rect_outline(item.x - 2, item.y - 2, item.w + 4, item.h + 4, 10, theme.accent, 36);
         }
-        r.draw_icon(item.x + 6, item.y + 8, icon, theme.accent);
-        let fg = if is_sel { theme.accent } else { theme.text_primary };
-        r.draw_text(item.x + 26, item.y + 6, truncate_to_cells(label, 11).0, fg, None);
+        // Иконка в собственном чипе, подпись — без обрезки до 1 колонки.
+        r.fill_rounded_rect(item.x + 5, item.y + 4, 22, 22, 6, theme.surface);
+        r.draw_icon(item.x + 8, item.y + 7, icon, theme.accent);
+        let fg = if is_sel { theme.text_primary } else { theme.text_secondary };
+        let max_cells = ((item.w as i32 - 44) / 8).max(4) as usize;
+        r.draw_text(item.x + 36, item.y + 7, truncate_to_cells(label, max_cells).0, fg, None);
     }
     if n == 0 {
-        r.draw_text(l.menu.x + 12, l.menu.y + 50, "No matching apps", theme.text_secondary, None);
+        r.draw_text(l.menu.x + 14, l.menu.y + 72, "No matching applications", theme.text_secondary, None);
     }
 
-    let sep_y = l.menu.y + l.menu.h as i32 - 38;
-    r.draw_hline(l.menu.x + 8, sep_y, l.menu.w - 16, theme.titlebar_active);
-    r.draw_text(l.menu.x + 12, sep_y + 10, "root @ DeiX", theme.text_secondary, None);
+    // Футер: пользователь и питание.
+    let sep_y = l.menu.y + l.menu.h as i32 - 44;
+    r.fill_rect_alpha(l.menu.x + 10, sep_y, l.menu.w - 20, 1, Color::WHITE, 30);
+    let (av_x, av_y) = (l.menu.x + 24, sep_y + 22);
+    r.fill_circle(av_x, av_y, 10, theme.accent);
+    r.draw_text(av_x - 4, av_y - 8, "r", Color::WHITE, None);
+    r.draw_text(av_x + 18, av_y - 8, "root @ DeiX", theme.text_secondary, None);
 
-    r.fill_rounded_rect(l.restart.x, l.restart.y, l.restart.w, l.restart.h, 4, theme.titlebar_active);
-    r.draw_icon(l.restart.x + 4, l.restart.y + 3, IconType::Restart, theme.text_primary);
-    r.draw_text(l.restart.x + 22, l.restart.y + 4, "Reboot", theme.text_primary, None);
+    // Компактные чипы питания: перезагрузка и выключение.
+    r.fill_rounded_rect(l.restart.x, l.restart.y, l.restart.w, l.restart.h, 8, theme.titlebar_active);
+    r.draw_rounded_rect_outline(l.restart.x, l.restart.y, l.restart.w, l.restart.h, 8, Color::WHITE, 20);
+    r.draw_icon(l.restart.x + 10, l.restart.y + 4, IconType::Restart, theme.text_primary);
 
-    r.fill_rounded_rect(l.shutdown.x, l.shutdown.y, l.shutdown.w, l.shutdown.h, 4, Color::RED);
-    r.draw_icon(l.shutdown.x + 4, l.shutdown.y + 3, IconType::Power, Color::WHITE);
-    r.draw_text(l.shutdown.x + 22, l.shutdown.y + 4, "Power", Color::WHITE, None);
+    r.fill_rounded_rect(l.shutdown.x, l.shutdown.y, l.shutdown.w, l.shutdown.h, 8, Color::RED);
+    r.draw_icon(l.shutdown.x + 10, l.shutdown.y + 4, IconType::Power, Color::WHITE);
 }
 
 // --------------------------------------------------- Центр управления
@@ -398,8 +460,16 @@ pub fn draw_control_center(r: &mut Renderer, theme: &UiTheme, screen_w: i32, scr
     let cc = control_center_rect(screen_w, screen_h);
     let (cc_x, cc_y) = (cc.x, cc.y);
 
-    r.fill_rounded_rect(cc_x, cc_y, cc.w, cc.h, theme.corner_radius, theme.window_bg);
-    r.draw_rect_outline_alpha(cc_x, cc_y, cc.w, cc.h, theme.titlebar_active, 180);
+    let fx = crate::ui::effects::current();
+    if theme.enable_blur && fx.blur_enabled() {
+        r.apply_blur_rect(cc_x, cc_y, cc.w, cc.h, 2);
+    }
+    if fx.shadows_enabled() {
+        r.draw_drop_shadow(cc_x, cc_y, cc.w, cc.h, 3);
+    }
+    r.fill_rounded_rect_alpha(cc_x, cc_y, cc.w, cc.h, 12, theme.window_bg, theme.opacity);
+    r.draw_rounded_rect_outline(cc_x, cc_y, cc.w, cc.h, 12, Color::BLACK, 120);
+    r.draw_rounded_rect_outline(cc_x + 1, cc_y + 1, cc.w - 2, cc.h - 2, 11, Color::WHITE, 26);
 
     r.draw_text(cc_x + 12, cc_y + 10, "Control Center", theme.accent, None);
     r.draw_hline(cc_x + 12, cc_y + 32, cc.w - 24, theme.titlebar_active);

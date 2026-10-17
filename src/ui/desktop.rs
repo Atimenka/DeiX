@@ -87,6 +87,9 @@ pub struct Desktop {
     pub menu_search: String,
     /// Выбранный стрелками пункт меню (индекс в отфильтрованном списке).
     pub menu_sel: usize,
+    /// Пункт Dock под курсором (индекс в DockLayout::items); hover
+    /// перерисовывает сцену только в момент смены пункта.
+    pub dock_hover: Option<usize>,
     pub control_center_open: bool,
     /// Режим обзора окон (Overview).
     pub overview_open: bool,
@@ -165,6 +168,7 @@ impl Desktop {
             start_menu_open: false,
             menu_search: String::new(),
             menu_sel: 0,
+            dock_hover: None,
             control_center_open: false,
             overview_open: false,
             prev_overview_open: false,
@@ -434,6 +438,43 @@ impl Desktop {
         }
     }
 
+    /// Подсветка под курсором: пункт Dock и пункт меню Пуск. Сцена
+    /// перерисовывается только при смене пункта, а не на каждый пиксель
+    /// движения мыши.
+    fn update_hover(&mut self, x: i32, y: i32, screen_w: i32, screen_h: i32) {
+        let dl = dock_layout(self, screen_w, screen_h);
+        let mut hover = None;
+        if dl.dock.contains(x, y) {
+            for (i, item) in dl.items.iter().enumerate() {
+                if item.rect.contains_pad(x, y, 3) {
+                    hover = Some(i);
+                    break;
+                }
+            }
+        }
+        if hover != self.dock_hover {
+            self.dock_hover = hover;
+            self.dirty = true;
+        }
+
+        // Наведение в меню Пуск двигает тот же выбор, что и стрелки:
+        // Enter всегда запускает подсвеченный пункт.
+        if self.start_menu_open {
+            let l = start_menu_layout(screen_h);
+            let mut idx = [0usize; START_MENU_APPS.len()];
+            let n = filtered_app_indices(&self.menu_search, &mut idx);
+            for k in 0..n {
+                if l.app_items[k].contains(x, y) {
+                    if self.menu_sel != k {
+                        self.menu_sel = k;
+                        self.dirty = true;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     pub fn handle_input(&mut self, screen_w: i32, screen_h: i32) {
         let m = mouse::snapshot();
         let ui_m = UiMetrics::fluent();
@@ -447,6 +488,7 @@ impl Desktop {
             // в run_event_loop (update_cursor_only).
             self.last_cursor_pos = (m.x, m.y);
             self.cursor_moved = true;
+            self.update_hover(m.x, m.y, screen_w, screen_h);
         }
 
         let pressed = m.left_button && !self.prev_left_button;
@@ -1552,10 +1594,10 @@ impl Desktop {
         // Меню Пуск: геометрия из start_menu_layout + запас на рамку.
         let l = start_menu_layout(screen_h);
         let menu_rect = Rect::new(
-            l.menu.x - 2,
-            l.menu.y - 2,
-            l.menu.w + 4,
-            l.menu.h + 4,
+            l.menu.x - 8,
+            l.menu.y - 8,
+            l.menu.w + 16,
+            l.menu.h + 16,
         );
         if self.start_menu_open {
             if self.prev_start_menu_rect.is_none() {
@@ -1568,7 +1610,7 @@ impl Desktop {
 
         // Центр управления: геометрия из control_center_rect + запас.
         let cc = control_center_rect(screen_w, screen_h);
-        let cc_rect = Rect::new(cc.x - 2, cc.y - 2, cc.w + 4, cc.h + 4);
+        let cc_rect = Rect::new(cc.x - 8, cc.y - 8, cc.w + 16, cc.h + 16);
         if self.control_center_open {
             if self.prev_control_center_rect.is_none() {
                 r.add_damage(cc_rect);
@@ -1582,7 +1624,7 @@ impl Desktop {
         // изменилась (окно открыли/закрыли), старую полосу надо
         // перерисовать, иначе по краям остаются куски прежнего Dock.
         let dock = dock_layout(self, screen_w, screen_h).dock;
-        let dock_rect = Rect::new(dock.x - 2, dock.y - 2, dock.w + 4, dock.h + 4);
+        let dock_rect = Rect::new(dock.x - 8, dock.y - 8, dock.w + 16, dock.h + 16);
         if self.prev_dock_rect != Some(dock_rect) {
             if let Some(old) = self.prev_dock_rect {
                 r.add_damage(old);
