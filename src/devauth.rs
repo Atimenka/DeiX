@@ -2,6 +2,11 @@
 // devauth — серверная активация dev-режима (см. docs/DEVAUTH.md).
 //
 // Поток:
+//   dev link    — показывает одноразовый код привязки (XXXX-XXXX, 10 минут);
+//                 пользователь вводит его на сайте в разделе «Аккаунт», и
+//                 устройство записывается на его аккаунт. Фоновая проверка
+//                 сообщает, когда привязка выполнена. Без привязки сервер
+//                 заявки не принимает;
 //   dev request — создаёт device_id, отправляет заявку одним POST и
 //                 сразу отключается; дальше ответ сервера ждёт не команда,
 //                 а фоновый опрос статуса (poll_pending), который сам
@@ -14,7 +19,8 @@
 //
 // Сервер — Supabase PostgREST (см. supabase/migrations). ОС ходит туда
 // по HTTPS с publishable-ключом: он ПУБЛИЧНЫЙ по дизайну и дает право
-// вызвать ровно две функции — request_dev_unlock (подать заявку) и
+// вызвать четыре функции — begin_device_link и device_link_status
+// (привязка к аккаунту), request_dev_unlock (подать заявку) и
 // claim_dev_unlock (узнать статус и забрать одобренный токен; токен
 // выдается один раз). К таблицам у этого ключа доступа нет. Заявки
 // одобряет владелец проекта в админ-панели сайта (web/);
@@ -38,6 +44,8 @@ const ANON_KEY: &str = "sb_publishable_gFxef7M8SrR-yUO_KyLkMg_AoNsUins";
 
 /// Интервал фонового опроса статуса заявки.
 const POLL_INTERVAL_MS: u64 = 20_000;
+/// Интервал проверки, привязал ли пользователь устройство на сайте.
+const LINK_POLL_INTERVAL_MS: u64 = 5_000;
 /// Подряд идущих сбоев связи, после которых опрос прекращается.
 const POLL_MAX_FAILURES: u32 = 5;
 
@@ -46,6 +54,9 @@ static PENDING: AtomicBool = AtomicBool::new(false);
 static POLLING: AtomicBool = AtomicBool::new(false);
 static NEXT_POLL_MS: AtomicU64 = AtomicU64::new(0);
 static POLL_FAILURES: AtomicU32 = AtomicU32::new(0);
+static LINK_PENDING: AtomicBool = AtomicBool::new(false);
+static NEXT_LINK_MS: AtomicU64 = AtomicU64::new(0);
+static LINK_FAILURES: AtomicU32 = AtomicU32::new(0);
 
 const DEVICE_ID_FILE: &str = "/userdata/etc/device.id";
 const UNLOCK_KEY_FILE: &str = "/userdata/etc/dev_unlock.key";
@@ -168,6 +179,7 @@ fn server_request(id: &str) -> Result<(), RequestError> {
     let resp = rpc("request_dev_unlock", &body).map_err(RequestError::Unreachable)?;
     if resp.status != 200 {
         return Err(RequestError::Rejected(describe_rejection(
+            "request_dev_unlock",
             resp.status,
             &resp.body,
         )));
@@ -187,13 +199,16 @@ fn server_request(id: &str) -> Result<(), RequestError> {
 
 /// Причина отказа сервера: сообщение PostgREST/Kong и, где причина
 /// однозначна по коду ответа, что нужно исправить на стороне проекта.
-fn describe_rejection(status: u16, body: &[u8]) -> String {
+fn describe_rejection(function: &str, status: u16, body: &[u8]) -> String {
     let text = String::from_utf8_lossy(body).into_owned();
     let message = json_str_field(&text, "message").unwrap_or_else(|| clip(text.trim(), 160));
     let hint = match status {
-        404 => " - function request_dev_unlock not found on this project: apply supabase/migrations (see docs/DEVAUTH.md)",
-        401 | 403 => " - the project rejected the anon key",
-        _ => "",
+        404 => format!(
+            " - function {} not found on this project: apply supabase/migrations (see docs/DEVAUTH.md)",
+            function
+        ),
+        401 | 403 => String::from(" - the project rejected the anon key"),
+        _ => String::new(),
     };
     format!("HTTP {}: {}{}", status, clip(&message, 160), hint)
 }
@@ -232,6 +247,15 @@ fn json_str_field(obj: &str, key: &str) -> Option<String> {
     Some(inner[..end].to_string())
 }
 
+/// Целое числовое поле JSON-ответа (например, `expires_in`).
+fn json_num_field(obj: &str, key: &str) -> Option<u64> {
+    let pat = format!("\"{}\"", key);
+    let start = obj.find(&pat)? + pat.len();
+    let rest = obj[start..].trim_start().strip_prefix(':')?.trim_start();
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
 // ==================== публичный интерфейс ====================
 
 /// Проверяет активацию для `dev on`. Ok(описание источника) — активация
@@ -266,6 +290,72 @@ pub fn cmd_id() {
         Ok(id) => println!("  [devauth] device id: {}", id),
         Err(e) => println!("  [devauth] cannot create device id: {}", e),
     }
+}
+
+/// `dev link`: привязывает устройство к аккаунту сайта. Показывает
+/// одноразовый код, который вводится на сайте в разделе «Аккаунт»;
+/// о завершении привязки сообщает фоновая проверка.
+pub fn cmd_link() {
+    let id = match device_id() {
+        Ok(id) => id,
+        Err(e) => {
+            println!("  [devauth] cannot create device id: {}", e);
+            return;
+        }
+    };
+    println!("  [devauth] device id: {}", id);
+    let body = format!("{{\"p_device_id\":\"{}\"}}", id);
+    let resp = match rpc("begin_device_link", &body) {
+        Ok(resp) => resp,
+        Err(e) => {
+            println!("  [devauth] server unreachable: {}", e);
+            notify::push(Kind::Warning, "Device link", "Server unreachable. No code was issued.");
+            return;
+        }
+    };
+    if resp.status != 200 {
+        let e = describe_rejection("begin_device_link", resp.status, &resp.body);
+        println!("  [devauth] the server refused to issue a code:");
+        println!("  [devauth] {}", e);
+        notify::push(Kind::Error, "Device link refused", &e);
+        return;
+    }
+    let text = String::from_utf8_lossy(&resp.body).into_owned();
+    match json_str_field(&text, "status").as_deref() {
+        Some("linked") => {
+            let user = json_str_field(&text, "username").unwrap_or_default();
+            LINK_PENDING.store(false, Ordering::Relaxed);
+            println!("  [devauth] this device is linked to the account '{}'.", user);
+            println!("  [devauth] run 'dev request' to ask for a developer token.");
+        }
+        Some("code") => {
+            let code = json_str_field(&text, "code").unwrap_or_default();
+            let minutes = json_num_field(&text, "expires_in").unwrap_or(0).div_ceil(60);
+            println!("  [devauth] link code: {}  (valid for about {} min)", code, minutes);
+            println!("  [devauth] sign in on the site, open Account -> My devices and enter the code.");
+            notify::push(
+                Kind::Info,
+                "Device link code",
+                &format!("{} - enter it on the site under Account.", code),
+            );
+            start_link_polling();
+        }
+        _ => {
+            println!(
+                "  [devauth] unexpected server response: {}",
+                clip(text.trim(), 120)
+            );
+        }
+    }
+}
+
+fn start_link_polling() {
+    LINK_FAILURES.store(0, Ordering::Relaxed);
+    NEXT_LINK_MS.store(
+        crate::timer::uptime_ms() + LINK_POLL_INTERVAL_MS,
+        Ordering::Relaxed,
+    );
+    LINK_PENDING.store(true, Ordering::Relaxed);
 }
 
 /// `dev request`: отправляет заявку одним POST и сразу возвращается.
@@ -339,25 +429,94 @@ fn announce(kind: Kind, title: &str, message: &str) {
     notify::push(kind, title, message);
 }
 
-/// Фоновая проверка статуса заявки. Вызывается из главных циклов CLI и
-/// рабочего стола, вне выполнения команд: сетевой стек однозадачный.
-/// Пока заявка не подавалась или решение уже получено — выходит сразу.
+/// Фоновые проверки: привязка устройства к аккаунту и статус заявки.
+/// Вызывается из главных циклов CLI и рабочего стола, вне выполнения
+/// команд: сетевой стек однозадачный. Пока проверять нечего — выходит
+/// сразу.
 pub fn poll_pending() {
-    if !PENDING.load(Ordering::Relaxed) {
-        return;
-    }
-    if crate::timer::uptime_ms() < NEXT_POLL_MS.load(Ordering::Relaxed) {
+    let now = crate::timer::uptime_ms();
+    let link_due = LINK_PENDING.load(Ordering::Relaxed)
+        && now >= NEXT_LINK_MS.load(Ordering::Relaxed);
+    let request_due =
+        PENDING.load(Ordering::Relaxed) && now >= NEXT_POLL_MS.load(Ordering::Relaxed);
+    if !link_due && !request_due {
         return;
     }
     if POLLING.swap(true, Ordering::Acquire) {
         return;
     }
-    check_pending();
-    NEXT_POLL_MS.store(
-        crate::timer::uptime_ms() + POLL_INTERVAL_MS,
-        Ordering::Relaxed,
-    );
+    if link_due {
+        check_link();
+        NEXT_LINK_MS.store(
+            crate::timer::uptime_ms() + LINK_POLL_INTERVAL_MS,
+            Ordering::Relaxed,
+        );
+    }
+    if request_due {
+        check_pending();
+        NEXT_POLL_MS.store(
+            crate::timer::uptime_ms() + POLL_INTERVAL_MS,
+            Ordering::Relaxed,
+        );
+    }
     POLLING.store(false, Ordering::Release);
+}
+
+fn check_link() {
+    let id = match device_id() {
+        Ok(id) => id,
+        Err(_) => {
+            LINK_PENDING.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+    let body = format!("{{\"p_device_id\":\"{}\"}}", id);
+    let outcome = match rpc("device_link_status", &body) {
+        Ok(resp) if resp.status == 200 => {
+            let text = String::from_utf8_lossy(&resp.body).into_owned();
+            match json_str_field(&text, "status").as_deref() {
+                Some("linked") => Ok(Some(json_str_field(&text, "username").unwrap_or_default())),
+                Some("code") => Ok(None),
+                _ => Err(None),
+            }
+        }
+        Ok(resp) => Err(Some(describe_rejection(
+            "device_link_status",
+            resp.status,
+            &resp.body,
+        ))),
+        Err(e) => Err(Some(e)),
+    };
+    match outcome {
+        Ok(Some(user)) => {
+            LINK_PENDING.store(false, Ordering::Relaxed);
+            announce(
+                Kind::Success,
+                "Device linked",
+                &format!("Linked to the account '{}'. Run 'dev request' to ask for a token.", user),
+            );
+        }
+        Ok(None) => LINK_FAILURES.store(0, Ordering::Relaxed),
+        Err(None) => {
+            LINK_PENDING.store(false, Ordering::Relaxed);
+            announce(
+                Kind::Warning,
+                "Device link",
+                "The link code expired. Run 'dev link' for a new one.",
+            );
+        }
+        Err(Some(e)) => {
+            let failures = LINK_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
+            if failures >= POLL_MAX_FAILURES {
+                LINK_PENDING.store(false, Ordering::Relaxed);
+                announce(
+                    Kind::Warning,
+                    "Device link",
+                    &format!("Link check stopped after {} failures: {}", failures, e),
+                );
+            }
+        }
+    }
 }
 
 fn check_pending() {
@@ -449,13 +608,16 @@ pub fn status_lines() -> Vec<String> {
             "  device id: {}",
             String::from_utf8_lossy(&data).trim()
         )),
-        Err(_) => out.push(String::from("  device id: not created yet ('dev request')")),
+        Err(_) => out.push(String::from("  device id: not created yet ('dev link')")),
     }
     let unlocked = match crate::vfs::read_file(UNLOCK_KEY_FILE) {
         Ok(_) => "yes (cached)",
         Err(_) => "no",
     };
     out.push(format!("  activation: {}", unlocked));
+    if LINK_PENDING.load(Ordering::Relaxed) {
+        out.push(String::from("  link: waiting for the code to be entered on the site"));
+    }
     if PENDING.load(Ordering::Relaxed) {
         out.push(String::from("  request: waiting for the server decision (background check)"));
     }

@@ -29,6 +29,27 @@ async function loadMine() {
   }
 }
 
+async function loadDevices() {
+  const select = document.getElementById('device-id');
+  const button = document.getElementById('submit-btn');
+  const hint = document.getElementById('device-hint');
+  try {
+    const data = await postJson('/api/devices', { action: 'list' });
+    select.replaceChildren(...data.devices.map((d) => el('option', { value: d.device_id, text: d.device_id })));
+    button.disabled = data.devices.length === 0;
+    if (!data.devices.length) {
+      hint.replaceChildren(
+        document.createTextNode('Нет привязанных устройств. '),
+        el('a', { href: '/account', text: 'Привяжите устройство' }),
+        document.createTextNode(' командой dev link в DeiX.'),
+      );
+    }
+  } catch (err) {
+    hint.textContent = err.message;
+    button.disabled = true;
+  }
+}
+
 (async () => {
   const user = await fetchMe();
   if (!user) {
@@ -36,6 +57,7 @@ async function loadMine() {
     return;
   }
   document.getElementById('request-view').hidden = false;
+  loadDevices();
   loadMine();
 })();
 

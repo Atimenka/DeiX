@@ -36,9 +36,9 @@
     <div class="two" id="request-view" hidden>
       <div class="panel">
         <form id="submit-form" class="stack" autocomplete="off">
-          <label>Device ID
-            <input id="device-id" name="device_id" required maxlength="32" minlength="32" pattern="[0-9a-fA-F]{32}" spellcheck="false" placeholder="32 символа 0-9 и a-f">
-            <span class="hint">Выполните в DeiX команду <code>dev id</code> и скопируйте результат.</span>
+          <label>Устройство
+            <select id="device-id" name="device_id" required></select>
+            <span class="hint" id="device-hint">Устройства привязываются в разделе «Аккаунт» командой <code>dev link</code> в DeiX.</span>
           </label>
           <label>Название устройства (необязательно)
             <input id="name" name="name" maxlength="64" placeholder="Например: ноутбук в QEMU">

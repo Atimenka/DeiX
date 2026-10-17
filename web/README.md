@@ -8,9 +8,10 @@ serverless-функции в `api/` (Node 22).
 |---|---|
 | `/` | о проекте |
 | `/register`, `/login`, `/account` | регистрация, вход, смена пароля и выход |
-| `/request` | заявка на токен (только для вошедших) и «Мои заявки» |
+| `/request` | заявка на токен для привязанного устройства (только для вошедших) и «Мои заявки» |
 | `/admin` | панель Owner: принять/отклонить/удалить заявку, приём заявок вкл/выкл |
 | `POST /api/auth` | `config`, `me`, `register`, `login`, `logout`, `change_password` |
+| `POST /api/devices` | `list`, `link` (код из `dev link`), `unlink` |
 | `POST /api/request` | `mine`, `submit` |
 | `POST /api/admin` | `list`, `decide`, `remove`, `set_open` (только role=owner) |
 

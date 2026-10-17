@@ -21,6 +21,12 @@ const MESSAGES = {
   denied: 'Владелец проекта отклонил заявку.',
 };
 
+const DB_ERRORS = {
+  'this device is not linked to your account': 'Это устройство не привязано к вашему аккаунту. Привяжите его в разделе «Аккаунт».',
+  'this account already has 3 pending requests': 'У вас уже 3 заявки на рассмотрении.',
+  'the project owner is not accepting dev requests right now': 'Владелец проекта сейчас не принимает заявки.',
+};
+
 function cleanDeviceId(value) {
   const id = String(value || '').trim().toLowerCase();
   if (!DEVICE_ID_RE.test(id)) {
@@ -58,6 +64,8 @@ module.exports = async function handler(req, res) {
         p_device_id: id,
         p_name: name || null,
         p_note: note || null,
+      }).catch((err) => {
+        throw err instanceof HttpError && DB_ERRORS[err.message] ? new HttpError(400, DB_ERRORS[err.message]) : err;
       });
       return send(res, 200, {
         ok: true,

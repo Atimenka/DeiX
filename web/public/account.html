@@ -33,6 +33,16 @@
           <button class="btn" id="logout-btn" type="button">Выйти</button>
         </div>
       </div>
+      <div class="panel wide">
+        <h3>Мои устройства</h3>
+        <p class="hint">В DeiX выполните <code>dev link</code>: система покажет код вида XXXX-XXXX, действует 10 минут. Заявку на токен можно подать только для привязанного устройства.</p>
+        <form id="link-form" class="row-gap" autocomplete="off">
+          <input id="link-code" name="code" required maxlength="9" spellcheck="false" placeholder="XXXX-XXXX" aria-label="Код привязки">
+          <button class="btn primary" type="submit">Привязать</button>
+        </form>
+        <div class="result" id="link-result" hidden></div>
+        <div id="devices"></div>
+      </div>
       <div class="panel">
         <h3>Смена пароля</h3>
         <form id="password-form" class="stack">

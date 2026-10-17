@@ -283,3 +283,7 @@ h3.title-sm { margin: 0; }
 .mine-item { padding: 12px 0; border-top: 1px solid var(--border); }
 .mine-item:first-child { border-top: 0; }
 #captcha { min-height: 0; }
+
+.panel.wide { grid-column: 1 / -1; }
+.device-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+#link-form input { flex: 1 1 180px; text-transform: uppercase; letter-spacing: 0.12em; font-family: ui-monospace, monospace; }

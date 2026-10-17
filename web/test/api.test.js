@@ -13,9 +13,11 @@ const db = {
   users: new Map(),
   profiles: new Map(),
   rows: new Map(),
+  links: new Map(),
   tokens: new Map(),
   refresh: new Map(),
   open: true,
+  codes: new Map(),
   seq: 0,
 };
 
@@ -117,7 +119,28 @@ globalThis.fetch = async (url, init = {}) => {
       rows.map((r) => ({ ...r, profiles: r.user_id ? { username: db.profiles.get(r.user_id).username } : null })),
     );
   }
+  if (path === 'device_links') {
+    const owner = u.searchParams.get('user_id').slice(3);
+    return jsonResponse(200, [...db.links.values()].filter((l) => l.user_id === owner));
+  }
+  if (path === 'rpc/link_device') {
+    const entry = [...db.codes].find(([, c]) => c === body.p_code.replace('-', '').toUpperCase());
+    if (!entry) return jsonResponse(400, { code: 'P0001', message: 'invalid or expired code' });
+    db.codes.delete(entry[0]);
+    db.links.set(entry[0], { device_id: entry[0], user_id: body.p_user_id, linked_at: new Date().toISOString() });
+    return jsonResponse(200, { device_id: entry[0] });
+  }
+  if (path === 'rpc/unlink_device') {
+    const link = db.links.get(body.p_device_id);
+    const ok = Boolean(link && link.user_id === body.p_user_id);
+    if (ok) db.links.delete(body.p_device_id);
+    return jsonResponse(200, ok);
+  }
   if (path === 'rpc/web_request_dev_unlock') {
+    const link = db.links.get(body.p_device_id);
+    if (!link || link.user_id !== body.p_user_id) {
+      return jsonResponse(400, { code: 'P0001', message: 'this device is not linked to your account' });
+    }
     if (!db.open) return jsonResponse(400, { code: 'P0001', message: 'closed' });
     const cur = db.rows.get(body.p_device_id);
     if (cur) return jsonResponse(200, { result: 'exists', status: cur.status });
@@ -145,6 +168,7 @@ globalThis.fetch = async (url, init = {}) => {
 const authHandler = require('../api/auth');
 const adminHandler = require('../api/admin');
 const requestHandler = require('../api/request');
+const devicesHandler = require('../api/devices');
 
 function call(handler, body, { cookies = {}, headers } = {}) {
   return new Promise((resolve) => {
@@ -230,6 +254,16 @@ test('requests need an account; owner panel needs the owner role', async () => {
   assert.equal((await call(adminHandler, { action: 'list' }, { cookies: user })).status, 403);
 
   assert.equal((await call(requestHandler, { action: 'submit', device_id: 'zz' }, { cookies: user })).status, 400);
+  const unlinked = await call(requestHandler, { action: 'submit', device_id: ID }, { cookies: user });
+  assert.equal(unlinked.status, 400);
+  assert.match(unlinked.json.error, /не привязано/);
+
+  db.codes.set(ID, 'ABCD2345');
+  assert.equal((await call(devicesHandler, { action: 'link', code: 'zzzz-zzzz' }, { cookies: user })).status, 400);
+  assert.equal((await call(devicesHandler, { action: 'link', code: 'bad' }, { cookies: user })).status, 400);
+  assert.equal((await call(devicesHandler, { action: 'link', code: 'abcd-2345' }, { cookies: user })).json.device_id, ID);
+  assert.equal((await call(devicesHandler, { action: 'list' }, { cookies: user })).json.devices.length, 1);
+
   const sub = await call(requestHandler, { action: 'submit', device_id: ID.toUpperCase(), name: 'qemu' }, { cookies: user });
   assert.equal(sub.json.result, 'created');
   const mine = await call(requestHandler, { action: 'mine' }, { cookies: user });
@@ -247,6 +281,24 @@ test('requests need an account; owner panel needs the owner role', async () => {
   await call(adminHandler, { action: 'set_open', open: true }, { cookies: owner });
   await call(adminHandler, { action: 'remove', device_id: ID }, { cookies: owner });
   assert.equal(db.rows.size, 0);
+});
+
+test('devices need login and are unlinkable only by their owner', async () => {
+  assert.equal((await call(devicesHandler, { action: 'list' })).status, 401);
+  const owner = sessionOf(await call(authHandler, { action: 'login', identifier: 'Atimenka', password: 'owner-pass' }));
+  assert.equal((await call(devicesHandler, { action: 'unlink', device_id: ID }, { cookies: owner })).status, 404);
+  const user = sessionOf(await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'secret-pass' }));
+  assert.equal((await call(devicesHandler, { action: 'unlink', device_id: ID }, { cookies: user })).status, 200);
+  assert.equal((await call(devicesHandler, { action: 'list' }, { cookies: user })).json.devices.length, 0);
+  assert.equal((await call(requestHandler, { action: 'submit', device_id: ID }, { cookies: user })).status, 400);
+});
+
+test('wrong link codes are rate limited', async () => {
+  const user = sessionOf(await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'secret-pass' }));
+  for (let i = 0; i < 9; i++) {
+    assert.equal((await call(devicesHandler, { action: 'link', code: 'ZZZZ-ZZZZ' }, { cookies: user })).status, 400);
+  }
+  assert.equal((await call(devicesHandler, { action: 'link', code: 'ZZZZ-ZZZZ' }, { cookies: user })).status, 429);
 });
 
 test('csrf header and origin are enforced', async () => {
