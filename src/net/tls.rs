@@ -204,6 +204,38 @@ fn send_record(rtype: u8, ver_minor: u8, payload: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Отправляет ClientHello двумя TCP-сегментами, разрезая запись внутри
+/// имени хоста (SNI). Приёмнику это не мешает (поток тот же), а DPI,
+/// который ищет имя в первом сегменте, имени целиком не видит.
+fn send_client_hello(ch: &[u8], host: &str) -> Result<(), String> {
+    let mut rec = Vec::with_capacity(5 + ch.len());
+    rec.push(CONTENT_HANDSHAKE);
+    rec.push(3);
+    rec.push(1);
+    rec.extend_from_slice(&(ch.len() as u16).to_be_bytes());
+    rec.extend_from_slice(ch);
+    let name = host.as_bytes();
+    let at = if name.len() >= 2 {
+        ch.windows(name.len()).position(|w| w == name)
+    } else {
+        None
+    };
+    match at {
+        Some(p) => {
+            let split = 5 + p + name.len() / 2;
+            if !tcp::send(&rec[..split]) || !tcp::send(&rec[split..]) {
+                return Err("TCP: отправка ClientHello не удалась".into());
+            }
+        }
+        None => {
+            if !tcp::send(&rec) {
+                return Err("TCP: отправка ClientHello не удалась".into());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Шифрует record (RFC 8446 §5.2): inner plaintext = данные || тип.
 fn seal_record(keys: &mut Keys, inner_type: u8, payload: &[u8]) -> Vec<u8> {
     let mut inner = Vec::with_capacity(payload.len() + 1);
@@ -393,8 +425,8 @@ fn parse_server_hello(msg: &[u8]) -> Result<[u8; 32], String> {
 pub fn connect(ip: [u8; 4], port: u16, host: &str) -> Result<TlsStream, String> {
     if !tcp::connect(ip, port) {
         return Err(format!(
-            "Не удалось установить TCP-соединение с {} ({}.{}.{}.{}:{})",
-            host, ip[0], ip[1], ip[2], ip[3], port
+            "Не удалось установить TCP-соединение с {} ({}.{}.{}.{}:{}): {}",
+            host, ip[0], ip[1], ip[2], ip[3], port, tcp::connect_failure()
         ));
     }
     match handshake(host) {
@@ -474,7 +506,7 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
     let ch = build_client_hello(host, &random, &session_id, &pubkey);
     let mut transcript = Sha256::new();
     transcript.update(&ch);
-    send_record(CONTENT_HANDSHAKE, 1, &ch)?;
+    send_client_hello(&ch, host)?;
     mark("ClientHello отправлен, ждём ServerHello");
     deadline = crate::timer::uptime_ms() + HANDSHAKE_TIMEOUT_MS;
 

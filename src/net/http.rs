@@ -143,8 +143,8 @@ fn request_once(
     } else {
         if !tcp::connect(ip, port) {
             return Err(format!(
-                "Не удалось установить TCP-соединение с {} ({}.{}.{}.{}:{})",
-                host, ip[0], ip[1], ip[2], ip[3], port
+                "Не удалось установить TCP-соединение с {} ({}.{}.{}.{}:{}): {}",
+                host, ip[0], ip[1], ip[2], ip[3], port, tcp::connect_failure()
             ));
         }
         Conn::Plain
