@@ -292,10 +292,10 @@ impl Window {
             x,
             y,
             width: 480,
-            height: 390,
+            height: 430,
             minimized: false,
             maximized: false,
-            restore_geometry: (x, y, 480, 390),
+            restore_geometry: (x, y, 480, 430),
             content: WindowContent::ThemeSettings,
         }
     }

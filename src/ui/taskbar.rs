@@ -311,24 +311,36 @@ pub fn draw_start_menu(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, scr
     // первый результат.
     r.fill_rounded_rect(l.search.x, l.search.y, l.search.w, l.search.h, 4, theme.titlebar_inactive);
     r.draw_icon(l.search.x + 4, l.search.y + 4, IconType::Search, theme.text_secondary);
-    let q = truncate_to_cells(&desktop.menu_search, 24).0;
-    r.draw_text(l.search.x + 24, l.search.y + 4, q, theme.text_primary, None);
-    r.draw_text(
-        l.search.x + 24 + crate::ui::text::text_cells(q) as i32 * 8,
-        l.search.y + 4,
-        "_",
-        theme.accent,
-        None,
-    );
+    if desktop.menu_search.is_empty() {
+        r.draw_text(l.search.x + 24, l.search.y + 4, "Search apps...", theme.text_secondary, None);
+    } else {
+        let q = truncate_to_cells(&desktop.menu_search, 24).0;
+        r.draw_text(l.search.x + 24, l.search.y + 4, q, theme.text_primary, None);
+        r.draw_text(
+            l.search.x + 24 + crate::ui::text::text_cells(q) as i32 * 8,
+            l.search.y + 4,
+            "_",
+            theme.accent,
+            None,
+        );
+    }
 
     let mut idx = [0usize; START_MENU_APPS.len()];
     let n = filtered_app_indices(&desktop.menu_search, &mut idx);
     for k in 0..n {
         let (label, _, icon) = START_MENU_APPS[idx[k]];
         let item = l.app_items[k];
-        r.fill_rounded_rect(item.x, item.y, item.w, item.h, 4, theme.titlebar_inactive);
+        // Пункт, выбранный стрелками (Enter запустит именно его),
+        // подсвечен акцентной рамкой.
+        let is_sel = n > 0 && k == desktop.menu_sel.min(n - 1);
+        let bg = if is_sel { theme.titlebar_active } else { theme.titlebar_inactive };
+        r.fill_rounded_rect(item.x, item.y, item.w, item.h, 4, bg);
+        if is_sel {
+            r.draw_rect(item.x, item.y, item.w, item.h, theme.accent);
+        }
         r.draw_icon(item.x + 6, item.y + 8, icon, theme.accent);
-        r.draw_text(item.x + 26, item.y + 6, truncate_to_cells(label, 11).0, theme.text_primary, None);
+        let fg = if is_sel { theme.accent } else { theme.text_primary };
+        r.draw_text(item.x + 26, item.y + 6, truncate_to_cells(label, 11).0, fg, None);
     }
     if n == 0 {
         r.draw_text(l.menu.x + 12, l.menu.y + 50, "No matching apps", theme.text_secondary, None);

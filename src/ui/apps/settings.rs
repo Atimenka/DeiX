@@ -45,9 +45,14 @@ pub fn accent_rect(i: usize) -> Rect {
     Rect::new(12 + i as i32 * 34, 180, 26, 26)
 }
 
-/// Прямоугольник кнопки стиля обоев `i`.
+/// Прямоугольник кнопки стиля обоев `i`: 3 в ряд, 2 ряда (5 стилей).
 pub fn wallpaper_rect(i: usize) -> Rect {
-    Rect::new(12 + i as i32 * 102, 232, 96, 26)
+    Rect::new(
+        12 + (i % 3) as i32 * 152,
+        232 + (i / 3) as i32 * 30,
+        144,
+        26,
+    )
 }
 
 /// Профили производительности. Порядок = порядок отрисовки.
@@ -59,7 +64,7 @@ pub const PROFILE_CHOICES: [(&str, PerfProfile); 3] = [
 
 /// Прямоугольник кнопки профиля производительности `i`.
 pub fn profile_rect(i: usize) -> Rect {
-    Rect::new(12 + i as i32 * 152, 286, 144, 26)
+    Rect::new(12 + i as i32 * 152, 314, 144, 26)
 }
 
 /// Тема по пресету — для построения карточек-превью.
@@ -125,7 +130,7 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
 
     // Профиль производительности: каждый пункт реально меняет путь
     // отрисовки (blur/тени/прозрачность — см. ui::effects).
-    r.draw_text(w.x + 12, content_y + 268, "EFFECTS", theme.text_secondary, None);
+    r.draw_text(w.x + 12, content_y + 296, "EFFECTS", theme.text_secondary, None);
     let current_profile = crate::ui::effects::current();
     for (i, (name, profile)) in PROFILE_CHOICES.iter().enumerate() {
         let rect = profile_rect(i);
@@ -141,7 +146,15 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
         PerfProfile::Balanced => "Blur disabled; shadows and translucency kept.",
         PerfProfile::Performance => "Blur and shadows off, surfaces opaque.",
     };
-    r.draw_text(w.x + 12, content_y + 318, hint, theme.text_secondary, None);
+    r.draw_text(w.x + 12, content_y + 346, hint, theme.text_secondary, None);
+
+    r.draw_text(
+        w.x + 12,
+        content_y + 366,
+        "Custom wallpaper: /userdata/wallpaper.bmp (24/32-bit, <= 268 KB)",
+        theme.text_secondary,
+        None,
+    );
 
     // Честный статус звука: регулятора громкости в этом релизе нет,
     // поэтому ползунок не рисуется — только реальный backend.
@@ -150,10 +163,10 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
     } else {
         "Sound: PC speaker (no volume control)"
     };
-    r.draw_text(w.x + 12, content_y + 340, audio, theme.text_secondary, None);
+    r.draw_text(w.x + 12, content_y + 386, audio, theme.text_secondary, None);
     r.draw_text(
         w.x + 12,
-        content_y + 360,
+        content_y + 406,
         "Display resolution: Start menu > Display Settings",
         theme.text_secondary,
         None,

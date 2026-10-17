@@ -85,6 +85,8 @@ pub struct Desktop {
     pub start_menu_open: bool,
     /// Поисковый запрос меню Пуск (набирается с клавиатуры).
     pub menu_search: String,
+    /// Выбранный стрелками пункт меню (индекс в отфильтрованном списке).
+    pub menu_sel: usize,
     pub control_center_open: bool,
     /// Режим обзора окон (Overview).
     pub overview_open: bool,
@@ -162,6 +164,7 @@ impl Desktop {
             next_window_id: 1,
             start_menu_open: false,
             menu_search: String::new(),
+            menu_sel: 0,
             control_center_open: false,
             overview_open: false,
             prev_overview_open: false,
@@ -275,7 +278,7 @@ impl Desktop {
     }
 
     pub fn open_theme_settings(&mut self, screen_w: i32, screen_h: i32) {
-        self.open_placed(480, 390, screen_w, screen_h, Window::new_theme_settings);
+        self.open_placed(480, 430, screen_w, screen_h, Window::new_theme_settings);
     }
 
     pub fn open_about(&mut self, screen_w: i32, screen_h: i32) {
@@ -544,9 +547,7 @@ impl Desktop {
             // Верхняя панель.
             if panel_rect(screen_w).contains(m.x, m.y) {
                 if panel_menu_button_rect().contains(m.x, m.y) {
-                    self.start_menu_open = true;
-                    self.menu_search.clear();
-                    self.control_center_open = false;
+                    self.open_start_menu();
                 } else if panel_status_rect(screen_w).contains(m.x, m.y) {
                     self.control_center_open = true;
                 }
@@ -861,6 +862,16 @@ impl Desktop {
     fn close_start_menu(&mut self) {
         self.start_menu_open = false;
         self.menu_search.clear();
+        self.menu_sel = 0;
+    }
+
+    /// Открывает меню Пуск с чистым поиском (кнопка панели / Win).
+    fn open_start_menu(&mut self) {
+        self.start_menu_open = true;
+        self.menu_search.clear();
+        self.menu_sel = 0;
+        self.control_center_open = false;
+        self.overview_open = false;
     }
 
     /// Запускает приложение из меню/Dock. Открытие окна закрывает меню.
@@ -954,25 +965,39 @@ impl Desktop {
     }
 
     /// Клавиатура при открытом меню Пуск: набор уходит в строку поиска,
-    /// Enter запускает первый найденный пункт, Backspace стирает.
+    /// стрелки двигают выбор по отфильтрованным пунктам, Enter запускает
+    /// выбранный, Backspace стирает.
     fn handle_menu_search_keys(&mut self, screen_w: i32, screen_h: i32) {
         while let Some(b) = keyboard::try_read_char() {
             self.dirty = true;
+            let mut idx = [0usize; START_MENU_APPS.len()];
+            let n = filtered_app_indices(&self.menu_search, &mut idx);
             match b {
                 0x08 => {
                     self.menu_search.pop();
+                    self.menu_sel = 0;
                 }
                 b'\n' | b'\r' => {
-                    let mut idx = [0usize; START_MENU_APPS.len()];
-                    let n = filtered_app_indices(&self.menu_search, &mut idx);
                     if n > 0 {
-                        self.launch_app(START_MENU_APPS[idx[0]].1, screen_w, screen_h);
+                        let k = self.menu_sel.min(n - 1);
+                        self.launch_app(START_MENU_APPS[idx[k]].1, screen_w, screen_h);
                     }
                     return;
+                }
+                keyboard::ARROW_DOWN | keyboard::ARROW_RIGHT => {
+                    if n > 0 {
+                        self.menu_sel = (self.menu_sel + 1) % n;
+                    }
+                }
+                keyboard::ARROW_UP | keyboard::ARROW_LEFT => {
+                    if n > 0 {
+                        self.menu_sel = self.menu_sel.min(n - 1).checked_sub(1).unwrap_or(n - 1);
+                    }
                 }
                 b if b >= 0x20 && b < 0x7F => {
                     if self.menu_search.chars().count() < 24 {
                         self.menu_search.push(b as char);
+                        self.menu_sel = 0;
                     }
                 }
                 _ => {}
@@ -1685,6 +1710,16 @@ impl Desktop {
         self.dirty = false;
 
         loop {
+            // Win/Super открывает и закрывает меню Пуск.
+            if keyboard::try_read_super() {
+                if self.start_menu_open {
+                    self.close_start_menu();
+                } else {
+                    self.open_start_menu();
+                }
+                self.dirty = true;
+            }
+
             if keyboard::try_read_escape() {
                 // Escape сначала закрывает обзор/меню/панель и только
                 // при их отсутствии завершает графическую сессию.
@@ -1867,9 +1902,66 @@ fn blend_into(pixels: &mut [u32], idx: usize, fg: Color, alpha: u8) {
 
 /// Генерация обоев выбранного стиля в пиксели кеша. Четыре стиля дают
 /// действительно разные картины; все цвета берутся из активной темы.
+/// Пытается загрузить пользовательские обои из /userdata/wallpaper.bmp:
+/// несжатый BMP 24/32 бит (BI_RGB), любой размер в пределах лимита файла
+/// ext2 (268 КБ, например 320x240x24); картинка растягивается на экран
+/// ближайшим соседом. false — файла нет или формат не поддержан.
+fn load_bmp_wallpaper(pixels: &mut [u32], w: i32, h: i32) -> bool {
+    let data = match ext2::read_file_path("/wallpaper.bmp") {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    if data.len() < 54 || &data[0..2] != b"BM" {
+        return false;
+    }
+    let off = u32::from_le_bytes([data[10], data[11], data[12], data[13]]) as usize;
+    let bw = i32::from_le_bytes([data[18], data[19], data[20], data[21]]);
+    let bh_raw = i32::from_le_bytes([data[22], data[23], data[24], data[25]]);
+    let bpp = u16::from_le_bytes([data[28], data[29]]);
+    let compression = u32::from_le_bytes([data[30], data[31], data[32], data[33]]);
+    if compression != 0 || (bpp != 24 && bpp != 32) || bw <= 0 || bh_raw == 0 {
+        return false;
+    }
+    let top_down = bh_raw < 0;
+    let bh = bh_raw.unsigned_abs() as usize;
+    let bw = bw as usize;
+    let bytes_pp = (bpp / 8) as usize;
+    // Строки BMP выровнены на 4 байта.
+    let stride = (bw * bytes_pp).div_ceil(4) * 4;
+    let needed = match stride.checked_mul(bh).and_then(|v| v.checked_add(off)) {
+        Some(v) => v,
+        None => return false,
+    };
+    if needed > data.len() {
+        return false;
+    }
+
+    let (w, h) = (w.max(1) as usize, h.max(1) as usize);
+    for y in 0..h {
+        let sy = y * bh / h;
+        let srow = if top_down { sy } else { bh - 1 - sy };
+        let row_off = off + srow * stride;
+        for x in 0..w {
+            let sx = x * bw / w;
+            let p = row_off + sx * bytes_pp;
+            let (b, g, r) = (data[p], data[p + 1], data[p + 2]);
+            if let Some(dst) = pixels.get_mut(y * w + x) {
+                *dst = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
+            }
+        }
+    }
+    true
+}
+
 fn generate_wallpaper(pixels: &mut [u32], w: i32, h: i32, theme: &UiTheme) {
     let (w, h) = (w.max(1), h.max(1));
     let wu = w as usize;
+
+    // Стиль Custom: картинка пользователя; если её нет или формат не
+    // поддержан — ниже рисуется процедурная Aurora (ветки `_`).
+    if theme.wallpaper_style == 4 && load_bmp_wallpaper(pixels, w, h) {
+        return;
+    }
 
     // База: вертикальный градиент (у каждого стиля свои опорные цвета).
     let (top, bottom) = match theme.wallpaper_style {

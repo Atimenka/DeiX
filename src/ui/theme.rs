@@ -170,7 +170,10 @@ impl UiTheme {
 /// Названия стилей обоев (индекс = `UiTheme::wallpaper_style`).
 /// Каждому имени соответствует реально отличающаяся генерация фона
 /// в `desktop::generate_wallpaper` — декоративных пунктов здесь нет.
-pub const WALLPAPER_STYLES: [&str; 4] = ["Aurora", "Midnight", "Plasma Flow", "Minimal"];
+/// "Custom" читает /userdata/wallpaper.bmp (BMP 24/32 бит, до 268 КБ —
+/// предел файла ext2-тома); без валидного файла рисуется Aurora.
+pub const WALLPAPER_STYLES: [&str; 5] =
+    ["Aurora", "Midnight", "Plasma Flow", "Minimal", "Custom"];
 
 static mut CURRENT_THEME: Option<UiTheme> = None;
 
