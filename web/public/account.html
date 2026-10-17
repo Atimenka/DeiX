@@ -43,6 +43,19 @@
         <div class="result" id="link-result" hidden></div>
         <div id="devices"></div>
       </div>
+      <div class="panel wide">
+        <h3>Ключ разблокировки dev-режима</h3>
+        <p class="hint">Одноразовый ключ для конкретного устройства. В DeiX выполните <code>dev id</code>, вставьте Device ID сюда, получите ключ и введите его в DeiX командой <code>dev unlock КЛЮЧ</code>, затем <code>dev on</code>. Сеть в момент ввода не нужна. Ключ показывается один раз и на сайте не хранится.</p>
+        <form id="key-form" class="row-gap" autocomplete="off">
+          <input id="key-device" name="device" required maxlength="32" spellcheck="false" placeholder="Device ID (32 символа)" aria-label="Device ID" list="key-devices">
+          <datalist id="key-devices"></datalist>
+          <button class="btn primary" type="submit">Получить ключ</button>
+        </form>
+        <div class="result" id="key-result" hidden></div>
+        <pre class="keybox mono" id="key-out" hidden></pre>
+        <div class="row-gap"><button class="btn small" id="key-copy" type="button" hidden>Скопировать</button></div>
+        <div id="key-history"></div>
+      </div>
       <div class="panel">
         <h3>Смена пароля</h3>
         <form id="password-form" class="stack">

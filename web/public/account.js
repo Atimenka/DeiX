@@ -12,6 +12,7 @@
   document.getElementById('admin-link').hidden = user.role !== 'owner';
   document.getElementById('account-view').hidden = false;
   loadDevices();
+  loadKeyHistory();
 })();
 
 async function loadDevices() {
@@ -19,6 +20,9 @@ async function loadDevices() {
   try {
     const data = await postJson('/api/devices', { action: 'list' });
     box.replaceChildren();
+    document.getElementById('key-devices').replaceChildren(
+      ...data.devices.map((device) => el('option', { value: device.device_id })),
+    );
     if (!data.devices.length) {
       box.append(el('p', { class: 'hint', text: 'Привязанных устройств пока нет.' }));
       return;
@@ -85,5 +89,53 @@ document.getElementById('password-form').addEventListener('submit', async (event
     showResult(result, 'ok', 'Пароль изменён');
   } catch (err) {
     showResult(result, 'err', err.message);
+  }
+});
+
+async function loadKeyHistory() {
+  const box = document.getElementById('key-history');
+  try {
+    const data = await postJson('/api/keys', { action: 'list' });
+    box.replaceChildren();
+    if (!data.keys.length) return;
+    box.append(el('p', { class: 'hint', text: 'Недавно выданные ключи:' }));
+    for (const item of data.keys) {
+      box.append(
+        el('div', { class: 'mine-item' }, [
+          el('span', { class: 'mono', text: item.device_id }),
+          el('div', { class: 'hint', text: new Date(item.created_at).toLocaleString('ru-RU') }),
+        ]),
+      );
+    }
+  } catch (err) {
+    box.replaceChildren(el('p', { class: 'hint', text: err.message }));
+  }
+}
+
+document.getElementById('key-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const result = document.getElementById('key-result');
+  const out = document.getElementById('key-out');
+  const copy = document.getElementById('key-copy');
+  try {
+    const data = await postJson('/api/keys', { action: 'issue', device_id: document.getElementById('key-device').value });
+    out.textContent = data.key;
+    out.hidden = false;
+    copy.hidden = false;
+    showResult(result, 'ok', `Ключ для устройства ${data.device_id.slice(0, 8)}… готов. Он работает только на нём и только один раз.`);
+    loadKeyHistory();
+  } catch (err) {
+    out.hidden = true;
+    copy.hidden = true;
+    showResult(result, 'err', err.message);
+  }
+});
+
+document.getElementById('key-copy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(document.getElementById('key-out').textContent);
+    toast('Ключ скопирован', 'ok');
+  } catch {
+    toast('Не удалось скопировать: выделите ключ вручную', 'err');
   }
 });

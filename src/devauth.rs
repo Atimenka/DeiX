@@ -111,6 +111,140 @@ fn store_unlock(id: &str, key: &str) -> Result<(), String> {
         .map_err(|e| e.message())
 }
 
+// ==================== офлайн-ключ с сайта ====================
+
+/// Открытый ключ ECDSA P-256 (SEC1, несжатая точка), которым сайт проекта
+/// подписывает ключи разблокировки. Закрытая часть хранится только в
+/// переменных окружения сайта.
+const DEV_KEY_PUBLIC: [u8; 65] = [
+    0x04, 0xd0, 0xe1, 0xbb, 0xef, 0xe3, 0x36, 0xb8, 0xbb, 0xf1, 0xae, 0x50, 0xbd,
+    0x77, 0xa3, 0xcb, 0xbc, 0x4a, 0x0b, 0xed, 0x1f, 0xfb, 0x62, 0x0d, 0xe1, 0xa5,
+    0x7a, 0x3c, 0x84, 0x1c, 0x6a, 0x03, 0x99, 0xf6, 0x20, 0x1b, 0x30, 0xb1, 0xca,
+    0x8e, 0xe7, 0xac, 0x35, 0x3a, 0xf6, 0x2b, 0x9d, 0x8f, 0xba, 0x93, 0xdf, 0x96,
+    0xe4, 0x6f, 0xe1, 0x99, 0xf2, 0xfd, 0x9c, 0x60, 0xd4, 0xd8, 0xdf, 0xe1, 0xf9,
+];
+
+const KEY_ALPHABET: &[u8; 32] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const KEY_DOMAIN: &[u8] = b"DEIX-DEV-UNLOCK-1\0";
+const KEY_NONCE_LEN: usize = 8;
+const KEY_SIG_LEN: usize = 64;
+const KEY_CHARS: usize = 116;
+const USED_KEYS_FILE: &str = "/userdata/etc/dev_keys.used";
+
+/// Переводит ключ с сайта (регистр и дефисы не важны) в байты:
+/// nonce (8) и подпись r||s (64).
+fn decode_site_key(text: &str) -> Result<Vec<u8>, String> {
+    let mut symbols: Vec<u8> = Vec::with_capacity(KEY_CHARS);
+    for ch in text.chars() {
+        if ch == '-' || ch.is_whitespace() {
+            continue;
+        }
+        let up = ch.to_ascii_uppercase();
+        let index = KEY_ALPHABET
+            .iter()
+            .position(|&a| a as char == up)
+            .ok_or_else(|| format!("symbol {} ('{}') is not valid in a key", symbols.len() + 1, ch))?;
+        symbols.push(index as u8);
+    }
+    if symbols.len() != KEY_CHARS {
+        return Err(format!(
+            "the key must have {} symbols without dashes, got {}",
+            KEY_CHARS,
+            symbols.len()
+        ));
+    }
+    let mut out: Vec<u8> = Vec::with_capacity(KEY_NONCE_LEN + KEY_SIG_LEN);
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    for v in symbols {
+        acc = (acc << 5) | v as u32;
+        bits += 5;
+        if bits >= 8 {
+            out.push((acc >> (bits - 8)) as u8);
+            bits -= 8;
+            acc &= (1u32 << bits) - 1;
+        }
+    }
+    if acc != 0 || out.len() != KEY_NONCE_LEN + KEY_SIG_LEN {
+        return Err(String::from("the key is damaged: padding bits are not zero"));
+    }
+    Ok(out)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
+}
+
+fn key_already_used(nonce_hex: &str) -> bool {
+    match crate::vfs::read_file(USED_KEYS_FILE) {
+        Ok(data) => String::from_utf8_lossy(&data).lines().any(|l| l.trim() == nonce_hex),
+        Err(_) => false,
+    }
+}
+
+fn mark_key_used(nonce_hex: &str) -> Result<(), String> {
+    let mut content = crate::vfs::read_file(USED_KEYS_FILE).unwrap_or_default();
+    if !content.is_empty() && content.last() != Some(&b'\n') {
+        content.push(b'\n');
+    }
+    content.extend_from_slice(nonce_hex.as_bytes());
+    content.push(b'\n');
+    crate::vfs::mkdir("/userdata/etc").map_err(|e| e.message())?;
+    crate::vfs::write_file(USED_KEYS_FILE, &content).map_err(|e| e.message())
+}
+
+/// Проверяет ключ с сайта для этого устройства и, если он настоящий и ещё
+/// не использовался, записывает активацию. Сеть не нужна.
+fn unlock_with_key(text: &str) -> Result<(), String> {
+    let id = device_id()?;
+    let raw = decode_site_key(text)?;
+    let nonce = &raw[..KEY_NONCE_LEN];
+    let sig = &raw[KEY_NONCE_LEN..];
+
+    let mut message: Vec<u8> = Vec::with_capacity(KEY_DOMAIN.len() + id.len() + KEY_NONCE_LEN);
+    message.extend_from_slice(KEY_DOMAIN);
+    message.extend_from_slice(id.as_bytes());
+    message.extend_from_slice(nonce);
+    let digest = crate::crypto::sha256::sha256(&message);
+
+    let curve = crate::crypto::ecdsa::p256();
+    if !crate::crypto::ecdsa::verify(&curve, &DEV_KEY_PUBLIC, &digest, &sig[..32], &sig[32..]) {
+        return Err(String::from(
+            "the signature does not match: the key was issued for another device ID, or it was typed with a mistake",
+        ));
+    }
+
+    let nonce_hex = hex(nonce);
+    if key_already_used(&nonce_hex) {
+        return Err(String::from("this key was already used on this device"));
+    }
+    mark_key_used(&nonce_hex)?;
+    store_unlock(&id, &format!("offline-{}", nonce_hex))
+}
+
+/// `dev unlock <ключ>`: активация ключом, полученным на сайте в разделе
+/// «Аккаунт». После неё `dev on` работает без сети.
+pub fn cmd_unlock(arg: &str) {
+    let key = arg.trim();
+    if key.is_empty() {
+        println!("  [devauth] usage: dev unlock <key from the site>");
+        println!("  [devauth] get the key on the site: Account -> dev unlock key (needs: dev id)");
+        return;
+    }
+    println!("  [devauth] checking the signature (a few seconds)...");
+    match unlock_with_key(key) {
+        Ok(()) => {
+            println!("  [devauth] key accepted, this device is unlocked.");
+            println!("  [devauth] now run 'dev on'.");
+        }
+        Err(e) => println!("  [devauth] key rejected: {}", e),
+    }
+}
+
 // ==================== HTTP к Supabase ====================
 
 /// Статус заявки на сервере.

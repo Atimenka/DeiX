@@ -4,6 +4,10 @@ process.env.SUPABASE_URL = 'https://db.test';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key';
 process.env.SUPABASE_ANON_KEY = 'anon-key';
 
+const nodeCrypto = require('node:crypto');
+const keyPair = nodeCrypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+process.env.DEV_KEY_PRIVATE = keyPair.privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -18,6 +22,7 @@ const db = {
   refresh: new Map(),
   open: true,
   codes: new Map(),
+  keys: [],
   seq: 0,
 };
 
@@ -119,6 +124,14 @@ globalThis.fetch = async (url, init = {}) => {
       rows.map((r) => ({ ...r, profiles: r.user_id ? { username: db.profiles.get(r.user_id).username } : null })),
     );
   }
+  if (path.startsWith('dev_keys')) {
+    if (init.method === 'POST') {
+      db.keys.push({ ...body, created_at: new Date().toISOString() });
+      return jsonResponse(201);
+    }
+    const owner = u.searchParams.get('user_id').slice(3);
+    return jsonResponse(200, db.keys.filter((k) => k.user_id === owner));
+  }
   if (path === 'device_links') {
     const owner = u.searchParams.get('user_id').slice(3);
     return jsonResponse(200, [...db.links.values()].filter((l) => l.user_id === owner));
@@ -180,6 +193,8 @@ const adminHandler = require('../api/admin');
 const requestHandler = require('../api/request');
 const devicesHandler = require('../api/devices');
 const osHandler = require('../api/os');
+const keysHandler = require('../api/keys');
+const { signedMessage } = require('../api/_keys');
 
 function call(handler, body, { cookies = {}, headers } = {}) {
   return new Promise((resolve) => {
@@ -374,4 +389,53 @@ test('login is rate limited after repeated failures', async () => {
     assert.equal((await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'x' }, { headers })).status, 401);
   }
   assert.equal((await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'brand-new-pass' }, { headers })).status, 429);
+});
+
+function decode32(text) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let bits = 0;
+  let acc = 0;
+  const out = [];
+  for (const ch of text.replace(/-/g, '')) {
+    acc = (acc << 5) | alphabet.indexOf(ch);
+    bits += 5;
+    if (bits >= 8) {
+      out.push((acc >> (bits - 8)) & 255);
+      bits -= 8;
+      acc &= (1 << bits) - 1;
+    }
+  }
+  return Buffer.from(out);
+}
+
+test('dev keys: need login, are signed for the device, and are rate limited', async () => {
+  assert.equal((await call(keysHandler, { action: 'issue', device_id: ID })).status, 401);
+  const user = sessionOf(await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'brand-new-pass' }));
+  assert.equal((await call(keysHandler, { action: 'issue', device_id: 'zz' }, { cookies: user })).status, 400);
+
+  const out = await call(keysHandler, { action: 'issue', device_id: ID.toUpperCase() }, { cookies: user });
+  assert.equal(out.status, 200);
+  assert.match(out.json.key, /^([A-Z2-9]{4}-){28}[A-Z2-9]{4}$/);
+  const raw = decode32(out.json.key).subarray(0, 72);
+  const nonce = raw.subarray(0, 8);
+  const signature = raw.subarray(8);
+  const verify = (deviceId) =>
+    nodeCrypto.verify('sha256', signedMessage(deviceId, nonce), { key: keyPair.publicKey, dsaEncoding: 'ieee-p1363' }, signature);
+  assert.equal(verify(ID), true);
+  assert.equal(verify('b'.repeat(32)), false);
+  assert.equal(db.keys.length, 1);
+  assert.equal(db.keys[0].nonce, nonce.toString('hex'));
+  assert.equal((await call(keysHandler, { action: 'list' }, { cookies: user })).json.keys.length, 1);
+
+  const second = await call(keysHandler, { action: 'issue', device_id: ID }, { cookies: user });
+  assert.notEqual(second.json.key, out.json.key);
+
+  db.open = false;
+  assert.equal((await call(keysHandler, { action: 'issue', device_id: ID }, { cookies: user })).status, 400);
+  db.open = true;
+
+  for (let i = 0; i < 3; i++) {
+    assert.equal((await call(keysHandler, { action: 'issue', device_id: ID }, { cookies: user })).status, 200);
+  }
+  assert.equal((await call(keysHandler, { action: 'issue', device_id: ID }, { cookies: user })).status, 429);
 });

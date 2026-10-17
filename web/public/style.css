@@ -287,3 +287,15 @@ h3.title-sm { margin: 0; }
 .panel.wide { grid-column: 1 / -1; }
 .device-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 #link-form input { flex: 1 1 180px; text-transform: uppercase; letter-spacing: 0.12em; font-family: ui-monospace, monospace; }
+
+.keybox {
+  margin: 0.75rem 0;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+  line-height: 1.6;
+}
+.keybox[hidden] { display: none; }

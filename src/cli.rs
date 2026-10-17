@@ -15,7 +15,7 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::arch::asm;
 
-const MAX_LINE: usize = 120;
+const MAX_LINE: usize = 256;
 const MAX_HISTORY: usize = 32;
 
 pub fn run() -> ! {
@@ -316,7 +316,13 @@ pub fn execute(line: &str) {
         "notify" => cmd_notify(rest),
         "curl" => cmd_curl(rest),
         "dev" => {
-            match rest.trim() {
+            let sub = rest.trim();
+            let (word, arg) = match sub.find(char::is_whitespace) {
+                Some(i) => (&sub[..i], sub[i..].trim()),
+                None => (sub, ""),
+            };
+            match word {
+                "unlock" => crate::devauth::cmd_unlock(arg),
                 "on" => crate::devmode::enable_dev_mode(),
                 "off" => crate::devmode::disable_dev_mode(),
                 "link" => crate::devauth::cmd_link(),
@@ -528,7 +534,7 @@ fn cmd_help() {
     println!("  install                 - {}", t!(en: "clone this disk onto a second physical disk (real HDD install)", ru: "клонировать этот диск на второй физический диск (установка на реальный HDD)"));
     println!("  sysfs [status|convert]  - {}", t!(en: "convert /system from EROFS to ext2 (dev mode only)", ru: "конвертировать /system из EROFS в ext2 (только dev-режим)"));
     println!("  curl <url>              - {}", t!(en: "HTTP(S) GET for network diagnostics", ru: "HTTP(S) GET для диагностики сети"));
-    println!("  dev [link|request|on|off|revoke] - {}", t!(en: "developer mode (link device to account, server-side activation, see docs/DEVAUTH.md)", ru: "режим разработчика (серверная активация, см. docs/DEVAUTH.md)"));
+    println!("  dev [unlock|link|request|on|off|revoke] - {}", t!(en: "developer mode (unlock with a site key, link device, server activation; see docs/DEVAUTH.md)", ru: "режим разработчика (ключ с сайта, привязка, серверная активация; см. docs/DEVAUTH.md)"));
     println!("  bigfile <size_kb>       - {}", t!(en: "test ext2 indirect blocks with a large file", ru: "проверить indirect-блоки ext2 большим файлом"));
     println!("  useradd <user> <pass>   - {}", t!(en: "create a new user account", ru: "создать новый аккаунт пользователя"));
     println!("  passwd <u> <old> <new>  - {}", t!(en: "change a user's password", ru: "сменить пароль пользователя"));

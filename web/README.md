@@ -13,6 +13,7 @@ serverless-функции в `api/` (Node 22).
 | `POST /api/auth` | `config`, `me`, `register`, `login`, `logout`, `change_password` |
 | `POST /api/os?fn=...` | шлюз для ОС: `begin_device_link`, `device_link_status`, `request_dev_unlock`, `claim_dev_unlock` |
 | `POST /api/devices` | `list`, `link` (код из `dev link`), `unlink` |
+| `POST /api/keys` | `list`, `issue` (офлайн-ключ `dev unlock` для Device ID; нужна переменная `DEV_KEY_PRIVATE`) |
 | `POST /api/request` | `mine`, `submit` |
 | `POST /api/admin` | `list`, `decide`, `remove`, `set_open` (только role=owner) |
 

@@ -39,8 +39,8 @@ pub fn enable_dev_mode() {
         }
         Err(reason) => {
             crate::println!("  [dev] Активация НЕ пройдена: {}", reason);
-            crate::println!("  [dev] Порядок: 'dev request' -> одобрение владельцем");
-            crate::println!("  [dev] проекта (docs/DEVAUTH.md) -> 'dev on'.");
+            crate::println!("  [dev] Порядок: ключ с сайта -> 'dev unlock <ключ>' -> 'dev on'");
+            crate::println!("  [dev] (или 'dev request' -> одобрение владельцем, docs/DEVAUTH.md).");
             return;
         }
     }
@@ -73,7 +73,7 @@ pub fn dev_status() {
     for line in crate::devauth::status_lines() {
         crate::println!("{}", line);
     }
-    crate::println!("  команды: dev id | dev link | dev request | dev on | dev off | dev revoke");
+    crate::println!("  команды: dev id | dev unlock | dev link | dev request | dev on | dev off | dev revoke");
 }
 
 /// Чтение строки с клавиатуры или COM1.
