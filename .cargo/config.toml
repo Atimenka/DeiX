@@ -5,6 +5,7 @@ target = "x86_64-unknown-none"
 # кадре, который компилятор оптимизировал.
 rustflags = ["-C", "force-frame-pointers=yes"]
 
-[profile.release]
-lto = "fat"
-opt-level = 2
+# ВНИМАНИЕ: профиль release задаётся ТОЛЬКО в Cargo.toml. Профиль в
+# config.toml перекрывает манифест молча: из-за дубля здесь ядро
+# собиралось с opt-level=2, а правки opt-level в Cargo.toml не имели
+# эффекта, и kernel.bin не влезал в 2048 секторов.
