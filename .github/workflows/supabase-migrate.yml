@@ -41,14 +41,19 @@ jobs:
             exit 1
           fi
 
-          # Пробует подключиться; при неудаче печатает ПРИЧИНУ от psql
-          # (в ней нет пароля: "password authentication failed",
-          # "Network is unreachable", "Tenant or user not found" и т.п.).
+          # Пробует подключиться; причины отказов копятся в PROBE_LOG и
+          # публикуются аннотацией ::notice:: — логи заданий недоступны
+          # через api.github.com, а аннотации доступны. Пароля в
+          # сообщениях psql нет ("password authentication failed",
+          # "Network is unreachable", "Tenant or user not found", ...).
+          PROBE_LOG=""
           try() {
             local err
             err=$(psql -h "$1" -p "$2" -U "$3" -d postgres -tAc "select 1" 2>&1 >/dev/null) \
               && return 0
-            echo "    $1:$2 ($3) -> ${err}" | head -1
+            err=$(printf '%s' "$err" | head -2 | tr '\n' ' ')
+            echo "    $1:$2 ($3) -> ${err}"
+            PROBE_LOG="${PROBE_LOG}$1 ($3): ${err}%0A"
             return 1
           }
 
@@ -73,21 +78,27 @@ jobs:
           fi
 
           if [ -z "$HOST" ]; then
+            echo "::notice title=probe results::${PROBE_LOG}"
             echo "::error::Database unreachable: either the password in the secret is wrong (rotated?) or the pooler region is not in the probe list."
             exit 1
           fi
           echo "connected via $HOST:$PORT as $DBUSER"
+          echo "::notice title=connection::connected via $HOST:$PORT as $DBUSER"
 
           EXISTS=$(psql -h "$HOST" -p "$PORT" -U "$DBUSER" -d postgres -tAc \
             "select coalesce(to_regclass('public.dev_unlocks')::text, '')")
           if [ "$EXISTS" = "public.dev_unlocks" ]; then
             echo "table public.dev_unlocks already exists - migration skipped"
+            echo "::notice title=migration::table already exists - skipped"
           else
             psql -h "$HOST" -p "$PORT" -U "$DBUSER" -d postgres \
               -v ON_ERROR_STOP=1 -f supabase/migrations/20261017120000_dev_unlocks.sql
             echo "migration applied"
+            echo "::notice title=migration::applied"
           fi
 
           echo "--- verification: RLS policies on dev_unlocks ---"
-          psql -h "$HOST" -p "$PORT" -U "$DBUSER" -d postgres -tAc \
-            "select policyname from pg_policies where schemaname='public' and tablename='dev_unlocks'"
+          POLICIES=$(psql -h "$HOST" -p "$PORT" -U "$DBUSER" -d postgres -tAc \
+            "select policyname from pg_policies where schemaname='public' and tablename='dev_unlocks'" | tr '\n' ';')
+          echo "$POLICIES"
+          echo "::notice title=rls policies::${POLICIES}"
