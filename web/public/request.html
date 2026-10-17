@@ -15,6 +15,7 @@
         <a href="/">О проекте</a>
         <a class="active" href="/request">Запросить токен</a>
         <a href="https://github.com/Atimenka/DeiX" rel="noopener">GitHub</a>
+        <span id="nav-auth" class="nav-auth"></span>
       </nav>
     </div>
   </header>
@@ -23,7 +24,16 @@
     <h1>Заявка на одноразовый токен</h1>
     <p class="sub">Токен включает dev-режим DeiX на одном устройстве. Заявку рассматривает владелец проекта.</p>
 
-    <div class="two">
+    <div class="panel" id="need-login" hidden>
+      <h3>Нужен аккаунт</h3>
+      <p class="hint">Заявки подают только вошедшие пользователи, чтобы владелец видел, кто просит токен.</p>
+      <div class="row-gap">
+        <a class="btn primary" id="go-login" href="/login?next=/request">Войти</a>
+        <a class="btn" href="/register?next=/request">Создать аккаунт</a>
+      </div>
+    </div>
+
+    <div class="two" id="request-view" hidden>
       <div class="panel">
         <form id="submit-form" class="stack" autocomplete="off">
           <label>Device ID
@@ -36,20 +46,18 @@
           <label>Зачем нужен dev-режим (необязательно)
             <textarea id="note" name="note" maxlength="280" placeholder="Коротко о задаче"></textarea>
           </label>
-          <div class="hp" aria-hidden="true"><label>Сайт <input id="website" tabindex="-1" autocomplete="off"></label></div>
           <button class="btn primary" id="submit-btn" type="submit">Отправить заявку</button>
         </form>
         <div class="result" id="submit-result" hidden></div>
       </div>
 
       <div class="panel">
-        <h3>Проверить статус</h3>
-        <p class="hint">Введите Device ID, чтобы узнать, что решил владелец. Сам токен на сайте не показывается: его получает ОС при проверке.</p>
-        <form id="status-form" class="stack" autocomplete="off">
-          <input id="status-id" maxlength="32" spellcheck="false" placeholder="Device ID">
-          <button class="btn" type="submit">Проверить</button>
-        </form>
-        <div class="result" id="status-result" hidden></div>
+        <div class="toolbar">
+          <h3 class="title-sm">Мои заявки</h3>
+          <button class="btn small" id="reload-btn" type="button">Обновить</button>
+        </div>
+        <p class="hint">Сам токен на сайте не показывается: его получает ОС при проверке статуса.</p>
+        <div id="mine"></div>
       </div>
     </div>
   </main>
@@ -57,7 +65,7 @@
   <footer>
     <div class="wrap">
       <span>© <span data-year></span> DeiX OS</span>
-      <span><a href="/admin">Вход для Owner</a></span>
+      <span><a href="https://github.com/Atimenka/DeiX" rel="noopener">GitHub</a></span>
     </div>
   </footer>
   <script src="/site.js"></script>

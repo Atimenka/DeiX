@@ -276,3 +276,10 @@ dialog .row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8
 h1.title { margin: 0; }
 td.devcell .mono { display: block; }
 td.devcell small { color: var(--muted); }
+
+.nav-auth { display: inline-flex; align-items: center; gap: 14px; }
+.row-gap { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+h3.title-sm { margin: 0; }
+.mine-item { padding: 12px 0; border-top: 1px solid var(--border); }
+.mine-item:first-child { border-top: 0; }
+#captcha { min-height: 0; }

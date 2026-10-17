@@ -13,10 +13,11 @@
     <div class="wrap">
       <a class="brand" href="/"><img src="/favicon.svg" alt="">DeiX OS</a>
       <nav class="links">
-        <a class="hide-sm" href="#features">Возможности</a>
-        <a class="hide-sm" href="#dev">Dev-режим</a>
+        <a class="hide-sm" href="/#features">Возможности</a>
+        <a class="hide-sm" href="/#dev">Dev-режим</a>
+        <a class="hide-sm" href="/request">Запросить токен</a>
         <a href="https://github.com/Atimenka/DeiX" rel="noopener">GitHub</a>
-        <a class="btn primary small" href="/request">Запросить токен</a>
+        <span id="nav-auth" class="nav-auth"></span>
       </nav>
     </div>
   </header>
@@ -64,7 +65,7 @@
         <p class="sub">Dev-режим включает root-оболочку и снимает гарантии целостности системы, поэтому доступен только после одобрения заявки владельцем проекта.</p>
         <div class="steps">
           <div class="step"><h3>Узнайте Device ID</h3><p>В DeiX выполните <code>dev id</code>. Команда печатает идентификатор устройства из 32 символов.</p></div>
-          <div class="step"><h3>Подайте заявку</h3><p>Отправьте Device ID через <a href="/request">форму на сайте</a> или командой <code>dev request</code> прямо из ОС.</p></div>
+          <div class="step"><h3>Подайте заявку</h3><p>Войдите в аккаунт и отправьте Device ID через <a href="/request">форму на сайте</a> или выполните <code>dev request</code> прямо в ОС.</p></div>
           <div class="step"><h3>Дождитесь решения</h3><p>Владелец проекта принимает или отклоняет заявку в панели. ОС сама проверяет статус и покажет уведомление.</p></div>
           <div class="step"><h3>Включите режим</h3><p>После одобрения ОС получает одноразовый токен и сохраняет его. Выполните <code>dev on</code>.</p></div>
         </div>
@@ -77,7 +78,7 @@
   <footer>
     <div class="wrap">
       <span>© <span data-year></span> DeiX OS</span>
-      <span><a href="https://github.com/Atimenka/DeiX" rel="noopener">GitHub</a> · <a href="/admin">Вход для Owner</a></span>
+      <span><a href="https://github.com/Atimenka/DeiX" rel="noopener">GitHub</a></span>
     </div>
   </footer>
   <script src="/site.js"></script>

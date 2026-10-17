@@ -1,6 +1,5 @@
 'use strict';
 
-const CSRF = { 'x-deix-csrf': '1' };
 const STATUS_LABEL = { pending: 'На рассмотрении', approved: 'Одобрена', consumed: 'Токен выдан', denied: 'Отклонена' };
 const TABS = [
   ['pending', 'Ожидают'],
@@ -14,21 +13,21 @@ const $ = (id) => document.getElementById(id);
 let state = { requests: [], counts: {}, tab: 'pending', timer: null };
 
 function api(body) {
-  return postJson('/api/admin', body, CSRF);
+  return postJson('/api/admin', body);
 }
 
-function showLogin() {
+function showDenied(title, text, canLogin) {
   clearInterval(state.timer);
   $('panel-view').hidden = true;
-  $('login-view').hidden = false;
-  $('who').hidden = true;
+  $('denied-view').hidden = false;
+  $('denied-title').textContent = title;
+  $('denied-text').textContent = text;
+  $('denied-login').hidden = !canLogin;
 }
 
-function showPanel(user) {
-  $('login-view').hidden = true;
+function showPanel() {
+  $('denied-view').hidden = true;
   $('panel-view').hidden = false;
-  $('who').hidden = false;
-  $('who').textContent = `Owner · ${user}`;
   refresh();
   clearInterval(state.timer);
   state.timer = setInterval(refresh, 15000);
@@ -125,6 +124,7 @@ function render() {
           el('span', { class: 'mono', text: row.device_id }),
           el('small', { text: row.hostname || 'без названия' }),
         ]),
+        el('td', null, [el('span', { text: row.requester || 'анонимно (из ОС)' })]),
         el('td', null, [el('span', { class: `badge ${row.status}`, text: STATUS_LABEL[row.status] || row.status })]),
         el('td', null, [el('span', { class: 'badge src', text: row.source === 'web' ? 'сайт' : 'ОС' })]),
         el('td', null, [el('div', { class: 'note-text', text: row.note || '—' })]),
@@ -145,36 +145,13 @@ async function refresh() {
     $('updated').textContent = `Обновлено: ${new Date().toLocaleTimeString('ru-RU')}`;
     render();
   } catch (err) {
-    if (err.status === 401) {
-      showLogin();
+    if (err.status === 401 || err.status === 403) {
+      showDenied('Нужен вход', 'Сессия закончилась. Войдите снова.', true);
       return;
     }
     toast(err.message, 'err');
   }
 }
-
-$('login-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  $('login-btn').disabled = true;
-  try {
-    const data = await api({ action: 'login', user: $('login-user').value, password: $('login-pass').value });
-    $('login-pass').value = '';
-    $('login-result').hidden = true;
-    showPanel(data.user);
-  } catch (err) {
-    showResult($('login-result'), 'err', err.message);
-  } finally {
-    $('login-btn').disabled = false;
-  }
-});
-
-$('logout-btn').addEventListener('click', async () => {
-  try {
-    await api({ action: 'logout' });
-  } finally {
-    showLogin();
-  }
-});
 
 $('refresh-btn').addEventListener('click', refresh);
 
@@ -190,31 +167,13 @@ $('open-switch').addEventListener('change', async (event) => {
   }
 });
 
-const dialog = $('password-dialog');
-$('password-btn').addEventListener('click', () => {
-  $('pw-result').hidden = true;
-  $('password-form').reset();
-  dialog.showModal();
-});
-$('pw-cancel').addEventListener('click', () => dialog.close());
-$('password-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  try {
-    await api({ action: 'change_password', current: $('pw-current').value, next: $('pw-next').value });
-    dialog.close();
-    toast('Пароль изменён', 'ok');
-  } catch (err) {
-    showResult($('pw-result'), 'err', err.message);
-  }
-});
-
 (async () => {
-  try {
-    const me = await api({ action: 'me' });
-    if (me.owner) showPanel(me.user);
-    else showLogin();
-  } catch (err) {
-    showLogin();
-    showResult($('login-result'), 'err', err.message);
+  const user = await fetchMe();
+  if (!user) {
+    showDenied('Нужен вход', 'Панель доступна только владельцу проекта. Войдите в аккаунт Owner.', true);
+  } else if (user.role !== 'owner') {
+    showDenied('Нет доступа', 'Ваш аккаунт не имеет прав Owner.', false);
+  } else {
+    showPanel();
   }
 })();

@@ -18,10 +18,10 @@ Dev-режим DeiX (`dev on`) активируется через сервер�
 
 * У публичного ключа ОС нет доступа к таблицам вообще — только к двум
   функциям: подать заявку и забрать статус/токен.
-* Заявку подаёт ОС (`dev request`) или посетитель сайта (`/request`,
-  Device ID берётся командой `dev id`).
-* Владелец входит на `/admin`, одобряет или отклоняет заявки, закрывает
-  приём заявок, меняет пароль. Одобрение генерирует токен в базе
+* Заявку подаёт ОС (`dev request`) или вошедший в аккаунт посетитель
+  сайта (`/request`, Device ID берётся командой `dev id`).
+* Владелец (роль `owner` в `public.profiles`) входит на сайт и открывает
+  `/admin`: одобряет или отклоняет заявки, закрывает приём заявок. Одобрение генерирует токен в базе
   (`approve_dev_unlock`).
 * Токен **одноразовый**: `claim_dev_unlock` отдаёт его устройству один
   раз, после чего строка получает статус `consumed`, а токен удаляется
@@ -38,14 +38,30 @@ supabase link --project-ref xtsrvmwfnsxunvwuaplz
 supabase db push
 ```
 
-или целиком в Dashboard → SQL Editor. Учётная запись Owner хранится в
-`dev_settings` (ключ `owner`: логин и scrypt-хеш пароля). Первичный хеш
-создаётся вручную; дальше пароль меняется из панели («Сменить пароль»).
+или целиком в Dashboard → SQL Editor. Аккаунты сайта описаны миграцией
+`supabase/migrations/20261017180000_accounts.sql` (`public.profiles`,
+привязка заявок к `user_id`, функции для service_role).
 
-Сайт (`web/`, проект Vercel с root directory `web`) использует
-переменные окружения: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
-(sensitive), `SESSION_SECRET` (sensitive, случайная строка). Пароль
-Owner нигде не хранится в открытом виде: ни в репозитории, ни в env.
+Пользователи хранятся в Supabase Auth, имя и роль — в `public.profiles`.
+Регистрация идёт через сайт: почта, username, пароль, повтор пароля и
+капча Cloudflare Turnstile; подтверждение почты не требуется. Публичная
+регистрация Supabase выключена (`disable_signup`), аккаунты создаёт только
+серверная функция сайта.
+
+Owner создаётся один раз вручную (в миграции нет ни логина, ни пароля):
+пользователь в Authentication → Users, затем
+`update public.profiles set role = 'owner' where lower(username) = lower('<логин>');`
+(допустим только один owner).
+
+Сессия сайта — cookies `deix_at` (access-токен) и `deix_rt` (refresh),
+`HttpOnly; Secure; SameSite=Strict`, 30 дней. Истёкший access-токен
+сайт обновляет по refresh-токену сам.
+
+Переменные окружения проекта Vercel (root directory `web`):
+`SUPABASE_URL`, `SUPABASE_ANON_KEY` (publishable), `SUPABASE_SERVICE_ROLE_KEY`
+(sensitive), `TURNSTILE_SITE_KEY` и `TURNSTILE_SECRET` (sensitive; без них
+капча отключена, и формы об этом предупреждают). Пароли в репозитории и env
+не хранятся.
 
 ОС собирается с двумя публичными константами (`src/devauth.rs`): URL
 проекта и publishable-ключ. `service_role` и пароль Postgres в ОС не

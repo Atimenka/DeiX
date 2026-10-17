@@ -1,14 +1,18 @@
 'use strict';
 
-const crypto = require('crypto');
-
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://xtsrvmwfnsxunvwuaplz.supabase.co';
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const SESSION_SECRET = process.env.SESSION_SECRET || '';
+const ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
+const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET || '';
+const TURNSTILE_SITE_KEY = process.env.TURNSTILE_SITE_KEY || '';
 
-const COOKIE = 'deix_owner';
-const SESSION_TTL_S = 12 * 60 * 60;
+const ACCESS_COOKIE = 'deix_at';
+const REFRESH_COOKIE = 'deix_rt';
+const COOKIE_TTL_S = 30 * 24 * 60 * 60;
 const DEVICE_ID_RE = /^[0-9a-f]{32}$/;
+const USERNAME_RE = /^[A-Za-z0-9_]{3,24}$/;
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/;
+const MIN_PASSWORD = 8;
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -33,8 +37,18 @@ function fail(res, err) {
 }
 
 function requireConfigured() {
-  if (!SERVICE_KEY || !SESSION_SECRET) {
+  if (!SERVICE_KEY || !ANON_KEY) {
     throw new HttpError(503, 'Сервер не настроен: не заданы переменные окружения');
+  }
+}
+
+async function parseResponse(resp) {
+  const text = await resp.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
   }
 }
 
@@ -56,15 +70,7 @@ async function sb(path, { method = 'GET', body, headers = {} } = {}) {
     console.error('supabase unreachable:', e && e.message);
     throw new HttpError(502, 'База данных недоступна');
   }
-  const text = await resp.text();
-  let data = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = null;
-    }
-  }
+  const data = await parseResponse(resp);
   if (!resp.ok) {
     if (resp.status === 400 && data && data.code === 'P0001' && data.message) {
       throw new HttpError(400, data.message);
@@ -77,6 +83,27 @@ async function sb(path, { method = 'GET', body, headers = {} } = {}) {
 
 function rpc(name, args) {
   return sb(`rpc/${name}`, { method: 'POST', body: args });
+}
+
+/** Запрос к Supabase Auth. Возвращает { status, data } без выброса на 4xx. */
+async function auth(path, { method = 'POST', body, token, admin = false } = {}) {
+  requireConfigured();
+  const key = admin ? SERVICE_KEY : ANON_KEY;
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/auth/v1/${path}`, {
+      method,
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${token || key}`,
+        'Content-Type': 'application/json',
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return { status: resp.status, data: await parseResponse(resp) };
+  } catch (e) {
+    console.error('supabase auth unreachable:', e && e.message);
+    throw new HttpError(502, 'Сервер аккаунтов недоступен');
+  }
 }
 
 function readBody(req) {
@@ -125,58 +152,42 @@ function sameOrigin(req) {
   }
 }
 
-function scrypt(password, salt, keylen, opts) {
-  return new Promise((resolve, reject) => {
-    crypto.scrypt(password, salt, keylen, opts, (err, key) => (err ? reject(err) : resolve(key)));
-  });
+/** Общая защита всех POST-эндпоинтов: метод, origin и заголовок против CSRF. */
+function guardPost(req, res) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    throw new HttpError(405, 'Метод не поддерживается');
+  }
+  if (!sameOrigin(req) || req.headers['x-deix-csrf'] !== '1') {
+    throw new HttpError(403, 'Запрос отклонён');
+  }
 }
 
-const SCRYPT = { N: 16384, r: 8, p: 1 };
-
-async function hashPassword(password) {
-  const salt = crypto.randomBytes(16);
-  const key = await scrypt(password, salt, 32, SCRYPT);
-  return `scrypt$${SCRYPT.N}$${SCRYPT.r}$${SCRYPT.p}$${salt.toString('base64')}$${key.toString('base64')}`;
+function captchaEnabled() {
+  return Boolean(TURNSTILE_SECRET && TURNSTILE_SITE_KEY);
 }
 
-async function verifyPassword(password, stored) {
-  const parts = String(stored || '').split('$');
-  if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
-  const [, n, r, p, saltB64, keyB64] = parts;
-  const expected = Buffer.from(keyB64, 'base64');
-  const key = await scrypt(password, Buffer.from(saltB64, 'base64'), expected.length, {
-    N: Number(n),
-    r: Number(r),
-    p: Number(p),
-  });
-  return key.length === expected.length && crypto.timingSafeEqual(key, expected);
-}
-
-function b64url(buf) {
-  return Buffer.from(buf).toString('base64url');
-}
-
-function hmac(data) {
-  return crypto.createHmac('sha256', SESSION_SECRET).update(data).digest();
-}
-
-function fingerprint(hash) {
-  return crypto.createHash('sha256').update(String(hash)).digest('hex').slice(0, 16);
-}
-
-function issueSession(user, hash) {
-  const payload = b64url(
-    JSON.stringify({ u: user, v: fingerprint(hash), exp: Math.floor(Date.now() / 1000) + SESSION_TTL_S }),
-  );
-  return `${payload}.${b64url(hmac(payload))}`;
-}
-
-function sessionCookie(token) {
-  return `${COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_S}`;
-}
-
-function clearCookie() {
-  return `${COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`;
+/** Проверка токена Cloudflare Turnstile. Без ключей проверка не выполняется. */
+async function verifyCaptcha(token, ip) {
+  if (!captchaEnabled()) return;
+  if (!token || typeof token !== 'string') {
+    throw new HttpError(400, 'Подтвердите, что вы не робот');
+  }
+  let data = null;
+  try {
+    const resp = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ secret: TURNSTILE_SECRET, response: token, remoteip: ip }).toString(),
+    });
+    data = await parseResponse(resp);
+  } catch (e) {
+    console.error('turnstile unreachable:', e && e.message);
+    throw new HttpError(502, 'Не удалось проверить капчу, попробуйте ещё раз');
+  }
+  if (!data || data.success !== true) {
+    throw new HttpError(400, 'Капча не пройдена, попробуйте ещё раз');
+  }
 }
 
 function cookieValue(req, name) {
@@ -188,53 +199,91 @@ function cookieValue(req, name) {
   return '';
 }
 
-async function loadOwner() {
-  const rows = await sb('dev_settings?key=eq.owner&select=value');
-  const value = Array.isArray(rows) && rows[0] && rows[0].value;
-  if (!value || !value.user || !value.hash) {
-    throw new HttpError(503, 'Учётная запись Owner не создана');
-  }
-  return value;
+function cookie(name, value, maxAge) {
+  return `${name}=${value}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${maxAge}`;
 }
 
-async function currentOwner(req) {
+function setSession(res, session) {
+  res.setHeader('Set-Cookie', [
+    cookie(ACCESS_COOKIE, session.access_token, COOKIE_TTL_S),
+    cookie(REFRESH_COOKIE, session.refresh_token, COOKIE_TTL_S),
+  ]);
+}
+
+function clearSession(res) {
+  res.setHeader('Set-Cookie', [cookie(ACCESS_COOKIE, '', 0), cookie(REFRESH_COOKIE, '', 0)]);
+}
+
+async function loadProfile(userId) {
+  const rows = await sb(`profiles?id=eq.${userId}&select=id,username,role`);
+  return Array.isArray(rows) && rows[0] ? rows[0] : null;
+}
+
+/**
+ * Текущий пользователь по cookie. Просроченный access-токен обновляется
+ * refresh-токеном, новые cookie ставятся в ответ. null — не вошёл.
+ */
+async function currentUser(req, res) {
   requireConfigured();
-  const token = cookieValue(req, COOKIE);
-  const dot = token.indexOf('.');
-  if (dot < 1) return null;
-  const payload = token.slice(0, dot);
-  const given = Buffer.from(token.slice(dot + 1), 'base64url');
-  const want = hmac(payload);
-  if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) return null;
-  let data;
-  try {
-    data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-  } catch {
-    return null;
+  let access = cookieValue(req, ACCESS_COOKIE);
+  const refresh = cookieValue(req, REFRESH_COOKIE);
+  let user = null;
+
+  if (access) {
+    const r = await auth('user', { method: 'GET', token: access });
+    if (r.status === 200 && r.data && r.data.id) user = r.data;
   }
-  if (!data || typeof data.exp !== 'number' || data.exp < Date.now() / 1000) return null;
-  const owner = await loadOwner();
-  if (data.u !== owner.user || data.v !== fingerprint(owner.hash)) return null;
-  return owner;
+  if (!user && refresh) {
+    const r = await auth('token?grant_type=refresh_token', { body: { refresh_token: refresh } });
+    if (r.status === 200 && r.data && r.data.access_token && r.data.user) {
+      access = r.data.access_token;
+      user = r.data.user;
+      setSession(res, r.data);
+    } else {
+      clearSession(res);
+    }
+  }
+  if (!user) return null;
+
+  const profile = await loadProfile(user.id);
+  if (!profile) return null;
+  return { id: user.id, email: user.email, username: profile.username, role: profile.role, token: access };
+}
+
+async function requireUser(req, res) {
+  const user = await currentUser(req, res);
+  if (!user) throw new HttpError(401, 'Требуется вход в аккаунт');
+  return user;
+}
+
+async function requireOwner(req, res) {
+  const user = await requireUser(req, res);
+  if (user.role !== 'owner') throw new HttpError(403, 'Нужны права Owner');
+  return user;
 }
 
 module.exports = {
   DEVICE_ID_RE,
+  EMAIL_RE,
   HttpError,
-  clearCookie,
+  MIN_PASSWORD,
+  TURNSTILE_SITE_KEY,
+  USERNAME_RE,
+  auth,
+  captchaEnabled,
+  clearSession,
   clientIp,
-  currentOwner,
+  currentUser,
   fail,
-  hashPassword,
-  issueSession,
-  loadOwner,
+  guardPost,
   overLimit,
   readBody,
   recordHit,
+  requireOwner,
+  requireUser,
   rpc,
-  sameOrigin,
   sb,
   send,
-  sessionCookie,
-  verifyPassword,
+  setSession,
+  verifyCaptcha,
 };

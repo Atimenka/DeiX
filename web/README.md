@@ -7,14 +7,21 @@ serverless-функции в `api/` (Node 22).
 | Путь | Назначение |
 |---|---|
 | `/` | о проекте |
-| `/request` | заявка на токен и проверка статуса по Device ID |
-| `/admin` | вход Owner, принятие и отклонение заявок, приём заявок вкл/выкл, смена пароля |
-| `POST /api/request` | публичное API (`submit`, `status`) |
-| `POST /api/admin` | API Owner (`login`, `me`, `list`, `decide`, `remove`, `set_open`, `change_password`, `logout`) |
+| `/register`, `/login`, `/account` | регистрация, вход, смена пароля и выход |
+| `/request` | заявка на токен (только для вошедших) и «Мои заявки» |
+| `/admin` | панель Owner: принять/отклонить/удалить заявку, приём заявок вкл/выкл |
+| `POST /api/auth` | `config`, `me`, `register`, `login`, `logout`, `change_password` |
+| `POST /api/request` | `mine`, `submit` |
+| `POST /api/admin` | `list`, `decide`, `remove`, `set_open` (только role=owner) |
 
-Переменные окружения Vercel: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-`SESSION_SECRET`. Схема базы и учётная запись Owner описаны в
-`docs/DEVAUTH.md`; тесты API: `npm test` (без сети, база подменена).
+Все POST требуют заголовок `X-DeiX-CSRF: 1` и same-origin. Сессия — cookies
+`deix_at`/`deix_rt` (HttpOnly, Secure, SameSite=Strict, 30 дней) поверх
+Supabase Auth.
+
+Переменные окружения Vercel: `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
+`SUPABASE_SERVICE_ROLE_KEY`, `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET`
+(без двух последних капча выключена). Схема и создание Owner описаны в
+`docs/DEVAUTH.md`; тесты API: `npm test` (без сети, Supabase подменён).
 
 Root Directory проекта Vercel — `web`.
 
