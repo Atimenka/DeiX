@@ -12,10 +12,54 @@ use alloc::string::String;
 
 /// Ширина боковой панели разделов.
 pub const SIDEBAR_W: i32 = 110;
-/// Первая строка списка файлов (от верха содержимого).
-pub const LIST_START_Y: i32 = 44;
+/// Первая строка списка файлов (от верха содержимого):
+/// панель инструментов (36) + строка хлебных крошек (24) + зазор.
+pub const LIST_START_Y: i32 = 68;
 /// Шаг строки списка.
 pub const ROW_H: i32 = 22;
+
+/// Хлебные крошки текущего пути: (hitbox, подпись, целевой путь внутри
+/// раздела). Клик по сегменту — переход в этот каталог; те же
+/// прямоугольники использует и отрисовка, и обработчик кликов.
+/// Сегменты, не влезающие по ширине окна, не показываются и не кликаются.
+pub fn breadcrumbs(
+    partition: &str,
+    path: &str,
+    win_w: u32,
+) -> alloc::vec::Vec<(Rect, String, String)> {
+    let mut out = alloc::vec::Vec::new();
+    let y = 42;
+    let limit = win_w as i32 - 8;
+    let mut x = SIDEBAR_W + 8;
+
+    let w = crate::ui::text::text_cells(partition) as i32 * 8 + 8;
+    if x + w > limit {
+        return out;
+    }
+    out.push((
+        Rect::new(x, y, w as u32, 20),
+        String::from(partition),
+        String::from("/"),
+    ));
+    x += w + 14;
+
+    let mut target = String::new();
+    for comp in path.split('/').filter(|c| !c.is_empty()) {
+        target.push('/');
+        target.push_str(comp);
+        let w = crate::ui::text::text_cells(comp) as i32 * 8 + 8;
+        if x + w > limit {
+            break;
+        }
+        out.push((
+            Rect::new(x, y, w as u32, 20),
+            String::from(comp),
+            target.clone(),
+        ));
+        x += w + 14;
+    }
+    out
+}
 
 /// Кнопка «+File» (относительно области содержимого). Правый якорь —
 /// как и при отрисовке.
@@ -82,6 +126,22 @@ pub fn draw_files(
         r.draw_text(w.x + db.x + 4, content_y + db.y + 4, "+Folder", Color::WHITE, None);
     }
 
+    // Хлебные крошки: раздел и каждый каталог пути — кликабельные
+    // сегменты (те же Rect проверяет обработчик кликов).
+    let crumbs = breadcrumbs(current_partition, current_path, w.width);
+    let last = crumbs.len().saturating_sub(1);
+    for (i, (rect, label, _)) in crumbs.iter().enumerate() {
+        let (cx, cy) = (w.x + rect.x, content_y + rect.y);
+        let is_last = i == last;
+        let bg = if is_last { theme.titlebar_active } else { theme.titlebar_inactive };
+        let fg = if is_last { theme.accent } else { theme.text_primary };
+        r.fill_rounded_rect(cx, cy, rect.w, rect.h, 4, bg);
+        r.draw_text(cx + 4, cy + 4, label, fg, None);
+        if !is_last {
+            r.draw_text(cx + rect.w as i32 + 3, cy + 4, ">", theme.text_secondary, None);
+        }
+    }
+
     let list_start_y = content_y + LIST_START_Y;
     let mut ey = list_start_y;
     for (idx, entry) in entries.iter().enumerate() {
@@ -121,6 +181,31 @@ pub fn draw_files(
     }
 }
 
+/// Диалог подтверждения закрытия редактора (координаты относительно
+/// области содержимого окна).
+pub fn editor_dialog_rect(win_w: u32, win_h: u32) -> Rect {
+    let w = 300u32.min(win_w.saturating_sub(16)).max(220);
+    let h = 96u32;
+    Rect::new(
+        (win_w as i32 - w as i32) / 2,
+        ((win_h as i32 - h as i32) / 2).max(8),
+        w,
+        h,
+    )
+}
+
+/// Кнопка диалога закрытия: 0 = Save, 1 = Discard, 2 = Cancel.
+pub fn editor_dialog_btn(win_w: u32, win_h: u32, i: usize) -> Rect {
+    let d = editor_dialog_rect(win_w, win_h);
+    let btn_w = (d.w as i32 - 32) / 3;
+    Rect::new(
+        d.x + 8 + i as i32 * (btn_w + 8),
+        d.y + d.h as i32 - 32,
+        btn_w as u32,
+        24,
+    )
+}
+
 pub fn draw_file_editor(
     r: &mut Renderer,
     theme: &UiTheme,
@@ -132,6 +217,7 @@ pub fn draw_file_editor(
     scroll: usize,
     modified: bool,
     read_only: bool,
+    confirm_close: bool,
     error: Option<&String>,
     status_msg: Option<&String>,
     content_y: i32,
@@ -170,5 +256,35 @@ pub fn draw_file_editor(
         r.draw_text(w.x + 160, status_y, msg, Color::GREEN, None);
     } else if let Some(err) = error {
         r.draw_text(w.x + 160, status_y, err, Color::RED, None);
+    }
+
+    // Диалог закрытия с несохранёнными изменениями: Save / Discard /
+    // Cancel. Кнопки — те же Rect, что проверяет обработчик кликов.
+    if confirm_close {
+        r.shade_rect(w.x, content_y, w.width, w.height, 90);
+        let d = editor_dialog_rect(w.width, w.height);
+        let (dx, dy) = (w.x + d.x, content_y + d.y);
+        r.fill_rounded_rect(dx, dy, d.w, d.h, 6, theme.window_bg);
+        r.draw_rect(dx, dy, d.w, d.h, theme.accent);
+
+        let max_cells = ((d.w as i32 - 24) / 8).max(8) as usize;
+        let prompt = format!("Save changes to {}?", filename);
+        let shown = crate::ui::text::truncate_to_cells(&prompt, max_cells).0;
+        r.draw_text(dx + 12, dy + 12, shown, theme.text_primary, None);
+
+        let labels = ["Save", "Discard", "Cancel"];
+        for (i, label) in labels.iter().enumerate() {
+            let b = editor_dialog_btn(w.width, w.height, i);
+            let (bx, by) = (w.x + b.x, content_y + b.y);
+            let bg = match i {
+                0 => theme.accent,
+                1 => Color::RED,
+                _ => theme.titlebar_inactive,
+            };
+            let fg = if i == 2 { theme.text_primary } else { Color::WHITE };
+            r.fill_rounded_rect(bx, by, b.w, b.h, 4, bg);
+            let tw = label.len() as i32 * 8;
+            r.draw_text(bx + (b.w as i32 - tw) / 2, by + 5, label, fg, None);
+        }
     }
 }

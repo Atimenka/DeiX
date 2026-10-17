@@ -56,6 +56,9 @@ pub enum WindowContent {
         scroll: usize,
         modified: bool,
         read_only: bool,
+        /// Открыт ли диалог подтверждения закрытия (Save/Discard/Cancel).
+        /// Пока он открыт, ввод в текст не идёт, клики — только по кнопкам.
+        confirm_close: bool,
         error: Option<String>,
         status_msg: Option<String>,
     },
@@ -289,10 +292,10 @@ impl Window {
             x,
             y,
             width: 480,
-            height: 320,
+            height: 390,
             minimized: false,
             maximized: false,
-            restore_geometry: (x, y, 480, 320),
+            restore_geometry: (x, y, 480, 390),
             content: WindowContent::ThemeSettings,
         }
     }
@@ -365,11 +368,12 @@ impl Window {
                 scroll: 0,
                 modified: false,
                 read_only,
+                confirm_close: false,
                 error,
                 status_msg: if read_only {
                     Some(String::from("read-only"))
                 } else {
-                    Some(String::from("saved when window closes"))
+                    None
                 },
             },
         }
@@ -792,16 +796,23 @@ pub fn draw_window(
     let total_h = w.height + titlebar_h as u32;
     let frame = WindowFrame::of(w, &ui_m);
 
-    if theme.enable_blur && !is_dragging {
+    // Профиль производительности реально меняет путь отрисовки:
+    // Balanced убирает blur, Performance — ещё и тени (см. ui::effects).
+    let fx = crate::ui::effects::current();
+    if theme.enable_blur && fx.blur_enabled() && !is_dragging {
         r.apply_blur_rect(w.x - 4, w.y - 4, w.width + 8, total_h + 8, 2);
     }
 
-    r.draw_drop_shadow(w.x, w.y, w.width, total_h, 4);
+    if fx.shadows_enabled() {
+        r.draw_drop_shadow(w.x, w.y, w.width, total_h, 4);
+    }
     if !is_focused {
         r.shade_rect(w.x, w.y, w.width, total_h, 15);
     }
 
-    r.fill_rounded_rect_alpha(w.x + 4, w.y + 4, w.width, total_h, theme.corner_radius, Color::SHADOW, 80);
+    if fx.shadows_enabled() {
+        r.fill_rounded_rect_alpha(w.x + 4, w.y + 4, w.width, total_h, theme.corner_radius, Color::SHADOW, 80);
+    }
 
     let title_bg = if is_focused { theme.titlebar_active } else { theme.titlebar_inactive };
 
@@ -868,6 +879,7 @@ pub fn draw_window(
             scroll,
             modified,
             read_only,
+            confirm_close,
             error,
             status_msg,
         } => {
@@ -882,6 +894,7 @@ pub fn draw_window(
                 *scroll,
                 *modified,
                 *read_only,
+                *confirm_close,
                 error.as_ref(),
                 status_msg.as_ref(),
                 content_y,

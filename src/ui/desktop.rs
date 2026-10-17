@@ -275,7 +275,7 @@ impl Desktop {
     }
 
     pub fn open_theme_settings(&mut self, screen_w: i32, screen_h: i32) {
-        self.open_placed(480, 320, screen_w, screen_h, Window::new_theme_settings);
+        self.open_placed(480, 390, screen_w, screen_h, Window::new_theme_settings);
     }
 
     pub fn open_about(&mut self, screen_w: i32, screen_h: i32) {
@@ -291,28 +291,29 @@ impl Desktop {
         });
     }
 
+    /// Закрытие по кнопке окна. Редактор с несохранёнными изменениями
+    /// не закрывается молча: открывается диалог Save / Discard / Cancel,
+    /// решение принимает пользователь (см. клики по кнопкам диалога).
+    pub fn request_close_window(&mut self, idx: usize) {
+        if idx >= self.windows.len() {
+            return;
+        }
+        if let WindowContent::FileEditor {
+            modified: true,
+            read_only: false,
+            confirm_close,
+            ..
+        } = &mut self.windows[idx].content
+        {
+            *confirm_close = true;
+            self.dirty = true;
+            return;
+        }
+        self.close_window(idx);
+    }
+
     pub fn close_window(&mut self, idx: usize) {
         if idx < self.windows.len() {
-            // Редактор сохраняет изменённый файл при закрытии: клавиатура
-            // не передаёт Ctrl-сочетания, поэтому отдельной горячей
-            // клавиши сохранения нет.
-            if let WindowContent::FileEditor {
-                full_path,
-                lines,
-                modified: true,
-                read_only: false,
-                ..
-            } = &self.windows[idx].content
-            {
-                let mut data = lines.join("\n");
-                data.push('\n');
-                if let Err(e) = crate::vfs::write_file(full_path, data.as_bytes()) {
-                    crate::diag::error(
-                        crate::diag::ErrorCode::new(crate::diag::Subsystem::Vfs, 10),
-                        &format!("редактор, сохранение {}: {}", full_path, e.message()),
-                    );
-                }
-            }
             let closed = self.windows.remove(idx);
             self.dirty = true;
             if self.focused_id == Some(closed.id) {
@@ -575,7 +576,7 @@ impl Desktop {
                 let pad = WindowFrame::BTN_HIT_PAD;
 
                 if f.close.contains_pad(m.x, m.y, pad) {
-                    self.close_window(i);
+                    self.request_close_window(i);
                     return;
                 }
                 if f.maximize.contains_pad(m.x, m.y, pad) {
@@ -647,6 +648,9 @@ impl Desktop {
                 if w.minimized {
                     return;
                 }
+                // Высота окна нужна редактору для прокрутки вслед за
+                // курсором; берётся до заёма содержимого.
+                let win_h = w.height;
                 match &mut w.content {
                     WindowContent::Terminal { lines, current_line } => {
                         while let Some(byte) = keyboard::try_read_char() {
@@ -744,9 +748,20 @@ impl Desktop {
                         scroll,
                         modified,
                         read_only,
+                        confirm_close,
                         status_msg: _,
                         ..
                     } => {
+                        if *confirm_close {
+                            // Диалог закрытия модален: ввод в текст не
+                            // идёт, накопленные нажатия сбрасываются.
+                            while keyboard::try_read_char().is_some() {}
+                            return;
+                        }
+                        // Видимых строк столько же, сколько рисует
+                        // draw_file_editor (шаг 18, поля 60).
+                        let visible_lines =
+                            ((win_h as i32 - 60) / 18).max(1) as usize;
                         while let Some(byte) = keyboard::try_read_char() {
                             self.dirty = true;
                             match byte {
@@ -764,6 +779,11 @@ impl Desktop {
                                 keyboard::ARROW_DOWN => {
                                     if *cursor_row + 1 < lines.len() {
                                         *cursor_row += 1;
+                                    }
+                                    // Прокрутка следует за курсором вниз,
+                                    // как и вверх.
+                                    if *cursor_row >= *scroll + visible_lines {
+                                        *scroll = *cursor_row + 1 - visible_lines;
                                     }
                                     let max_col = lines
                                         .get(*cursor_row)
@@ -807,6 +827,9 @@ impl Desktop {
                                             *cursor_row += 1;
                                             *cursor_col = 0;
                                             *modified = true;
+                                            if *cursor_row >= *scroll + visible_lines {
+                                                *scroll = *cursor_row + 1 - visible_lines;
+                                            }
                                         }
                                     }
                                 }
@@ -1004,6 +1027,8 @@ impl Desktop {
         // `win` держит заём на список окон, поэтому арм кладёт параметры
         // сюда, а push происходит после match.
         let mut open_editor: Option<(i32, i32, String, String, bool)> = None;
+        // Аналогично для закрытия текущего окна из диалога редактора.
+        let mut close_after = false;
 
         match &mut win.content {
             WindowContent::TaskManager {
@@ -1095,6 +1120,7 @@ impl Desktop {
                         set_theme(settings_ui::theme_for_preset(*preset));
                         self.wallpaper_cache.invalidate();
                         self.dirty = true;
+                        crate::ui::config::save();
                         return;
                     }
                 }
@@ -1107,6 +1133,7 @@ impl Desktop {
                         // Обои могут использовать акцент — кеш устарел.
                         self.wallpaper_cache.invalidate();
                         self.dirty = true;
+                        crate::ui::config::save();
                         return;
                     }
                 }
@@ -1118,6 +1145,20 @@ impl Desktop {
                         set_theme(updated);
                         self.wallpaper_cache.invalidate();
                         self.dirty = true;
+                        crate::ui::config::save();
+                        return;
+                    }
+                }
+
+                for (i, (_, profile)) in settings_ui::PROFILE_CHOICES.iter().enumerate() {
+                    if settings_ui::profile_rect(i).contains(rel_x, rel_y) {
+                        crate::ui::effects::set(*profile);
+                        // Тени/blur меняются у всех окон сразу — сцену
+                        // нужно собрать заново целиком (инвалидация кеша
+                        // обоев даёт полноэкранный damage).
+                        self.wallpaper_cache.invalidate();
+                        self.dirty = true;
+                        crate::ui::config::save();
                         return;
                     }
                 }
@@ -1206,6 +1247,28 @@ impl Desktop {
                     return;
                 }
 
+                // Хлебные крошки: переход в любой сегмент текущего пути.
+                for (rect, _, target) in
+                    files_ui::breadcrumbs(current_partition, current_path, win.width)
+                {
+                    if rect.contains(rel_x, rel_y) {
+                        let (new_entries, err) =
+                            load_partition_entries(current_partition, &target);
+                        match err {
+                            Some(e) => *error = Some(e),
+                            None => {
+                                *current_path = target;
+                                *entries = new_entries;
+                                *selected_idx = None;
+                                *error = None;
+                                *status_msg = None;
+                            }
+                        }
+                        self.dirty = true;
+                        return;
+                    }
+                }
+
                 if rel_y >= files_ui::LIST_START_Y {
                     let idx = ((rel_y - files_ui::LIST_START_Y) / files_ui::ROW_H) as usize;
                     if idx < entries.len() {
@@ -1262,15 +1325,11 @@ impl Desktop {
                 bookmarks,
                 status_msg,
             } => {
+                use crate::ui::apps::browser as browser_ui;
                 if rel_y <= 24 {
-                    let tab_w = 120;
-                    let clicked_tab = (rel_x - 8) / tab_w;
-                    if clicked_tab >= 0 && (clicked_tab as usize) < tabs.len() {
-                        *active_tab = clicked_tab as usize;
-                        *address_input = tabs[*active_tab].url.clone();
-                        self.dirty = true;
-                    }
-                    if rel_x >= win.width as i32 - 30 {
+                    // Hitbox = те же Rect, по которым draw_browser рисует
+                    // вкладки и кнопку «+».
+                    if browser_ui::new_tab_btn_rect(win.width).contains(rel_x, rel_y) {
                         let new_tab = BrowserTab {
                             title: String::from("New Tab"),
                             url: String::from("deix://home"),
@@ -1281,14 +1340,32 @@ impl Desktop {
                         *active_tab = tabs.len() - 1;
                         *address_input = String::from("deix://home");
                         self.dirty = true;
+                        return;
+                    }
+                    for i in 0..browser_ui::visible_tabs(win.width, tabs.len()) {
+                        if browser_ui::tab_rect(i).contains(rel_x, rel_y) {
+                            *active_tab = i;
+                            *address_input = tabs[i].url.clone();
+                            self.dirty = true;
+                            break;
+                        }
                     }
                     return;
                 }
-                if rel_y >= 54 && rel_y <= 74 {
-                    let bk_w = 110;
-                    let clicked_bk = (rel_x - 8) / bk_w;
-                    if clicked_bk >= 0 && (clicked_bk as usize) < bookmarks.len() {
-                        let target_url = bookmarks[clicked_bk as usize].clone();
+                if rel_y >= 54 && rel_y < 74 {
+                    let mut clicked: Option<usize> = None;
+                    for i in 0..bookmarks.len() {
+                        let br = browser_ui::bookmark_rect(i);
+                        if br.x + br.w as i32 > win.width as i32 {
+                            break;
+                        }
+                        if br.contains(rel_x, rel_y) {
+                            clicked = Some(i);
+                            break;
+                        }
+                    }
+                    if let Some(i) = clicked {
+                        let target_url = bookmarks[i].clone();
                         *address_input = target_url.clone();
                         if let Some(tab) = tabs.get_mut(*active_tab) {
                             tab.url = target_url.clone();
@@ -1315,16 +1392,68 @@ impl Desktop {
                     self.dirty = true;
                 }
             }
+            WindowContent::FileEditor {
+                full_path,
+                lines,
+                modified,
+                confirm_close,
+                error,
+                status_msg,
+                ..
+            } => {
+                // Диалог закрытия модален: пока он открыт, клики по
+                // содержимому обрабатываются только кнопками диалога.
+                if *confirm_close {
+                    let (ww, wh) = (win.width, win.height);
+                    if files_ui::editor_dialog_btn(ww, wh, 0).contains(rel_x, rel_y) {
+                        // Save: при успехе окно закрывается, при ошибке
+                        // остаётся открытым с текстом ошибки.
+                        let mut data = lines.join("\n");
+                        data.push('\n');
+                        match crate::vfs::write_file(full_path, data.as_bytes()) {
+                            Ok(()) => {
+                                *modified = false;
+                                close_after = true;
+                            }
+                            Err(e) => {
+                                *confirm_close = false;
+                                *status_msg = None;
+                                *error = Some(format!("Save failed: {}", e.message()));
+                            }
+                        }
+                        self.dirty = true;
+                    } else if files_ui::editor_dialog_btn(ww, wh, 1).contains(rel_x, rel_y) {
+                        // Discard: закрыть без записи.
+                        close_after = true;
+                        self.dirty = true;
+                    } else if files_ui::editor_dialog_btn(ww, wh, 2).contains(rel_x, rel_y) {
+                        // Cancel: вернуться к редактированию.
+                        *confirm_close = false;
+                        self.dirty = true;
+                    }
+                }
+            }
             _ => {}
         }
 
+        if close_after {
+            self.close_window(win_idx);
+            return;
+        }
         if let Some((x, y, name, full, read_only)) = open_editor {
             self.push_focused(Window::new_file_editor(x, y, &name, &full, read_only));
         }
     }
 
     pub fn render(&mut self, r: &mut Renderer) {
-        let theme = get_theme();
+        // Профиль производительности применяется к локальной копии темы:
+        // Performance делает поверхности непрозрачными (fill_*_alpha при
+        // 255 идёт быстрым путём без смешивания), Balanced/Performance
+        // отключают blur. Сохранённая тема при этом не изменяется.
+        let fx = crate::ui::effects::current();
+        let mut theme = get_theme();
+        theme.opacity = fx.effective_opacity(theme.opacity);
+        theme.enable_blur = theme.enable_blur && fx.blur_enabled();
         let screen_w = r.width() as i32;
         let screen_h = r.height() as i32;
 
@@ -1518,6 +1647,10 @@ impl Desktop {
     pub fn run_event_loop(&mut self, r: &mut Renderer, preserve_windows: bool) -> DesktopExit {
         let screen_w = r.width() as i32;
         let screen_h = r.height() as i32;
+
+        // Настройки рабочего стола (тема/акцент/обои/профиль) из
+        // /userdata/config/desktop.cfg — один раз за загрузку.
+        crate::ui::config::load_once();
 
         if !preserve_windows {
             self.push_focused(Window::new_browser(40, 40, "deix://home"));

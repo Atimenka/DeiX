@@ -1,9 +1,34 @@
 //! Отрисовка приложения Веб-Браузер
+//!
+//! Геометрия вкладок, кнопки новой вкладки и закладок описана
+//! функциями ниже (координаты относительно области содержимого);
+//! обработчик кликов в `desktop.rs` использует те же прямоугольники.
 
-use crate::renderer::{Color, IconType, Renderer};
+use crate::renderer::{Color, IconType, Rect, Renderer};
 use crate::ui::theme::UiTheme;
 use crate::ui::window::{BrowserTab, Window};
 use alloc::string::String;
+
+/// Вкладка `i` в полосе вкладок.
+pub fn tab_rect(i: usize) -> Rect {
+    Rect::new(i as i32 * 122, 0, 120, 24)
+}
+
+/// Кнопка «+» (новая вкладка), прижата к правому краю.
+pub fn new_tab_btn_rect(win_w: u32) -> Rect {
+    Rect::new(win_w as i32 - 28, 2, 22, 20)
+}
+
+/// Сколько вкладок помещается до кнопки «+».
+pub fn visible_tabs(win_w: u32, n: usize) -> usize {
+    let cap = ((win_w as i32 - 32) / 122).max(1) as usize;
+    n.min(cap)
+}
+
+/// Закладка `i` в панели закладок.
+pub fn bookmark_rect(i: usize) -> Rect {
+    Rect::new(8 + i as i32 * 110, 54, 104, 20)
+}
 
 pub fn draw_browser(
     r: &mut Renderer,
@@ -23,18 +48,19 @@ pub fn draw_browser(
     // за правый край прямо на рабочий стол.
     let max_line_bytes = ((w.width as i32 - 24) / 8).max(4) as usize;
 
-    let mut tx = w.x;
-    for (i, tab) in tabs.iter().enumerate() {
-        let tab_w = 120i32;
+    // Вкладки: столько, сколько помещается до «+» — тем же расчётом
+    // пользуется обработчик кликов, невидимых вкладок-хитбоксов нет.
+    for (i, tab) in tabs.iter().enumerate().take(visible_tabs(w.width, tabs.len())) {
+        let tr = tab_rect(i);
         let is_sel = i == active_tab;
         let bg = if is_sel { theme.window_bg } else { theme.titlebar_inactive };
-        r.fill_rounded_rect(tx, content_y, tab_w as u32, 24, 4, bg);
+        r.fill_rounded_rect(w.x + tr.x, content_y + tr.y, tr.w, tr.h, 4, bg);
         let tab_title = clip_bytes(&tab.title, 10);
-        r.draw_text(tx + 8, content_y + 4, tab_title, theme.text_primary, None);
-        tx += tab_w + 2;
+        r.draw_text(w.x + tr.x + 8, content_y + tr.y + 4, tab_title, theme.text_primary, None);
     }
-    r.fill_rounded_rect(w.x + w.width as i32 - 28, content_y + 2, 22, 20, 4, theme.accent);
-    r.draw_text(w.x + w.width as i32 - 21, content_y + 4, "+", Color::WHITE, None);
+    let ntb = new_tab_btn_rect(w.width);
+    r.fill_rounded_rect(w.x + ntb.x, content_y + ntb.y, ntb.w, ntb.h, 4, theme.accent);
+    r.draw_text(w.x + ntb.x + 7, content_y + ntb.y + 2, "+", Color::WHITE, None);
 
     let nav_y = content_y + 26;
     r.fill_rect(w.x, nav_y, w.width, 28, theme.titlebar_active);
@@ -50,11 +76,13 @@ pub fn draw_browser(
 
     let bk_y = nav_y + 28;
     r.fill_rect(w.x, bk_y, w.width, 20, theme.titlebar_inactive);
-    let mut bx = w.x + 8;
-    for bm in bookmarks.iter() {
+    for (i, bm) in bookmarks.iter().enumerate() {
+        let br = bookmark_rect(i);
+        if br.x + br.w as i32 > w.width as i32 {
+            break;
+        }
         let bm_label = clip_bytes(bm, 12);
-        r.draw_text(bx, bk_y + 2, bm_label, theme.accent, None);
-        bx += 110;
+        r.draw_text(w.x + br.x, content_y + br.y + 2, bm_label, theme.accent, None);
     }
 
     let page_y = bk_y + 22;

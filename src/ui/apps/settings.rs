@@ -7,6 +7,7 @@
 //! видимой карточки и её hitbox исключено по построению.
 
 use crate::renderer::{Color, IconType, Rect, Renderer};
+use crate::ui::effects::PerfProfile;
 use crate::ui::theme::{ThemePreset, UiTheme, WALLPAPER_STYLES};
 use crate::ui::window::{RESOLUTION_PRESETS, Window};
 use alloc::format;
@@ -47,6 +48,18 @@ pub fn accent_rect(i: usize) -> Rect {
 /// Прямоугольник кнопки стиля обоев `i`.
 pub fn wallpaper_rect(i: usize) -> Rect {
     Rect::new(12 + i as i32 * 102, 232, 96, 26)
+}
+
+/// Профили производительности. Порядок = порядок отрисовки.
+pub const PROFILE_CHOICES: [(&str, PerfProfile); 3] = [
+    ("Quality", PerfProfile::Quality),
+    ("Balanced", PerfProfile::Balanced),
+    ("Performance", PerfProfile::Performance),
+];
+
+/// Прямоугольник кнопки профиля производительности `i`.
+pub fn profile_rect(i: usize) -> Rect {
+    Rect::new(12 + i as i32 * 152, 286, 144, 26)
 }
 
 /// Тема по пресету — для построения карточек-превью.
@@ -110,6 +123,26 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
         r.draw_text(cx + 6, cy + 6, name, fg, None);
     }
 
+    // Профиль производительности: каждый пункт реально меняет путь
+    // отрисовки (blur/тени/прозрачность — см. ui::effects).
+    r.draw_text(w.x + 12, content_y + 268, "EFFECTS", theme.text_secondary, None);
+    let current_profile = crate::ui::effects::current();
+    for (i, (name, profile)) in PROFILE_CHOICES.iter().enumerate() {
+        let rect = profile_rect(i);
+        let (cx, cy) = (w.x + rect.x, content_y + rect.y);
+        let is_current = current_profile == *profile;
+        let bg = if is_current { theme.accent } else { theme.surface_alt };
+        let fg = if is_current { Color::WHITE } else { theme.text_primary };
+        r.fill_rounded_rect(cx, cy, rect.w, rect.h, 4, bg);
+        r.draw_text(cx + 8, cy + 6, name, fg, None);
+    }
+    let hint = match current_profile {
+        PerfProfile::Quality => "Blur, shadows and translucency enabled.",
+        PerfProfile::Balanced => "Blur disabled; shadows and translucency kept.",
+        PerfProfile::Performance => "Blur and shadows off, surfaces opaque.",
+    };
+    r.draw_text(w.x + 12, content_y + 318, hint, theme.text_secondary, None);
+
     // Честный статус звука: регулятора громкости в этом релизе нет,
     // поэтому ползунок не рисуется — только реальный backend.
     let audio = if crate::hda::is_ready() {
@@ -117,10 +150,10 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
     } else {
         "Sound: PC speaker (no volume control)"
     };
-    r.draw_text(w.x + 12, content_y + 274, audio, theme.text_secondary, None);
+    r.draw_text(w.x + 12, content_y + 340, audio, theme.text_secondary, None);
     r.draw_text(
         w.x + 12,
-        content_y + 294,
+        content_y + 360,
         "Display resolution: Start menu > Display Settings",
         theme.text_secondary,
         None,
