@@ -7,18 +7,30 @@
 
 ENTRY(long_mode_start)
 
+/* Явные программные заголовки с нормальными правами (text R+X,
+   rodata R, data/bss R+W). Без них ld сливает всё в один RWX-сегмент
+   и binutils >= 2.39 предупреждает "LOAD segment with RWX permissions".
+   На kernel.bin это не влияет: objcopy -O binary раскладывает байты по
+   адресам секций, заголовки сегментов в плоский образ не попадают. */
+PHDRS {
+    text   PT_LOAD FLAGS(5);
+    rodata PT_LOAD FLAGS(4);
+    data   PT_LOAD FLAGS(6);
+    bss    PT_LOAD FLAGS(6);
+}
+
 SECTIONS {
     . = 0x100000;
 
     .text :
     {
         *(.text .text.*)
-    }
+    } :text
 
     .rodata :
     {
         *(.rodata .rodata.*)
-    }
+    } :rodata
 
     .data :
     {
@@ -32,7 +44,7 @@ SECTIONS {
         *(.got.plt .got.plt.*)
         . = ALIGN(512);
         __image_end = .;
-    }
+    } :data
 
     /* Rust .bss (HEAP_STORAGE и др.) — на 3 МиБ, вне legacy-дыры
        0xA0000-0xFFFFF и выше кода ядра. Раньше стояла на 2 МиБ, но
@@ -55,5 +67,5 @@ SECTIONS {
         *(COMMON)
         . = ALIGN(8);
         __kernel_bss_end = .;
-    }
+    } :bss
 }

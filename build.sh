@@ -135,15 +135,9 @@ if [ ! -f "$KERNEL_LIB" ]; then
 fi
 
 echo "==> [4/8] Линкуем kernel.bin (long_mode_init + ядро, база 0x100000)"
-# kernel.elf — промежуточный файл: в образ идёт только плоский kernel.bin
-# (objcopy -O binary), сегменты ELF никто не загружает, права RWX на них
-# не имеют смысла. Предупреждение binutils >= 2.39 глушим его же флагом;
-# на старых binutils флага нет — там нет и предупреждения.
-LD_RWX_FLAG=""
-if ld --help 2>/dev/null | grep -q 'no-warn-rwx-segments'; then
-    LD_RWX_FLAG="--no-warn-rwx-segments"
-fi
-ld -n --gc-sections $LD_RWX_FLAG -T boot/linker_kernel.ld -o "$BUILD/kernel.elf" \
+# Права сегментов (text R+X, rodata R, data/bss R+W) заданы в PHDRS
+# линкер-скрипта — RWX-сегментов нет, предупреждать ld не о чем.
+ld -n --gc-sections -T boot/linker_kernel.ld -o "$BUILD/kernel.elf" \
     "$BUILD/long_mode_init.o" \
     "$KERNEL_LIB"
 
