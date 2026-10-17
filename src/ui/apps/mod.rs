@@ -4,12 +4,14 @@ pub mod about;
 pub mod browser;
 pub mod error_center;
 pub mod files;
+pub mod installer;
 pub mod settings;
 pub mod task_manager;
 pub mod terminal;
 
 pub use about::*;
 pub use browser::*;
+pub use installer::draw_installer;
 pub use error_center::*;
 pub use files::*;
 pub use settings::*;

@@ -317,6 +317,7 @@ pub fn execute(line: &str) {
                 _ => crate::devmode::dev_status(),
             }
         }
+        "sysfs" => crate::sysfs::cmd_sysfs(rest),
         "nvidia" => crate::drivers::nvidia::cmd_nvidia(rest),
         "microcode" => crate::microcode::cmd_microcode(rest),
         "hal" => crate::drivers::hal_selftest(),
@@ -515,6 +516,7 @@ fn cmd_help() {
     println!("  pkg <list|install|remove|info> - {}", t!(en: "local package manager (see 'pkg list')", ru: "локальный пакетный менеджер (см. 'pkg list')"));
     println!("  run <program.mex>       - {}", t!(en: "run a .mex program", ru: "запустить .mex программу"));
     println!("  install                 - {}", t!(en: "clone this disk onto a second physical disk (real HDD install)", ru: "клонировать этот диск на второй физический диск (установка на реальный HDD)"));
+    println!("  sysfs [status|convert]  - {}", t!(en: "convert /system from EROFS to ext2 (dev mode only)", ru: "конвертировать /system из EROFS в ext2 (только dev-режим)"));
     println!("  bigfile <size_kb>       - {}", t!(en: "test ext2 indirect blocks with a large file", ru: "проверить indirect-блоки ext2 большим файлом"));
     println!("  useradd <user> <pass>   - {}", t!(en: "create a new user account", ru: "создать новый аккаунт пользователя"));
     println!("  passwd <u> <old> <new>  - {}", t!(en: "change a user's password", ru: "сменить пароль пользователя"));
@@ -1900,7 +1902,7 @@ pub const VALID_COMMANDS: &[&str] = &[
     "bigfile", "useradd", "passwd", "whoami", "users", "encrypt", "crash",
     "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",
     "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "dev", "profile",
-    "ps", "kill", "log", "error", "panic", "diagnostics", "wallpaper"
+    "ps", "kill", "log", "error", "panic", "diagnostics", "wallpaper", "sysfs"
 ];
 
 pub fn is_valid_command(name: &str) -> bool {

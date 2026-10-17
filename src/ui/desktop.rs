@@ -17,9 +17,10 @@ use crate::ui::taskbar::{
     work_area, DockAction, StartMenuAction, START_MENU_APPS,
 };
 use crate::ui::theme::{get_theme, set_theme, UiTheme};
+use crate::ui::apps::installer as installer_ui;
 use crate::ui::window::{
     draw_window, load_partition_entries, maximized_geometry,
-    BrowserTab, Window, WindowContent, WindowFrame, MIN_WINDOW_H, MIN_WINDOW_W,
+    BrowserTab, InstallerPage, Window, WindowContent, WindowFrame, MIN_WINDOW_H, MIN_WINDOW_W,
     RESOLUTION_PRESETS,
 };
 use alloc::format;
@@ -291,6 +292,22 @@ impl Desktop {
 
     pub fn open_about(&mut self, screen_w: i32, screen_h: i32) {
         self.open_placed(380, 220, screen_w, screen_h, Window::new_about);
+    }
+
+    pub fn open_installer(&mut self, screen_w: i32, screen_h: i32) {
+        // Установка — одна за раз: повторный запуск фокусирует уже
+        // открытое окно, а не создаёт второй параллельный мастер.
+        if let Some(i) = self
+            .windows
+            .iter()
+            .position(|w| matches!(w.content, WindowContent::Installer { .. }))
+        {
+            self.windows[i].minimized = false;
+            self.focus_window(i);
+            self.start_menu_open = false;
+            return;
+        }
+        self.open_placed(520, 360, screen_w, screen_h, Window::new_installer);
     }
 
     pub fn open_display_settings(&mut self, screen_w: i32, screen_h: i32) {
@@ -937,6 +954,32 @@ impl Desktop {
                             }
                         }
                     }
+                    WindowContent::Installer { st } => {
+                        while let Some(byte) = keyboard::try_read_char() {
+                            self.dirty = true;
+                            match byte {
+                                b'\n' | b'\r' => st.next(),
+                                b'\t' => {
+                                    if st.page == InstallerPage::Account {
+                                        st.field = (st.field + 1) % 3;
+                                    }
+                                }
+                                0x08 | 0x7F => {
+                                    if st.page == InstallerPage::Account {
+                                        st.field_mut().pop();
+                                    }
+                                }
+                                b if b >= 0x20 && b < 0x7F => {
+                                    if st.page == InstallerPage::Account
+                                        && st.field_mut().len() < 48
+                                    {
+                                        st.field_mut().push(b as char);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     _ => {
                         while keyboard::try_read_char().is_some() {}
                     }
@@ -944,6 +987,37 @@ impl Desktop {
             }
         } else {
             while keyboard::try_read_char().is_some() {}
+        }
+    }
+
+    /// Выполняет шаги активной установки (страница Progress окна
+    /// Install DeiX). До 4 шагов за кадр (~256 КиБ записи), чтобы
+    /// рабочий стол оставался отзывчивым.
+    fn pump_installer_jobs(&mut self) {
+        for w in self.windows.iter_mut() {
+            let WindowContent::Installer { st } = &mut w.content else {
+                continue;
+            };
+            if st.page != InstallerPage::Progress {
+                continue;
+            }
+            let Some(job) = st.job.as_mut() else {
+                continue;
+            };
+            let mut steps = 0;
+            while steps < 4 && job.step() {
+                steps += 1;
+            }
+            if job.failed() {
+                st.error = job.error().map(String::from);
+                st.page = InstallerPage::Failed;
+                st.job = None;
+            } else if job.finished() {
+                st.result_notes = job.notes().to_vec();
+                st.page = InstallerPage::Done;
+                st.job = None;
+            }
+            self.dirty = true;
         }
     }
 
@@ -974,6 +1048,7 @@ impl Desktop {
             StartMenuAction::OpenThemeSettings => self.open_theme_settings(screen_w, screen_h),
             StartMenuAction::OpenAbout => self.open_about(screen_w, screen_h),
             StartMenuAction::OpenDisplaySettings => self.open_display_settings(screen_w, screen_h),
+            StartMenuAction::OpenInstaller => self.open_installer(screen_w, screen_h),
         }
         self.menu_search.clear();
     }
@@ -1606,6 +1681,62 @@ impl Desktop {
                     self.dirty = true;
                 }
             }
+            WindowContent::Installer { st } => {
+                let (ww, wh) = (win.width, win.height);
+                // Кнопки навигации (те же прямоугольники, что в
+                // draw_installer).
+                if installer_ui::next_btn_rect(ww, wh).contains(rel_x, rel_y) {
+                    st.next();
+                    self.dirty = true;
+                    return;
+                }
+                if installer_ui::back_btn_rect(ww, wh).contains(rel_x, rel_y) {
+                    st.back();
+                    self.dirty = true;
+                    return;
+                }
+                match st.page {
+                    InstallerPage::Disk => {
+                        for i in 0..st.disks.len() {
+                            if installer_ui::list_item_rect(ww, i).contains(rel_x, rel_y) {
+                                st.disk_idx = i;
+                                st.size_idx = 0; // размеры зависят от диска
+                                st.note = None;
+                                self.dirty = true;
+                            }
+                        }
+                    }
+                    InstallerPage::Scheme => {
+                        // Пункт UEFI отображается, но пока недоступен —
+                        // клик честно объясняет почему.
+                        if installer_ui::list_item_rect(ww, 1).contains(rel_x, rel_y) {
+                            st.note = Some(String::from(
+                                "UEFI install is not available yet (planned for the next update).",
+                            ));
+                            self.dirty = true;
+                        }
+                    }
+                    InstallerPage::Size => {
+                        let n = st.size_options_mib().len();
+                        for i in 0..n {
+                            if installer_ui::list_item_rect(ww, i).contains(rel_x, rel_y) {
+                                st.size_idx = i;
+                                st.note = None;
+                                self.dirty = true;
+                            }
+                        }
+                    }
+                    InstallerPage::Account => {
+                        for i in 0..3 {
+                            if installer_ui::field_rect(ww, i).contains(rel_x, rel_y) {
+                                st.field = i;
+                                self.dirty = true;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
             WindowContent::FileEditor {
                 full_path,
                 lines,
@@ -1938,6 +2069,10 @@ impl Desktop {
             crate::diag::persist::flush();
 
             self.handle_input(screen_w, screen_h);
+
+            // Активная установка (окно Install DeiX): несколько шагов
+            // работы за кадр, прогресс перерисовывается честно.
+            self.pump_installer_jobs();
 
             // Часы панели: RTC опрашивается ~раз в секунду, перерисовка —
             // только когда реально сменилась минута (а не каждую секунду).

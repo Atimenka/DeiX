@@ -263,21 +263,55 @@ pub fn is_slave_present() -> bool {
     wait_drq_or_err().is_ok()
 }
 
-/// Возвращает общее число адресуемых секторов диска Slave, читая слова
-/// 60-61 структуры IDENTIFY DEVICE (стандартное поле "Total number of
-/// user addressable sectors" для LBA28-дисков). Нужно команде `install`,
-/// чтобы не записать больше данных, чем реально помещается на целевой
-/// диск.
-pub fn slave_sector_count() -> Option<u32> {
-    if !is_slave_present() {
+/// IDENTIFY DEVICE (0xEC) для произвольного диска: возвращает 512 байт
+/// структуры или None, если диска нет / это не ATA-диск (ATAPI).
+/// В отличие от is_slave_present, ВСЕГДА вычитывает буфер данных —
+/// контроллер не остаётся в состоянии DRQ.
+fn identify(drive: Drive) -> Option<[u8; SECTOR_SIZE]> {
+    let select: u8 = match drive {
+        Drive::Master => 0xE0,
+        Drive::Slave => 0xF0,
+    };
+    unsafe {
+        outb(DRIVE_HEAD_PORT, select);
+        outb(SECTOR_COUNT_PORT, 0);
+        outb(LBA_LOW_PORT, 0);
+        outb(LBA_MID_PORT, 0);
+        outb(LBA_HIGH_PORT, 0);
+        outb(COMMAND_PORT, CMD_IDENTIFY);
+    }
+
+    let status = unsafe { inb(STATUS_PORT) };
+    if status == 0x00 {
         return None;
     }
-    // is_slave_present() уже отправил IDENTIFY и дождался DRQ — данные
-    // готовы к чтению, остаётся вычитать все 256 слов (512 байт) буфера.
+    if !wait_bsy_clear() {
+        return None;
+    }
+    // Ненулевые LBA_MID/LBA_HIGH после IDENTIFY — не ATA-диск (ATAPI).
+    let lba_mid = unsafe { inb(LBA_MID_PORT) };
+    let lba_high = unsafe { inb(LBA_HIGH_PORT) };
+    if lba_mid != 0 || lba_high != 0 {
+        return None;
+    }
+    if wait_drq_or_err().is_err() {
+        return None;
+    }
+
     let mut buf = [0u8; SECTOR_SIZE];
     unsafe {
         insw(DATA_PORT, &mut buf);
     }
+    Some(buf)
+}
+
+/// Общее число адресуемых секторов диска — слова 60-61 структуры
+/// IDENTIFY DEVICE ("Total number of user addressable sectors", LBA28).
+/// Нужно установщику: показать ёмкость целевого диска и не записать
+/// больше, чем реально помещается. Заодно вычитывает данные IDENTIFY,
+/// оставленные is_slave_present в контроллере (DRQ).
+pub fn sector_count(drive: Drive) -> Option<u32> {
+    let buf = identify(drive)?;
     let sectors = u32::from_le_bytes([buf[120], buf[121], buf[122], buf[123]]);
     if sectors == 0 {
         None

@@ -108,6 +108,59 @@ fn system_image() -> Result<&'static [u8], VfsError> {
     *guard = Some(leaked);
     Ok(leaked)
 }
+
+// ==================== Тип ФС раздела /system ====================
+
+/// Какая файловая система на /system. Штатно это EROFS; утилита `sysfs
+/// convert` (dev-режим) переформатирует раздел в ext2 — после этого vfs
+/// обязан читать его драйвером ext2. Определяется по магии суперблока
+/// (обе сигнатуры лежат в блоке на смещении 1024 от начала раздела:
+/// ext2 — 0xEF53 на +56, EROFS — 0xE0F5E1E2 на +0).
+/// 0 = ещё не определяли, 1 = EROFS, 2 = ext2.
+static SYSTEM_FS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+fn system_is_ext2() -> bool {
+    use core::sync::atomic::Ordering;
+    match SYSTEM_FS.load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let is = crate::ext2::is_formatted_vol(crate::ext2::VolId::System);
+            SYSTEM_FS.store(if is { 2 } else { 1 }, Ordering::Relaxed);
+            is
+        }
+    }
+}
+
+/// Разрешена ли запись на /system: только после конверсии в ext2 и
+/// только в dev-режиме.
+fn system_writable() -> bool {
+    system_is_ext2() && crate::devmode::sudo_allowed()
+}
+
+/// Перемонтирует /system после конверсии EROFS→ext2: сбрасывает
+/// определение типа ФС, кеш геометрии ext2 и кеш EROFS-образа.
+pub fn remount_system() {
+    use core::sync::atomic::Ordering;
+    SYSTEM_FS.store(0, Ordering::Relaxed);
+    crate::ext2::invalidate_cache(crate::ext2::VolId::System);
+    let mut guard = SYSTEM_IMAGE.lock();
+    if let Some(img) = guard.take() {
+        // Образ был отдан Box::leak при кешировании; возвращаем его
+        // аллокатору — ссылки на образ не живут дольше одной операции
+        // vfs, а новые после сброса кеша не появятся.
+        unsafe {
+            drop(alloc::boxed::Box::from_raw(img as *const [u8] as *mut [u8]));
+        }
+    }
+}
+
+fn system_ext2_err(path: &str, e: crate::ext2::Ext2Error) -> VfsError {
+    match e {
+        crate::ext2::Ext2Error::FileNotFound => VfsError::NotFound { path: String::from(path) },
+        other => VfsError::Io { path: String::from(path), cause: ext2_cause(other) },
+    }
+}
 // ==================== Разбор путей ====================
 
 /// Разбирает абсолютный путь на точку монтирования и остаток пути
@@ -156,6 +209,11 @@ pub fn read_file(path: &str) -> Result<Vec<u8>, VfsError> {
     let (mount, rest) = split_mount(path)?;
     match mount {
         MOUNT_SYSTEM => {
+            if system_is_ext2() {
+                let key = userdata_key(&rest);
+                return crate::ext2::read_file_path_vol(crate::ext2::VolId::System, &key)
+                    .map_err(|e| system_ext2_err(path, e));
+            }
             let img = system_image()?;
             crate::erofs::read_file(&img, &rest).map_err(|e| match e {
                 crate::erofs::ErofsError::NotFound => VfsError::NotFound { path: String::from(path) },
@@ -188,7 +246,14 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<(), VfsError> {
     }
     let (mount, rest) = split_mount(path)?;
     match mount {
-        MOUNT_SYSTEM => Err(VfsError::ReadOnly { path: String::from(path) }),
+        MOUNT_SYSTEM => {
+            if !system_writable() {
+                return Err(VfsError::ReadOnly { path: String::from(path) });
+            }
+            let key = userdata_key(&rest);
+            crate::ext2::write_file_path_vol(crate::ext2::VolId::System, &key, data)
+                .map_err(|e| system_ext2_err(path, e))
+        }
         MOUNT_USERDATA => {
             let key = userdata_key(&rest);
             crate::ext2::write_file_path(&key, data).map_err(|e| VfsError::Io {
@@ -204,7 +269,15 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<(), VfsError> {
 pub fn mkdir(path: &str) -> Result<(), VfsError> {
     let (mount, rest) = split_mount(path)?;
     match mount {
-        MOUNT_SYSTEM => Err(VfsError::ReadOnly { path: String::from(path) }),
+        MOUNT_SYSTEM => {
+            if !system_writable() {
+                return Err(VfsError::ReadOnly { path: String::from(path) });
+            }
+            let key = userdata_key(&rest);
+            crate::ext2::mkdir_p_vol(crate::ext2::VolId::System, &key)
+                .map(|_| ())
+                .map_err(|e| system_ext2_err(path, e))
+        }
         MOUNT_USERDATA => {
             let key = userdata_key(&rest);
             crate::ext2::mkdir_p(&key).map(|_| ()).map_err(|e| VfsError::Io {
@@ -220,7 +293,14 @@ pub fn mkdir(path: &str) -> Result<(), VfsError> {
 pub fn remove(path: &str) -> Result<(), VfsError> {
     let (mount, rest) = split_mount(path)?;
     match mount {
-        MOUNT_SYSTEM => Err(VfsError::ReadOnly { path: String::from(path) }),
+        MOUNT_SYSTEM => {
+            if !system_writable() {
+                return Err(VfsError::ReadOnly { path: String::from(path) });
+            }
+            let key = userdata_key(&rest);
+            crate::ext2::delete_file_path_vol(crate::ext2::VolId::System, &key)
+                .map_err(|e| system_ext2_err(path, e))
+        }
         MOUNT_USERDATA => {
             let key = userdata_key(&rest);
             crate::ext2::delete_file_path(&key).map_err(|e| VfsError::Io {
@@ -237,6 +317,21 @@ pub fn stat(path: &str) -> Result<Stat, VfsError> {
     let (mount, rest) = split_mount(path)?;
     match mount {
         MOUNT_SYSTEM => {
+            if system_is_ext2() {
+                let read_only = !system_writable();
+                if rest.is_empty() {
+                    return Ok(Stat { is_dir: true, size: 0, read_only });
+                }
+                let (parent, leaf) = split_parent(&rest);
+                let key = userdata_key(&parent);
+                let entries = crate::ext2::list_dir_path_vol(crate::ext2::VolId::System, &key)
+                    .map_err(|e| system_ext2_err(path, e))?;
+                return entries
+                    .into_iter()
+                    .find(|e| e.name == leaf)
+                    .map(|e| Stat { is_dir: e.is_directory, size: e.size as u64, read_only })
+                    .ok_or_else(|| VfsError::NotFound { path: String::from(path) });
+            }
             let img = system_image()?;
             // Корень раздела: у EROFS-корня нет записи в родителе,
             // поэтому проверяем только что образ вообще разбирается.
@@ -307,6 +402,15 @@ pub fn readdir(path: &str) -> Result<Vec<DirEnt>, VfsError> {
     }
     match mount {
         MOUNT_SYSTEM => {
+            if system_is_ext2() {
+                let key = userdata_key(&rest);
+                let entries = crate::ext2::list_dir_path_vol(crate::ext2::VolId::System, &key)
+                    .map_err(|e| system_ext2_err(path, e))?;
+                return Ok(entries
+                    .into_iter()
+                    .map(|e| DirEnt { name: e.name, is_dir: e.is_directory, size: e.size as u64 })
+                    .collect());
+            }
             let img = system_image()?;
             let listing = crate::erofs::list_dir(&img, &rest).map_err(|e| match e {
                 crate::erofs::ErofsError::NotFound => VfsError::NotFound { path: String::from(path) },
@@ -336,7 +440,6 @@ pub fn readdir(path: &str) -> Result<Vec<DirEnt>, VfsError> {
     }
 }
 
-/// Проверяет существование пути.
 /// Текущее состояние точек монтирования — для отчётов и `diagnostics`.
 ///
 /// Не загружает образ `/system` и не берёт блокировки безусловно: функция
@@ -345,12 +448,17 @@ pub fn readdir(path: &str) -> Result<Vec<DirEnt>, VfsError> {
 pub fn describe_mounts() -> Vec<String> {
     let mut out = Vec::new();
 
-    let system = match SYSTEM_IMAGE.try_lock() {
-        Some(guard) => match guard.as_ref() {
-            Some(img) => format!("{} ro erofs ({} КиБ в кеше)", MOUNT_SYSTEM, img.len() / 1024),
-            None => format!("{} ro erofs (образ ещё не читался)", MOUNT_SYSTEM),
-        },
-        None => format!("{} ro erofs (кеш занят)", MOUNT_SYSTEM),
+    let system = if SYSTEM_FS.load(core::sync::atomic::Ordering::Relaxed) == 2 {
+        let mode = if crate::devmode::sudo_allowed() { "rw (dev)" } else { "ro" };
+        format!("{} {} ext2 (converted)", MOUNT_SYSTEM, mode)
+    } else {
+        match SYSTEM_IMAGE.try_lock() {
+            Some(guard) => match guard.as_ref() {
+                Some(img) => format!("{} ro erofs ({} КиБ в кеше)", MOUNT_SYSTEM, img.len() / 1024),
+                None => format!("{} ro erofs (образ ещё не читался)", MOUNT_SYSTEM),
+            },
+            None => format!("{} ro erofs (кеш занят)", MOUNT_SYSTEM),
+        }
     };
     out.push(system);
 
@@ -364,6 +472,7 @@ pub fn describe_mounts() -> Vec<String> {
     out
 }
 
+/// Проверяет существование пути.
 pub fn exists(path: &str) -> bool {
     stat(path).is_ok()
 }
@@ -404,10 +513,10 @@ fn ext2_cause(e: crate::ext2::Ext2Error) -> String {
             let code = crate::diag::ErrorCode::new(crate::diag::Subsystem::Ext2, 6);
             match cause {
                 Some(id) => {
-                    crate::diag::caused_by(id, code, "EXT2: ошибка диска при обращении к /userdata");
+                    crate::diag::caused_by(id, code, "EXT2: ошибка диска при обращении к тому");
                 }
                 None => {
-                    crate::diag::error(code, "EXT2: ошибка диска при обращении к /userdata");
+                    crate::diag::error(code, "EXT2: ошибка диска при обращении к тому");
                 }
             }
             String::from("ошибка диска")
@@ -415,7 +524,7 @@ fn ext2_cause(e: crate::ext2::Ext2Error) -> String {
         E::NotFormatted => {
             crate::diag::warn(
                 crate::diag::ErrorCode::new(crate::diag::Subsystem::Ext2, 1),
-                "EXT2: /userdata не отформатирован",
+                "EXT2: том не отформатирован",
             );
             String::from("раздел не отформатирован")
         }

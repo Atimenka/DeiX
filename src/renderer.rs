@@ -160,6 +160,8 @@ pub enum IconType {
     Reload,
     ArrowLeft,
     ArrowRight,
+    /// Установщик: стрелка вниз в диск.
+    Install,
 }
 
 pub struct Renderer {
@@ -596,6 +598,15 @@ impl Renderer {
             IconType::Check => {
                 self.draw_line(x + 2, y + 8, x + 6, y + 12, color);
                 self.draw_line(x + 6, y + 12, x + 13, y + 3, color);
+            }
+            IconType::Install => {
+                // Стрелка вниз в "диск" (нижняя скобка).
+                self.draw_vline(x + 8, y + 2, 7, color);
+                self.draw_line(x + 5, y + 6, x + 8, y + 9, color);
+                self.draw_line(x + 11, y + 6, x + 8, y + 9, color);
+                self.draw_vline(x + 2, y + 10, 4, color);
+                self.draw_vline(x + 14, y + 10, 4, color);
+                self.draw_hline(x + 2, y + 13, 13, color);
             }
             IconType::Browser => {
                 self.draw_rect(x + 2, y + 2, 12, 12, color);

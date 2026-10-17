@@ -25,6 +25,183 @@ pub struct FileViewEntry {
     pub size: u32,
 }
 
+/// Страница мастера установки (окно "Install DeiX").
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum InstallerPage {
+    Disk,
+    Scheme,
+    Size,
+    Account,
+    Confirm,
+    Progress,
+    Done,
+    Failed,
+}
+
+/// Состояние графического установщика. Всю работу делает
+/// install::InstallJob — здесь только выбор параметров и навигация
+/// по страницам мастера.
+pub struct InstallerState {
+    pub page: InstallerPage,
+    pub disks: Vec<crate::install::TargetDisk>,
+    pub disk_idx: usize,
+    pub size_idx: usize,
+    pub username: String,
+    pub password: String,
+    pub confirm: String,
+    /// Активное поле страницы Account: 0 = username, 1 = password,
+    /// 2 = confirm.
+    pub field: usize,
+    /// Сообщение валидации/подсказка под текущей страницей.
+    pub note: Option<String>,
+    pub job: Option<crate::install::InstallJob>,
+    /// Заметки завершённой установки (шифрование и т.п.).
+    pub result_notes: Vec<String>,
+    pub error: Option<String>,
+}
+
+impl InstallerState {
+    pub fn new() -> Self {
+        InstallerState {
+            page: InstallerPage::Disk,
+            disks: crate::install::detect_disks(),
+            disk_idx: 0,
+            size_idx: 0,
+            username: String::new(),
+            password: String::new(),
+            confirm: String::new(),
+            field: 0,
+            note: None,
+            job: None,
+            result_notes: Vec::new(),
+            error: None,
+        }
+    }
+
+    /// Доступные размеры /userdata (МиБ) для выбранного диска.
+    pub fn size_options_mib(&self) -> Vec<u32> {
+        let cap = self.disks.get(self.disk_idx).and_then(|d| d.sectors);
+        crate::install::USERDATA_PRESETS_MIB
+            .iter()
+            .copied()
+            .filter(|mib| match cap {
+                Some(c) => mib * 2048 <= crate::install::max_userdata_sectors(c),
+                None => true,
+            })
+            .collect()
+    }
+
+    /// Мутабельная ссылка на активное текстовое поле (страница Account).
+    pub fn field_mut(&mut self) -> &mut String {
+        match self.field {
+            0 => &mut self.username,
+            1 => &mut self.password,
+            _ => &mut self.confirm,
+        }
+    }
+
+    pub fn back(&mut self) {
+        self.note = None;
+        self.page = match self.page {
+            InstallerPage::Scheme => InstallerPage::Disk,
+            InstallerPage::Size => InstallerPage::Scheme,
+            InstallerPage::Account => InstallerPage::Size,
+            InstallerPage::Confirm => InstallerPage::Account,
+            other => other,
+        };
+    }
+
+    /// Кнопка Next/Install: валидация текущей страницы и переход.
+    pub fn next(&mut self) {
+        self.note = None;
+        match self.page {
+            InstallerPage::Disk => {
+                if self.disks.is_empty() {
+                    self.note = Some(String::from("No ATA disks found."));
+                    return;
+                }
+                let min_cap =
+                    crate::install::USERDATA_START_LBA + crate::install::USERDATA_MIN_SECTORS;
+                if let Some(cap) = self.disks[self.disk_idx].sectors {
+                    if cap < min_cap {
+                        self.note = Some(format!(
+                            "Disk too small: {} MiB, {} MiB required.",
+                            cap / 2048,
+                            min_cap / 2048
+                        ));
+                        return;
+                    }
+                }
+                self.page = InstallerPage::Scheme;
+            }
+            InstallerPage::Scheme => {
+                // Доступна только схема BIOS/MBR (UEFI — в следующем
+                // обновлении), поэтому выбор здесь не хранится.
+                self.page = InstallerPage::Size;
+            }
+            InstallerPage::Size => {
+                let options = self.size_options_mib();
+                if options.is_empty() {
+                    self.note = Some(String::from("Disk has no room for /userdata."));
+                    return;
+                }
+                if self.size_idx >= options.len() {
+                    self.size_idx = options.len() - 1;
+                }
+                self.page = InstallerPage::Account;
+            }
+            InstallerPage::Account => {
+                let u = self.username.trim();
+                let user_ok = !u.is_empty()
+                    && u.len() <= 32
+                    && u.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+                if !user_ok {
+                    self.note =
+                        Some(String::from("Username: letters, digits, '_' or '-', up to 32."));
+                    return;
+                }
+                if self.password.is_empty() {
+                    self.note = Some(String::from("Password must not be empty."));
+                    return;
+                }
+                if self.password != self.confirm {
+                    self.note = Some(String::from("Passwords do not match."));
+                    return;
+                }
+                self.page = InstallerPage::Confirm;
+            }
+            InstallerPage::Confirm => self.start_install(),
+            InstallerPage::Progress
+            | InstallerPage::Done
+            | InstallerPage::Failed => {}
+        }
+    }
+
+    fn start_install(&mut self) {
+        let options = self.size_options_mib();
+        let mib = options.get(self.size_idx).copied().unwrap_or(8);
+        let drive = match self.disks.get(self.disk_idx) {
+            Some(d) => d.drive,
+            None => {
+                self.note = Some(String::from("No target disk selected."));
+                return;
+            }
+        };
+        match crate::install::InstallJob::new(
+            drive,
+            mib * 2048,
+            String::from(self.username.trim()),
+            self.password.clone(),
+        ) {
+            Ok(job) => {
+                self.job = Some(job);
+                self.page = InstallerPage::Progress;
+            }
+            Err(e) => self.note = Some(e),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BrowserTab {
     pub title: String,
@@ -149,6 +326,10 @@ pub enum WindowContent {
         /// (например, нехватка памяти ядра) — показывается в окне.
         status: Option<String>,
     },
+    /// Мастер установки DeiX на диск (Install DeiX).
+    Installer {
+        st: InstallerState,
+    },
 }
 
 impl WindowContent {
@@ -165,6 +346,7 @@ impl WindowContent {
             WindowContent::ThemeSettings => IconType::Theme,
             WindowContent::About => IconType::About,
             WindowContent::DisplaySettings { .. } => IconType::Display,
+            WindowContent::Installer { .. } => IconType::Install,
         }
     }
 }
@@ -392,6 +574,21 @@ impl Window {
             maximized: false,
             restore_geometry: (x, y, 380, 220),
             content: WindowContent::About,
+        }
+    }
+
+    pub fn new_installer(x: i32, y: i32) -> Self {
+        Window {
+            id: 0,
+            title: String::from("Install DeiX"),
+            x,
+            y,
+            width: 520,
+            height: 360,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 520, 360),
+            content: WindowContent::Installer { st: InstallerState::new() },
         }
     }
 
@@ -1199,6 +1396,9 @@ pub fn draw_window(
         }
         WindowContent::DisplaySettings { status } => {
             apps::draw_display_settings(r, theme, w, content_y, status.as_deref());
+        }
+        WindowContent::Installer { st } => {
+            apps::draw_installer(r, theme, w, st, content_y);
         }
     }
 }

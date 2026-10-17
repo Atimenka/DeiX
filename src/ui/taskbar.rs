@@ -26,10 +26,11 @@ pub enum StartMenuAction {
     OpenThemeSettings,
     OpenAbout,
     OpenDisplaySettings,
+    OpenInstaller,
 }
 
 /// Приложения меню Пуск и закреплённая часть Dock.
-pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 8] = [
+pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 9] = [
     ("Terminal", StartMenuAction::OpenTerminal, IconType::Terminal),
     ("Files", StartMenuAction::OpenFiles, IconType::Files),
     ("Browser", StartMenuAction::OpenBrowser, IconType::Browser),
@@ -37,6 +38,7 @@ pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 8] = [
     ("Errors", StartMenuAction::OpenErrorCenter, IconType::Settings),
     ("Personalize", StartMenuAction::OpenThemeSettings, IconType::Theme),
     ("Display", StartMenuAction::OpenDisplaySettings, IconType::Display),
+    ("Install DeiX", StartMenuAction::OpenInstaller, IconType::Install),
     ("About", StartMenuAction::OpenAbout, IconType::About),
 ];
 
@@ -51,6 +53,7 @@ pub fn launch_matches(action: StartMenuAction, content: &WindowContent) -> bool 
         (StartMenuAction::OpenThemeSettings, WindowContent::ThemeSettings) => true,
         (StartMenuAction::OpenAbout, WindowContent::About) => true,
         (StartMenuAction::OpenDisplaySettings, WindowContent::DisplaySettings { .. }) => true,
+        (StartMenuAction::OpenInstaller, WindowContent::Installer { .. }) => true,
         _ => false,
     }
 }
@@ -291,16 +294,27 @@ pub struct StartMenuLayout {
 /// Меню Пуск: поиск сверху, одна колонка приложений (как в концепте
 /// Aurora), футер с пользователем и кнопками питания. Высота подобрана
 /// так, чтобы меню не перекрывало Dock даже на 640x480.
-pub fn start_menu_layout(_screen_h: i32) -> StartMenuLayout {
+pub fn start_menu_layout(screen_h: i32) -> StartMenuLayout {
     let m = UiMetrics::fluent();
     let menu_w = 288i32;
-    let menu_h = 386i32;
     let mx = 6i32;
     let my = m.top_panel_height + 6;
+    // Шаг строки подбирается под высоту экрана: шапка (66) + список +
+    // футер с кнопками питания (44) не должны ложиться на Dock даже на
+    // 640x480. На больших экранах шаг — штатные 34 px.
+    let n = START_MENU_APPS.len() as i32;
+    let avail = screen_h - m.dock_height - m.dock_margin - 2 - my;
+    let step = ((avail - 66 - 44) / n).clamp(26, 34);
+    let menu_h = 66 + step * n + 44;
 
     let mut app_items = [Rect::new(0, 0, 0, 0); START_MENU_APPS.len()];
     for (i, slot) in app_items.iter_mut().enumerate() {
-        *slot = Rect::new(mx + 12, my + 66 + i as i32 * 34, (menu_w - 24) as u32, 30);
+        *slot = Rect::new(
+            mx + 12,
+            my + 66 + i as i32 * step,
+            (menu_w - 24) as u32,
+            (step - 4) as u32,
+        );
     }
 
     StartMenuLayout {

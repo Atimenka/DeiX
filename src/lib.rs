@@ -64,6 +64,7 @@ mod serial;
 mod sound;
 mod spinlock;
 mod sync;
+mod sysfs;
 mod timer;
 mod ui;
 mod userfs;
