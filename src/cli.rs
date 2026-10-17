@@ -323,6 +323,7 @@ pub fn execute(line: &str) {
         "crypt" => crate::luks::cmd_crypt(rest),
         "dinit" => crate::dinit::cmd_dinit(rest),
         "logo" => crate::bootlogo::cmd_logo(rest),
+        "wallpaper" => cmd_wallpaper(rest),
         "linux" => crate::linux::cmd_linux(rest),
         "profile" => crate::userfs::cmd_profile(rest, &current_user().unwrap_or_default()),
         "lock" => crate::loginui::cmd_lock(&current_user().unwrap_or_default()),
@@ -501,6 +502,7 @@ fn cmd_help() {
     println!("  hal                     - {}", t!(en: "driver layer selftest on RTL8139", ru: "самопроверка прослойки драйверов на RTL8139"));
     println!("  nvidia                  - {}", t!(en: "NVIDIA hardware detection: probe and identify GPU (not an acceleration driver)", ru: "детект NVIDIA-железа: поиск и опознание карты (не драйвер ускорения)"));
     println!("  logo [show|info]        - {}", t!(en: "boot logo: show / info", ru: "загрузочное лого: показать / инфо"));
+    println!("  wallpaper <url|file>    - {}", t!(en: "download PNG/BMP and set as desktop wallpaper", ru: "скачать PNG/BMP и поставить обоями рабочего стола"));
     println!("  sound [list|play <имя>|beep [hz ms]] - {}", t!(en: "UI sound effects via PC speaker", ru: "звуковые эффекты UI через PC speaker"));
     println!("  linux <run|info> <файл> - {}", t!(en: "run a Linux ELF program", ru: "запустить ELF-программу Linux"));
     println!("  gpu info                - {}", t!(en: "show detected GPU info", ru: "показать инфо об обнаруженном GPU"));
@@ -679,6 +681,37 @@ fn cmd_mem(arg: &str) {
             ru: "Vec автоматически освобождён (dealloc) при выходе из области видимости."
         )
     );
+}
+
+/// `wallpaper <url|/userdata/путь>` — скачивает PNG/BMP по http(s) или
+/// берёт файл с диска, уменьшает до лимита ext2 (268 КиБ), пишет в
+/// /userdata/wallpaper.bmp и переключает тему на стиль Custom.
+/// Вся логика — в ui::wallpaper (общая с браузером).
+fn cmd_wallpaper(arg: &str) {
+    let a = arg.trim();
+    if a.is_empty() {
+        let t = crate::ui::theme::get_theme();
+        let style = crate::ui::theme::WALLPAPER_STYLES
+            .get(t.wallpaper_style as usize)
+            .copied()
+            .unwrap_or("?");
+        println!("  {}", t!(en: "Usage: wallpaper <http(s)://url | /userdata/path.png|.bmp>", ru: "Использование: wallpaper <http(s)://url | /userdata/путь.png|.bmp>"));
+        println!("  {} {}", t!(en: "Current style:", ru: "Текущий стиль:"), style);
+        return;
+    }
+    let result = if a.starts_with("http://") || a.starts_with("https://") {
+        println!("  {} {}", t!(en: "Downloading", ru: "Скачиваю"), a);
+        crate::ui::wallpaper::set_from_url(a)
+    } else {
+        match crate::vfs::read_file(a) {
+            Ok(data) => crate::ui::wallpaper::set_from_bytes(&data),
+            Err(e) => Err(e.message()),
+        }
+    };
+    match result {
+        Ok(msg) => println!("  [wallpaper] {}", msg),
+        Err(e) => println!("  [wallpaper] {}: {}", t!(en: "error", ru: "ошибка"), e),
+    }
 }
 
 fn cmd_lang(arg: &str) {
@@ -1867,7 +1900,7 @@ pub const VALID_COMMANDS: &[&str] = &[
     "bigfile", "useradd", "passwd", "whoami", "users", "encrypt", "crash",
     "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",
     "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "dev", "profile",
-    "ps", "kill", "log", "error", "panic", "diagnostics"
+    "ps", "kill", "log", "error", "panic", "diagnostics", "wallpaper"
 ];
 
 pub fn is_valid_command(name: &str) -> bool {

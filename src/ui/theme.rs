@@ -190,6 +190,20 @@ pub fn get_theme() -> UiTheme {
     }
 }
 
+/// Поколение обоев: увеличивается при записи нового /wallpaper.bmp
+/// (ui::wallpaper), чтобы работающий рабочий стол перегенерировал кеш —
+/// иначе скачанные из браузера обои появлялись бы только после
+/// перезахода в графику.
+static WALLPAPER_EPOCH: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+pub fn bump_wallpaper_epoch() {
+    WALLPAPER_EPOCH.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn wallpaper_epoch() -> u32 {
+    WALLPAPER_EPOCH.load(core::sync::atomic::Ordering::SeqCst)
+}
+
 pub fn set_theme(theme: UiTheme) {
     unsafe {
         CURRENT_THEME = Some(theme);

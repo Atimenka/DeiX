@@ -18,7 +18,7 @@ use crate::ui::taskbar::{
 };
 use crate::ui::theme::{get_theme, set_theme, UiTheme};
 use crate::ui::window::{
-    draw_window, fetch_and_render_web_page, load_partition_entries, maximized_geometry,
+    draw_window, load_partition_entries, maximized_geometry,
     BrowserTab, Window, WindowContent, WindowFrame, MIN_WINDOW_H, MIN_WINDOW_W,
     RESOLUTION_PRESETS,
 };
@@ -138,6 +138,9 @@ pub struct Desktop {
     /// Когда в следующий раз проверять часы (RTC читается ~раз в секунду,
     /// а не в каждом проходе цикла событий).
     next_clock_check_ms: u64,
+    /// Последнее увиденное поколение обоев (theme::wallpaper_epoch):
+    /// при смене — кеш обоев сброшен (обои скачаны браузером/CLI).
+    wallpaper_epoch_seen: u32,
 }
 
 /// Запас вокруг окна под мягкую тень (4 px), blur-ореол (4 px) и
@@ -192,6 +195,7 @@ impl Desktop {
             cursor_saved_valid: false,
             last_clock_key: u32::MAX,
             next_clock_check_ms: 0,
+            wallpaper_epoch_seen: crate::ui::theme::wallpaper_epoch(),
         }
     }
 
@@ -736,20 +740,49 @@ impl Desktop {
                         status_msg,
                         ..
                     } => {
+                        let visible = crate::ui::apps::browser::visible_lines(win_h);
                         while let Some(byte) = keyboard::try_read_char() {
                             self.dirty = true;
                             match byte {
                                 b'\n' => {
                                     let new_url = address_input.clone();
                                     if let Some(tab) = tabs.get_mut(*active_tab) {
-                                        tab.url = new_url.clone();
-                                        tab.title = format!("Page: {}", new_url);
-                                        tab.content = fetch_and_render_web_page(&new_url);
+                                        tab.navigate(&new_url, true);
+                                        *address_input = tab.url.clone();
                                     }
-                                    *status_msg = Some(format!("Navigated to {}", new_url));
+                                    *status_msg = Some(format!("Loaded {}", new_url));
                                 }
                                 0x08 => {
                                     address_input.pop();
+                                }
+                                // Стрелки/прокрутка страницы: вверх-вниз по
+                                // строкам, влево-вправо — Back/Forward.
+                                keyboard::ARROW_UP => {
+                                    if let Some(tab) = tabs.get_mut(*active_tab) {
+                                        tab.scroll = tab.scroll.saturating_sub(3);
+                                    }
+                                }
+                                keyboard::ARROW_DOWN => {
+                                    if let Some(tab) = tabs.get_mut(*active_tab) {
+                                        let max = tab.content.len().saturating_sub(visible / 2);
+                                        tab.scroll = (tab.scroll + 3).min(max);
+                                    }
+                                }
+                                keyboard::ARROW_LEFT => {
+                                    if let Some(tab) = tabs.get_mut(*active_tab) {
+                                        if tab.go_back() {
+                                            *address_input = tab.url.clone();
+                                            *status_msg = Some(String::from("Back"));
+                                        }
+                                    }
+                                }
+                                keyboard::ARROW_RIGHT => {
+                                    if let Some(tab) = tabs.get_mut(*active_tab) {
+                                        if tab.go_forward() {
+                                            *address_input = tab.url.clone();
+                                            *status_msg = Some(String::from("Forward"));
+                                        }
+                                    }
                                 }
                                 b if b >= 0x20 && b < 0x7F => {
                                     address_input.push(b as char);
@@ -1411,26 +1444,84 @@ impl Desktop {
                     // Hitbox = те же Rect, по которым draw_browser рисует
                     // вкладки и кнопку «+».
                     if browser_ui::new_tab_btn_rect(win.width).contains(rel_x, rel_y) {
-                        let new_tab = BrowserTab {
-                            title: String::from("New Tab"),
-                            url: String::from("deix://home"),
-                            content: fetch_and_render_web_page("deix://home"),
-                            scroll: 0,
-                        };
-                        tabs.push(new_tab);
+                        tabs.push(BrowserTab::open("deix://home"));
                         *active_tab = tabs.len() - 1;
                         *address_input = String::from("deix://home");
                         self.dirty = true;
                         return;
                     }
                     for i in 0..browser_ui::visible_tabs(win.width, tabs.len()) {
-                        if browser_ui::tab_rect(i).contains(rel_x, rel_y) {
-                            *active_tab = i;
-                            *address_input = tabs[i].url.clone();
-                            self.dirty = true;
-                            break;
+                        if !browser_ui::tab_rect(i).contains(rel_x, rel_y) {
+                            continue;
                         }
+                        // «×» активной вкладки: закрытие (последняя вкладка
+                        // не закрывается, а возвращается на домашнюю).
+                        if i == *active_tab
+                            && browser_ui::tab_close_rect(i).contains(rel_x, rel_y)
+                        {
+                            if tabs.len() > 1 {
+                                tabs.remove(i);
+                                *active_tab = i.min(tabs.len() - 1);
+                            } else if let Some(tab) = tabs.get_mut(0) {
+                                tab.navigate("deix://home", true);
+                            }
+                        } else {
+                            *active_tab = i;
+                        }
+                        if let Some(tab) = tabs.get(*active_tab) {
+                            *address_input = tab.url.clone();
+                        }
+                        self.dirty = true;
+                        break;
                     }
+                    return;
+                }
+                // Панель навигации: Back / Forward / Reload / Home / Star.
+                // Hitbox = те же Rect, по которым рисуются кнопки.
+                if rel_y > 24 && rel_y < 54 {
+                    let cur_url = tabs.get(*active_tab).map(|t| t.url.clone()).unwrap_or_default();
+                    match browser_ui::nav_button_at(rel_x, rel_y) {
+                        Some(browser_ui::NavButton::Back) => {
+                            if let Some(tab) = tabs.get_mut(*active_tab) {
+                                if tab.go_back() {
+                                    *address_input = tab.url.clone();
+                                    *status_msg = Some(String::from("Back"));
+                                }
+                            }
+                        }
+                        Some(browser_ui::NavButton::Forward) => {
+                            if let Some(tab) = tabs.get_mut(*active_tab) {
+                                if tab.go_forward() {
+                                    *address_input = tab.url.clone();
+                                    *status_msg = Some(String::from("Forward"));
+                                }
+                            }
+                        }
+                        Some(browser_ui::NavButton::Reload) => {
+                            if let Some(tab) = tabs.get_mut(*active_tab) {
+                                tab.navigate(&cur_url, false);
+                                *status_msg = Some(String::from("Reloaded"));
+                            }
+                        }
+                        Some(browser_ui::NavButton::Home) => {
+                            if let Some(tab) = tabs.get_mut(*active_tab) {
+                                tab.navigate("deix://home", true);
+                                *address_input = tab.url.clone();
+                            }
+                        }
+                        Some(browser_ui::NavButton::Star) => {
+                            // Закладка текущей страницы: повторный клик снимает.
+                            if let Some(pos) = bookmarks.iter().position(|b| *b == cur_url) {
+                                bookmarks.remove(pos);
+                                *status_msg = Some(String::from("Bookmark removed"));
+                            } else if !cur_url.is_empty() {
+                                bookmarks.push(cur_url);
+                                *status_msg = Some(String::from("Bookmark added"));
+                            }
+                        }
+                        None => {}
+                    }
+                    self.dirty = true;
                     return;
                 }
                 if rel_y >= 54 && rel_y < 74 {
@@ -1449,12 +1540,35 @@ impl Desktop {
                         let target_url = bookmarks[i].clone();
                         *address_input = target_url.clone();
                         if let Some(tab) = tabs.get_mut(*active_tab) {
-                            tab.url = target_url.clone();
-                            tab.title = format!("Page: {}", target_url);
-                            tab.content = fetch_and_render_web_page(&target_url);
+                            tab.navigate(&target_url, true);
                         }
-                        *status_msg = Some(format!("Navigated to {}", target_url));
+                        *status_msg = Some(format!("Loaded {}", target_url));
                         self.dirty = true;
+                    }
+                    return;
+                }
+                // Содержимое: клик по строке `[N] ...` открывает links[N-1]
+                // (геометрия строк — та же, что в draw_browser: старт 76,
+                // шаг 18).
+                if rel_y >= 76 {
+                    let row = ((rel_y - 76) / 18) as usize;
+                    if row >= browser_ui::visible_lines(win.height) {
+                        return; // строка статуса / полоса под страницей
+                    }
+                    let target = tabs.get(*active_tab).and_then(|tab| {
+                        let line = tab.content.get(tab.scroll + row)?;
+                        let rest = line.strip_prefix('[')?;
+                        let close = rest.find(']')?;
+                        let n: usize = rest[..close].parse().ok()?;
+                        tab.links.get(n.checked_sub(1)?).cloned()
+                    });
+                    if let Some(url) = target {
+                        if let Some(tab) = tabs.get_mut(*active_tab) {
+                            tab.navigate(&url, true);
+                            *address_input = tab.url.clone();
+                            *status_msg = Some(format!("Loaded {}", url));
+                            self.dirty = true;
+                        }
                     }
                 }
             }
@@ -1922,6 +2036,12 @@ fn run_mini_terminal_command(cmd: &str, lines: &mut Vec<String>) {
 }
 
 fn draw_wallpaper(r: &mut Renderer, theme: &UiTheme, desktop: &mut Desktop, w: i32, h: i32) {
+    // Новые обои могли записать браузер или CLI прямо во время сессии.
+    let epoch = crate::ui::theme::wallpaper_epoch();
+    if epoch != desktop.wallpaper_epoch_seen {
+        desktop.wallpaper_epoch_seen = epoch;
+        desktop.wallpaper_cache.invalidate();
+    }
     let cache_invalid = !desktop.wallpaper_cache.valid
         || desktop.wallpaper_cache.width != w as u32
         || desktop.wallpaper_cache.height != h as u32;

@@ -18,12 +18,15 @@ use crate::net::{dns, inflate, tcp, tls};
 const MAX_REDIRECTS: u32 = 3;
 const MAX_BODY: usize = 1024 * 1024;
 
-/// Ответ HTTP-запроса после всех redirect.
-pub struct HttpResponse {
+/// Ответ HTTP-запроса после всех redirect, байты тела как приняты
+/// (текстовые потребители сами делают from_utf8_lossy; бинарные —
+/// картинки, загрузки — получают данные неиспорченными).
+pub struct HttpBytes {
     pub status: u16,
     pub reason: String,
-    pub body: String,
-    /// URL, с которого фактически пришёл ответ (после redirect).
+    pub body: Vec<u8>,
+    /// Значение заголовка Content-Type как прислал сервер (может быть пустым).
+    pub content_type: String,
     pub final_url: String,
 }
 
@@ -105,8 +108,8 @@ impl Conn {
     }
 }
 
-/// Один HTTP GET без redirect: (status, reason, location, body).
-fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, String), String> {
+/// Один HTTP GET без redirect: (status, reason, location, тело-байты, content-type).
+fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
     let (host, port, path, https) = parse_url(url)
         .ok_or_else(|| "Некорректный URL адрес".to_string())?;
     let ip = resolve(&host)
@@ -125,7 +128,7 @@ fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, String), String
     };
 
     let req = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: DeiX-Browser/3.0 (DeiX OS x86_64)\r\nAccept: text/html,text/plain\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n",
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: DeiX-Browser/3.0 (DeiX OS x86_64)\r\nAccept: */*\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n",
         path, host
     );
     if let Err(e) = conn.send(req.as_bytes()) {
@@ -194,8 +197,8 @@ fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, String), String
         body_bytes = data;
     }
 
-    let body = String::from_utf8_lossy(&body_bytes).into_owned();
-    Ok((status, reason, location, body))
+    let content_type = header_value(&header_text, "content-type").unwrap_or_default();
+    Ok((status, reason, location, body_bytes, content_type))
 }
 
 /// true, если заголовок name присутствует и содержит value (без учёта
@@ -236,8 +239,8 @@ fn dechunk(raw: &[u8]) -> (Vec<u8>, bool) {
     }
 }
 
-/// HTTP GET с переходом по redirect (до MAX_REDIRECTS).
-pub fn fetch(url: &str) -> Result<HttpResponse, String> {
+/// HTTP GET с переходом по redirect (до MAX_REDIRECTS), байтовое тело.
+pub fn fetch_bytes(url: &str) -> Result<HttpBytes, String> {
     let mut current = if url.trim().starts_with("http://") || url.trim().starts_with("https://") {
         url.trim().to_string()
     } else {
@@ -245,7 +248,7 @@ pub fn fetch(url: &str) -> Result<HttpResponse, String> {
     };
 
     for _ in 0..=MAX_REDIRECTS {
-        let (status, reason, location, body) = fetch_once(&current)?;
+        let (status, reason, location, body, content_type) = fetch_once(&current)?;
         let is_redirect = matches!(status, 301 | 302 | 303 | 307 | 308);
         if is_redirect {
             if let Some(loc) = location {
@@ -253,19 +256,22 @@ pub fn fetch(url: &str) -> Result<HttpResponse, String> {
                 continue;
             }
         }
-        return Ok(HttpResponse {
+        return Ok(HttpBytes {
             status,
             reason,
             body,
+            content_type,
             final_url: current,
         });
     }
     Err(format!("Слишком много перенаправлений (>{})", MAX_REDIRECTS))
 }
 
+
+
 /// Превращает Location в абсолютный URL относительно base
 /// (с сохранением схемы base для относительных ссылок).
-fn absolutize(loc: &str, base: &str) -> String {
+pub fn absolutize(loc: &str, base: &str) -> String {
     if loc.starts_with("http://") || loc.starts_with("https://") {
         return loc.to_string();
     }

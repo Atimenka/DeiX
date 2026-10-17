@@ -31,6 +31,69 @@ pub struct BrowserTab {
     pub url: String,
     pub content: Vec<String>,
     pub scroll: usize,
+    /// Абсолютные URL ссылок страницы: маркер `[N]` в тексте и строки
+    /// секции «Links» указывают на links[N-1].
+    pub links: Vec<String>,
+    /// История навигации вкладки; hist_pos — текущая позиция
+    /// (кнопки Back/Forward ходят по ней без повторной загрузки списка).
+    pub history: Vec<String>,
+    pub hist_pos: usize,
+}
+
+impl BrowserTab {
+    /// Новая вкладка, сразу загружающая URL.
+    pub fn open(url: &str) -> Self {
+        let (content, links, title) = fetch_and_render_web_page(url);
+        BrowserTab {
+            title,
+            url: String::from(url),
+            content,
+            scroll: 0,
+            links,
+            history: alloc::vec![String::from(url)],
+            hist_pos: 0,
+        }
+    }
+
+    /// Переход по URL: загрузка страницы + запись в историю.
+    /// `push_history=false` — для Back/Forward/Reload (позиция в истории
+    /// не меняется или уже изменена вызывающим).
+    pub fn navigate(&mut self, url: &str, push_history: bool) {
+        let (content, links, title) = fetch_and_render_web_page(url);
+        self.url = String::from(url);
+        self.title = title;
+        self.content = content;
+        self.links = links;
+        self.scroll = 0;
+        if push_history {
+            // Отрезаем «вперёд»-хвост: новый переход начинает новую ветку.
+            self.history.truncate(self.hist_pos + 1);
+            self.history.push(String::from(url));
+            self.hist_pos = self.history.len() - 1;
+        }
+    }
+
+    /// Назад по истории. true — переход был.
+    pub fn go_back(&mut self) -> bool {
+        if self.hist_pos == 0 {
+            return false;
+        }
+        self.hist_pos -= 1;
+        let url = self.history[self.hist_pos].clone();
+        self.navigate(&url, false);
+        true
+    }
+
+    /// Вперёд по истории. true — переход был.
+    pub fn go_forward(&mut self) -> bool {
+        if self.hist_pos + 1 >= self.history.len() {
+            return false;
+        }
+        self.hist_pos += 1;
+        let url = self.history[self.hist_pos].clone();
+        self.navigate(&url, false);
+        true
+    }
 }
 
 pub enum WindowContent {
@@ -239,23 +302,18 @@ impl Window {
 
     pub fn new_browser(x: i32, y: i32, initial_url: &str) -> Self {
         let url = if initial_url.is_empty() { "deix://home" } else { initial_url };
-        let tab0 = BrowserTab {
-            title: String::from("DeiX Browser"),
-            url: String::from(url),
-            content: fetch_and_render_web_page(url),
-            scroll: 0,
-        };
+        let tab0 = BrowserTab::open(url);
 
         Window {
             id: 0,
             title: String::from("DeiX Web Browser"),
             x,
             y,
-            width: 560,
-            height: 360,
+            width: 640,
+            height: 420,
             minimized: false,
             maximized: false,
-            restore_geometry: (x, y, 560, 360),
+            restore_geometry: (x, y, 640, 420),
             content: WindowContent::WebBrowser {
                 tabs: alloc::vec![tab0],
                 active_tab: 0,
@@ -401,18 +459,19 @@ impl Window {
     }
 }
 
-pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
+/// Загружает URL и возвращает (строки страницы, ссылки, заголовок вкладки).
+pub fn fetch_and_render_web_page(url: &str) -> (Vec<String>, Vec<String>, String) {
     let clean_url = url.trim();
 
     if clean_url == "deix://home" {
-        return alloc::vec![
+        return (alloc::vec![
             String::from("# DeiX Browser"),
             String::from("Limited text-oriented HTTP/HTTPS client."),
             String::new(),
-            String::from("## Quick Navigation:"),
-            String::from("* [https://example.com] HTTPS test page (TLS 1.3)"),
-            String::from("* [deix://docs] System Architecture & Manual"),
-            String::from("* [http://deix.os] System Status (local page)"),
+            String::from("## Quick Navigation (click a link):"),
+            String::from("[1] https://example.com — HTTPS test page (TLS 1.3)"),
+            String::from("[2] deix://docs — System Architecture & Manual"),
+            String::from("[3] http://deix.os — System Status (local page)"),
             String::new(),
             String::from("## Honest limitations:"),
             String::from("- HTTPS: own TLS 1.3 client (X25519 + AES-128-GCM) with X.509 chain verification"),
@@ -421,9 +480,19 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::from("- HTTP/1.1 with chunked transfer and gzip (DEFLATE) decompression; GET only, no keep-alive"),
             String::from("- Text rendering only: no CSS, JavaScript or images"),
             String::from("- DNS: real A-record lookups over UDP/53 (no DNSSEC, no IPv6)"),
-        ];
+            String::new(),
+            String::from("## Wallpapers from the internet:"),
+            String::from("Open a direct PNG/BMP image URL here (or run `wallpaper <url>` in the CLI)"),
+            String::from("- the image is downloaded, scaled to the ext2 file limit and set as wallpaper."),
+        ],
+        alloc::vec![
+            String::from("https://example.com"),
+            String::from("deix://docs"),
+            String::from("http://deix.os"),
+        ],
+        String::from("DeiX Browser"));
     } else if clean_url == "deix://docs" {
-        return alloc::vec![
+        return (alloc::vec![
             alloc::format!("# {} Documentation", crate::OS_RELEASE),
             String::from("Kernel Specs & Subsystem Guide"),
             String::new(),
@@ -438,7 +507,7 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::from("Hostnames are resolved with a real DNS client (A records, UDP/53)."),
             String::from("TLS 1.3: X25519 + HKDF-SHA256 + AES-128-GCM; X.509 chains verified against 23 Mozilla roots."),
             String::from("HTTP/1.1: chunked transfer decoding + gzip (RFC 1951/1952) decompression."),
-        ];
+        ], Vec::new(), String::from("DeiX Docs"));
     } else if clean_url == "http://deix.os" {
         // Локальная страница с НАСТОЯЩИМИ значениями подсистем — никакой
         // выдуманной телеметрии.
@@ -448,7 +517,7 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
         let dns = crate::net::dns_ip();
         let cpu = crate::cpuid::brand_string()
             .unwrap_or_else(|| crate::cpuid::vendor_string());
-        return alloc::vec![
+        return (alloc::vec![
             String::from("# DeiX OS Status (local page)"),
             alloc::format!("{} | Ring 0 Long Mode", crate::OS_RELEASE),
             String::new(),
@@ -463,7 +532,7 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
                 ip[0], ip[1], ip[2], ip[3], gw[0], gw[1], gw[2], gw[3],
                 dns[0], dns[1], dns[2], dns[3]
             ),
-        ];
+        ], Vec::new(), String::from("DeiX Status"));
     }
 
     let full_url = if !clean_url.starts_with("http://") && !clean_url.starts_with("https://") && !clean_url.starts_with("deix://") {
@@ -472,11 +541,19 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
         clean_url.to_string()
     };
 
-    match crate::net::http::fetch(&full_url) {
-        Ok(resp) => parse_html_to_browser_lines(&resp),
+    match crate::net::http::fetch_bytes(&full_url) {
+        Ok(resp) => {
+            if looks_binary(&resp) {
+                render_download(&resp)
+            } else {
+                let (lines, links) = parse_html_to_browser_lines(&resp);
+                let title = page_tab_title(&lines, &resp.final_url);
+                (lines, links, title)
+            }
+        }
         // Показываем настоящую причину сбоя из net::http. Подменять её
         // «успешной» страницей нельзя: иначе сеть не диагностируется.
-        Err(err) => alloc::vec![
+        Err(err) => (alloc::vec![
             format!("# Failed to load {}", full_url),
             String::new(),
             format!("Error: {}", err),
@@ -489,12 +566,106 @@ pub fn fetch_and_render_web_page(url: &str) -> Vec<String> {
             String::from("* server certificate failed verification (expiry, hostname, CA chain)"),
             String::new(),
             String::from("Check in the CLI: `ifconfig`, `dns <host>`, `ping <ip>`."),
-        ],
+        ], Vec::new(), String::from("Load failed")),
     }
 }
 
-pub fn parse_html_to_browser_lines(resp: &crate::net::http::HttpResponse) -> Vec<String> {
-    let html = &resp.body;
+/// Бинарный ли ответ: смотрим Content-Type, сигнатуры картинок и долю
+/// нулевых байтов (сервера без Content-Type встречаются).
+fn looks_binary(resp: &crate::net::http::HttpBytes) -> bool {
+    let ct = resp.content_type.to_ascii_lowercase();
+    if ct.starts_with("image/") || ct.starts_with("application/octet-stream") {
+        return true;
+    }
+    if ct.starts_with("text/")
+        || ct.contains("html")
+        || ct.contains("json")
+        || ct.contains("xml")
+        || ct.contains("javascript")
+    {
+        return false;
+    }
+    if crate::png::is_png(&resp.body) || resp.body.starts_with(b"BM") {
+        return true;
+    }
+    let probe = &resp.body[..resp.body.len().min(512)];
+    !probe.is_empty() && probe.iter().filter(|&&b| b == 0).count() * 20 > probe.len()
+}
+
+/// Бинарный ответ: PNG/BMP сразу ставится обоями (это и есть «скачать
+/// обои из интернета»), прочее сохраняется в /userdata/downloads.
+fn render_download(resp: &crate::net::http::HttpBytes) -> (Vec<String>, Vec<String>, String) {
+    let mut lines = alloc::vec![
+        format!("# Download: {}", resp.final_url),
+        format!(
+            "Type: {} | Size: {} KiB",
+            if resp.content_type.is_empty() { "unknown" } else { &resp.content_type },
+            resp.body.len() / 1024
+        ),
+        String::new(),
+    ];
+    let is_image = crate::png::is_png(&resp.body) || resp.body.starts_with(b"BM");
+    if is_image {
+        match crate::ui::wallpaper::set_from_bytes(&resp.body) {
+            Ok(msg) => {
+                lines.push(format!("## {}", msg));
+                lines.push(String::from("The new wallpaper is already on the desktop."));
+            }
+            Err(e) => lines.push(format!("## Wallpaper not set: {}", e)),
+        }
+    }
+    let name = filename_from_url(&resp.final_url);
+    let path = format!("/userdata/downloads/{}", name);
+    match crate::vfs::write_file(&path, &resp.body) {
+        Ok(()) => lines.push(format!("Saved: {}", path)),
+        Err(e) => lines.push(format!("Not saved to downloads: {}", e.message())),
+    }
+    if !is_image {
+        lines.push(String::new());
+        lines.push(String::from("JPEG/GIF/WebP are not decodable here: only PNG (8-bit) and BMP 24/32."));
+    }
+    (lines, Vec::new(), String::from("Download"))
+}
+
+/// Имя файла из URL: последний сегмент пути без query, только
+/// безопасные символы; пустое → download.bin.
+fn filename_from_url(url: &str) -> String {
+    let no_scheme = url.split("://").nth(1).unwrap_or(url);
+    let path = no_scheme.split(&['?', '#'][..]).next().unwrap_or("");
+    let seg = path.rsplit('/').next().unwrap_or("");
+    let clean: String = seg
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        .take(48)
+        .collect();
+    if clean.is_empty() || clean == "." || clean == ".." {
+        String::from("download.bin")
+    } else {
+        clean
+    }
+}
+
+/// Заголовок вкладки: первая `## ...` строка (титул страницы) или хост URL.
+fn page_tab_title(lines: &[String], url: &str) -> String {
+    for l in lines.iter().take(8) {
+        if let Some(t) = l.strip_prefix("## ") {
+            if !t.trim().is_empty() {
+                return String::from(t.trim());
+            }
+        }
+    }
+    let host = url.split("://").nth(1).unwrap_or(url);
+    String::from(host.split('/').next().unwrap_or(host))
+}
+
+/// Разбирает HTML в строки страницы + список абсолютных URL ссылок.
+/// Маркеры `[N]` в тексте и строки секции «Links on this page» ведут на
+/// links[N-1] — обработчик кликов в desktop.rs парсит этот префикс.
+pub fn parse_html_to_browser_lines(
+    resp: &crate::net::http::HttpBytes,
+) -> (Vec<String>, Vec<String>) {
+    let html = String::from_utf8_lossy(&resp.body).into_owned();
+    let mut links: Vec<String> = Vec::new();
     let mut lines = Vec::new();
     lines.push(format!("# Web Page: {}", resp.final_url));
     // Настоящая строка статуса из ответа сервера, а не вечное «200 OK».
@@ -549,6 +720,26 @@ pub fn parse_html_to_browser_lines(resp: &crate::net::http::HttpResponse) -> Vec
                 text.push_str("\n* ");
             } else if is_block_tag(&name) {
                 text.push('\n');
+            } else if name == "a" && cs.get(i + 1) != Some(&'/') && links.len() < MAX_PAGE_LINKS {
+                // Ссылка: href абсолютизируется относительно финального
+                // URL, в текст вставляется маркер [N] перед якорем.
+                if let Some(href) = extract_href(&cs, i, tag_end) {
+                    let h = href.trim();
+                    let skip = h.is_empty()
+                        || h.starts_with('#')
+                        || h.starts_with("javascript:")
+                        || h.starts_with("mailto:")
+                        || h.starts_with("data:");
+                    if !skip {
+                        let abs = if h.starts_with("deix://") {
+                            String::from(h)
+                        } else {
+                            crate::net::http::absolutize(h, &resp.final_url)
+                        };
+                        links.push(abs);
+                        text.push_str(&format!(" [{}]", links.len()));
+                    }
+                }
             }
             i = tag_end;
         } else if cs[i] == '&' {
@@ -614,7 +805,68 @@ pub fn parse_html_to_browser_lines(resp: &crate::net::http::HttpResponse) -> Vec
         lines.push(String::from("HTML Body empty or binary content."));
     }
 
-    lines
+    // Секция переходов: кликабельные строки `[N] url`.
+    if !links.is_empty() {
+        lines.push(String::new());
+        lines.push(String::from("## Links on this page (click to open):"));
+        for (n, l) in links.iter().enumerate() {
+            lines.push(format!("[{}] {}", n + 1, l));
+        }
+    }
+
+    (lines, links)
+}
+
+/// Максимум ссылок со страницы: защищает кучу от каталогов-портянок.
+const MAX_PAGE_LINKS: usize = 64;
+
+/// Значение атрибута href внутри тега cs[start..end]: в кавычках
+/// (одинарных/двойных) или до первого пробела/'>'.
+fn extract_href(cs: &[char], start: usize, end: usize) -> Option<String> {
+    let mut i = start;
+    while i + 4 < end.min(cs.len()) {
+        let is_href = (cs[i] == 'h' || cs[i] == 'H')
+            && cs[i + 1].to_ascii_lowercase() == 'r'
+            && cs[i + 2].to_ascii_lowercase() == 'e'
+            && cs[i + 3].to_ascii_lowercase() == 'f'
+            // слева — разделитель, а не часть другого атрибута
+            && !cs[i - 1].is_ascii_alphanumeric();
+        if !is_href {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 4;
+        while j < end && cs[j].is_whitespace() {
+            j += 1;
+        }
+        if j >= end || cs[j] != '=' {
+            i += 1;
+            continue;
+        }
+        j += 1;
+        while j < end && cs[j].is_whitespace() {
+            j += 1;
+        }
+        if j >= end {
+            return None;
+        }
+        let mut val = String::new();
+        if cs[j] == '"' || cs[j] == '\'' {
+            let q = cs[j];
+            j += 1;
+            while j < end && cs[j] != q && val.len() < 512 {
+                val.push(cs[j]);
+                j += 1;
+            }
+        } else {
+            while j < end && !cs[j].is_whitespace() && cs[j] != '>' && val.len() < 512 {
+                val.push(cs[j]);
+                j += 1;
+            }
+        }
+        return Some(val);
+    }
+    None
 }
 
 /// Регистронезависимое (ASCII) сравнение с образцом на позиции pos.

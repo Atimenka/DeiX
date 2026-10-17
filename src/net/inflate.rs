@@ -303,6 +303,48 @@ fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
+/// Распаковывает zlib-поток (RFC 1950): 2 байта заголовка CMF/FLG,
+/// DEFLATE-данные, 4 байта Adler-32. Формат PNG хранит IDAT именно так.
+/// Второй элемент результата — true, если вывод усечён по лимиту.
+pub fn zlib_inflate(data: &[u8]) -> Result<(Vec<u8>, bool), String> {
+    if data.len() < 6 {
+        return Err("zlib: поток короче минимального".into());
+    }
+    let cmf = data[0];
+    let flg = data[1];
+    if cmf & 0x0F != 8 {
+        return Err("zlib: метод сжатия не DEFLATE".into());
+    }
+    if (((cmf as u16) << 8) | flg as u16) % 31 != 0 {
+        return Err("zlib: контрольная сумма заголовка не сходится".into());
+    }
+    if flg & 0x20 != 0 {
+        return Err("zlib: preset dictionary не поддерживается".into());
+    }
+    let (out, truncated) = inflate(&data[2..data.len() - 4])?;
+    if truncated {
+        return Ok((out, true));
+    }
+    let tail = &data[data.len() - 4..];
+    let expect = u32::from_be_bytes([tail[0], tail[1], tail[2], tail[3]]);
+    let (mut a, mut b) = (1u32, 0u32);
+    for &byte in out.iter() {
+        a += byte as u32;
+        if a >= 65521 {
+            a -= 65521;
+        }
+        b += a;
+        if b >= 0x8000_0000 {
+            b %= 65521;
+        }
+    }
+    b %= 65521;
+    if ((b << 16) | a) != expect {
+        return Err("zlib: Adler-32 не совпал (данные повреждены)".into());
+    }
+    Ok((out, false))
+}
+
 /// Распаковывает gzip-поток (RFC 1952) с проверкой CRC-32 и ISIZE.
 /// Второй элемент результата — true, если вывод усечён по лимиту
 /// (тогда CRC/ISIZE не проверяются — конец потока не читался).

@@ -51,6 +51,7 @@ mod nouveau;
 mod partition_map;
 mod pci;
 mod pkg;
+mod png;
 mod port;
 mod process;
 mod renderer;
