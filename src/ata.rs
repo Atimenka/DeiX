@@ -61,7 +61,7 @@ pub const SECTOR_SIZE: usize = 512;
 /// Какой из двух дисков на первичном ATA-контроллере адресуем.
 /// См. модульную документацию выше — оба используют одни и те же порты
 /// ввода-вывода, различается только бит в DRIVE_HEAD.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Drive {
     /// "Primary Master" — тот самый диск, с которого DeiX загрузилась.
     Master,
