@@ -212,7 +212,15 @@ impl Renderer {
         if x < 0 || y < 0 || x as u32 >= self.fb.width || y as u32 >= self.fb.height {
             return;
         }
+        // Крайние значения альфы — без чтения фона и смешивания.
+        if alpha == 0 {
+            return;
+        }
         let idx = y as usize * self.fb.width as usize + x as usize;
+        if alpha == 255 {
+            self.back_buffer[idx] = color.0;
+            return;
+        }
         let bg = Color(self.back_buffer[idx]);
         self.back_buffer[idx] = color.alpha_blend(bg, alpha).0;
     }
@@ -275,6 +283,16 @@ impl Renderer {
     }
 
     pub fn fill_rect_alpha(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color, alpha: u8) {
+        // Быстрые пути: alpha 0 — ничего не меняет, alpha 255 — обычная
+        // непрозрачная заливка без чтения фона и смешивания. Профиль
+        // Performance (opacity=255) целиком идёт этим путём.
+        if alpha == 0 {
+            return;
+        }
+        if alpha == 255 {
+            self.fill_rect(x, y, w, h, color);
+            return;
+        }
         let x0 = x.max(0);
         let y0 = y.max(0);
         let x1 = (x + w as i32).min(self.fb.width as i32);

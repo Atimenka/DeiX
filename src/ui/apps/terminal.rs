@@ -163,7 +163,7 @@ pub fn cmd_terminal_color(arg: &str) {
 
 pub fn draw_terminal(
     r: &mut Renderer,
-    _theme: &UiTheme,
+    theme: &UiTheme,
     w: &Window,
     lines: &[String],
     current_line: &str,
@@ -171,8 +171,14 @@ pub fn draw_terminal(
 ) {
     let cfg = *TERMINAL_CONFIG.lock();
 
-    // 1. Акриловое размытие фона под окном терминала (Acrylic Blur)
-    if cfg.blur_enabled {
+    // Blur под терминалом: draw_window уже размыл область всего окна,
+    // если это включено темой и профилем. Повторное размытие того же
+    // места — двойная работа без видимого результата, поэтому
+    // собственный blur терминала (настройка DUIL) применяется только
+    // когда оконный blur не выполнялся.
+    let window_blurred =
+        theme.enable_blur && crate::ui::effects::current().blur_enabled();
+    if cfg.blur_enabled && !window_blurred {
         r.apply_blur_rect(w.x, content_y, w.width, w.height, 2);
     }
 
