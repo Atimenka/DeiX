@@ -35,6 +35,7 @@ fn preset_from_token(s: &str) -> Option<ThemePreset> {
         "aero_glass" => Some(ThemePreset::AeroGlass),
         "emerald" => Some(ThemePreset::EmeraldForest),
         "sunset_gold" => Some(ThemePreset::SunsetGold),
+        _ => None,
     }
 }
 
