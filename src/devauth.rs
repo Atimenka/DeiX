@@ -144,7 +144,10 @@ fn server_status(id: &str) -> Result<ServerStatus, String> {
 enum RequestError {
     /// Заявка с таким device_id уже есть (HTTP 409).
     Duplicate,
-    Failed(String),
+    /// До сервера не достучались: DNS, TCP, TLS, таймаут.
+    Unreachable(String),
+    /// Сервер ответил отказом: заявка в таблицу не попала.
+    Rejected(String),
 }
 
 fn server_request(id: &str) -> Result<(), RequestError> {
@@ -164,16 +167,25 @@ fn server_request(id: &str) -> Result<(), RequestError> {
         ],
         body.as_bytes(),
     )
-    .map_err(RequestError::Failed)?;
+    .map_err(RequestError::Unreachable)?;
     match resp.status {
         201 => Ok(()),
         409 => Err(RequestError::Duplicate),
-        _ => Err(RequestError::Failed(http_error(
-            "request",
-            resp.status,
-            &resp.body,
-        ))),
+        status => Err(RequestError::Rejected(describe_rejection(status, &resp.body))),
     }
+}
+
+/// Причина отказа сервера: сообщение PostgREST/Kong и, где причина
+/// однозначна по коду ответа, что нужно исправить на стороне проекта.
+fn describe_rejection(status: u16, body: &[u8]) -> String {
+    let text = String::from_utf8_lossy(body).into_owned();
+    let message = json_str_field(&text, "message").unwrap_or_else(|| clip(text.trim(), 160));
+    let hint = match status {
+        404 => " - table public.dev_unlocks not found on this project: apply the SQL from docs/DEVAUTH.md",
+        401 | 403 => " - the anon key or the RLS policy 'os can request' rejected the insert",
+        _ => "",
+    };
+    format!("HTTP {}: {}{}", status, clip(&message, 160), hint)
 }
 
 fn http_error(what: &str, status: u16, body: &[u8]) -> String {
@@ -262,8 +274,15 @@ pub fn cmd_request() {
         Err(RequestError::Duplicate) => {
             println!("  [devauth] request for this device id is already on the server.");
         }
-        Err(RequestError::Failed(e)) => {
+        Err(RequestError::Unreachable(e)) => {
             println!("  [devauth] server unreachable: {}", e);
+            notify::push(Kind::Warning, "Dev access", "Server unreachable. The request was not sent.");
+            return;
+        }
+        Err(RequestError::Rejected(e)) => {
+            println!("  [devauth] the server rejected the request, nothing was saved:");
+            println!("  [devauth] {}", e);
+            notify::push(Kind::Error, "Dev access request rejected", &e);
             return;
         }
     }

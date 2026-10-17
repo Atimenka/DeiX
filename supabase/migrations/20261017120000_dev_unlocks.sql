@@ -11,8 +11,10 @@
 -- ограничены политиками ниже: подать заявку и прочитать статус.
 -- Одобрять/менять строки anon не может — это делает только владелец
 -- проекта из дашборда (service role).
+--
+-- Скрипт идемпотентен: его можно повторно выполнять в SQL Editor.
 
-create table public.dev_unlocks (
+create table if not exists public.dev_unlocks (
   device_id    text primary key,
   hostname     text,
   status       text not null default 'pending'
@@ -24,7 +26,12 @@ create table public.dev_unlocks (
 
 alter table public.dev_unlocks enable row level security;
 
+-- Права на уровне таблицы: RLS-политики ниже действуют только поверх них.
+grant usage on schema public to anon;
+grant select, insert on public.dev_unlocks to anon;
+
 -- ОС может подать заявку: только pending и без ключа.
+drop policy if exists "os can request" on public.dev_unlocks;
 create policy "os can request"
   on public.dev_unlocks
   for insert
@@ -35,6 +42,7 @@ create policy "os can request"
 -- ВНИМАНИЕ: anon-ключ публичный, поэтому перечислить заявки может
 -- любой, у кого он есть. Для реестра хобби-ОС это осознанный компромисс
 -- (см. docs/DEVAUTH.md, раздел «Честные границы»).
+drop policy if exists "os can read status" on public.dev_unlocks;
 create policy "os can read status"
   on public.dev_unlocks
   for select
@@ -44,3 +52,6 @@ create policy "os can read status"
 -- Политик INSERT/UPDATE/DELETE для одобрения нет намеренно:
 -- status и unlock_key меняются только из дашборда (service role
 -- обходит RLS).
+
+-- Обновить кеш схемы PostgREST, чтобы таблица стала доступна сразу.
+notify pgrst, 'reload schema';

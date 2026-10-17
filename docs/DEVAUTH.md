@@ -23,6 +23,21 @@ URL проекта и anon-ключ (Dashboard → Settings → API → `anon pu
 Anon-ключ публичен по дизайну; `service_role` и пароль Postgres в ОС
 не попадают никогда.
 
+## Если заявка не появилась в таблице
+
+`dev request` печатает «request sent» только при ответе сервера 201.
+Если вместо этого выведено `the server rejected the request`, строка в
+таблицу не попала, а причина указана в тексте ответа:
+
+* `HTTP 404 ... table public.dev_unlocks not found` — миграция не
+  применена к этому проекту: выполните SQL из
+  `supabase/migrations/20261017120000_dev_unlocks.sql` в Dashboard →
+  SQL Editor (скрипт идемпотентен, повторный запуск безопасен);
+* `HTTP 401/403` — неверный anon-ключ в `src/devauth.rs` или нет
+  политики `os can request` (тот же SQL её создаёт);
+* `server unreachable` — до сервера не дошли (DNS/TCP/TLS), это
+  проблема сети ОС, а не проекта.
+
 ## Поток активации
 
 1. **ОС**: `dev request` — генерирует `device_id` (32 hex-символа,
