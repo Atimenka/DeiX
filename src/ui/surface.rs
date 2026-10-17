@@ -88,4 +88,15 @@ impl WallpaperSurface {
     pub fn invalidate(&mut self) {
         self.valid = false;
     }
+
+    /// Полностью освобождает пиксели кеша. Вызывается перед сменой
+    /// разрешения: новый кеш и новый back buffer выделяются только
+    /// после того, как старые возвращены куче, — пиковое потребление
+    /// памяти не удваивается.
+    pub fn release(&mut self) {
+        self.pixels = Vec::new();
+        self.width = 0;
+        self.height = 0;
+        self.valid = false;
+    }
 }

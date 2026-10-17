@@ -1152,6 +1152,11 @@ fn enter_graphics_mode(gpu_device: &crate::pci::PciDevice, width: u32, height: u
         width, height
     );
 
+    // Back buffer старого режима освобождается до установки нового:
+    // два полноэкранных буфера одновременно не помещаются в кучу при
+    // переходе на большие разрешения (см. renderer::set_active_framebuffer).
+    crate::renderer::reset_renderer();
+
     match crate::vbe::set_mode(gpu_device, width, height, crate::vbe::BPP_32) {
         Some(fb) => {
             // Абсолютный курсор мыши (VMware/QEMU backdoor, см.

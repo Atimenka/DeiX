@@ -702,7 +702,13 @@ static ACTIVE_RENDERER: SpinLock<Option<Renderer>> = SpinLock::new(None);
 
 pub fn set_active_framebuffer(fb: Framebuffer) {
     without_interrupts(|| {
-        *ACTIVE_RENDERER.lock() = Some(Renderer::new(fb));
+        let mut guard = ACTIVE_RENDERER.lock();
+        // Сначала освобождаем back buffer старого режима, потом выделяем
+        // новый: иначе при переходе на большое разрешение оба буфера
+        // (например, 1.8 МиБ + 5 МиБ) живут одновременно и на куче в
+        // 16 МиБ это заканчивалось alloc error — чёрным экраном.
+        *guard = None;
+        *guard = Some(Renderer::new(fb));
     });
 }
 

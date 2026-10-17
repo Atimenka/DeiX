@@ -50,7 +50,7 @@ pub fn launch_matches(action: StartMenuAction, content: &WindowContent) -> bool 
         (StartMenuAction::OpenErrorCenter, WindowContent::ErrorCenter { .. }) => true,
         (StartMenuAction::OpenThemeSettings, WindowContent::ThemeSettings) => true,
         (StartMenuAction::OpenAbout, WindowContent::About) => true,
-        (StartMenuAction::OpenDisplaySettings, WindowContent::DisplaySettings) => true,
+        (StartMenuAction::OpenDisplaySettings, WindowContent::DisplaySettings { .. }) => true,
         _ => false,
     }
 }
@@ -201,9 +201,9 @@ pub fn draw_dock(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen_w:
     let dl = dock_layout(desktop, screen_w, screen_h);
     let fx = crate::ui::effects::current();
 
-    // Стеклянная подложка: blur обоев (только Quality), мягкая тень,
-    // акрил и две кромки — светлая сверху, тёмная по контуру.
-    if theme.enable_blur && fx.blur_enabled() {
+    // Стеклянная подложка: blur обоев (только Quality и не во время
+    // перетаскивания окна), мягкая тень, акрил и две кромки.
+    if theme.enable_blur && fx.blur_enabled() && !desktop.is_interacting() {
         r.apply_blur_rect(dl.dock.x, dl.dock.y, dl.dock.w, dl.dock.h, 2);
     }
     if fx.shadows_enabled() {
@@ -550,13 +550,13 @@ pub fn draw_overview(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, scree
 
     for (i, w) in desktop.windows.iter().enumerate() {
         let card = overview_card_rect(i, n, screen_w, screen_h);
-        r.fill_rounded_rect(card.x, card.y, card.w, card.h, 8, theme.window_bg);
-        let outline = if desktop.focused_id == Some(w.id) {
-            theme.accent
+        r.fill_rounded_rect_alpha(card.x, card.y, card.w, card.h, 10, theme.window_bg, 242);
+        if desktop.focused_id == Some(w.id) {
+            r.draw_rounded_rect_outline(card.x, card.y, card.w, card.h, 10, theme.accent, 235);
+            r.draw_rounded_rect_outline(card.x - 1, card.y - 1, card.w + 2, card.h + 2, 11, theme.accent, 80);
         } else {
-            theme.titlebar_active
-        };
-        r.draw_rect(card.x, card.y, card.w, card.h, outline);
+            r.draw_rounded_rect_outline(card.x, card.y, card.w, card.h, 10, Color::WHITE, 30);
+        }
 
         r.draw_icon(card.x + 10, card.y + 10, w.content.icon(), theme.accent);
         let title = truncate_to_cells(&w.title, ((card.w as i32 - 40) / 8).max(4) as usize).0;

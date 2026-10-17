@@ -282,7 +282,7 @@ impl Desktop {
     }
 
     pub fn open_theme_settings(&mut self, screen_w: i32, screen_h: i32) {
-        self.open_placed(480, 430, screen_w, screen_h, Window::new_theme_settings);
+        self.open_placed(480, 460, screen_w, screen_h, Window::new_theme_settings);
     }
 
     pub fn open_about(&mut self, screen_w: i32, screen_h: i32) {
@@ -438,17 +438,31 @@ impl Desktop {
         }
     }
 
+    /// Идёт ли сейчас перетаскивание или изменение размера окна —
+    /// на это время дорогие эффекты (blur под Dock) отключаются,
+    /// как и blur самих окон в draw_window.
+    pub fn is_interacting(&self) -> bool {
+        self.dragging_window.is_some() || self.resizing_window.is_some()
+    }
+
     /// Подсветка под курсором: пункт Dock и пункт меню Пуск. Сцена
     /// перерисовывается только при смене пункта, а не на каждый пиксель
     /// движения мыши.
     fn update_hover(&mut self, x: i32, y: i32, screen_w: i32, screen_h: i32) {
-        let dl = dock_layout(self, screen_w, screen_h);
+        // Вне горизонтальной полосы Dock раскладка (с её Vec) не
+        // считается вовсе — обычное движение мыши по рабочей области
+        // не делает аллокаций.
+        let m = UiMetrics::fluent();
+        let dock_top = screen_h - m.dock_height - m.dock_margin;
         let mut hover = None;
-        if dl.dock.contains(x, y) {
-            for (i, item) in dl.items.iter().enumerate() {
-                if item.rect.contains_pad(x, y, 3) {
-                    hover = Some(i);
-                    break;
+        if y >= dock_top && y < dock_top + m.dock_height {
+            let dl = dock_layout(self, screen_w, screen_h);
+            if dl.dock.contains(x, y) {
+                for (i, item) in dl.items.iter().enumerate() {
+                    if item.rect.contains_pad(x, y, 3) {
+                        hover = Some(i);
+                        break;
+                    }
                 }
             }
         }
@@ -1077,8 +1091,8 @@ impl Desktop {
         win_idx: usize,
         mx: i32,
         my: i32,
-        _screen_w: i32,
-        _screen_h: i32,
+        screen_w: i32,
+        screen_h: i32,
     ) {
         let ui_m = UiMetrics::fluent();
         let content = WindowFrame::of(&self.windows[win_idx], &ui_m).content;
@@ -1444,7 +1458,7 @@ impl Desktop {
                     }
                 }
             }
-            WindowContent::DisplaySettings => {
+            WindowContent::DisplaySettings { status } => {
                 // Строки рисуются с content_y + 32 шагом 28 (см.
                 // draw_display_settings); клики выше первой строки
                 // (заголовок) не должны выбирать режим.
@@ -1455,7 +1469,26 @@ impl Desktop {
                 let idx = ((rel_y - py_start) / 28) as usize;
                 if idx < RESOLUTION_PRESETS.len() {
                     let (res_w, res_h) = RESOLUTION_PRESETS[idx];
-                    self.pending_resolution = Some((res_w, res_h));
+                    // Preflight по памяти: новому режиму нужны back buffer
+                    // и кеш обоев (w*h*4 каждый); буферы текущего режима
+                    // при переключении освобождаются. Если места всё равно
+                    // не хватает — честный отказ вместо alloc error и
+                    // чёрного экрана посреди переключения.
+                    let needed = (res_w as usize) * (res_h as usize) * 4 * 2;
+                    let reclaimed = (screen_w as usize) * (screen_h as usize) * 4 * 2;
+                    let margin = 2 * 1024 * 1024;
+                    let available = crate::allocator::stats().free + reclaimed;
+                    if needed + margin > available {
+                        *status = Some(format!(
+                            "Not enough kernel memory for {}x{} ({} MiB short)",
+                            res_w,
+                            res_h,
+                            (needed + margin - available).div_ceil(1024 * 1024)
+                        ));
+                    } else {
+                        *status = None;
+                        self.pending_resolution = Some((res_w, res_h));
+                    }
                     self.dirty = true;
                 }
             }
@@ -1848,6 +1881,12 @@ pub fn run_desktop_session(mut on_resolution_change: impl FnMut(u32, u32) -> boo
             Some(DesktopExit::Quit) | None => return,
             Some(DesktopExit::ChangeResolution(w, h)) => {
                 preserve_windows = true;
+                // Кеш обоев старого разрешения освобождается ДО смены
+                // режима: вместе со сбросом рендерера в enter_graphics_mode
+                // это убирает пиковое удвоение памяти (старые + новые
+                // буферы), из-за которого переключение на большие
+                // разрешения падало по alloc error в чёрный экран.
+                desktop.wallpaper_cache.release();
                 if !on_resolution_change(w, h) {
                     return;
                 }
@@ -1887,6 +1926,9 @@ fn draw_wallpaper(r: &mut Renderer, theme: &UiTheme, desktop: &mut Desktop, w: i
         // Обои генерируются ОДИН раз (в кеш) при смене темы/стиля/
         // разрешения; движение курсора и перетаскивание окон кеш
         // не трогают — кадр только копирует готовые пиксели.
+        // Старые пиксели возвращаются куче до выделения новых — иначе
+        // на большом разрешении кеш временно существует в двух копиях.
+        desktop.wallpaper_cache.release();
         desktop.wallpaper_cache = WallpaperSurface::new(w as u32, h as u32);
         generate_wallpaper(&mut desktop.wallpaper_cache.pixels, w, h, theme);
         desktop.wallpaper_cache.valid = true;
@@ -1936,6 +1978,39 @@ fn isqrt(v: i64) -> i32 {
 
 /// Смешивает цвет `fg` с альфой поверх пикселя кеша.
 #[inline]
+/// Мягкий диск в пиксельный буфер: альфа квадратично спадает от
+/// центра (peak) к краю (0). Основа свечений в генераторе обоев.
+fn blend_soft_disc(
+    pixels: &mut [u32],
+    wu: usize,
+    w: i32,
+    h: i32,
+    cx: i32,
+    cy: i32,
+    rad: i32,
+    color: Color,
+    peak: u8,
+) {
+    if rad <= 0 {
+        return;
+    }
+    let r2 = rad as i64 * rad as i64;
+    let y0 = (cy - rad).max(0);
+    let y1 = (cy + rad).min(h - 1);
+    for y in y0..=y1 {
+        let dy = (y - cy) as i64;
+        let span = isqrt(r2 - dy * dy);
+        let x0 = (cx - span).max(0);
+        let x1 = (cx + span).min(w - 1);
+        let row = y as usize * wu;
+        for x in x0..=x1 {
+            let dx = (x - cx) as i64;
+            let a = ((r2 - (dx * dx + dy * dy)) * peak as i64 / r2) as u8;
+            blend_into(pixels, row + x as usize, color, a);
+        }
+    }
+}
+
 fn blend_into(pixels: &mut [u32], idx: usize, fg: Color, alpha: u8) {
     if let Some(p) = pixels.get_mut(idx) {
         *p = fg.alpha_blend(Color::from_u32(*p), alpha).0;
@@ -2030,30 +2105,36 @@ fn generate_wallpaper(pixels: &mut [u32], w: i32, h: i32, theme: &UiTheme) {
     }
 
     match theme.wallpaper_style {
-        // Midnight: графит + тонкая сетка 64 px и редкие акцентные точки.
+        // Midnight: луна с мягким гало, звёзды трёх яркостей и дымка
+        // у горизонта.
         1 => {
-            let grid = theme.text_secondary;
-            for y in 0..h {
+            let moon = Color::rgb(226, 232, 240);
+            let (mx, my) = (w * 3 / 4, h / 4);
+            blend_soft_disc(pixels, wu, w, h, mx, my, h / 5, moon, 26);
+            blend_soft_disc(pixels, wu, w, h, mx, my, h / 12, moon, 210);
+            for i in 0..90i32 {
+                let px = (i * 193 + 31) % w;
+                let py = (i * 311 + 59) % h;
+                let idx = py as usize * wu + px as usize;
+                let a = match i % 3 {
+                    0 => 230,
+                    1 => 140,
+                    _ => 80,
+                };
+                blend_into(pixels, idx, theme.text_primary, a);
+            }
+            let band_c = h * 3 / 4;
+            for y in (band_c - 50).max(0)..(band_c + 50).min(h) {
+                let dist = (y - band_c).abs();
+                let alpha = (16 * (50 - dist) / 50) as u8;
                 let row = y as usize * wu;
-                if y % 64 == 0 {
-                    for x in 0..w {
-                        blend_into(pixels, row + x as usize, grid, 22);
-                    }
-                } else {
-                    let mut x = 0;
-                    while x < w {
-                        blend_into(pixels, row + x as usize, grid, 22);
-                        x += 64;
-                    }
+                for x in 0..w {
+                    blend_into(pixels, row + x as usize, theme.accent, alpha);
                 }
             }
-            for i in 0..18 {
-                let px = (i * 211 + 37) % w;
-                let py = (i * 149 + 83) % h;
-                blend_into(pixels, py as usize * wu + px as usize, theme.accent, 150);
-            }
         }
-        // Plasma Flow: крупные полупрозрачные круги из цветов темы.
+        // Plasma Flow: крупные полупрозрачные круги из цветов темы +
+        // мягкие световые пятна, задающие «течение» по диагонали.
         2 => {
             let colors = [
                 theme.accent,
@@ -2079,8 +2160,11 @@ fn generate_wallpaper(pixels: &mut [u32], w: i32, h: i32, theme: &UiTheme) {
                     }
                 }
             }
+            blend_soft_disc(pixels, wu, w, h, w / 4, h / 4, h / 2, theme.accent, 26);
+            blend_soft_disc(pixels, wu, w, h, w * 3 / 4, h * 3 / 4, h / 2, theme.accent_hover, 22);
         }
-        // Minimal: светлые поверхности + одна мягкая акцентная полоса.
+        // Minimal: светлые поверхности, одна мягкая акцентная полоса и
+        // лёгкое затемнение краёв для глубины.
         3 => {
             let band_c = h * 2 / 3;
             for y in (band_c - 40).max(0)..(band_c + 40).min(h) {
@@ -2091,33 +2175,69 @@ fn generate_wallpaper(pixels: &mut [u32], w: i32, h: i32, theme: &UiTheme) {
                     blend_into(pixels, row + x as usize, theme.accent, alpha);
                 }
             }
-        }
-        // Aurora: две диагональные «полярные» ленты + звёзды.
-        _ => {
+            let edge = (w / 8).max(1);
             for y in 0..h {
                 let row = y as usize * wu;
-                let xc1 = w / 5 + y / 3;
-                for dx in -70..=70i32 {
-                    let x = xc1 + dx;
-                    if x >= 0 && x < w {
-                        let alpha = (40 * (70 - dx.abs()) / 70) as u8;
-                        blend_into(pixels, row + x as usize, theme.accent, alpha);
-                    }
+                for x in 0..edge {
+                    let a = (22 * (edge - x) / edge) as u8;
+                    blend_into(pixels, row + x as usize, Color::BLACK, a);
+                    blend_into(pixels, row + (w - 1 - x) as usize, Color::BLACK, a);
                 }
-                let xc2 = w * 3 / 4 - y / 4;
-                for dx in -90..=90i32 {
-                    let x = xc2 + dx;
-                    if x >= 0 && x < w {
-                        let alpha = (28 * (90 - dx.abs()) / 90) as u8;
-                        blend_into(pixels, row + x as usize, theme.accent_hover, alpha);
+            }
+        }
+        // Aurora: изогнутые ленты сияния (бирюза/фиолет) с квадратичным
+        // спадом к краям, мягкие свечения и звёзды — как в концепте.
+        _ => {
+            let violet = Color::rgb(138, 123, 240);
+            blend_soft_disc(pixels, wu, w, h, w / 5, h / 3, h / 2, theme.accent, 16);
+            blend_soft_disc(pixels, wu, w, h, w * 3 / 4, h / 2, h / 2, violet, 12);
+
+            let ribbons: [(Color, i32, i32, i32, i32); 3] = [
+                (theme.accent, w / 6, 3, 84, 42),
+                (violet, w * 11 / 16, -4, 110, 34),
+                (theme.accent_hover, w * 7 / 8, 5, 64, 26),
+            ];
+            for y in 0..h {
+                let row = y as usize * wu;
+                // Квадратичная добавка даёт лентам лёгкий изгиб.
+                let bend = (y * y) / (h * 6).max(1);
+                for (color, base, slope, halfw, peak) in ribbons.iter() {
+                    let xc = *base + y / *slope + if *slope > 0 { bend } else { -bend };
+                    let hw = *halfw;
+                    let x0 = (xc - hw).max(0);
+                    let x1 = (xc + hw).min(w - 1);
+                    for x in x0..=x1 {
+                        let dx = x - xc;
+                        let a = ((hw * hw - dx * dx) * peak / (hw * hw)) as u8;
+                        blend_into(pixels, row + x as usize, *color, a);
                     }
                 }
             }
-            for i in 0..36 {
-                let px = (i * 137 + 42) % w;
-                let py = (i * 269 + 17) % h;
-                if let Some(p) = pixels.get_mut(py as usize * wu + px as usize) {
-                    *p = theme.text_primary.0;
+
+            for i in 0..70i32 {
+                let px = (i * 193 + 31) % w;
+                let py = (i * 311 + 59) % h;
+                let idx = py as usize * wu + px as usize;
+                let a = match i % 3 {
+                    0 => 255,
+                    1 => 150,
+                    _ => 90,
+                };
+                blend_into(pixels, idx, theme.text_primary, a);
+                // Редкие звёзды — с короткими лучами.
+                if i % 9 == 0 {
+                    if px + 1 < w {
+                        blend_into(pixels, idx + 1, theme.text_primary, 70);
+                    }
+                    if px > 0 {
+                        blend_into(pixels, idx - 1, theme.text_primary, 70);
+                    }
+                    if py + 1 < h {
+                        blend_into(pixels, idx + wu, theme.text_primary, 70);
+                    }
+                    if py > 0 {
+                        blend_into(pixels, idx - wu, theme.text_primary, 70);
+                    }
                 }
             }
         }

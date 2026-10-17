@@ -45,13 +45,13 @@ pub fn accent_rect(i: usize) -> Rect {
     Rect::new(12 + i as i32 * 34, 180, 26, 26)
 }
 
-/// Прямоугольник кнопки стиля обоев `i`: 3 в ряд, 2 ряда (5 стилей).
+/// Свотч-превью стиля обоев `i`: 3 в ряд, 2 ряда (5 стилей).
 pub fn wallpaper_rect(i: usize) -> Rect {
     Rect::new(
         12 + (i % 3) as i32 * 152,
-        232 + (i / 3) as i32 * 30,
+        232 + (i / 3) as i32 * 46,
         144,
-        26,
+        40,
     )
 }
 
@@ -64,7 +64,7 @@ pub const PROFILE_CHOICES: [(&str, PerfProfile); 3] = [
 
 /// Прямоугольник кнопки профиля производительности `i`.
 pub fn profile_rect(i: usize) -> Rect {
-    Rect::new(12 + i as i32 * 152, 314, 144, 26)
+    Rect::new(12 + i as i32 * 152, 346, 144, 26)
 }
 
 /// Тема по пресету — для построения карточек-превью.
@@ -116,21 +116,24 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
         }
     }
 
-    // Стиль обоев.
+    // Стиль обоев — живые миниатюры: каждый свотч рисуется теми же
+    // опорными цветами, что и настоящий генератор обоев этого стиля.
     r.draw_text(w.x + 12, content_y + 214, "WALLPAPER", theme.text_secondary, None);
     for (i, name) in WALLPAPER_STYLES.iter().enumerate() {
         let rect = wallpaper_rect(i);
         let (cx, cy) = (w.x + rect.x, content_y + rect.y);
-        let is_current = theme.wallpaper_style == i as u8;
-        let bg = if is_current { theme.accent } else { theme.surface_alt };
-        let fg = if is_current { Color::WHITE } else { theme.text_primary };
-        r.fill_rounded_rect(cx, cy, rect.w, rect.h, 4, bg);
-        r.draw_text(cx + 6, cy + 6, name, fg, None);
+        draw_wallpaper_swatch(r, theme, i, cx, cy, rect.w, rect.h);
+        r.draw_text(cx + 7, cy + rect.h as i32 - 19, name, Color::BLACK, None);
+        r.draw_text(cx + 6, cy + rect.h as i32 - 20, name, Color::WHITE, None);
+        if theme.wallpaper_style == i as u8 {
+            r.draw_rounded_rect_outline(cx, cy, rect.w, rect.h, 8, theme.accent, 235);
+            r.draw_rounded_rect_outline(cx - 1, cy - 1, rect.w + 2, rect.h + 2, 9, theme.accent, 80);
+        }
     }
 
     // Профиль производительности: каждый пункт реально меняет путь
     // отрисовки (blur/тени/прозрачность — см. ui::effects).
-    r.draw_text(w.x + 12, content_y + 296, "EFFECTS", theme.text_secondary, None);
+    r.draw_text(w.x + 12, content_y + 328, "EFFECTS", theme.text_secondary, None);
     let current_profile = crate::ui::effects::current();
     for (i, (name, profile)) in PROFILE_CHOICES.iter().enumerate() {
         let rect = profile_rect(i);
@@ -146,11 +149,11 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
         PerfProfile::Balanced => "Blur disabled; shadows and translucency kept.",
         PerfProfile::Performance => "Blur and shadows off, surfaces opaque.",
     };
-    r.draw_text(w.x + 12, content_y + 346, hint, theme.text_secondary, None);
+    r.draw_text(w.x + 12, content_y + 380, hint, theme.text_secondary, None);
 
     r.draw_text(
         w.x + 12,
-        content_y + 366,
+        content_y + 398,
         "Custom wallpaper: /userdata/wallpaper.bmp (24/32-bit, <= 268 KB)",
         theme.text_secondary,
         None,
@@ -163,14 +166,66 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
     } else {
         "Sound: PC speaker (no volume control)"
     };
-    r.draw_text(w.x + 12, content_y + 386, audio, theme.text_secondary, None);
+    r.draw_text(w.x + 12, content_y + 416, audio, theme.text_secondary, None);
     r.draw_text(
         w.x + 12,
-        content_y + 406,
+        content_y + 434,
         "Display resolution: Start menu > Display Settings",
         theme.text_secondary,
         None,
     );
+}
+
+/// Миниатюра стиля обоев: та же палитра и мотив, что у настоящего
+/// генератора (desktop::generate_wallpaper), в масштабе кнопки.
+fn draw_wallpaper_swatch(
+    r: &mut Renderer,
+    theme: &UiTheme,
+    style: usize,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+) {
+    let (wi, hi) = (w as i32, h as i32);
+    match style {
+        // Midnight: тёмное небо, луна, звёзды.
+        1 => {
+            r.fill_rounded_rect(x, y, w, h, 8, theme.bg_top.lerp(Color::BLACK, 120));
+            r.fill_circle(x + wi - 22, y + 11, 6, Color::rgb(226, 232, 240));
+            for (sx, sy) in [(14, 8), (40, 16), (70, 7), (96, 20)] {
+                r.put_pixel(x + sx, y + sy, theme.text_primary);
+            }
+        }
+        // Plasma Flow: встречный градиент и круги.
+        2 => {
+            r.fill_rounded_rect(x, y, w, h, 8, theme.bg_bottom);
+            r.fill_circle(x + 30, y + 12, 10, theme.bg_top.lerp(theme.accent, 90));
+            r.fill_circle(x + wi - 34, y + hi - 14, 12, theme.bg_top.lerp(theme.accent_hover, 70));
+        }
+        // Minimal: светлая поверхность с акцентной полосой.
+        3 => {
+            r.fill_rounded_rect(x, y, w, h, 8, theme.window_bg.lerp(Color::WHITE, 120));
+            r.fill_rect(x + 2, y + hi * 2 / 3, w - 4, 3, theme.window_bg.lerp(theme.accent, 60));
+        }
+        // Custom: пользовательский BMP.
+        4 => {
+            r.fill_rounded_rect(x, y, w, h, 8, theme.surface_alt);
+            r.draw_icon(x + wi - 24, y + 5, IconType::Files, theme.accent);
+        }
+        // Aurora: графит и две ленты сияния.
+        _ => {
+            r.fill_rounded_rect(x, y, w, h, 8, theme.bg_top);
+            let violet = Color::rgb(138, 123, 240);
+            r.draw_line(x + 16, y + hi - 4, x + 44, y + 4, theme.bg_top.lerp(theme.accent, 120));
+            r.draw_line(x + 17, y + hi - 4, x + 45, y + 4, theme.bg_top.lerp(theme.accent, 90));
+            r.draw_line(x + 78, y + 3, x + 108, y + hi - 5, theme.bg_top.lerp(violet, 110));
+            r.draw_line(x + 79, y + 3, x + 109, y + hi - 5, theme.bg_top.lerp(violet, 80));
+            for (sx, sy) in [(60, 8), (124, 12), (10, 6)] {
+                r.put_pixel(x + sx, y + sy, theme.text_primary);
+            }
+        }
+    }
 }
 
 pub fn draw_display_settings(
@@ -178,6 +233,7 @@ pub fn draw_display_settings(
     theme: &UiTheme,
     w: &Window,
     content_y: i32,
+    status: Option<&str>,
 ) {
     r.fill_rect_alpha(w.x, content_y, w.width, w.height, theme.window_bg, theme.opacity);
 
@@ -199,5 +255,18 @@ pub fn draw_display_settings(
         }
 
         ry += 28;
+    }
+
+    // Причина отказа последней попытки (нехватка памяти ядра) — реальное
+    // сообщение из обработчика клика, а не декорация.
+    if let Some(msg) = status {
+        let max_cells = ((w.width as i32 - 24) / 8).max(8) as usize;
+        r.draw_text(
+            w.x + 12,
+            ry + 6,
+            crate::ui::text::truncate_to_cells(msg, max_cells).0,
+            Color::RED,
+            None,
+        );
     }
 }

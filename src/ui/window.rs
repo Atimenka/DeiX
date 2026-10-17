@@ -81,7 +81,11 @@ pub enum WindowContent {
     },
     ThemeSettings,
     About,
-    DisplaySettings,
+    DisplaySettings {
+        /// Причина отказа последней попытки смены разрешения
+        /// (например, нехватка памяти ядра) — показывается в окне.
+        status: Option<String>,
+    },
 }
 
 impl WindowContent {
@@ -97,7 +101,7 @@ impl WindowContent {
             WindowContent::ErrorCenter { .. } => IconType::Settings,
             WindowContent::ThemeSettings => IconType::Theme,
             WindowContent::About => IconType::About,
-            WindowContent::DisplaySettings => IconType::Display,
+            WindowContent::DisplaySettings { .. } => IconType::Display,
         }
     }
 }
@@ -292,10 +296,10 @@ impl Window {
             x,
             y,
             width: 480,
-            height: 430,
+            height: 460,
             minimized: false,
             maximized: false,
-            restore_geometry: (x, y, 480, 430),
+            restore_geometry: (x, y, 480, 460),
             content: WindowContent::ThemeSettings,
         }
     }
@@ -392,7 +396,7 @@ impl Window {
             minimized: false,
             maximized: false,
             restore_geometry: (x, y_pos.max(20), 240, height),
-            content: WindowContent::DisplaySettings,
+            content: WindowContent::DisplaySettings { status: None },
         }
     }
 }
@@ -941,8 +945,8 @@ pub fn draw_window(
         WindowContent::About => {
             apps::draw_about(r, theme, w, content_y);
         }
-        WindowContent::DisplaySettings => {
-            apps::draw_display_settings(r, theme, w, content_y);
+        WindowContent::DisplaySettings { status } => {
+            apps::draw_display_settings(r, theme, w, content_y, status.as_deref());
         }
     }
 }
