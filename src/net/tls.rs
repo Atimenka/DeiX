@@ -50,6 +50,28 @@ const HRR_RANDOM: [u8; 32] = [
     0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C,
 ];
 
+/// Стадия рукопожатия и время её начала — для сообщения об ошибке:
+/// видно, где именно оно встало и сколько ушло на вычисления.
+static STAGE: crate::spinlock::SpinLock<&'static str> = crate::spinlock::SpinLock::new("не начато");
+static STAGE_START_MS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static HANDSHAKE_START_MS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+fn mark(stage: &'static str) {
+    *STAGE.lock() = stage;
+    STAGE_START_MS.store(crate::timer::uptime_ms(), core::sync::atomic::Ordering::Relaxed);
+}
+
+fn stage_report() -> String {
+    let now = crate::timer::uptime_ms();
+    format!(
+        "стадия «{}», {} мс в ней, {} мс с начала рукопожатия; {}",
+        *STAGE.lock(),
+        now.saturating_sub(STAGE_START_MS.load(core::sync::atomic::Ordering::Relaxed)),
+        now.saturating_sub(HANDSHAKE_START_MS.load(core::sync::atomic::Ordering::Relaxed)),
+        tcp::link_stats()
+    )
+}
+
 /// Односторонний набор ключей записи (клиентский или серверный).
 struct Keys {
     gcm: AesGcm128,
@@ -376,10 +398,22 @@ pub fn connect(ip: [u8; 4], port: u16, host: &str) -> Result<TlsStream, String> 
         ));
     }
     match handshake(host) {
-        Ok(stream) => Ok(stream),
+        Ok(stream) => {
+            crate::diag::notice(
+                crate::diag::NONE,
+                &format!(
+                    "TLS {}: рукопожатие заняло {} мс",
+                    host,
+                    crate::timer::uptime_ms()
+                        .saturating_sub(HANDSHAKE_START_MS.load(core::sync::atomic::Ordering::Relaxed))
+                ),
+            );
+            Ok(stream)
+        }
         Err(e) => {
+            let report = stage_report();
             tcp::close();
-            Err(e)
+            Err(format!("{} [{}]", e, report))
         }
     }
 }
@@ -421,7 +455,13 @@ fn parse_certificate_msg(msg: &[u8]) -> Result<Vec<Vec<u8>>, String> {
 }
 
 fn handshake(host: &str) -> Result<TlsStream, String> {
-    let deadline = crate::timer::uptime_ms() + HANDSHAKE_TIMEOUT_MS;
+    HANDSHAKE_START_MS.store(crate::timer::uptime_ms(), core::sync::atomic::Ordering::Relaxed);
+    mark("ключи клиента");
+    // Дедлайн ожидания данных от сети. Вычисления (X25519, проверка
+    // цепочки и подписей) могут занимать секунды и не должны съедать
+    // время, отведённое серверу, поэтому после каждого из них он
+    // отсчитывается заново.
+    let mut deadline: u64;
 
     let mut priv_key = [0u8; 32];
     crate::rng::fill_random(&mut priv_key);
@@ -435,6 +475,8 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
     let mut transcript = Sha256::new();
     transcript.update(&ch);
     send_record(CONTENT_HANDSHAKE, 1, &ch)?;
+    mark("ClientHello отправлен, ждём ServerHello");
+    deadline = crate::timer::uptime_ms() + HANDSHAKE_TIMEOUT_MS;
 
     let mut rx: Vec<u8> = Vec::new();
 
@@ -461,7 +503,10 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
     transcript.update(&sh);
 
     // --- ключевое расписание (RFC 8446 §7.1) ---
+    mark("X25519 с ключом сервера");
     let shared = x25519(&priv_key, &server_pub);
+    deadline = crate::timer::uptime_ms() + HANDSHAKE_TIMEOUT_MS;
+    mark("ждём серверный flight (EncryptedExtensions..Finished)");
     if shared.iter().all(|&b| b == 0) {
         return Err("TLS: X25519 дал нулевой общий секрет".into());
     }
@@ -526,10 +571,13 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
                 }
                 HS_CERTIFICATE => {
                     let chain = parse_certificate_msg(&msg)?;
+                    mark("проверка цепочки сертификатов");
                     x509::verify_chain(&chain, host)
                         .map_err(|e| format!("сертификат {}: {}", host, e))?;
                     leaf_key = Some(x509::leaf_public_key(&chain[0])?);
                     transcript.update(&msg);
+                    deadline = crate::timer::uptime_ms() + HANDSHAKE_TIMEOUT_MS;
+                    mark("ждём серверный flight (CertificateVerify, Finished)");
                 }
                 HS_CERT_VERIFY => {
                     // Подпись покрывает транскрипт ПО Certificate
@@ -551,10 +599,13 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
                     content.extend_from_slice(b"TLS 1.3, server CertificateVerify");
                     content.push(0);
                     content.extend_from_slice(&th);
+                    mark("проверка подписи CertificateVerify");
                     x509::verify_tls_signature(key, scheme, &content, &msg[8..])
                         .map_err(|e| format!("TLS: {}", e))?;
                     cert_verified = true;
                     transcript.update(&msg);
+                    deadline = crate::timer::uptime_ms() + HANDSHAKE_TIMEOUT_MS;
+                    mark("ждём серверный Finished");
                 }
                 other => {
                     return Err(format!("TLS: неожиданное handshake-сообщение {}", other))
@@ -570,6 +621,7 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
     let c_ap = derive_secret(&master, b"c ap traffic", &th_server_fin);
     let s_ap = derive_secret(&master, b"s ap traffic", &th_server_fin);
 
+    mark("отправка client Finished");
     // --- CCS (совместимость с middlebox) + client Finished ---
     send_record(CONTENT_CCS, 3, &[1])?;
     let fk_v = hkdf_expand_label(&c_hs, b"finished", &[], 32);
@@ -676,10 +728,11 @@ impl TlsStream {
             None => String::from(tcp::last_end()),
         };
         format!(
-            "{}; TCP принято {} байт, TLS-записей после рукопожатия {}",
+            "{}; TCP принято {} байт, TLS-записей после рукопожатия {}; {}",
             why,
             tcp::rx_bytes(),
-            self.records
+            self.records,
+            tcp::link_stats()
         )
     }
 

@@ -30,10 +30,33 @@ static NPORT: SpinLock<u16> = SpinLock::new(1024);
 // байт данных принято с начала текущего соединения.
 static LAST_END: SpinLock<&'static str> = SpinLock::new("данных ещё не ждали");
 static RX_BYTES: AtomicU32 = AtomicU32::new(0);
+static DUP_DROPPED: AtomicU32 = AtomicU32::new(0);
+static GAP_DROPPED: AtomicU32 = AtomicU32::new(0);
+/// Наш seq сразу после последней отправки и наибольший ack от сервера.
+static SENT_END: AtomicU32 = AtomicU32::new(0);
+static PEER_ACK: AtomicU32 = AtomicU32::new(0);
+/// Начальный seq (ISN) всех наших соединений.
+const ISN: u32 = 0xDEADBEEF;
 
 /// Причина последнего пустого результата `recv`.
 pub fn last_end() -> &'static str {
     *LAST_END.lock()
+}
+
+/// Сводка по соединению: сколько байт отправлено и сколько из них
+/// подтвердил сервер, сколько сегментов отброшено как дубликаты и
+/// сколько как пришедшие с пропуском.
+pub fn link_stats() -> alloc::string::String {
+    let base = ISN.wrapping_add(1);
+    let sent = SENT_END.load(Ordering::Relaxed).wrapping_sub(base);
+    let acked = PEER_ACK.load(Ordering::Relaxed).wrapping_sub(base);
+    alloc::format!(
+        "отправлено {} байт, сервер подтвердил {}; сегментов-дубликатов {}, с пропуском {}",
+        sent,
+        acked,
+        DUP_DROPPED.load(Ordering::Relaxed),
+        GAP_DROPPED.load(Ordering::Relaxed)
+    )
 }
 
 /// Сколько байт TCP-данных принято в текущем соединении.
@@ -121,9 +144,13 @@ fn tcp_payload(pkt: &[u8]) -> Vec<u8> {
 pub fn connect(dip: [u8;4], dport: u16) -> bool {
     if !rtl8139::is_ready() { return false; }
     let sp = { let mut p = NPORT.lock(); let v = *p; *p = if *p>=65535 {1024} else {*p+1}; v };
-    let isn: u32 = 0xDEADBEEF;
+    let isn: u32 = ISN;
     let mut c = TcpConn { state:0, sport:sp, dip, dport, seq:isn, ack:0 };
     RX_BYTES.store(0, Ordering::Relaxed);
+    DUP_DROPPED.store(0, Ordering::Relaxed);
+    GAP_DROPPED.store(0, Ordering::Relaxed);
+    SENT_END.store(isn.wrapping_add(1), Ordering::Relaxed);
+    PEER_ACK.store(isn.wrapping_add(1), Ordering::Relaxed);
     *LAST_END.lock() = "данных ещё не ждали";
     send_seg(&c, SYN, &[]);
     let t0 = crate::timer::uptime_ms();
@@ -147,7 +174,8 @@ pub fn send(data: &[u8]) -> bool {
     let cl = CONN.lock();
     if let Some(ref c) = *cl { if c.state != 1 { return false; } send_seg(c, PSH|ACK, data); drop(cl);
         let mut l = CONN.lock(); if let Some(ref mut c) = *l {
-            c.seq = c.seq.wrapping_add(data.len() as u32); } true } else { false }
+            c.seq = c.seq.wrapping_add(data.len() as u32);
+            SENT_END.store(c.seq, Ordering::Relaxed); } true } else { false }
 }
 
 pub fn recv(to: u64) -> Vec<u8> {
@@ -161,32 +189,55 @@ pub fn recv(to: u64) -> Vec<u8> {
         }
         while let Some(pkt) = rx_dequeue() {
             let cl = CONN.lock();
-            if let Some(ref c) = *cl {
-                if let Some((f, _, s)) = parse_tcp(&pkt, c.sport, c.dport) {
-                    if f&RST != 0 {
-                        *LAST_END.lock() = "сервер сбросил соединение (RST)";
-                        return Vec::new();
-                    }
-                    if f&(PSH|ACK) != 0 {
-                        let p = tcp_payload(&pkt);
-                        if !p.is_empty() {
-                            // Подтверждаем полученные данные (window update):
-                            // иначе сервер упирается в окно и передача встаёт.
-                            let new_ack = s.wrapping_add(p.len() as u32);
-                            let mut nc = *c;
-                            nc.ack = new_ack;
-                            drop(cl);
-                            RX_BYTES.fetch_add(p.len() as u32, Ordering::Relaxed);
-                            *CONN.lock() = Some(nc);
-                            send_seg(&nc, ACK, &[]);
-                            return p;
+            let c = match *cl {
+                Some(ref c) => c,
+                None => continue,
+            };
+            let (f, peer_ack, s) = match parse_tcp(&pkt, c.sport, c.dport) {
+                Some(v) => v,
+                None => continue,
+            };
+            if f&RST != 0 {
+                *LAST_END.lock() = "сервер сбросил соединение (RST)";
+                return Vec::new();
+            }
+            if f&ACK != 0 && (peer_ack.wrapping_sub(PEER_ACK.load(Ordering::Relaxed)) as i32) > 0 {
+                PEER_ACK.store(peer_ack, Ordering::Relaxed);
+            }
+            if f&(PSH|ACK) != 0 {
+                let p = tcp_payload(&pkt);
+                if !p.is_empty() {
+                    // Принимаем только данные, продолжающие поток: дубликаты
+                    // (повторная отправка сервера) отбрасываем, перекрытие
+                    // обрезаем, сегмент с пропуском не принимаем. На любое
+                    // отклонение отвечаем текущим ACK, чтобы сервер повторил.
+                    let gap = s.wrapping_sub(c.ack) as i32;
+                    let skip = if gap < 0 { gap.unsigned_abs() as usize } else { 0 };
+                    if gap > 0 || skip >= p.len() {
+                        if gap > 0 {
+                            GAP_DROPPED.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            DUP_DROPPED.fetch_add(1, Ordering::Relaxed);
                         }
+                        let nc = *c;
+                        send_seg(&nc, ACK, &[]);
+                        continue;
                     }
-                    if f&FIN != 0 {
-                        *LAST_END.lock() = "сервер закрыл TCP-соединение (FIN)";
-                        return Vec::new();
-                    }
+                    let fresh = p[skip..].to_vec();
+                    let mut nc = *c;
+                    nc.ack = c.ack.wrapping_add(fresh.len() as u32);
+                    drop(cl);
+                    RX_BYTES.fetch_add(fresh.len() as u32, Ordering::Relaxed);
+                    *CONN.lock() = Some(nc);
+                    // Подтверждаем полученные данные (window update):
+                    // иначе сервер упирается в окно и передача встаёт.
+                    send_seg(&nc, ACK, &[]);
+                    return fresh;
                 }
+            }
+            if f&FIN != 0 {
+                *LAST_END.lock() = "сервер закрыл TCP-соединение (FIN)";
+                return Vec::new();
             }
         }
         if crate::timer::uptime_ms()-t0 > to {
