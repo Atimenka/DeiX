@@ -66,13 +66,16 @@ pub fn link_stats() -> alloc::string::String {
     let base = ISN.wrapping_add(1);
     let sent = SENT_END.load(Ordering::Relaxed).wrapping_sub(base);
     let acked = PEER_ACK.load(Ordering::Relaxed).wrapping_sub(base);
+    let (nic_frames, _, _, _) = rtl8139::traffic_counters();
     alloc::format!(
-        "отправлено {} байт, сервер подтвердил {}, повторных отправок {}; сегментов-дубликатов {}, с пропуском {}",
+        "отправлено {} байт, сервер подтвердил {}, повторных отправок {}; сегментов-дубликатов {}, с пропуском {}; кадров от карты {}, потеряно в кольце {}",
         sent,
         acked,
         RETRANSMITS.load(Ordering::Relaxed),
         DUP_DROPPED.load(Ordering::Relaxed),
-        GAP_DROPPED.load(Ordering::Relaxed)
+        GAP_DROPPED.load(Ordering::Relaxed),
+        nic_frames,
+        rtl8139::rx_drops()
     )
 }
 
@@ -180,6 +183,8 @@ fn connect_one(dip: [u8;4], dport: u16, waits: &[u64]) -> Result<(), &'static st
     if !rtl8139::is_ready() { return Err("сетевая карта не готова"); }
     let sp = { let mut p = NPORT.lock(); let v = *p; *p = if *p>=65535 {1024} else {*p+1}; v };
     let isn: u32 = ISN;
+    rtl8139::poll_rx();
+    RX_QUEUE.lock().clear();
     let mut c = TcpConn { state:0, sport:sp, dip, dport, seq:isn, ack:0 };
     RX_BYTES.store(0, Ordering::Relaxed);
     DUP_DROPPED.store(0, Ordering::Relaxed);

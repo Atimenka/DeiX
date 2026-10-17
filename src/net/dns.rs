@@ -38,8 +38,16 @@ static QUERY_SEQ: SpinLock<u16> = SpinLock::new(0);
 fn cache_get(name: &str) -> Option<Vec<[u8; 4]>> {
     let now = crate::timer::uptime_ms();
     without_interrupts(|| {
-        let mut c = CACHE.lock();
-        c.retain(|e| e.expires_ms > now);
+        let c = CACHE.lock();
+        c.iter().find(|e| e.name == name && e.expires_ms > now).map(|e| e.ips.clone())
+    })
+}
+
+/// Запись с истёкшим TTL: используется, только если свежий запрос не
+/// получил ответа (RFC 8767, serve-stale).
+fn cache_stale(name: &str) -> Option<Vec<[u8; 4]>> {
+    without_interrupts(|| {
+        let c = CACHE.lock();
         c.iter().find(|e| e.name == name).map(|e| e.ips.clone())
     })
 }
@@ -231,6 +239,13 @@ pub fn resolve_all(host: &str) -> Vec<[u8; 4]> {
             });
             return Vec::new();
         }
+    }
+    if let Some(ips) = cache_stale(&name) {
+        crate::diag::notice(
+            crate::diag::NONE,
+            &format!("DNS: нет ответа для '{}', использован прошлый ответ с истёкшим TTL", name),
+        );
+        return ips;
     }
     set_error(format!(
         "нет ответа от DNS-сервера {}.{}.{}.{} за {} с ({} запроса)",

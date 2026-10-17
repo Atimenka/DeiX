@@ -86,7 +86,7 @@ static STATE: SpinLock<Rtl8139State> = SpinLock::new(Rtl8139State::new());
 // а весь стек работает потом, из `poll_deferred`.
 
 /// Число слотов приёмного кольца.
-const RX_RING_SLOTS: usize = 16;
+const RX_RING_SLOTS: usize = 64;
 /// Максимальный размер кадра в слоте.
 const RX_RING_FRAME: usize = 1600;
 
