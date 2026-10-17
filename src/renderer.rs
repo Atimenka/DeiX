@@ -357,17 +357,6 @@ impl Renderer {
         self.add_damage(Rect::new(x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32));
     }
 
-    pub fn fill_rect_gradient_v(&mut self, x: i32, y: i32, w: u32, h: u32, top: Color, bottom: Color) {
-        if h == 0 {
-            return;
-        }
-        for row in 0..h as i32 {
-            let t = (row as u32 * 255 / h.max(1)) as u8;
-            let color = top.lerp(bottom, t);
-            self.draw_hline(x, y + row, w, color);
-        }
-    }
-
     pub fn shade_rect(&mut self, x: i32, y: i32, w: u32, h: u32, strength: u8) {
         let x0 = x.max(0);
         let y0 = y.max(0);
