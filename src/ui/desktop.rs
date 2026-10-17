@@ -122,6 +122,8 @@ pub struct Desktop {
     prev_start_menu_rect: Option<crate::renderer::Rect>,
     /// Область Центра управления прошлого кадра (если был открыт).
     prev_control_center_rect: Option<crate::renderer::Rect>,
+    /// Область уведомлений прошлого кадра (ui::notify).
+    prev_toast_rect: Option<crate::renderer::Rect>,
     /// Курсор сдвинулся, но сцена не менялась — быстрый путь без
     /// полной перерисовки (save-under, см. update_cursor_only).
     cursor_moved: bool,
@@ -189,6 +191,7 @@ impl Desktop {
             prev_window_rects: Vec::new(),
             prev_start_menu_rect: None,
             prev_control_center_rect: None,
+            prev_toast_rect: None,
             cursor_moved: false,
             prev_left_button: false,
             cursor_saved_pixels: Vec::new(),
@@ -578,6 +581,12 @@ impl Desktop {
                 return;
             }
             self.dirty = true;
+
+            // Уведомление лежит поверх всего: клик по нему закрывает его
+            // и вниз не проваливается.
+            if crate::ui::notify::click(m.x, m.y, timer::uptime_ms()) {
+                return;
+            }
 
             // Overview поверх всего: клик по карточке активирует окно,
             // мимо карточек — закрывает обзор. Вниз клик не проваливается.
@@ -1835,6 +1844,8 @@ impl Desktop {
             draw_overview(r, &theme, self, screen_w, screen_h);
         }
 
+        crate::ui::notify::draw(r, &theme);
+
         let m = mouse::snapshot();
         self.save_under_cursor(r, m.x, m.y);
         draw_cursor(r);
@@ -1897,6 +1908,17 @@ impl Desktop {
         } else if let Some(old) = self.prev_control_center_rect.take() {
             r.add_damage(old);
         }
+
+        // Уведомления: карточки двигаются и гаснут, поэтому каждый кадр
+        // в damage идёт объединение прошлой и текущей области.
+        let toast_rect = crate::ui::notify::region(screen_w, screen_h);
+        match (self.prev_toast_rect, toast_rect) {
+            (Some(old), Some(cur)) => r.add_damage(old.union(&cur)),
+            (Some(old), None) => r.add_damage(old),
+            (None, Some(cur)) => r.add_damage(cur),
+            (None, None) => {}
+        }
+        self.prev_toast_rect = toast_rect;
 
         // Dock: его ширина зависит от числа окон. Если область Dock
         // изменилась (окно открыли/закрыли), старую полосу надо
@@ -2074,6 +2096,14 @@ impl Desktop {
             // Активная установка (окно Install DeiX): несколько шагов
             // работы за кадр, прогресс перерисовывается честно.
             self.pump_installer_jobs();
+
+            // Уведомления: шаг анимации раз в ~33 мс, пока есть карточки.
+            {
+                let m = mouse::snapshot();
+                if crate::ui::notify::frame(timer::uptime_ms(), screen_w, screen_h, m.x, m.y) {
+                    self.dirty = true;
+                }
+            }
 
             // Часы панели: RTC опрашивается ~раз в секунду, перерисовка —
             // только когда реально сменилась минута (а не каждую секунду).

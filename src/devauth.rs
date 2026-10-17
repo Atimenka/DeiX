@@ -29,6 +29,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::println;
+use crate::ui::notify::{self, Kind};
 
 const SUPABASE_URL: &str = "https://xtsrvmwfnsxunvwuaplz.supabase.co";
 const ANON_KEY: &str = "sb_publishable_gFxef7M8SrR-yUO_KyLkMg_AoNsUins";
@@ -252,6 +253,11 @@ pub fn cmd_request() {
         Ok(()) => {
             println!("  [devauth] request sent, connection closed.");
             println!("  [devauth] Ask the project owner to approve this device id.");
+            notify::push(
+                Kind::Info,
+                "Dev access requested",
+                "Request sent. Waiting for the project owner to approve this device.",
+            );
         }
         Err(RequestError::Duplicate) => {
             println!("  [devauth] request for this device id is already on the server.");
@@ -278,9 +284,10 @@ fn start_polling() {
     PENDING.store(true, Ordering::Relaxed);
 }
 
-fn announce(message: &str) {
+fn announce(kind: Kind, title: &str, message: &str) {
     println!("  [devauth] {}", message);
     crate::diag::notice(crate::diag::NONE, message);
+    notify::push(kind, title, message);
 }
 
 /// Фоновая проверка статуса заявки. Вызывается из главных циклов CLI и
@@ -309,7 +316,11 @@ fn check_pending() {
         Ok(id) => id,
         Err(e) => {
             PENDING.store(false, Ordering::Relaxed);
-            announce(&format!("status polling stopped: no device id ({})", e));
+            announce(
+                Kind::Error,
+                "Dev access",
+                &format!("Status polling stopped: no device id ({})", e),
+            );
             return;
         }
     };
@@ -318,29 +329,43 @@ fn check_pending() {
         Ok(ServerStatus::Approved(key)) => {
             PENDING.store(false, Ordering::Relaxed);
             match store_unlock(&id, &key) {
-                Ok(()) => announce("request APPROVED by the server - run 'dev on'."),
-                Err(e) => announce(&format!(
-                    "request APPROVED, but the key could not be saved: {}",
-                    e
-                )),
+                Ok(()) => announce(
+                    Kind::Success,
+                    "Dev access approved",
+                    "The server approved this device. Run 'dev on' to enable developer mode.",
+                ),
+                Err(e) => announce(
+                    Kind::Warning,
+                    "Dev access approved",
+                    &format!("Approved, but the key could not be saved: {}", e),
+                ),
             }
         }
         Ok(ServerStatus::Denied) => {
             PENDING.store(false, Ordering::Relaxed);
-            announce("request was DENIED by the project owner.");
+            announce(
+                Kind::Error,
+                "Dev access denied",
+                "The project owner denied this device request.",
+            );
         }
         Ok(ServerStatus::NotRequested) => {
             PENDING.store(false, Ordering::Relaxed);
-            announce("the server has no request for this device id - run 'dev request'.");
+            announce(
+                Kind::Warning,
+                "Dev access",
+                "The server has no request for this device id. Run 'dev request'.",
+            );
         }
         Err(e) => {
             let failures = POLL_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
             if failures >= POLL_MAX_FAILURES {
                 PENDING.store(false, Ordering::Relaxed);
-                announce(&format!(
-                    "status polling stopped after {} failures: {}",
-                    failures, e
-                ));
+                announce(
+                    Kind::Warning,
+                    "Dev access",
+                    &format!("Status polling stopped after {} failures: {}", failures, e),
+                );
             }
         }
     }

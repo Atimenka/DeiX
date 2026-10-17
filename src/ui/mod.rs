@@ -5,6 +5,7 @@ pub mod config;
 pub mod desktop;
 pub mod effects;
 pub mod metrics;
+pub mod notify;
 pub mod surface;
 pub mod taskbar;
 pub mod text;

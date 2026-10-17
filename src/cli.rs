@@ -313,6 +313,7 @@ pub fn execute(line: &str) {
         "error" => crate::diag::cli::cmd_error(rest),
         "panic" => crate::diag::cli::cmd_panic(rest),
         "diagnostics" => crate::diag::cli::cmd_diagnostics(rest),
+        "notify" => cmd_notify(rest),
         "dev" => {
             match rest.trim() {
                 "on" => crate::devmode::enable_dev_mode(),
@@ -498,6 +499,7 @@ fn cmd_help() {
     println!("  cpuid                   - {}", t!(en: "print CPU vendor string", ru: "вывести vendor string процессора"));
     println!("  mem <n>                 - {}", t!(en: "heap allocator test (Vec<u32> of n elements)", ru: "тест heap-аллокатора (Vec<u32> на n элементов)"));
     println!("  lang <en|ru>            - {}", t!(en: "switch interface language", ru: "переключить язык интерфейса"));
+    println!("  notify <kind> <text>    - {}", t!(en: "desktop notification (info/ok/warn/error)", ru: "уведомление рабочего стола (info/ok/warn/error)"));
     println!("  ifconfig [ip|dns <ip>]  - {}", t!(en: "show/change network config (IP, DNS server)", ru: "показать/сменить сетевую конфигурацию (IP, DNS-сервер)"));
     println!("  arp                     - {}", t!(en: "show ARP cache", ru: "показать ARP-кэш"));
     println!("  ping <ip>               - {}", t!(en: "send ICMP echo request", ru: "отправить ICMP echo request"));
@@ -839,6 +841,43 @@ fn cmd_ifconfig(arg: &str) {
     } else {
         println!("RX drops: 0");
     }
+}
+
+fn cmd_notify(arg: &str) {
+    use crate::ui::notify::{push, Kind};
+    let arg = arg.trim();
+    let (word, text) = match arg.split_once(' ') {
+        Some((w, t)) => (w, t.trim()),
+        None => (arg, ""),
+    };
+    let (kind, title) = match word {
+        "info" => (Kind::Info, "Information"),
+        "ok" | "success" => (Kind::Success, "Success"),
+        "warn" | "warning" => (Kind::Warning, "Warning"),
+        "error" | "err" => (Kind::Error, "Error"),
+        _ => {
+            println!(
+                "{}",
+                t!(
+                    en: "Usage: notify <info|ok|warn|error> <text> - desktop notification",
+                    ru: "Использование: notify <info|ok|warn|error> <текст> - уведомление рабочего стола"
+                )
+            );
+            return;
+        }
+    };
+    if text.is_empty() {
+        println!("{}", t!(en: "Notification text is empty.", ru: "Текст уведомления пуст."));
+        return;
+    }
+    push(kind, title, text);
+    println!(
+        "{}",
+        t!(
+            en: "Queued. Notifications are shown by the graphical desktop.",
+            ru: "В очереди. Уведомления показывает графический рабочий стол."
+        )
+    );
 }
 
 fn cmd_arp() {
@@ -1908,7 +1947,8 @@ pub const VALID_COMMANDS: &[&str] = &[
     "bigfile", "useradd", "passwd", "whoami", "users", "encrypt", "crash",
     "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",
     "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "dev", "profile",
-    "ps", "kill", "log", "error", "panic", "diagnostics", "wallpaper", "sysfs"
+    "ps", "kill", "log", "error", "panic", "diagnostics", "wallpaper", "sysfs",
+    "notify"
 ];
 
 pub fn is_valid_command(name: &str) -> bool {
