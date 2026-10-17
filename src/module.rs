@@ -321,16 +321,18 @@ fn read_kmod_data(filename: &str) -> Result<Vec<u8>, ModuleError> {
             &alloc::format!("KMOD: поиск {} в /system/kmod", filename),
         );
     }
-    if let Some(layout) = crate::partition_map::lookup_layout("/system") {
-        if let Ok(image) = crate::bootchain::read_partition_image(layout) {
-            let path = alloc::format!("kmod/{}", filename.to_lowercase());
-            if let Ok(data) = crate::erofs::read_file(&image, &path) {
-                return Ok(data);
-            }
-            if let Ok(data) = crate::erofs::read_file(&image, filename) {
-                return Ok(data);
-            }
-        }
+    // Через VFS: образ /system кеширован там в ОДНОМ экземпляре (а после
+    // конверсии раздела в ext2 vfs сам выбирает нужный драйвер). Прежний
+    // путь читал весь раздел заново на каждый модуль — с ростом /system
+    // до 10 МиБ вторая копия рядом с кешем vfs не помещалась в кучу
+    // (16 МиБ) и роняла ядро нехваткой памяти.
+    let in_kmod = alloc::format!("/system/kmod/{}", filename.to_lowercase());
+    if let Ok(data) = crate::vfs::read_file(&in_kmod) {
+        return Ok(data);
+    }
+    let in_root = alloc::format!("/system/{}", filename);
+    if let Ok(data) = crate::vfs::read_file(&in_root) {
+        return Ok(data);
     }
     ext2::read_file(filename).map_err(|_| ModuleError::NotFound)
 }
