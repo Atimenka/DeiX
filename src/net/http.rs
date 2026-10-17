@@ -148,7 +148,7 @@ fn request_once(
         .ok_or_else(|| "Некорректный URL адрес".to_string())?;
     let ips = resolve_all(&host);
     if ips.is_empty() {
-        return Err(format!("DNS: не удалось разрешить хост '{}'", host));
+        return Err(format!("DNS: не удалось разрешить хост '{}': {}", host, dns::last_error()));
     }
 
     let mut conn = if https {

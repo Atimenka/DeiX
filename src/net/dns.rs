@@ -10,13 +10,14 @@
 use crate::net::udp;
 use crate::spinlock::SpinLock;
 use crate::sync::without_interrupts;
+use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
 const DNS_PORT: u16 = 53;
-const ATTEMPTS: u32 = 2;
-const ATTEMPT_TIMEOUT_MS: u64 = 2000;
+const ATTEMPTS: u32 = 3;
+const ATTEMPT_TIMEOUT_MS: u64 = 3000;
 /// TTL кеша ограничиваем сверху 10 минутами, снизу — 5 секундами.
 const TTL_MAX_MS: u64 = 600_000;
 const TTL_MIN_MS: u64 = 5_000;
@@ -31,6 +32,7 @@ struct CacheEntry {
 }
 
 static CACHE: SpinLock<Vec<CacheEntry>> = SpinLock::new(Vec::new());
+static LAST_ERROR: SpinLock<String> = SpinLock::new(String::new());
 static QUERY_SEQ: SpinLock<u16> = SpinLock::new(0);
 
 fn cache_get(name: &str) -> Option<Vec<[u8; 4]>> {
@@ -157,6 +159,15 @@ fn parse_response(msg: &[u8], expect_id: u16) -> Option<(Vec<[u8; 4]>, u64)> {
     if ips.is_empty() { None } else { Some((ips, min_ttl_ms)) }
 }
 
+fn set_error(msg: String) {
+    without_interrupts(|| *LAST_ERROR.lock() = msg);
+}
+
+/// Причина последней неудачи резолвинга.
+pub fn last_error() -> String {
+    without_interrupts(|| (*LAST_ERROR.lock()).clone())
+}
+
 /// Резолвит первую A-запись `host`.
 pub fn resolve_a(host: &str) -> Option<[u8; 4]> {
     resolve_all(host).first().copied()
@@ -168,54 +179,64 @@ pub fn resolve_a(host: &str) -> Option<[u8; 4]> {
 pub fn resolve_all(host: &str) -> Vec<[u8; 4]> {
     let name = host.trim().to_lowercase();
     if !valid_hostname(&name) {
+        set_error(format!("недопустимое имя '{}'", name));
         return Vec::new();
     }
     if let Some(ips) = cache_get(&name) {
         return ips;
     }
     if !crate::rtl8139::is_ready() {
+        set_error(String::from("сетевая карта не готова"));
         return Vec::new();
     }
 
     let server = crate::net::dns_ip();
+    let seq = without_interrupts(|| {
+        let mut s = QUERY_SEQ.lock();
+        *s = s.wrapping_add(1);
+        *s
+    });
+    // ID из тиков таймера + счётчика, локальный порт из эфемерального
+    // диапазона. Один ID и порт на все попытки: поздний ответ на первую
+    // отправку принимается так же, как ответ на повторную.
+    let id = (crate::timer::uptime_ms() as u16) ^ (seq.rotate_left(7)) ^ 0x5A17;
+    let sport = 49152 + (seq & 0x3FFF);
+    let query = build_query(id, &name);
+
     for _ in 0..ATTEMPTS {
-        let seq = without_interrupts(|| {
-            let mut s = QUERY_SEQ.lock();
-            *s = s.wrapping_add(1);
-            *s
-        });
-        // ID из тиков таймера + счётчика, локальный порт из
-        // эфемерального диапазона — защита от случайных совпадений.
-        let id = (crate::timer::uptime_ms() as u16) ^ (seq.rotate_left(7)) ^ 0x5A17;
-        let sport = 49152 + (seq & 0x3FFF);
-        let query = build_query(id, &name);
         if !udp::send_to(server, DNS_PORT, sport, &query) {
             continue;
         }
-
         let deadline = crate::timer::uptime_ms() + ATTEMPT_TIMEOUT_MS;
         loop {
             let left = deadline.saturating_sub(crate::timer::uptime_ms());
             if left == 0 {
                 break;
             }
-            match udp::recv_from(sport, left) {
-                Some((sip, sp, data)) => {
-                    if sip != server || sp != DNS_PORT {
-                        continue; // чужая датаграмма — ждём дальше
-                    }
-                    if let Some((ips, ttl_ms)) = parse_response(&data, id) {
-                        cache_put(&name, ips.clone(), ttl_ms);
-                        return ips;
-                    }
-                    // Ответ сервера с ошибкой (NXDOMAIN и т.п.) —
-                    // повторять бессмысленно.
-                    return Vec::new();
-                }
-                None => break, // таймаут попытки
+            let Some((sip, sp, data)) = udp::recv_from(sport, left) else { break };
+            if sip != server || sp != DNS_PORT || data.len() < 2
+                || u16::from_be_bytes([data[0], data[1]]) != id
+            {
+                continue;
             }
+            if let Some((ips, ttl_ms)) = parse_response(&data, id) {
+                cache_put(&name, ips.clone(), ttl_ms);
+                return ips;
+            }
+            let rcode = if data.len() >= 4 { data[3] & 0x0F } else { 0 };
+            set_error(match rcode {
+                0 => format!("ответ DNS без A-записей для '{}'", name),
+                3 => format!("имя '{}' не существует (NXDOMAIN)", name),
+                c => format!("DNS-сервер ответил ошибкой (RCODE {})", c),
+            });
+            return Vec::new();
         }
     }
+    set_error(format!(
+        "нет ответа от DNS-сервера {}.{}.{}.{} за {} с ({} запроса)",
+        server[0], server[1], server[2], server[3],
+        ATTEMPTS as u64 * ATTEMPT_TIMEOUT_MS / 1000, ATTEMPTS
+    ));
     Vec::new()
 }
 

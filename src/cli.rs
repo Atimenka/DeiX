@@ -969,13 +969,17 @@ fn cmd_dns(arg: &str) {
         ru: "Запрос к DNS-серверу {}.{}.{}.{} ...";
         server[0], server[1], server[2], server[3]
     );
-    match crate::net::dns::resolve_a(host) {
-        Some(ip) => println!("{}: {}.{}.{}.{}", host, ip[0], ip[1], ip[2], ip[3]),
-        None => println_t!(
-            en: "Could not resolve '{}' (timeout, NXDOMAIN or no network).",
-            ru: "Не удалось разрешить '{}' (таймаут, NXDOMAIN или нет сети).";
-            host
-        ),
+    let ips = crate::net::dns::resolve_all(host);
+    if ips.is_empty() {
+        println_t!(
+            en: "Could not resolve '{}': {}",
+            ru: "Не удалось разрешить '{}': {}";
+            host, crate::net::dns::last_error()
+        );
+        return;
+    }
+    for ip in ips {
+        println!("{}: {}.{}.{}.{}", host, ip[0], ip[1], ip[2], ip[3]);
     }
 }
 
