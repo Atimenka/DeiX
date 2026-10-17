@@ -3,8 +3,13 @@
 Сверка карты разделов DeiX OS между всеми источниками геометрии:
   1. src/partition_map.rs   (PARTITION_LAYOUT — источник истины)
   2. tools/make_deix_fs.py  (PRIMARY — сборка образа)
-  3. src/install.rs         (PART_SYSTEM / PART_USERDATA — инсталлятор)
-  4. src/ext2.rs            (FS_START_LBA / TOTAL_SECTORS — драйвер /userdata)
+  3. src/install.rs         (PART_SYSTEM / USERDATA_START_LBA /
+                             USERDATA_MIN_SECTORS — инсталлятор; размер
+                             /userdata выбирается при установке, поэтому
+                             сверяются начало раздела и минимум = штатному
+                             образу)
+  4. src/ext2.rs            (FS_START_LBA / TOTAL_SECTORS_DEFAULT — драйвер
+                             /userdata; реальный размер читается из MBR)
   5. boot/boot_sector.asm   (MBR-таблица в загрузочном секторе)
 
 Дополнительно проверяются служебные области:
@@ -59,28 +64,35 @@ def main():
         if fs_map.get(name) != geo:
             errors.append(f"make_deix_fs.py: '{name}' = {fs_map.get(name)}, ожидалось {geo}")
 
-    # 3. src/install.rs
+    # 3. src/install.rs — /system фиксирован; размер /userdata выбирается
+    #    при установке, поэтому сверяются начало раздела и минимальный
+    #    размер (= штатному образу из partition_map.rs).
     inst_text = read("src", "install.rs")
     inst = {}
     m = re.search(r"PART_SYSTEM:\s*\(u32,\s*u32\)\s*=\s*\((\d+),\s*(\d+)\)", inst_text)
     if m:
         inst["/system"] = (int(m.group(1)), int(m.group(2)))
-    m = re.search(r"PART_USERDATA:\s*\(u32,\s*u32\)\s*=\s*\((\d+),\s*(\d+)\)", inst_text)
-    if m:
-        inst["/userdata"] = (int(m.group(1)), int(m.group(2)))
-    for name, geo in pm_map.items():
-        if inst.get(name) != geo:
-            errors.append(f"install.rs: '{name}' = {inst.get(name)}, ожидалось {geo}")
+    if inst.get("/system") != pm_map["/system"]:
+        errors.append(
+            f"install.rs: '/system' = {inst.get('/system')}, ожидалось {pm_map['/system']}"
+        )
+    ud = pm_map["/userdata"]
+    m = re.search(r"USERDATA_START_LBA:\s*u32\s*=\s*(\d+)", inst_text)
+    if not m or int(m.group(1)) != ud[0]:
+        errors.append("install.rs: USERDATA_START_LBA != %d" % ud[0])
+    m = re.search(r"USERDATA_MIN_SECTORS:\s*u32\s*=\s*(\d+)", inst_text)
+    if not m or int(m.group(1)) != ud[1]:
+        errors.append("install.rs: USERDATA_MIN_SECTORS != %d" % ud[1])
 
-    # 4. src/ext2.rs (драйвер /userdata)
+    # 4. src/ext2.rs (драйвер /userdata): начало раздела и размер по
+    #    умолчанию (реальный размер драйвер читает из таблицы MBR).
     ext2_text = read("src", "ext2.rs")
     m_lba = re.search(r"FS_START_LBA:\s*u32\s*=\s*(\d+)", ext2_text)
-    m_sec = re.search(r"TOTAL_SECTORS:\s*u32\s*=\s*(\d+)", ext2_text)
-    ud = pm_map["/userdata"]
+    m_sec = re.search(r"TOTAL_SECTORS_DEFAULT:\s*u32\s*=\s*(\d+)", ext2_text)
     if not m_lba or int(m_lba.group(1)) != ud[0]:
         errors.append("ext2.rs: FS_START_LBA != %d" % ud[0])
     if not m_sec or int(m_sec.group(1)) != ud[1]:
-        errors.append("ext2.rs: TOTAL_SECTORS != %d" % ud[1])
+        errors.append("ext2.rs: TOTAL_SECTORS_DEFAULT != %d" % ud[1])
 
     # 5. boot/boot_sector.asm — MBR-таблица (пары dd LBA / dd секторов).
     asm_text = read("boot", "boot_sector.asm")

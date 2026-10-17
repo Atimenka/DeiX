@@ -142,8 +142,6 @@ struct Vol {
     groups: u32,
     /// Блоков в таблице дескрипторов групп.
     gdt_blocks: u32,
-    /// Блоков в таблице инодов одной группы.
-    itb_blocks: u32,
 }
 
 /// Кеш смонтированных стандартных томов (индекс = VolId).
@@ -226,9 +224,8 @@ fn load_vol(io: VolIo, encrypted: bool, start_lba: u32, max_sectors: u32) -> Res
         return Err(Ext2Error::NotFormatted);
     }
     let gdt_blocks = (groups * 32).div_ceil(BLOCK_SIZE as u32);
-    let itb_blocks = (ipg.saturating_mul(INODE_SIZE as u32)).div_ceil(BLOCK_SIZE as u32);
 
-    let vol = Vol { io, encrypted, start_lba, total_blocks, bpg, ipg, groups, gdt_blocks, itb_blocks };
+    let vol = Vol { io, encrypted, start_lba, total_blocks, bpg, ipg, groups, gdt_blocks };
 
     // Дескриптор группы 0 обязан указывать туда, где драйвер ожидает
     // метаданные (раскладка из заголовка файла) — иначе том создан не
@@ -779,7 +776,6 @@ impl FormatPlan {
             ipg: self.ipg,
             groups: self.groups,
             gdt_blocks: self.gdt_blocks,
-            itb_blocks: self.itb_blocks,
         }
     }
 
