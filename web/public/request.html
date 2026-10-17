@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Заявка на токен dev-режима — DeiX OS</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap">
+      <a class="brand" href="/"><img src="/favicon.svg" alt="">DeiX OS</a>
+      <nav class="links">
+        <a href="/">О проекте</a>
+        <a class="active" href="/request">Запросить токен</a>
+        <a href="https://github.com/Atimenka/DeiX" rel="noopener">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page wrap">
+    <h1>Заявка на одноразовый токен</h1>
+    <p class="sub">Токен включает dev-режим DeiX на одном устройстве. Заявку рассматривает владелец проекта.</p>
+
+    <div class="two">
+      <div class="panel">
+        <form id="submit-form" class="stack" autocomplete="off">
+          <label>Device ID
+            <input id="device-id" name="device_id" required maxlength="32" minlength="32" pattern="[0-9a-fA-F]{32}" spellcheck="false" placeholder="32 символа 0-9 и a-f">
+            <span class="hint">Выполните в DeiX команду <code>dev id</code> и скопируйте результат.</span>
+          </label>
+          <label>Название устройства (необязательно)
+            <input id="name" name="name" maxlength="64" placeholder="Например: ноутбук в QEMU">
+          </label>
+          <label>Зачем нужен dev-режим (необязательно)
+            <textarea id="note" name="note" maxlength="280" placeholder="Коротко о задаче"></textarea>
+          </label>
+          <div class="hp" aria-hidden="true"><label>Сайт <input id="website" tabindex="-1" autocomplete="off"></label></div>
+          <button class="btn primary" id="submit-btn" type="submit">Отправить заявку</button>
+        </form>
+        <div class="result" id="submit-result" hidden></div>
+      </div>
+
+      <div class="panel">
+        <h3>Проверить статус</h3>
+        <p class="hint">Введите Device ID, чтобы узнать, что решил владелец. Сам токен на сайте не показывается: его получает ОС при проверке.</p>
+        <form id="status-form" class="stack" autocomplete="off">
+          <input id="status-id" maxlength="32" spellcheck="false" placeholder="Device ID">
+          <button class="btn" type="submit">Проверить</button>
+        </form>
+        <div class="result" id="status-result" hidden></div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <span>© <span data-year></span> DeiX OS</span>
+      <span><a href="/admin">Вход для Owner</a></span>
+    </div>
+  </footer>
+  <script src="/site.js"></script>
+  <script src="/request.js"></script>
+</body>
+</html>

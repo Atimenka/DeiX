@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeiX OS — операционная система на Rust</title>
+  <meta name="description" content="DeiX OS — 64-битная операционная система, написанная с нуля на Rust и ассемблере для x86_64.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap">
+      <a class="brand" href="/"><img src="/favicon.svg" alt="">DeiX OS</a>
+      <nav class="links">
+        <a class="hide-sm" href="#features">Возможности</a>
+        <a class="hide-sm" href="#dev">Dev-режим</a>
+        <a href="https://github.com/Atimenka/DeiX" rel="noopener">GitHub</a>
+        <a class="btn primary small" href="/request">Запросить токен</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="wrap">
+        <span class="chip">0.3.0-beta · x86_64 · Rust no_std</span>
+        <h1>Операционная система, написанная <span class="grad">с нуля</span></h1>
+        <p class="lead">Маленькое ядро на Rust и ассемблере, неизменяемый системный раздел EROFS, собственный сетевой стек с TLS 1.3 и графическая оболочка. Работает в QEMU и на реальном железе.</p>
+        <div class="cta">
+          <a class="btn primary" href="https://github.com/Atimenka/DeiX" rel="noopener">Исходный код</a>
+          <a class="btn" href="/request">Запросить токен dev-режима</a>
+        </div>
+      </div>
+    </section>
+
+    <div class="wrap">
+      <div class="stats">
+        <div class="stat"><b>~32 000</b><span>строк Rust</span></div>
+        <div class="stat"><b>~0,9 МБ</b><span>ядро</span></div>
+        <div class="stat"><b>TLS 1.3</b><span>собственная реализация</span></div>
+        <div class="stat"><b>EROFS + ext2/4</b><span>/system и /userdata</span></div>
+      </div>
+    </div>
+
+    <section class="block" id="features">
+      <div class="wrap">
+        <h2>Что внутри</h2>
+        <p class="sub">Всё написано для DeiX: без заимствованного ядра и без libc.</p>
+        <div class="grid">
+          <div class="card"><h3>Ядро на Rust</h3><p>Загрузка MBR → stage2 → long mode → kernel.bin. Вытесняющая многозадачность на таймере PIT и изоляция Ring 3 для MEX-программ.</p></div>
+          <div class="card"><h3>Файловые системы</h3><p>/system — настоящий EROFS только для чтения, /userdata — ext2/4 для пользователей, настроек и пакетов.</p></div>
+          <div class="card"><h3>Сеть и TLS</h3><p>RTL8139, ARP, IPv4, ICMP, UDP, TCP, DNS и HTTP/1.1 с gzip. TLS 1.3 с проверкой сертификатов: X.509, RSA, ECDSA и 23 корневых CA.</p></div>
+          <div class="card"><h3>Графика и звук</h3><p>VBE 32 bpp с кириллическим шрифтом, рабочий стол с уведомлениями, Intel HDA и PC Speaker.</p></div>
+          <div class="card"><h3>Dinit и диагностика</h3><p>PID 1 — супервизор служб. Реестр кодов DX-*, кольцевой журнал, отчёт о сбое, который переживает перезагрузку.</p></div>
+          <div class="card"><h3>DeiX Script и MEX SDK</h3><p>Интерпретатор скриптов с функциями и циклами. Собственный формат программ MEX и freestanding-SDK для C/C++.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="dev">
+      <div class="wrap">
+        <h2>Dev-режим и одноразовый токен</h2>
+        <p class="sub">Dev-режим включает root-оболочку и снимает гарантии целостности системы, поэтому доступен только после одобрения заявки владельцем проекта.</p>
+        <div class="steps">
+          <div class="step"><h3>Узнайте Device ID</h3><p>В DeiX выполните <code>dev id</code>. Команда печатает идентификатор устройства из 32 символов.</p></div>
+          <div class="step"><h3>Подайте заявку</h3><p>Отправьте Device ID через <a href="/request">форму на сайте</a> или командой <code>dev request</code> прямо из ОС.</p></div>
+          <div class="step"><h3>Дождитесь решения</h3><p>Владелец проекта принимает или отклоняет заявку в панели. ОС сама проверяет статус и покажет уведомление.</p></div>
+          <div class="step"><h3>Включите режим</h3><p>После одобрения ОС получает одноразовый токен и сохраняет его. Выполните <code>dev on</code>.</p></div>
+        </div>
+        <p></p>
+        <div class="note">Честная граница: это реестр устройств, а не защита от владельца машины. Исходники открыты, и проверку можно обойти. Токен выдаётся один раз: сервер отдаёт его устройству и удаляет у себя.</div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <span>© <span data-year></span> DeiX OS</span>
+      <span><a href="https://github.com/Atimenka/DeiX" rel="noopener">GitHub</a> · <a href="/admin">Вход для Owner</a></span>
+    </div>
+  </footer>
+  <script src="/site.js"></script>
+</body>
+</html>

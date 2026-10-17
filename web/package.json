@@ -1,0 +1,12 @@
+{
+  "name": "deix-site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DeiX OS site: public pages, dev-token requests and the owner admin panel",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "test": "node --test test/api.test.js"
+  }
+}
