@@ -59,14 +59,18 @@ supabase db push
 
 Пользователи хранятся в Supabase Auth, имя и роль — в `public.profiles`.
 Регистрация идёт через сайт: почта, username, пароль, повтор пароля и
-капча Cloudflare Turnstile; подтверждение почты не требуется. Публичная
+капча Cloudflare Turnstile; почта проверяется на лету, а при настроенном почтовом ключе — письмом со ссылкой. Публичная
 регистрация Supabase выключена (`disable_signup`), аккаунты создаёт только
 серверная функция сайта.
 
-Owner создаётся один раз вручную (в миграции нет ни логина, ни пароля):
-пользователь в Authentication → Users, затем
+Owner назначает триггер `handle_new_user` (миграция
+`20261018120000_owner_claim.sql`): аккаунт, зарегистрированный с именем
+`Atimenka`, получает роль `owner`, пока в `public.profiles` нет ни одного
+owner. Пока owner не создан, имя может занять кто угодно, поэтому
+регистрировать его нужно сразу. Допустим только один owner; при необходимости
+роль можно выдать вручную:
 `update public.profiles set role = 'owner' where lower(username) = lower('<логин>');`
-(допустим только один owner).
+Панель Owner открывается только в сессии с 2FA.
 
 Сессия сайта — cookies `deix_at` (access-токен) и `deix_rt` (refresh),
 `HttpOnly; Secure; SameSite=Strict`, 30 дней. Истёкший access-токен

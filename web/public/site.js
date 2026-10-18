@@ -288,6 +288,19 @@ async function mountCaptcha(container) {
       'expired-callback': () => {
         value = '';
       },
+      'error-callback': (code) => {
+        value = '';
+        const host = location.hostname;
+        const text = /^1[01]\d{4}$/.test(String(code))
+          ? `Капча отклонила адрес ${host} (код ${code}). В Cloudflare → Turnstile → ваш виджет → Hostname Management добавьте ${host}, либо проверьте site key.`
+          : `Капча не загрузилась (код ${code || 'неизвестен'}). Проверьте соединение, отключите блокировщики и VPN, затем обновите страницу.`;
+        let note = container.parentNode.querySelector('.captcha-error');
+        if (!note) {
+          note = el('p', { class: 'hint captcha-error' });
+          container.after(note);
+        }
+        note.textContent = text;
+      },
     });
   }
   return {
