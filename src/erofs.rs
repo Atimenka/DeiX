@@ -1,9 +1,9 @@
 //! EROFS (Enhanced Read-Only File System) — НАСТОЯЩАЯ реализация формата.
 //!
 //! Соответствует спецификации EROFS v1 (erofs.docs.kernel.org, Linux
-//! `fs/erofs/erofs_fs.h`). Образы, созданные этим модулем, читаются
-//! штатными `dump.erofs`/`fsck.erofs` и монтируются ядром Linux; образы,
-//! созданные `mkfs.erofs`, читаются этим модулем.
+//! `fs/erofs/erofs_fs.h`). Модуль только читает: образ /system собирает
+//! `tools/make_deix_fs.py` на этапе сборки, ядро его не создаёт. Образы
+//! `mkfs.erofs` читаются этим модулем так же.
 //!
 //! ## Почему это важно
 //!
@@ -29,7 +29,6 @@
 //! no_std: только `alloc`.
 
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 
 /// Магия суперблока EROFS v1 (little-endian по смещению 1024).
@@ -55,7 +54,6 @@ const DATALAYOUT_FLAT_INLINE: u16 = 2;
 const EROFS_FT_REG_FILE: u8 = 1;
 const EROFS_FT_DIR: u8 = 2;
 
-const S_IFREG: u16 = 0o100_000;
 const S_IFDIR: u16 = 0o040_000;
 
 /// Ошибки разбора EROFS-образа.
@@ -156,8 +154,6 @@ fn rd_u64(b: &[u8], o: usize) -> Option<u64> {
 pub struct Superblock {
     pub blkszbits: u8,
     pub root_nid: u64,
-    pub inos: u64,
-    pub blocks: u32,
     pub meta_blkaddr: u32,
 }
 
@@ -168,10 +164,6 @@ impl Superblock {
         } else {
             1usize << self.blkszbits
         }
-    }
-
-    pub fn inos_and_blocks(&self) -> (u64, u32) {
-        (self.inos, self.blocks)
     }
 
     /// Смещение инода по его nid.
@@ -195,15 +187,11 @@ pub fn parse_superblock<S: Source + ?Sized>(img: &S) -> Result<Superblock, Erofs
     if !(9..=16).contains(&blkszbits) {
         return Err(ErofsError::BadBlockSize { bits: blkszbits });
     }
-    let res = Superblock {
+    Ok(Superblock {
         blkszbits,
         root_nid: rd_u16(sb, 14).ok_or(ErofsError::TooSmall)? as u64,
-        inos: rd_u64(sb, 16).ok_or(ErofsError::TooSmall)?,
-        blocks: rd_u32(sb, 36).ok_or(ErofsError::TooSmall)?,
         meta_blkaddr: rd_u32(sb, 40).ok_or(ErofsError::TooSmall)?,
-    };
-    let _ = res.inos_and_blocks();
-    Ok(res)
+    })
 }
 
 /// Инод EROFS (нужные нам поля; поддержаны compact и extended).
@@ -470,209 +458,4 @@ pub fn list_dir<S: Source + ?Sized>(img: &S, path: &str) -> Result<Vec<DirListin
 /// Проверяет существование пути (файла или каталога) и возвращает инод.
 pub fn stat<S: Source + ?Sized>(img: &S, path: &str) -> Result<Inode, ErofsError> {
     lookup_path(img, path)
-}
-
-// ==================== ЗАПИСЬ (mkfs) ====================
-
-fn wr_u16(b: &mut [u8], o: usize, v: u16) {
-    b[o..o + 2].copy_from_slice(&v.to_le_bytes());
-}
-fn wr_u32(b: &mut [u8], o: usize, v: u32) {
-    b[o..o + 4].copy_from_slice(&v.to_le_bytes());
-}
-fn wr_u64(b: &mut [u8], o: usize, v: u64) {
-    b[o..o + 8].copy_from_slice(&v.to_le_bytes());
-}
-
-fn align_up(v: usize, a: usize) -> usize {
-    v.div_ceil(a) * a
-}
-
-/// Записывает compact-инод (32 байта) по смещению `off`.
-#[allow(clippy::too_many_arguments)]
-fn write_inode(
-    img: &mut [u8],
-    off: usize,
-    mode: u16,
-    nlink: u16,
-    size: u32,
-    blkaddr: u32,
-    ino_num: u32,
-) {
-    // i_format: version=0 (compact), datalayout=FLAT_PLAIN
-    wr_u16(img, off, DATALAYOUT_FLAT_PLAIN << 1);
-    wr_u16(img, off + 2, 0); // i_xattr_icount
-    wr_u16(img, off + 4, mode); // i_mode
-    wr_u16(img, off + 6, nlink); // i_nlink
-    wr_u32(img, off + 8, size); // i_size
-    wr_u32(img, off + 12, 0); // i_reserved
-    wr_u32(img, off + 16, blkaddr); // i_u.raw_blkaddr
-    wr_u32(img, off + 20, ino_num); // i_ino
-    wr_u16(img, off + 24, 0); // i_uid
-    wr_u16(img, off + 26, 0); // i_gid
-    wr_u32(img, off + 28, 0); // i_reserved2
-}
-
-/// Собирает блоки данных каталога (записи + имена, по блокам).
-fn build_dir_blocks(entries: &[(String, u64, u8)]) -> Vec<u8> {
-    // Формируем поблочно: в каждом блоке — массив erofs_dirent, затем имена.
-    let mut out: Vec<u8> = Vec::new();
-    let mut idx = 0usize;
-
-    while idx < entries.len() {
-        // Сколько записей влезет в этот блок.
-        let mut n = 0usize;
-        let mut names_len = 0usize;
-        while idx + n < entries.len() {
-            let nl = entries[idx + n].0.len();
-            if (n + 1) * 12 + names_len + nl > EROFS_BLOCK_SIZE {
-                break;
-            }
-            names_len += nl;
-            n += 1;
-        }
-        if n == 0 {
-            break; // имя длиннее блока — не поддерживаем
-        }
-
-        let mut blk = vec![0u8; EROFS_BLOCK_SIZE];
-        let mut nameoff = n * 12;
-        for i in 0..n {
-            let (name, nid, ftype) = &entries[idx + i];
-            let e = i * 12;
-            wr_u64(&mut blk, e, *nid);
-            wr_u16(&mut blk, e + 8, nameoff as u16);
-            blk[e + 10] = *ftype;
-            blk[e + 11] = 0;
-            blk[nameoff..nameoff + name.len()].copy_from_slice(name.as_bytes());
-            nameoff += name.len();
-        }
-        out.extend_from_slice(&blk);
-        idx += n;
-    }
-    out
-}
-
-/// СОЗДАЁТ НАСТОЯЩИЙ EROFS-ОБРАЗ из списка файлов `(имя, содержимое)`.
-///
-/// Результат читается `dump.erofs`/`fsck.erofs` и монтируется Linux.
-pub fn build_image(files: &[(&str, &[u8])]) -> Vec<u8> {
-    let bs = EROFS_BLOCK_SIZE;
-
-    // --- раскладка инодов: корень, затем файлы ---
-    let inode_area = EROFS_SUPER_OFFSET + EROFS_SUPER_SIZE; // 1152
-    let root_nid = (inode_area / EROFS_ISLOT_SIZE) as u64; // 36
-    let mut nids: Vec<u64> = Vec::with_capacity(files.len());
-    for i in 0..files.len() {
-        nids.push(root_nid + 1 + i as u64);
-    }
-    let inode_area_end = inode_area + (1 + files.len()) * EROFS_ISLOT_SIZE;
-    // Иноды должны поместиться в блок 0.
-    if inode_area_end > bs {
-        // Слишком много файлов для простой раскладки — вернём пустой корень.
-        return build_image(&[]);
-    }
-
-    // --- данные каталога ---
-    // ВАЖНО: спецификация EROFS требует, чтобы записи каталога были
-    // отсортированы лексикографически по имени (fsck.erofs проверяет это
-    // и отвергает образ с "wrong dirent name order").
-    let mut dirents: Vec<(String, u64, u8)> = Vec::new();
-    dirents.push((".".into(), root_nid, EROFS_FT_DIR));
-    dirents.push(("..".into(), root_nid, EROFS_FT_DIR));
-    for (i, (name, _)) in files.iter().enumerate() {
-        dirents.push(((*name).into(), nids[i], EROFS_FT_REG_FILE));
-    }
-    dirents.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-
-    let dir_data = build_dir_blocks(&dirents);
-    // Реальный размер каталога — только заполненная часть последнего блока.
-    let dir_size = {
-        // Пересчитываем «полезный» размер: у нас всегда целые блоки, но
-        // размер каталога должен покрывать записи+имена.
-        let mut sz = 0usize;
-        let mut idx = 0usize;
-        while idx < dirents.len() {
-            let mut n = 0usize;
-            let mut names_len = 0usize;
-            while idx + n < dirents.len() {
-                let nl = dirents[idx + n].0.len();
-                if (n + 1) * 12 + names_len + nl > bs {
-                    break;
-                }
-                names_len += nl;
-                n += 1;
-            }
-            if n == 0 {
-                break;
-            }
-            let used = n * 12 + names_len;
-            idx += n;
-            sz += if idx < dirents.len() { bs } else { used };
-        }
-        sz
-    };
-
-    // --- распределяем блоки: сначала каталог, потом файлы ---
-    let mut blocks: Vec<u8> = Vec::new();
-    let dir_blkaddr = 1u32; // блок 0 занят SB+инодами
-    blocks.extend_from_slice(&dir_data);
-
-    let mut file_blkaddr: Vec<u32> = Vec::with_capacity(files.len());
-    for (_, data) in files.iter() {
-        let cur_block = dir_blkaddr as usize + blocks.len() / bs;
-        file_blkaddr.push(cur_block as u32);
-        blocks.extend_from_slice(data);
-        let pad = align_up(data.len(), bs) - data.len();
-        blocks.extend(core::iter::repeat_n(0u8, pad));
-    }
-
-    // --- собираем образ ---
-    let total = bs + blocks.len();
-    let mut img = vec![0u8; total];
-
-    // суперблок
-    let sb = EROFS_SUPER_OFFSET;
-    wr_u32(&mut img, sb, EROFS_SUPER_MAGIC_V1); // magic
-    wr_u32(&mut img, sb + 4, 0); // checksum (фича выключена)
-    wr_u32(&mut img, sb + 8, 0); // feature_compat
-    img[sb + 12] = EROFS_BLOCK_BITS; // blkszbits
-    img[sb + 13] = 0; // sb_extslots
-    wr_u16(&mut img, sb + 14, root_nid as u16); // root_nid
-    wr_u64(&mut img, sb + 16, (1 + files.len()) as u64); // inos
-    wr_u64(&mut img, sb + 24, 0); // build_time
-    wr_u32(&mut img, sb + 32, 0); // build_time_nsec
-    wr_u32(&mut img, sb + 36, (total / bs) as u32); // blocks
-    wr_u32(&mut img, sb + 40, 0); // meta_blkaddr
-    wr_u32(&mut img, sb + 44, 0); // xattr_blkaddr
-    // uuid[16] @48, volume_name[16] @64 — нули
-    wr_u32(&mut img, sb + 80, 0); // feature_incompat
-
-    // корневой инод
-    write_inode(
-        &mut img,
-        inode_area,
-        S_IFDIR | 0o755,
-        2,
-        dir_size as u32,
-        dir_blkaddr,
-        1,
-    );
-
-    // иноды файлов
-    for (i, (_, data)) in files.iter().enumerate() {
-        write_inode(
-            &mut img,
-            inode_area + (1 + i) * EROFS_ISLOT_SIZE,
-            S_IFREG | 0o644,
-            1,
-            data.len() as u32,
-            file_blkaddr[i],
-            (i + 2) as u32,
-        );
-    }
-
-    // данные
-    img[bs..bs + blocks.len()].copy_from_slice(&blocks);
-    img
 }
