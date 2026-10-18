@@ -278,35 +278,53 @@ async function mountCaptcha(container) {
   });
   let value = '';
   let widget = null;
+  const note = el('p', { class: 'hint captcha-error', hidden: true });
+  container.after(note);
+  const say = (text) => {
+    note.textContent = text;
+    note.hidden = !text;
+  };
+  const host = location.hostname;
+  const hostHint = `Если виджет пишет «Unable to connect to website», добавьте ${host} в Cloudflare → Turnstile → ваш виджет → Hostname Management.`;
+  let waiting = null;
   if (window.turnstile) {
     widget = window.turnstile.render(container, {
       sitekey: config.captcha_site_key,
       theme: document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
       callback: (token) => {
         value = token;
+        clearTimeout(waiting);
+        say('');
       },
       'expired-callback': () => {
         value = '';
       },
+      'timeout-callback': () => {
+        value = '';
+      },
+      'unsupported-callback': () => {
+        say('Браузер не поддерживается капчей Cloudflare. Обновите браузер.');
+      },
       'error-callback': (code) => {
         value = '';
-        const host = location.hostname;
-        const text = /^1[01]\d{4}$/.test(String(code))
-          ? `Капча отклонила адрес ${host} (код ${code}). В Cloudflare → Turnstile → ваш виджет → Hostname Management добавьте ${host}, либо проверьте site key.`
-          : `Капча не загрузилась (код ${code || 'неизвестен'}). Проверьте соединение, отключите блокировщики и VPN, затем обновите страницу.`;
-        let note = container.parentNode.querySelector('.captcha-error');
-        if (!note) {
-          note = el('p', { class: 'hint captcha-error' });
-          container.after(note);
-        }
-        note.textContent = text;
+        clearTimeout(waiting);
+        say(
+          /^1[01]\d{4}$/.test(String(code))
+            ? `Капча отклонила адрес ${host} (код ${code}). ${hostHint}`
+            : `Капча не загрузилась (код ${code || 'неизвестен'}). Проверьте соединение, отключите блокировщики и VPN, затем обновите страницу.`,
+        );
+        return true;
       },
     });
+    waiting = setTimeout(() => {
+      if (!value) say(`Капча не завершила проверку за 10 секунд. ${hostHint}`);
+    }, 10000);
   }
   return {
     token: () => value,
     reset: () => {
       value = '';
+      say('');
       if (widget !== null && window.turnstile) window.turnstile.reset(widget);
     },
   };
