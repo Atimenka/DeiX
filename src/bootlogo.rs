@@ -25,6 +25,7 @@
 //! ```
 
 use crate::renderer::Color;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Встроенное лого (собирается из assets/logo.png шагом [2d/8] build.sh).
 static LOGO: &[u8] = include_bytes!("../build/logo.dxlg");
@@ -36,6 +37,11 @@ pub const BG: Color = Color(0x000000);
 pub const FG: Color = Color(0x8FB8D8);
 /// Цвет подписи под лого.
 pub const TITLE: Color = Color(0x00D0FF);
+
+/// Число этапов загрузки, о которых сообщается на экране: старт,
+/// проверка разделов, память, готовность системы.
+const BOOT_STEPS: u32 = 4;
+static BOOT_STEP: AtomicU32 = AtomicU32::new(0);
 
 /// Разобранный заголовок DXLG.
 pub struct Logo<'a> {
@@ -148,19 +154,41 @@ pub fn draw_text_scaled(
             if bits == 0 {
                 continue;
             }
-            for col in 0..8i32 {
-                if (bits >> (7 - col)) & 1 != 0 {
-                    r.fill_rect(
-                        x + col * scale,
-                        y + row as i32 * scale,
-                        scale as u32,
-                        scale as u32,
-                        color,
-                    );
+            let mut col = 0i32;
+            while col < 8 {
+                if (bits >> (7 - col)) & 1 == 0 {
+                    col += 1;
+                    continue;
                 }
+                let start = col;
+                while col < 8 && (bits >> (7 - col)) & 1 != 0 {
+                    col += 1;
+                }
+                r.fill_rect(
+                    x + start * scale,
+                    y + row as i32 * scale,
+                    ((col - start) * scale) as u32,
+                    scale as u32,
+                    color,
+                );
             }
         }
         x += 8 * scale;
+    }
+}
+
+/// Полоса прогресса под строкой состояния: заполнена на долю
+/// пройденных этапов загрузки.
+fn draw_progress(r: &mut crate::renderer::Renderer, bottom: i32, step: u32) {
+    let bar_w = (r.width() as i32 * 4 / 10).clamp(120, 420);
+    let bar_h = 8;
+    let x = (r.width() as i32 - bar_w) / 2;
+    let y = bottom + 140;
+    r.fill_rounded_rect(x, y, bar_w as u32, bar_h as u32, 4, Color(0x16222E));
+    let filled = bar_w * step.min(BOOT_STEPS) as i32 / BOOT_STEPS as i32;
+    if filled > 0 {
+        r.fill_rounded_rect(x, y, filled as u32, bar_h as u32, 4, TITLE);
+        r.fill_fade_v(x + 4, y, (filled - 8).max(0) as u32, bar_h as u32 / 2, Color::WHITE, 70, 0);
     }
 }
 
@@ -179,6 +207,10 @@ fn compute_layout(screen_w: u32, screen_h: u32, logo_w: u32, logo_h: u32) -> (i3
 /// Если графики нет (не удалось включить framebuffer) — молча выходит,
 /// текстовый вывод продолжает работать как раньше.
 pub fn show(status: &str) {
+    show_screen(status, true);
+}
+
+fn show_screen(status: &str, with_bar: bool) {
     crate::renderer::ensure_framebuffer();
     if !crate::renderer::has_active_framebuffer() {
         return;
@@ -200,6 +232,10 @@ pub fn show(status: &str) {
 
         draw_text_scaled(r, "DeiX", bottom + 24, TITLE, 4);
         draw_text_scaled(r, status, bottom + 88, FG, 2);
+        if with_bar {
+            BOOT_STEP.store(1, Ordering::Relaxed);
+            draw_progress(r, bottom, 1);
+        }
 
         r.present();
     });
@@ -220,6 +256,9 @@ pub fn set_status(status: &str) {
         // Затираем область статуса и пишем новую строку
         r.fill_rect(0, y - 4, r.width(), 44, BG);
         draw_text_scaled(r, status, y, FG, 2);
+        let step = (BOOT_STEP.load(Ordering::Relaxed) + 1).min(BOOT_STEPS);
+        BOOT_STEP.store(step, Ordering::Relaxed);
+        draw_progress(r, bottom, step);
         r.present();
     });
 }
@@ -246,7 +285,7 @@ pub fn cmd_logo(arg: &str) {
             }
         }
         _ => {
-            show("Press Esc, Enter or Space to return");
+            show_screen("Press Esc, Enter or Space to return", false);
             loop {
                 if let Some(ch) = crate::keyboard::try_read_char() {
                     if ch == 0x1b || ch == b'\n' || ch == b'\r' || ch == b' ' || ch == b'q' || ch == b'Q' {

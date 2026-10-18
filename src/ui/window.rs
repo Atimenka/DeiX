@@ -1257,14 +1257,10 @@ pub fn draw_window(
     }
 
     if fx.shadows_enabled() {
-        r.draw_drop_shadow(w.x, w.y, w.width, total_h, 4);
+        r.draw_soft_shadow(w.x, w.y, w.width, total_h, 8, 3, 70);
     }
     if !is_focused {
         r.shade_rect(w.x, w.y, w.width, total_h, 15);
-    }
-
-    if fx.shadows_enabled() {
-        r.fill_rounded_rect_alpha(w.x + 4, w.y + 4, w.width, total_h, theme.corner_radius, Color::SHADOW, 80);
     }
 
     let title_bg = if is_focused { theme.titlebar_active } else { theme.titlebar_inactive };
@@ -1278,6 +1274,16 @@ pub fn draw_window(
         title_bg,
         theme.opacity,
     );
+
+    let inset = theme.corner_radius;
+    let sheen_w = (w.width as i32 - 2 * inset).max(0) as u32;
+    r.fill_fade_v(w.x + inset, w.y, sheen_w, titlebar_h as u32, Color::WHITE, 26, 0);
+    r.fill_rect_alpha(w.x + inset, w.y, sheen_w, 1, Color::WHITE, 40);
+    if is_focused {
+        r.fill_rect_alpha(w.x, w.y + titlebar_h - 1, w.width, 1, theme.accent, 190);
+    } else {
+        r.fill_rect_alpha(w.x, w.y + titlebar_h - 1, w.width, 1, Color::BLACK, 60);
+    }
 
     let title_color = if is_focused { theme.text_primary } else { theme.text_secondary };
     // Длинный заголовок (имя файла в редакторе) не должен заезжать под
