@@ -22,7 +22,6 @@ mod crypto_storage;
 mod devauth;
 mod devmode;
 mod diag;
-mod dialog;
 mod dinit;
 mod ds;
 mod duil;

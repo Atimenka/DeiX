@@ -676,8 +676,3 @@ pub fn build_image(files: &[(&str, &[u8])]) -> Vec<u8> {
     img[bs..bs + blocks.len()].copy_from_slice(&blocks);
     img
 }
-
-/// Проверяет, что образ — валидный EROFS.
-pub fn is_erofs<S: Source + ?Sized>(img: &S) -> bool {
-    parse_superblock(img).is_ok()
-}

@@ -263,7 +263,6 @@ pub fn execute(line: &str) {
         "uptime" => cmd_uptime(),
         "color" => cmd_color(rest),
         "cpuid" => cmd_cpuid(),
-        "mem" => cmd_mem(rest),
         "lang" => cmd_lang(rest),
         "ifconfig" => cmd_ifconfig(rest),
         "arp" => cmd_arp(),
@@ -277,11 +276,8 @@ pub fn execute(line: &str) {
         "mkdir" => cmd_mkdir(rest),
         "rm" => cmd_rm(rest),
         "pkg" => cmd_pkg(rest),
-        "dialog" => cmd_dialog_test(),
-        "erofs" => cmd_erofs_test(),
         "run" => cmd_run(rest),
         "install" => crate::install::cmd_install(rest),
-        "bigfile" => cmd_bigfile(rest),
         "useradd" => cmd_useradd(rest),
         "passwd" => cmd_passwd(rest),
         "whoami" => cmd_whoami(),
@@ -507,7 +503,6 @@ fn cmd_help() {
     println!("  color <name>            - {}", t!(en: "change text color", ru: "сменить цвет текста"));
     println!("                            (green/white/red/cyan/yellow)");
     println!("  cpuid                   - {}", t!(en: "print CPU vendor string", ru: "вывести vendor string процессора"));
-    println!("  mem <n>                 - {}", t!(en: "heap allocator test (Vec<u32> of n elements)", ru: "тест heap-аллокатора (Vec<u32> на n элементов)"));
     println!("  lang <en|ru>            - {}", t!(en: "switch interface language", ru: "переключить язык интерфейса"));
     println!("  notify <kind> <text>    - {}", t!(en: "desktop notification (info/ok/warn/error)", ru: "уведомление рабочего стола (info/ok/warn/error)"));
     println!("  ifconfig [ip|dns <ip>]  - {}", t!(en: "show/change network config (IP, DNS server)", ru: "показать/сменить сетевую конфигурацию (IP, DNS-сервер)"));
@@ -536,7 +531,6 @@ fn cmd_help() {
     println!("  sysfs [status|convert]  - {}", t!(en: "convert /system from EROFS to ext2 (dev mode only)", ru: "конвертировать /system из EROFS в ext2 (только dev-режим)"));
     println!("  curl <url>              - {}", t!(en: "HTTP(S) GET for network diagnostics", ru: "HTTP(S) GET для диагностики сети"));
     println!("  dev [unlock|link|request|on|off|revoke] - {}", t!(en: "developer mode (unlock with a site key, link device, server activation; see docs/DEVAUTH.md)", ru: "режим разработчика (ключ с сайта, привязка, серверная активация; см. docs/DEVAUTH.md)"));
-    println!("  bigfile <size_kb>       - {}", t!(en: "test ext2 indirect blocks with a large file", ru: "проверить indirect-блоки ext2 большим файлом"));
     println!("  useradd <user> <pass>   - {}", t!(en: "create a new user account", ru: "создать новый аккаунт пользователя"));
     println!("  passwd <u> <old> <new>  - {}", t!(en: "change a user's password", ru: "сменить пароль пользователя"));
     println!("  whoami                  - {}", t!(en: "show the currently logged-in user", ru: "показать текущего пользователя"));
@@ -661,47 +655,6 @@ fn cmd_color(name: &str) {
 fn cmd_cpuid() {
     println!("CPU vendor: {}", crate::cpuid::vendor_string());
     println!("CPU: {}", crate::cpuid::describe());
-}
-
-fn cmd_mem(arg: &str) {
-    let n: usize = if arg.is_empty() {
-        1000
-    } else {
-        match arg.parse() {
-            Ok(v) => v,
-            Err(_) => {
-                println!(
-                    "{}",
-                    t!(en: "Usage: mem <count>, e.g. mem 5000", ru: "Укажи число элементов, например: mem 5000")
-                );
-                return;
-            }
-        }
-    };
-
-    println_t!(
-        en: "Allocating Vec<u32> for {} elements via heap allocator...",
-        ru: "Выделяем Vec<u32> на {} элементов через heap-аллокатор...";
-        n
-    );
-    let mut v: Vec<u32> = Vec::with_capacity(n);
-    for i in 0..n as u32 {
-        v.push(i * 2);
-    }
-    let sum: u64 = v.iter().map(|&x| x as u64).sum();
-    let bytes = n * core::mem::size_of::<u32>();
-    println_t!(
-        en: "Done! Allocated {} bytes, sum of all elements = {}",
-        ru: "Готово! Выделено {} байт, сумма всех элементов = {}";
-        bytes, sum
-    );
-    println!(
-        "{}",
-        t!(
-            en: "Vec is automatically freed (dealloc) when it goes out of scope.",
-            ru: "Vec автоматически освобождён (dealloc) при выходе из области видимости."
-        )
-    );
 }
 
 /// `wallpaper <url|/userdata/путь>` — скачивает PNG/BMP по http(s) или
@@ -1414,90 +1367,6 @@ fn cmd_write(arg: &str) {
     }
 }
 
-/// `bigfile <size_kb>` — тестовая команда для проверки indirect-блоков
-/// ext2 (см. подробный комментарий в начале ext2.rs): генерирует файл
-/// заданного размера (в КиБ) с предсказуемым псевдослучайным содержимым
-/// (без настоящего RNG — линейный конгруэнтный генератор с фиксированным
-/// зерном, чтобы можно было детерминированно сверить прочитанные назад
-/// байты), пишет его на диск и сразу читает обратно, побайтово сверяя
-/// содержимое. Не предназначена для обычного использования — это
-/// диагностический инструмент, аналогичный `mem <count>` (тестирует
-/// heap-аллокатор), но для файловой системы.
-fn cmd_bigfile(arg: &str) {
-    let size_kb: usize = match arg.trim().parse() {
-        Ok(v) => v,
-        Err(_) => {
-            println!(
-                "{}",
-                t!(
-                    en: "Usage: bigfile <size_kb>, e.g. 'bigfile 64' to test a 64 KiB file \\
-                         (exercises ext2 indirect blocks beyond the 12 KiB direct-only limit)",
-                    ru: "Использование: bigfile <размер_кб>, например 'bigfile 64' для проверки \\
-                         файла в 64 КиБ (задействует indirect-блоки ext2 сверх лимита в 12 КиБ)"
-                )
-            );
-            return;
-        }
-    };
-
-    if !ext2::is_formatted() {
-        if let Err(_) = ext2::format() {
-            println!("{}", t!(en: "Failed to format disk.", ru: "Не удалось отформатировать диск."));
-            return;
-        }
-    }
-
-    let size = size_kb * 1024;
-    let mut data = Vec::with_capacity(size);
-    // Простой LCG (linear congruential generator) с фиксированным
-    // зерном — не криптографический RNG, просто детерминированный
-    // "мусор", который легко сгенерировать заново для сверки.
-    let mut state: u32 = 0x2A2A2A2A;
-    for _ in 0..size {
-        state = state.wrapping_mul(1103515245).wrapping_add(12345);
-        data.push((state >> 16) as u8);
-    }
-
-    println_t!(
-        en: "Writing {} KiB test file (name: BIGTEST.BIN)...",
-        ru: "Записываем тестовый файл {} КиБ (имя: BIGTEST.BIN)...";
-        size_kb
-    );
-
-    if let Err(_) = ext2::write_file("BIGTEST.BIN", &data) {
-        println!("{}", t!(en: "Write failed (file too large for indirect block support?).", ru: "Ошибка записи (файл слишком большой даже для indirect-блока?)."));
-        return;
-    }
-
-    match ext2::read_file("BIGTEST.BIN") {
-        Ok(read_back) => {
-            if read_back.len() != data.len() {
-                println_t!(
-                    en: "MISMATCH: wrote {} bytes but read back {} bytes!",
-                    ru: "НЕСОВПАДЕНИЕ: записали {} байт, а прочитали {} байт!";
-                    data.len(), read_back.len()
-                );
-                return;
-            }
-            if read_back == data {
-                println_t!(
-                    en: "OK: all {} bytes match after write+read-back (indirect blocks work correctly).",
-                    ru: "OK: все {} байт совпадают после записи+чтения (indirect-блоки работают корректно).";
-                    data.len()
-                );
-            } else {
-                let first_diff = read_back.iter().zip(data.iter()).position(|(a, b)| a != b);
-                println_t!(
-                    en: "MISMATCH: data differs at byte offset {:?}!",
-                    ru: "НЕСОВПАДЕНИЕ: данные отличаются со смещения байта {:?}!";
-                    first_diff
-                );
-            }
-        }
-        Err(_) => println!("{}", t!(en: "Read-back failed.", ru: "Ошибка обратного чтения.")),
-    }
-}
-
 // ==================== Авторизация (auth.rs) ====================
 
 /// Имя пользователя, вошедшего в текущем сеансе — None до успешного
@@ -1960,26 +1829,6 @@ pub fn cmd_poweroff() {
     }
 }
 
-pub fn cmd_dialog_test() {
-    let ok = crate::dialog::confirm("Continue?");
-    println!("confirm: {}", ok);
-    let line = crate::dialog::prompt_line("Enter text");
-    println!("prompt_line: {}", line);
-    let masked = crate::dialog::prompt_masked("Enter password");
-    println!("prompt_masked length: {}", masked.len());
-    let items = [String::from("Option 1"), String::from("Option 2")];
-    if let Some(idx) = crate::dialog::choose("Select item", &items) {
-        println!("selected: {}", idx);
-    }
-}
-
-pub fn cmd_erofs_test() {
-    let dummy = crate::erofs::build_image(&[("hello.txt", b"hello world\n")]);
-    if crate::erofs::is_erofs(&dummy) {
-        println!("  [erofs] build_image and is_erofs OK ({} bytes)", dummy.len());
-    }
-}
-
 pub fn cmd_halt() {
     println!("{}", t!(en: "Halting the CPU. Goodbye!", ru: "Остановка процессора. До свидания!"));
     // См. комментарий в cmd_reboot() — та же самая гарантия зануления
@@ -1994,10 +1843,10 @@ pub fn cmd_halt() {
 }
 
 pub const VALID_COMMANDS: &[&str] = &[
-    "help", "about", "echo", "clear", "uptime", "bootprof", "color", "cpuid", "mem", "lang",
+    "help", "about", "echo", "clear", "uptime", "bootprof", "color", "cpuid", "lang",
     "ifconfig", "arp", "ping", "dns", "threads", "crypt", "dinit", "hal", "gpu", "sound",
-    "ls", "cat", "write", "mkdir", "rm", "pkg", "dialog", "erofs", "run", "install",
-    "bigfile", "useradd", "passwd", "whoami", "users", "encrypt", "crash",
+    "ls", "cat", "write", "mkdir", "rm", "pkg", "run", "install",
+    "useradd", "passwd", "whoami", "users", "encrypt", "crash",
     "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",
     "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "dev", "profile",
     "ps", "kill", "log", "error", "panic", "diagnostics", "wallpaper", "sysfs",

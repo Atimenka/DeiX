@@ -206,7 +206,7 @@ Service areas outside partitions: LBA 0 — MBR; 1..2046 — stage2 + ramboot + 
 help about echo clear uptime color cpuid mem lang
 ifconfig [ip|dns <ip>] arp ping dns <host> gpu [info|nvinfo|mode] sound [list|play|beep|mode|hda]
 dinit [status|services|mounts|users|audit|security|stage|reload]
-duil [run|calc] ds [script.dxs|-i|-c] taskmgr ls cat write mkdir rm pkg run install bigfile
+duil [run|calc] ds [script.dxs|-i|-c] taskmgr ls cat write mkdir rm pkg run install
 useradd passwd whoami users encrypt crypt nvidia hal microcode logo linux profile lock
 threads crash bugreport dmesg crashlog dev root reboot poweroff shutdown halt
 ps kill kmod [load|list] lsmod
