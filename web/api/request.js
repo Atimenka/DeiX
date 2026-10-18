@@ -9,6 +9,7 @@ const {
   readBody,
   recordHit,
   requireUser,
+  requireVerified,
   rpc,
   sb,
   send,
@@ -52,6 +53,7 @@ module.exports = async function handler(req, res) {
     }
 
     if (body.action === 'submit') {
+      requireVerified(user);
       if (overLimit(`sub:${user.id}`, 10, 60 * 60 * 1000)) {
         throw new HttpError(429, 'Слишком много заявок. Попробуйте позже.');
       }

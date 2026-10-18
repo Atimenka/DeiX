@@ -6,6 +6,8 @@ const ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET || '';
 const TURNSTILE_SITE_KEY = process.env.TURNSTILE_SITE_KEY || '';
 
+const { mailConfigured } = require('./_mail');
+
 const ACCESS_COOKIE = 'deix_at';
 const REFRESH_COOKIE = 'deix_rt';
 const COOKIE_TTL_S = 30 * 24 * 60 * 60;
@@ -15,9 +17,10 @@ const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/;
 const MIN_PASSWORD = 8;
 
 class HttpError extends Error {
-  constructor(status, message) {
+  constructor(status, message, code) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -30,7 +33,7 @@ function send(res, status, payload) {
 
 function fail(res, err) {
   if (err instanceof HttpError) {
-    return send(res, err.status, { ok: false, error: err.message });
+    return send(res, err.status, err.code ? { ok: false, error: err.message, code: err.code } : { ok: false, error: err.message });
   }
   console.error('unhandled error:', err && err.message);
   return send(res, 500, { ok: false, error: 'Внутренняя ошибка сервера' });
@@ -199,15 +202,33 @@ function cookieValue(req, name) {
   return '';
 }
 
-function cookie(name, value, maxAge) {
-  return `${name}=${value}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${maxAge}`;
+function cookie(name, value, maxAge, path = '/') {
+  return `${name}=${value}; HttpOnly; Secure; SameSite=Strict; Path=${path}; Max-Age=${maxAge}`;
 }
 
-function setSession(res, session) {
+function setSession(res, session, extra = []) {
   res.setHeader('Set-Cookie', [
     cookie(ACCESS_COOKIE, session.access_token, COOKIE_TTL_S),
     cookie(REFRESH_COOKIE, session.refresh_token, COOKIE_TTL_S),
+    ...extra,
   ]);
+}
+
+/** Уровень аутентификации из access-токена (aal1 — пароль, aal2 — пароль и TOTP). */
+function tokenAal(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(String(token).split('.')[1], 'base64url').toString('utf8'));
+    return payload.aal === 'aal2' ? 'aal2' : 'aal1';
+  } catch {
+    return 'aal1';
+  }
+}
+
+function verifiedTotp(user) {
+  const list = (user && Array.isArray(user.factors) ? user.factors : []).filter(
+    (f) => f.factor_type === 'totp' && f.status === 'verified',
+  );
+  return list[0] || null;
 }
 
 function clearSession(res) {
@@ -215,7 +236,7 @@ function clearSession(res) {
 }
 
 async function loadProfile(userId) {
-  const rows = await sb(`profiles?id=eq.${userId}&select=id,username,role`);
+  const rows = await sb(`profiles?id=eq.${userId}&select=id,username,role,email_verified`);
   return Array.isArray(rows) && rows[0] ? rows[0] : null;
 }
 
@@ -247,7 +268,16 @@ async function currentUser(req, res) {
 
   const profile = await loadProfile(user.id);
   if (!profile) return null;
-  return { id: user.id, email: user.email, username: profile.username, role: profile.role, token: access };
+  return {
+    id: user.id,
+    email: user.email,
+    username: profile.username,
+    role: profile.role,
+    emailVerified: profile.email_verified === true,
+    factors: Array.isArray(user.factors) ? user.factors : [],
+    aal: tokenAal(access),
+    token: access,
+  };
 }
 
 async function requireUser(req, res) {
@@ -259,10 +289,27 @@ async function requireUser(req, res) {
 async function requireOwner(req, res) {
   const user = await requireUser(req, res);
   if (user.role !== 'owner') throw new HttpError(403, 'Нужны права Owner');
+  if (user.aal !== 'aal2') {
+    throw new HttpError(403, 'Для панели Owner нужна двухфакторная аутентификация: включите её в аккаунте и войдите заново.', 'mfa_required');
+  }
   return user;
 }
 
+/** Без подтверждённой почты ключи и заявки недоступны — но только если сервер умеет слать письма. */
+function requireVerified(user) {
+  if (mailConfigured() && !user.emailVerified) {
+    throw new HttpError(403, 'Подтвердите почту: ссылка отправлена в письме при регистрации.', 'email_unverified');
+  }
+}
+
 module.exports = {
+  ACCESS_COOKIE,
+  REFRESH_COOKIE,
+  cookie,
+  cookieValue,
+  requireVerified,
+  tokenAal,
+  verifiedTotp,
   DEVICE_ID_RE,
   EMAIL_RE,
   HttpError,

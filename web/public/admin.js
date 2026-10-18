@@ -16,13 +16,37 @@ function api(body) {
   return postJson('/api/admin', body);
 }
 
-function showDenied(title, text, canLogin) {
+function showDenied(title, text, actions) {
   clearInterval(state.timer);
   $('panel-view').hidden = true;
   $('denied-view').hidden = false;
   $('denied-title').textContent = title;
   $('denied-text').textContent = text;
-  $('denied-login').hidden = !canLogin;
+  $('denied-actions').replaceChildren(...actions);
+}
+
+const loginButton = () => el('a', { class: 'btn primary', href: '/login?next=/admin', text: 'Войти' });
+const securityButton = () => el('a', { class: 'btn primary', href: '/account#security', text: 'Настроить 2FA' });
+const relogButton = () =>
+  el('button', {
+    class: 'btn primary',
+    type: 'button',
+    text: 'Войти заново с кодом',
+    onclick: async () => {
+      try {
+        await authApi({ action: 'logout' });
+      } finally {
+        location.assign('/login?next=/admin');
+      }
+    },
+  });
+
+function denyMfa(user) {
+  if (user && user.mfa) {
+    showDenied('Нужен вход с кодом', 'Эта сессия открыта без кода из приложения. Войдите заново и введите код.', [relogButton()]);
+  } else {
+    showDenied('Включите 2FA', 'Панель Owner открывается только с двухфакторной аутентификацией. Подключите её в аккаунте, затем вернитесь сюда.', [securityButton()]);
+  }
 }
 
 function showPanel() {
@@ -126,7 +150,7 @@ function render() {
         ]),
         el('td', null, [el('span', { text: row.requester || 'анонимно (из ОС)' })]),
         el('td', null, [el('span', { class: `badge ${row.status}`, text: STATUS_LABEL[row.status] || row.status })]),
-        el('td', null, [el('span', { class: 'badge src', text: row.source === 'web' ? 'сайт' : 'ОС' })]),
+        el('td', null, [el('span', { class: 'badge', text: row.source === 'web' ? 'сайт' : 'ОС' })]),
         el('td', null, [el('div', { class: 'note-text', text: row.note || '—' })]),
         el('td', null, [el('div', { text: fmt(row.created_at) }), el('small', { class: 'hint', text: decided })]),
         el('td', { class: 'actions' }, actionButtons(row)),
@@ -145,8 +169,12 @@ async function refresh() {
     $('updated').textContent = `Обновлено: ${new Date().toLocaleTimeString('ru-RU')}`;
     render();
   } catch (err) {
+    if (err.code === 'mfa_required') {
+      denyMfa(await fetchMe());
+      return;
+    }
     if (err.status === 401 || err.status === 403) {
-      showDenied('Нужен вход', 'Сессия закончилась. Войдите снова.', true);
+      showDenied('Нужен вход', 'Сессия закончилась. Войдите снова.', [loginButton()]);
       return;
     }
     toast(err.message, 'err');
@@ -170,9 +198,11 @@ $('open-switch').addEventListener('change', async (event) => {
 (async () => {
   const user = await fetchMe();
   if (!user) {
-    showDenied('Нужен вход', 'Панель доступна только владельцу проекта. Войдите в аккаунт Owner.', true);
+    showDenied('Нужен вход', 'Панель доступна только владельцу проекта. Войдите в аккаунт Owner.', [loginButton()]);
   } else if (user.role !== 'owner') {
-    showDenied('Нет доступа', 'Ваш аккаунт не имеет прав Owner.', false);
+    showDenied('Нет доступа', 'Ваш аккаунт не имеет прав Owner.', [el('a', { class: 'btn', href: '/account', text: 'В аккаунт' })]);
+  } else if (user.aal !== 'aal2') {
+    denyMfa(user);
   } else {
     showPanel();
   }

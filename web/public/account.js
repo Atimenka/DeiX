@@ -1,19 +1,69 @@
 'use strict';
 
+const TABS = ['overview', 'devices', 'key', 'security'];
+let me = null;
+let mailEnabled = false;
+
+function showTab(name) {
+  const tab = TABS.includes(name) ? name : 'overview';
+  for (const pane of document.querySelectorAll('[data-pane]')) pane.hidden = pane.dataset.pane !== tab;
+  for (const button of document.querySelectorAll('#menu [data-tab]')) button.classList.toggle('active', button.dataset.tab === tab);
+  if (location.hash.slice(1) !== tab) history.replaceState(null, '', `#${tab}`);
+}
+
+function renderProfile() {
+  document.getElementById('avatar').textContent = me.username.slice(0, 1).toUpperCase();
+  document.getElementById('acc-name').textContent = me.username;
+  document.getElementById('acc-email').textContent = me.email;
+  document.getElementById('ov-name').textContent = me.username;
+  document.getElementById('ov-email').textContent = me.email;
+  document.getElementById('ov-role').textContent = me.role === 'owner' ? 'Owner' : 'Пользователь';
+  document.getElementById('admin-link').hidden = me.role !== 'owner';
+  const badges = document.getElementById('acc-badges');
+  badges.replaceChildren(
+    el('span', { class: `badge ${me.role === 'owner' ? 'owner' : ''}`, text: me.role === 'owner' ? 'Owner' : 'Пользователь' }),
+    el('span', { class: `badge ${me.mfa ? 'on' : 'warn'}`, text: me.mfa ? '2FA включена' : '2FA выключена' }),
+  );
+  renderMail();
+  renderMfa();
+}
+
+function renderMail() {
+  const badge = document.getElementById('mail-badge');
+  const text = document.getElementById('mail-text');
+  const resend = document.getElementById('mail-resend');
+  badge.className = `badge ${me.email_verified ? 'on' : 'warn'}`;
+  badge.textContent = me.email_verified ? 'Подтверждена' : 'Не подтверждена';
+  resend.hidden = me.email_verified || !mailEnabled;
+  if (me.email_verified) text.textContent = `Адрес ${me.email} подтверждён.`;
+  else if (mailEnabled) text.textContent = `Мы отправили письмо со ссылкой на ${me.email}. Без подтверждения недоступны ключи и заявки.`;
+  else text.textContent = 'Отправка писем на сервере не настроена, поэтому подтверждение пока не требуется.';
+}
+
 (async () => {
-  const user = await fetchMe();
-  if (!user) {
+  me = await fetchMe();
+  if (!me) {
     location.replace('/login?next=/account');
     return;
   }
-  document.getElementById('acc-name').textContent = user.username;
-  document.getElementById('acc-email').textContent = user.email;
-  document.getElementById('acc-role').textContent = user.role === 'owner' ? 'Owner' : 'Пользователь';
-  document.getElementById('admin-link').hidden = user.role !== 'owner';
+  try {
+    mailEnabled = (await authApi({ action: 'config' })).email_verification === true;
+  } catch {
+    mailEnabled = false;
+  }
+  renderProfile();
   document.getElementById('account-view').hidden = false;
+  showTab(location.hash.slice(1));
   loadDevices();
   loadKeyHistory();
 })();
+
+for (const button of document.querySelectorAll('#menu [data-tab]')) {
+  button.addEventListener('click', () => showTab(button.dataset.tab));
+}
+window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
+
+document.getElementById('mail-resend').addEventListener('click', (event) => resendVerification(event.currentTarget));
 
 async function loadDevices() {
   const box = document.getElementById('devices');
@@ -137,5 +187,136 @@ document.getElementById('key-copy').addEventListener('click', async () => {
     toast('Ключ скопирован', 'ok');
   } catch {
     toast('Не удалось скопировать: выделите ключ вручную', 'err');
+  }
+});
+
+const mfaResult = document.getElementById('mfa-result');
+const codesBox = document.getElementById('mfa-codes');
+let setupFactor = null;
+let pendingAction = null;
+let shownCodes = [];
+
+function renderMfa() {
+  const on = me.mfa;
+  const badge = document.getElementById('mfa-badge');
+  badge.className = `badge ${on ? 'on' : 'off'}`;
+  badge.textContent = on ? 'Включена' : 'Выключена';
+  document.getElementById('mfa-text').textContent = on
+    ? 'При входе нужен код из приложения. Резервные коды помогут, если телефон потерян.'
+    : me.role === 'owner'
+      ? 'Для панели Owner двухфакторная аутентификация обязательна: без неё доступ к заявкам закрыт.'
+      : 'Дополнительная защита аккаунта: после пароля потребуется код из приложения-аутентификатора.';
+  document.getElementById('mfa-start').hidden = on || !document.getElementById('mfa-setup').hidden;
+  document.getElementById('mfa-manage').hidden = !on || !codesBox.hidden;
+  if (!on) document.getElementById('mfa-confirm').hidden = true;
+}
+
+async function refreshMe() {
+  const data = await authApi({ action: 'me' });
+  me = data.user;
+  renderProfile();
+}
+
+document.getElementById('mfa-start').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  mfaResult.hidden = true;
+  try {
+    const data = await authApi({ action: 'mfa_enroll_start' });
+    setupFactor = data.factor_id;
+    document.getElementById('mfa-qr').src = data.qr;
+    document.getElementById('mfa-secret').textContent = data.secret;
+    document.getElementById('mfa-setup').hidden = false;
+    button.hidden = true;
+    document.getElementById('mfa-code').focus();
+  } catch (err) {
+    showResult(mfaResult, 'err', err.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('mfa-cancel').addEventListener('click', () => {
+  setupFactor = null;
+  document.getElementById('mfa-setup').hidden = true;
+  document.getElementById('mfa-code').value = '';
+  renderMfa();
+});
+
+function showCodes(codes) {
+  shownCodes = codes;
+  document.getElementById('mfa-codes-list').replaceChildren(...codes.map((code) => el('span', { text: code })));
+  codesBox.hidden = false;
+  document.getElementById('mfa-manage').hidden = true;
+}
+
+document.getElementById('mfa-finish').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  try {
+    const data = await authApi({ action: 'mfa_enroll_finish', factor_id: setupFactor, code: document.getElementById('mfa-code').value });
+    document.getElementById('mfa-setup').hidden = true;
+    document.getElementById('mfa-code').value = '';
+    showCodes(data.backup_codes);
+    await refreshMe();
+    toast('Двухфакторная аутентификация включена', 'ok');
+  } catch (err) {
+    showResult(mfaResult, 'err', err.message);
+  }
+});
+
+document.getElementById('codes-copy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(shownCodes.join('\n'));
+    toast('Коды скопированы', 'ok');
+  } catch {
+    toast('Не удалось скопировать: выделите коды вручную', 'err');
+  }
+});
+
+document.getElementById('codes-save').addEventListener('click', () => {
+  const text = `DeiX OS — резервные коды 2FA для ${me.username}\nКаждый код работает один раз.\n\n${shownCodes.join('\n')}\n`;
+  const link = el('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/plain' })), download: 'deix-backup-codes.txt' });
+  document.body.append(link);
+  link.click();
+  link.remove();
+});
+
+document.getElementById('codes-done').addEventListener('click', () => {
+  shownCodes = [];
+  document.getElementById('mfa-codes-list').replaceChildren();
+  codesBox.hidden = true;
+  renderMfa();
+});
+
+function askCode(action) {
+  pendingAction = action;
+  const form = document.getElementById('mfa-confirm');
+  form.hidden = false;
+  mfaResult.hidden = true;
+  document.getElementById('mfa-confirm-btn').textContent = action === 'mfa_disable' ? 'Отключить' : 'Создать коды';
+  document.getElementById('mfa-confirm-code').focus();
+}
+
+document.getElementById('mfa-regen').addEventListener('click', () => askCode('mfa_backup_regenerate'));
+document.getElementById('mfa-off').addEventListener('click', () => askCode('mfa_disable'));
+document.getElementById('mfa-confirm-cancel').addEventListener('click', () => {
+  document.getElementById('mfa-confirm').hidden = true;
+});
+
+document.getElementById('mfa-confirm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const input = document.getElementById('mfa-confirm-code');
+  try {
+    const data = await authApi({ action: pendingAction, code: input.value });
+    input.value = '';
+    document.getElementById('mfa-confirm').hidden = true;
+    if (pendingAction === 'mfa_disable') {
+      await refreshMe();
+      toast('Двухфакторная аутентификация отключена', 'ok');
+    } else {
+      showCodes(data.backup_codes);
+    }
+  } catch (err) {
+    showResult(mfaResult, 'err', err.message);
   }
 });

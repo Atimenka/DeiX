@@ -35,6 +35,7 @@ async function postJson(url, body, extraHeaders) {
   if (!resp.ok || !data || data.ok === false) {
     const err = new Error((data && data.error) || `Ошибка сервера (${resp.status})`);
     err.status = resp.status;
+    err.code = data && data.code;
     throw err;
   }
   return data;
@@ -75,17 +76,178 @@ function fetchMe() {
   return mePromise;
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function icon(name, extra) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('class', `icon${extra ? ` ${extra}` : ''}`);
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS(SVG_NS, 'use');
+  use.setAttribute('href', `/icons.svg#${name}`);
+  svg.append(use);
+  return svg;
+}
+
+function setTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  try {
+    localStorage.setItem('deix-theme', theme);
+  } catch {
+    return;
+  }
+}
+
+const NAV_LINKS = [
+  ['home', '/', 'Главная'],
+  ['features', '/#features', 'Возможности'],
+  ['dev', '/#dev', 'Dev-режим'],
+  ['request', '/request', 'Заявки'],
+];
+
+function buildLayout() {
+  const page = document.body.dataset.page || '';
+  document.body.prepend(
+    el('div', { class: 'bg', 'aria-hidden': 'true' }, [el('div', { class: 'blob a' }), el('div', { class: 'blob b' }), el('div', { class: 'blob c' })]),
+  );
+
+  const nav = el('header', { class: 'nav' });
+  const themeBtn = el('button', { class: 'icon-btn theme-toggle', type: 'button', 'aria-label': 'Сменить тему', title: 'Светлая / тёмная тема' }, [
+    icon('moon', 'moon'),
+    icon('sun', 'sun'),
+  ]);
+  themeBtn.addEventListener('click', () => {
+    setTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
+  });
+  const burger = el('button', { class: 'icon-btn burger', type: 'button', 'aria-label': 'Меню', 'aria-expanded': 'false' }, [icon('menu')]);
+  burger.addEventListener('click', () => {
+    const open = nav.classList.toggle('open');
+    burger.setAttribute('aria-expanded', String(open));
+    burger.replaceChildren(icon(open ? 'close' : 'menu'));
+  });
+  const links = el(
+    'nav',
+    { class: 'links', 'aria-label': 'Основная навигация' },
+    NAV_LINKS.map(([key, href, label]) => el('a', { class: `link${key === page ? ' active' : ''}`, href, text: label })),
+  );
+  links.append(el('a', { class: 'link', href: 'https://github.com/Atimenka/DeiX', rel: 'noopener', text: 'GitHub' }), el('span', { id: 'nav-auth', class: 'nav-auth' }));
+  nav.append(
+    el('div', { class: 'wrap' }, [
+      el('div', { class: 'nav-bar' }, [
+        el('a', { class: 'brand', href: '/' }, [el('img', { src: '/favicon.svg', alt: '' }), document.createTextNode('DeiX OS')]),
+        links,
+        el('div', { class: 'nav-tools' }, [themeBtn, burger]),
+      ]),
+    ]),
+  );
+  document.body.insertBefore(nav, document.body.querySelector('main'));
+
+  const foot = el('footer', { class: 'foot' }, [
+    el('div', { class: 'wrap' }, [
+      el('span', { text: `© ${new Date().getFullYear()} DeiX OS` }),
+      el('nav', null, [
+        el('a', { href: '/request', text: 'Заявки' }),
+        el('a', { href: '/register', text: 'Регистрация' }),
+        el('a', { href: 'https://github.com/Atimenka/DeiX', rel: 'noopener', text: 'GitHub' }),
+      ]),
+    ]),
+  ]);
+  document.body.append(foot);
+}
+
+function showBanner(parts) {
+  const nav = document.querySelector('header.nav');
+  if (!nav || document.getElementById('site-banner')) return;
+  nav.after(el('div', { id: 'site-banner', class: 'banner', role: 'status' }, [icon('alert'), ...parts]));
+}
+
+async function resendVerification(button) {
+  button.disabled = true;
+  try {
+    await authApi({ action: 'resend_verification' });
+    toast('Письмо отправлено. Проверьте почту.', 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+    button.disabled = false;
+  }
+}
+
+async function accountBanners(user) {
+  if (!user.email_verified) {
+    let enabled = false;
+    try {
+      enabled = (await authApi({ action: 'config' })).email_verification === true;
+    } catch {
+      enabled = false;
+    }
+    if (enabled) {
+      const button = el('button', { class: 'btn small', type: 'button', text: 'Отправить письмо ещё раз' });
+      button.addEventListener('click', () => resendVerification(button));
+      showBanner([el('span', { class: 'grow', text: `Почта ${user.email} не подтверждена: без этого недоступны ключи и заявки.` }), button]);
+      return;
+    }
+  }
+  if (user.role === 'owner' && !user.mfa) {
+    showBanner([
+      el('span', { class: 'grow', text: 'Для панели Owner обязательна двухфакторная аутентификация.' }),
+      el('a', { class: 'btn small primary', href: '/account#security', text: 'Включить 2FA' }),
+    ]);
+  }
+}
+
 async function renderNav() {
   const slot = document.getElementById('nav-auth');
   if (!slot) return;
   const user = await fetchMe();
   slot.replaceChildren();
   if (user) {
-    if (user.role === 'owner') slot.append(el('a', { href: '/admin', text: 'Панель' }));
-    slot.append(el('a', { class: 'btn small', href: '/account', text: user.username }));
+    if (user.role === 'owner') slot.append(el('a', { class: 'link', href: '/admin', text: 'Панель' }));
+    slot.append(el('a', { class: 'btn small', href: '/account' }, [icon('user'), document.createTextNode(user.username)]));
+    accountBanners(user);
   } else {
-    slot.append(el('a', { href: '/login', text: 'Войти' }), el('a', { class: 'btn primary small', href: '/register', text: 'Регистрация' }));
+    slot.append(el('a', { class: 'link', href: '/login', text: 'Войти' }), el('a', { class: 'btn primary small', href: '/register', text: 'Регистрация' }));
   }
+}
+
+function enhancePasswords() {
+  for (const input of document.querySelectorAll('input[type="password"]')) {
+    const wrap = el('span', { class: 'pw' });
+    const toggle = el('button', { type: 'button', 'aria-label': 'Показать пароль', tabindex: '-1' }, [icon('eye')]);
+    input.replaceWith(wrap);
+    wrap.append(input, toggle);
+    toggle.addEventListener('click', () => {
+      const show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      toggle.replaceChildren(icon(show ? 'eyeoff' : 'eye'));
+      toggle.setAttribute('aria-label', show ? 'Скрыть пароль' : 'Показать пароль');
+    });
+  }
+}
+
+function enhanceMotion() {
+  const items = document.querySelectorAll('.reveal');
+  if ('IntersectionObserver' in window) {
+    const seen = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('in');
+            seen.unobserve(entry.target);
+          }
+        }
+      },
+      { threshold: 0.12, rootMargin: '0px 0px -40px 0px' },
+    );
+    items.forEach((item) => seen.observe(item));
+  } else {
+    items.forEach((item) => item.classList.add('in'));
+  }
+  document.addEventListener('pointermove', (event) => {
+    const card = event.target instanceof Element ? event.target.closest('.card') : null;
+    if (!card) return;
+    const box = card.getBoundingClientRect();
+    card.style.setProperty('--mx', `${event.clientX - box.left}px`);
+    card.style.setProperty('--my', `${event.clientY - box.top}px`);
+  });
 }
 
 /**
@@ -119,7 +281,7 @@ async function mountCaptcha(container) {
   if (window.turnstile) {
     widget = window.turnstile.render(container, {
       sitekey: config.captcha_site_key,
-      theme: 'dark',
+      theme: document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
       callback: (token) => {
         value = token;
       },
@@ -137,7 +299,16 @@ async function mountCaptcha(container) {
   };
 }
 
-for (const node of document.querySelectorAll('[data-year]')) {
-  node.textContent = String(new Date().getFullYear());
+buildLayout();
+try {
+  const flash = sessionStorage.getItem('deix-flash');
+  if (flash) {
+    sessionStorage.removeItem('deix-flash');
+    toast(flash, 'ok');
+  }
+} catch {
+  document.documentElement.classList.add('no-storage');
 }
+enhancePasswords();
+enhanceMotion();
 renderNav();

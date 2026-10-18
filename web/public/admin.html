@@ -1,36 +1,29 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <title>Панель Owner — DeiX OS</title>
+  <meta name="theme-color" content="#06060c">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-  <header class="nav">
-    <div class="wrap">
-      <a class="brand" href="/"><img src="/favicon.svg" alt="">DeiX OS</a>
-      <nav class="links">
-        <a href="/">Сайт</a>
-        <span id="nav-auth" class="nav-auth"></span>
-      </nav>
-    </div>
-  </header>
-
-  <main class="wrap">
+<body data-page="admin">
+  <main class="page wrap">
     <section id="denied-view" hidden>
-      <div class="panel login-card">
-        <h2 id="denied-title">Нужен вход</h2>
-        <p class="hint" id="denied-text"></p>
-        <div class="row-gap"><a class="btn primary" id="denied-login" href="/login?next=/admin">Войти</a></div>
+      <div class="panel auth-card state" id="denied-card">
+        <div class="big"><svg class="icon"><use href="/icons.svg#lock"/></svg></div>
+        <h1 id="denied-title">Нужен вход</h1>
+        <p id="denied-text"></p>
+        <div class="row-gap" id="denied-actions"></div>
       </div>
     </section>
 
     <section id="panel-view" hidden>
       <div class="toolbar">
-        <h1 class="title">Заявки на dev-токен</h1>
+        <h1 class="title">Заявки на <span class="grad">dev-токен</span></h1>
         <div class="right">
           <label class="switch"><input type="checkbox" id="open-switch"><span id="open-label">Приём заявок</span></label>
           <button class="btn small" id="refresh-btn" type="button">Обновить</button>
@@ -57,7 +50,6 @@
       <p class="hint">Токен генерирует база при одобрении и не показывается на сайте: устройство получает его само при следующей проверке статуса и только один раз.</p>
     </section>
   </main>
-
   <script src="/site.js"></script>
   <script src="/admin.js"></script>
 </body>

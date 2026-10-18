@@ -1,6 +1,6 @@
 'use strict';
 
-const { DEVICE_ID_RE, HttpError, fail, guardPost, overLimit, readBody, recordHit, requireUser, sb, send } = require('./_lib');
+const { DEVICE_ID_RE, HttpError, fail, guardPost, overLimit, readBody, recordHit, requireUser, requireVerified, sb, send } = require('./_lib');
 const { issueKey, keysConfigured } = require('./_keys');
 
 const HOURLY_LIMIT = 5;
@@ -17,6 +17,7 @@ module.exports = async function handler(req, res) {
     }
 
     if (body.action === 'issue') {
+      requireVerified(user);
       const id = String(body.device_id || '').trim().toLowerCase();
       if (!DEVICE_ID_RE.test(id)) {
         throw new HttpError(400, 'Device ID — это 32 символа 0-9 и a-f. Его печатает команда «dev id» в DeiX.');

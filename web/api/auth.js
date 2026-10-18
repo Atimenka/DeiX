@@ -1,5 +1,8 @@
 'use strict';
 
+const crypto = require('node:crypto');
+const { checkEmailDomain } = require('./_emailcheck');
+const { mailConfigured, sendMail } = require('./_mail');
 const {
   EMAIL_RE,
   HttpError,
@@ -9,6 +12,8 @@ const {
   auth,
   captchaEnabled,
   clearSession,
+  cookie,
+  cookieValue,
   clientIp,
   currentUser,
   fail,
@@ -21,6 +26,7 @@ const {
   sb,
   send,
   setSession,
+  verifiedTotp,
   verifyCaptcha,
 } = require('./_lib');
 
@@ -29,10 +35,35 @@ const REGISTER_WINDOW_MS = 60 * 60 * 1000;
 const LOGIN_MAX_FAILS = 8;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
+const MFA_COOKIE = 'deix_mfa';
+const MFA_COOKIE_TTL_S = 5 * 60;
+const MFA_MAX_FAILS = 5;
+const MFA_WINDOW_MS = 10 * 60 * 1000;
+const VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
+const VERIFY_SEND_MAX = 3;
+const VERIFY_SEND_WINDOW_MS = 60 * 60 * 1000;
+const BACKUP_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const BACKUP_COUNT = 8;
+const BACKUP_LENGTH = 10;
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
 
 function publicUser(user) {
-  return { username: user.username, email: user.email, role: user.role };
+  return {
+    username: user.username,
+    email: user.email,
+    role: user.role,
+    email_verified: user.emailVerified === true,
+    mfa: Boolean(verifiedTotp(user)),
+    aal: user.aal,
+  };
+}
+
+function siteUrl(req) {
+  const fixed = (process.env.SITE_URL || '').replace(/\/+$/, '');
+  if (fixed) return fixed;
+  return `https://${String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim()}`;
 }
 
 function validatePassword(password) {
@@ -66,6 +97,7 @@ async function register(req, res, body) {
   validatePassword(password);
   if (password !== password2) throw new HttpError(400, 'Пароли не совпадают');
   await verifyCaptcha(body.captcha, ip);
+  await checkEmailDomain(email);
   recordHit(`reg:${ip}`);
 
   const taken = await sb(`profiles?username=ilike.${encodeURIComponent(username)}&select=id&limit=1`);
@@ -86,7 +118,62 @@ async function register(req, res, body) {
   const session = await signIn(email, password);
   if (!session) throw new HttpError(502, 'Аккаунт создан, но войти не удалось. Попробуйте войти вручную.');
   setSession(res, session);
-  return send(res, 200, { ok: true, user: { username, email, role: 'user' } });
+  const verification = mailConfigured() ? await sendVerification(req, created.data.id, email, username) : 'off';
+  return send(res, 200, {
+    ok: true,
+    verification,
+    user: { username, email, role: 'user', email_verified: false, mfa: false, aal: 'aal1' },
+  });
+}
+
+async function sendVerification(req, userId, email, username) {
+  const token = crypto.randomBytes(32).toString('hex');
+  await sb('email_verifications', {
+    method: 'POST',
+    body: { user_id: userId, token_hash: sha256(token), expires_at: new Date(Date.now() + VERIFY_TTL_MS).toISOString() },
+  });
+  const link = `${siteUrl(req)}/verify?token=${token}`;
+  try {
+    await sendMail({
+      to: email,
+      subject: 'Подтвердите почту для DeiX OS',
+      text: `Здравствуйте, ${username}!\n\nПодтвердите почту по ссылке (действует 24 часа):\n${link}\n\nЕсли вы не регистрировались в DeiX OS, просто проигнорируйте письмо.`,
+      html: `<p>Здравствуйте, <b>${username}</b>!</p><p><a href="${link}">Подтвердить почту</a> (ссылка действует 24 часа).</p><p>Если вы не регистрировались в DeiX OS, просто проигнорируйте письмо.</p>`,
+    });
+    return 'sent';
+  } catch (e) {
+    console.error('verification mail failed:', e && e.message);
+    return 'failed';
+  }
+}
+
+async function resendVerification(req, res) {
+  const user = await requireUser(req, res);
+  if (user.emailVerified) throw new HttpError(400, 'Почта уже подтверждена');
+  if (!mailConfigured()) throw new HttpError(503, 'Отправка писем на сервере не настроена');
+  const key = `vsend:${user.id}`;
+  if (overLimit(key, VERIFY_SEND_MAX, VERIFY_SEND_WINDOW_MS)) {
+    throw new HttpError(429, 'Письмо уже отправлялось несколько раз. Попробуйте через час.');
+  }
+  recordHit(key);
+  const result = await sendVerification(req, user.id, user.email, user.username);
+  if (result !== 'sent') throw new HttpError(502, 'Не удалось отправить письмо. Попробуйте позже.');
+  return send(res, 200, { ok: true });
+}
+
+async function verifyEmail(req, res, body) {
+  const ip = clientIp(req);
+  if (overLimit(`vmail:${ip}`, 20, 60 * 60 * 1000)) throw new HttpError(429, 'Слишком много попыток');
+  recordHit(`vmail:${ip}`);
+  const token = String(body.token || '');
+  if (!/^[0-9a-f]{64}$/.test(token)) throw new HttpError(400, 'Ссылка подтверждения повреждена');
+  const hash = sha256(token);
+  const now = encodeURIComponent(new Date().toISOString());
+  const rows = await sb(`email_verifications?token_hash=eq.${hash}&used_at=is.null&expires_at=gt.${now}&select=id,user_id&limit=1`);
+  if (!rows[0]) throw new HttpError(400, 'Ссылка недействительна или устарела. Запросите новое письмо в аккаунте.');
+  await sb(`email_verifications?id=eq.${rows[0].id}`, { method: 'PATCH', body: { used_at: new Date().toISOString() } });
+  await sb(`profiles?id=eq.${rows[0].user_id}`, { method: 'PATCH', body: { email_verified: true } });
+  return send(res, 200, { ok: true });
 }
 
 async function login(req, res, body) {
@@ -110,13 +197,219 @@ async function login(req, res, body) {
     await sleep(400);
     throw new HttpError(401, 'Неверный логин или пароль');
   }
-  const profile = await sb(`profiles?id=eq.${session.user.id}&select=username,role`);
+  const profile = await sb(`profiles?id=eq.${session.user.id}&select=username,role,email_verified`);
   if (!profile[0]) throw new HttpError(403, 'Профиль аккаунта не найден');
+  const full = await auth('user', { method: 'GET', token: session.access_token });
+  if (verifiedTotp(full.status === 200 && full.data ? full.data : session.user)) {
+    const pending = Buffer.from(JSON.stringify({ a: session.access_token, r: session.refresh_token })).toString('base64url');
+    res.setHeader('Set-Cookie', [cookie(MFA_COOKIE, pending, MFA_COOKIE_TTL_S, '/api')]);
+    return send(res, 200, { ok: true, mfa: true });
+  }
   setSession(res, session);
   return send(res, 200, {
     ok: true,
-    user: { username: profile[0].username, email: session.user.email, role: profile[0].role },
+    user: {
+      username: profile[0].username,
+      email: session.user.email,
+      role: profile[0].role,
+      email_verified: profile[0].email_verified === true,
+      mfa: false,
+      aal: 'aal1',
+    },
   });
+}
+
+function readPending(req) {
+  const raw = cookieValue(req, MFA_COOKIE);
+  if (!raw) return null;
+  try {
+    const data = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+    return data && data.a && data.r ? { access: data.a, refresh: data.r } : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeBackup(code) {
+  const value = String(code || '').toUpperCase().replace(/[\s-]/g, '');
+  return new RegExp(`^[${BACKUP_ALPHABET}]{${BACKUP_LENGTH}}$`).test(value) ? value : null;
+}
+
+function normalizeTotp(code) {
+  const value = String(code || '').replace(/\s/g, '');
+  return /^\d{6}$/.test(value) ? value : null;
+}
+
+/** Проверка TOTP-кода через GoTrue; возвращает aal2-сессию или null при неверном коде. */
+async function totpVerify(factorId, token, code) {
+  const challenge = await auth(`factors/${factorId}/challenge`, { token, body: {} });
+  if (challenge.status !== 200 || !challenge.data || !challenge.data.id) {
+    console.error('mfa challenge failed:', challenge.status);
+    throw new HttpError(502, 'Не удалось проверить код. Попробуйте ещё раз.');
+  }
+  const verified = await auth(`factors/${factorId}/verify`, { token, body: { challenge_id: challenge.data.id, code } });
+  if (verified.status === 200 && verified.data && verified.data.access_token) return verified.data;
+  return null;
+}
+
+async function storeBackupCodes(userId) {
+  const codes = [];
+  for (let i = 0; i < BACKUP_COUNT; i += 1) {
+    let code = '';
+    for (let j = 0; j < BACKUP_LENGTH; j += 1) code += BACKUP_ALPHABET[crypto.randomInt(BACKUP_ALPHABET.length)];
+    codes.push(code);
+  }
+  await sb(`mfa_backup_codes?user_id=eq.${userId}`, { method: 'DELETE' });
+  await sb('mfa_backup_codes', {
+    method: 'POST',
+    body: codes.map((code) => ({ user_id: userId, code_hash: sha256(code) })),
+  });
+  return codes.map((code) => `${code.slice(0, 5)}-${code.slice(5)}`);
+}
+
+async function takeBackupCode(userId, code) {
+  const rows = await sb(`mfa_backup_codes?user_id=eq.${userId}&code_hash=eq.${sha256(code)}&used_at=is.null&select=id&limit=1`);
+  if (!rows[0]) return false;
+  await sb(`mfa_backup_codes?id=eq.${rows[0].id}`, { method: 'PATCH', body: { used_at: new Date().toISOString() } });
+  return true;
+}
+
+async function dropTotp(user) {
+  for (const factor of user.factors.filter((f) => f.factor_type === 'totp')) {
+    const r = await auth(`admin/users/${user.id}/factors/${factor.id}`, { method: 'DELETE', admin: true });
+    if (r.status >= 300) {
+      console.error('factor delete failed:', r.status);
+      throw new HttpError(502, 'Не удалось отключить двухфакторную аутентификацию');
+    }
+  }
+  await sb(`mfa_backup_codes?user_id=eq.${user.id}`, { method: 'DELETE' });
+}
+
+async function mfaVerify(req, res, body) {
+  const pending = readPending(req);
+  const expired = new HttpError(401, 'Время ввода кода истекло. Войдите заново.', 'mfa_expired');
+  if (!pending) throw expired;
+  const me = await auth('user', { method: 'GET', token: pending.access });
+  if (me.status !== 200 || !me.data || !me.data.id) throw expired;
+  const user = me.data;
+  const factor = verifiedTotp(user);
+  if (!factor) throw expired;
+
+  const key = `mfa:${user.id}`;
+  if (overLimit(key, MFA_MAX_FAILS, MFA_WINDOW_MS)) {
+    throw new HttpError(429, 'Слишком много неверных кодов. Подождите 10 минут.');
+  }
+  const profile = (await sb(`profiles?id=eq.${user.id}&select=username,role,email_verified`))[0];
+  if (!profile) throw new HttpError(403, 'Профиль аккаунта не найден');
+
+  const clearPending = cookie(MFA_COOKIE, '', 0, '/api');
+  const totp = normalizeTotp(body.code);
+  const backup = totp ? null : normalizeBackup(body.code);
+  if (!totp && !backup) throw new HttpError(400, 'Введите 6 цифр из приложения или резервный код');
+
+  let session = null;
+  let reset = false;
+  if (totp) {
+    session = await totpVerify(factor.id, pending.access, totp);
+  } else if (await takeBackupCode(user.id, backup)) {
+    await dropTotp({ id: user.id, factors: user.factors });
+    session = { access_token: pending.access, refresh_token: pending.refresh };
+    reset = true;
+  }
+  if (!session) {
+    recordHit(key);
+    await sleep(400);
+    throw new HttpError(401, 'Неверный код');
+  }
+  setSession(res, session, [clearPending]);
+  return send(res, 200, {
+    ok: true,
+    mfa_reset: reset,
+    user: {
+      username: profile.username,
+      email: user.email,
+      role: profile.role,
+      email_verified: profile.email_verified === true,
+      mfa: !reset,
+      aal: reset ? 'aal1' : 'aal2',
+    },
+  });
+}
+
+async function mfaEnrollStart(req, res) {
+  const user = await requireUser(req, res);
+  if (verifiedTotp(user)) throw new HttpError(400, 'Двухфакторная аутентификация уже включена');
+  for (const factor of user.factors.filter((f) => f.factor_type === 'totp')) {
+    await auth(`admin/users/${user.id}/factors/${factor.id}`, { method: 'DELETE', admin: true });
+  }
+  const r = await auth('factors', {
+    token: user.token,
+    body: { factor_type: 'totp', friendly_name: `DeiX ${Date.now().toString(36)}`, issuer: 'DeiX OS' },
+  });
+  if (r.status !== 200 || !r.data || !r.data.totp) {
+    console.error('mfa enroll failed:', r.status, r.data && r.data.msg);
+    throw new HttpError(502, 'Не удалось начать подключение 2FA');
+  }
+  let qr = String(r.data.totp.qr_code || '');
+  if (qr.startsWith('<svg')) qr = `data:image/svg+xml;utf-8,${encodeURIComponent(qr)}`;
+  return send(res, 200, { ok: true, factor_id: r.data.id, qr, secret: r.data.totp.secret, uri: r.data.totp.uri });
+}
+
+async function mfaEnrollFinish(req, res, body) {
+  const user = await requireUser(req, res);
+  const factorId = String(body.factor_id || '');
+  const factor = user.factors.find((f) => f.id === factorId && f.factor_type === 'totp' && f.status !== 'verified');
+  if (!factor) throw new HttpError(400, 'Подключение не начато или уже завершено. Начните заново.');
+  const code = normalizeTotp(body.code);
+  if (!code) throw new HttpError(400, 'Введите 6 цифр из приложения');
+  const key = `mfa:${user.id}`;
+  if (overLimit(key, MFA_MAX_FAILS, MFA_WINDOW_MS)) throw new HttpError(429, 'Слишком много неверных кодов. Подождите 10 минут.');
+  const session = await totpVerify(factor.id, user.token, code);
+  if (!session) {
+    recordHit(key);
+    await sleep(400);
+    throw new HttpError(400, 'Неверный код. Проверьте время на телефоне и попробуйте ещё раз.');
+  }
+  setSession(res, session);
+  const backup = await storeBackupCodes(user.id);
+  return send(res, 200, { ok: true, backup_codes: backup });
+}
+
+async function requireTotpCode(user, body) {
+  const factor = verifiedTotp(user);
+  if (!factor) throw new HttpError(400, 'Двухфакторная аутентификация не включена');
+  const key = `mfa:${user.id}`;
+  if (overLimit(key, MFA_MAX_FAILS, MFA_WINDOW_MS)) throw new HttpError(429, 'Слишком много неверных кодов. Подождите 10 минут.');
+  const code = normalizeTotp(body.code);
+  if (!code) throw new HttpError(400, 'Введите 6 цифр из приложения');
+  const session = await totpVerify(factor.id, user.token, code);
+  if (!session) {
+    recordHit(key);
+    await sleep(400);
+    throw new HttpError(401, 'Неверный код');
+  }
+  return session;
+}
+
+async function mfaDisable(req, res, body) {
+  const user = await requireUser(req, res);
+  await requireTotpCode(user, body);
+  await dropTotp(user);
+  return send(res, 200, { ok: true });
+}
+
+async function mfaBackupRegenerate(req, res, body) {
+  const user = await requireUser(req, res);
+  await requireTotpCode(user, body);
+  return send(res, 200, { ok: true, backup_codes: await storeBackupCodes(user.id) });
+}
+
+async function mfaStatus(req, res) {
+  const user = await requireUser(req, res);
+  const rows = verifiedTotp(user)
+    ? await sb(`mfa_backup_codes?user_id=eq.${user.id}&used_at=is.null&select=id`)
+    : [];
+  return send(res, 200, { ok: true, enabled: Boolean(verifiedTotp(user)), backup_left: rows.length });
 }
 
 async function logout(req, res) {
@@ -157,6 +450,7 @@ module.exports = async function handler(req, res) {
           ok: true,
           captcha: captchaEnabled(),
           captcha_site_key: captchaEnabled() ? TURNSTILE_SITE_KEY : null,
+          email_verification: mailConfigured(),
         });
       case 'me': {
         const user = await currentUser(req, res);
@@ -166,6 +460,22 @@ module.exports = async function handler(req, res) {
         return await register(req, res, body);
       case 'login':
         return await login(req, res, body);
+      case 'mfa_verify':
+        return await mfaVerify(req, res, body);
+      case 'mfa_status':
+        return await mfaStatus(req, res);
+      case 'mfa_enroll_start':
+        return await mfaEnrollStart(req, res);
+      case 'mfa_enroll_finish':
+        return await mfaEnrollFinish(req, res, body);
+      case 'mfa_disable':
+        return await mfaDisable(req, res, body);
+      case 'mfa_backup_regenerate':
+        return await mfaBackupRegenerate(req, res, body);
+      case 'resend_verification':
+        return await resendVerification(req, res);
+      case 'verify_email':
+        return await verifyEmail(req, res, body);
       case 'logout':
         return await logout(req, res);
       case 'change_password':
