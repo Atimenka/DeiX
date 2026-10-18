@@ -104,6 +104,7 @@ fn system_image() -> Result<&'static [u8], VfsError> {
         cause: e,
     })?;
 
+    crate::bootprof::mark("vfs: whole /system image read from disk");
     let leaked: &'static [u8] = alloc::boxed::Box::leak(img.into_boxed_slice());
     *guard = Some(leaked);
     Ok(leaked)

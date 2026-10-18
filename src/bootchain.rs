@@ -109,6 +109,7 @@ pub fn run_boot_chain() -> Result<String, String> {
     // 1. /system/kernel/kernel.bin существует и читается из EROFS.
     let erofs_kernel = crate::vfs::read_file("/system/kernel/kernel.bin")
         .map_err(|e| format!("system: /system/kernel/kernel.bin: {}", e.message()))?;
+    crate::bootprof::mark("bootchain: /system/kernel/kernel.bin read (first /system access loads the whole image)");
     out.push_str(&format!(
         "    /system/kernel/kernel.bin: {} байт\n",
         erofs_kernel.len()
@@ -118,8 +119,10 @@ pub fn run_boot_chain() -> Result<String, String> {
     match read_kernel_image_info() {
         Ok(Some(info)) => {
             let raw = read_raw_kernel(&info)?;
+            crate::bootprof::mark("bootchain: raw kernel read");
             let raw_hash = crate::crypto::sha256::sha256(&raw);
             let erofs_hash = crate::crypto::sha256::sha256(&erofs_kernel);
+            crate::bootprof::mark("bootchain: sha256 of raw and /system kernel");
 
             if raw_hash != info.sha256 {
                 let msg = format!(

@@ -339,6 +339,7 @@ pub fn execute(line: &str) {
         "crypt" => crate::luks::cmd_crypt(rest),
         "dinit" => crate::dinit::cmd_dinit(rest),
         "logo" => crate::bootlogo::cmd_logo(rest),
+        "bootprof" => crate::bootprof::report(),
         "wallpaper" => cmd_wallpaper(rest),
         "linux" => crate::linux::cmd_linux(rest),
         "profile" => crate::userfs::cmd_profile(rest, &current_user().unwrap_or_default()),
@@ -1993,7 +1994,7 @@ pub fn cmd_halt() {
 }
 
 pub const VALID_COMMANDS: &[&str] = &[
-    "help", "about", "echo", "clear", "uptime", "color", "cpuid", "mem", "lang",
+    "help", "about", "echo", "clear", "uptime", "bootprof", "color", "cpuid", "mem", "lang",
     "ifconfig", "arp", "ping", "dns", "threads", "crypt", "dinit", "hal", "gpu", "sound",
     "ls", "cat", "write", "mkdir", "rm", "pkg", "dialog", "erofs", "run", "install",
     "bigfile", "useradd", "passwd", "whoami", "users", "encrypt", "crash",
