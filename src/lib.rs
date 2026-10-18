@@ -345,14 +345,22 @@ pub extern "C" fn kernel_main() -> ! {
     // UI-звуки (PC speaker, src/sound.rs; файлы *.dps в /system/media/audio/ui —
     // если в образе их нет, просто играем в тишине, как раньше).
     // Загрузка шла с USB-флешки (RAM-диск) — сигнал «носитель подключён»,
-    // затем общий стартовый сигнал «система готова».
+    // затем общий стартовый сигнал «система готова». Играет отдельная
+    // задача: звук идёт секунды, и ждать его до приглашения незачем.
+    if sched::spawn("boot-sound", boot_sound_task).is_none() {
+        boot_sound_task();
+    }
+
+    cli::run();
+}
+
+/// Стартовые UI-звуки; выполняется в фоновой задаче планировщика.
+extern "C" fn boot_sound_task() {
     if crate::ramdisk::is_active() {
         let _ = sound::play_ui(sound::UiSound::UsbConnect);
     }
     let _ = sound::play_ui(sound::UiSound::Startup);
     crate::serial_println!("[deix] M: startup sound done ({} ms)", timer::uptime_ms());
-
-    cli::run();
 }
 
 /// Полный сброс глобальных структур состояния (.data/.bss) перед переносом
