@@ -885,6 +885,7 @@ fn build_gdt(plan: &FormatPlan) -> Vec<u8> {
 /// Записывает метаданные одной группы: суперблок (основной или копию),
 /// GDT, битовые карты и обнулённую таблицу инодов.
 pub fn format_group(plan: &FormatPlan, g: u32) -> Result<(), Ext2Error> {
+    let _batch = ata::FlushBatch::begin();
     let v = plan.as_vol();
     let now = fake_timestamp();
     let base = group_base(&v, g);
@@ -946,6 +947,7 @@ pub fn format_group(plan: &FormatPlan, g: u32) -> Result<(), Ext2Error> {
 
 /// Завершает форматирование: корневой каталог и lost+found в группе 0.
 pub fn format_finish(plan: &FormatPlan) -> Result<(), Ext2Error> {
+    let _batch = ata::FlushBatch::begin();
     let v = plan.as_vol();
     let (_, _, itable) = group_meta(&v, 0);
     let root_block = itable + plan.itb_blocks;
@@ -974,6 +976,7 @@ pub fn format_finish(plan: &FormatPlan) -> Result<(), Ext2Error> {
 }
 
 fn format_volume(io: VolIo, encrypted: bool, start_lba: u32, total_sectors: u32) -> Result<(), Ext2Error> {
+    let _batch = ata::FlushBatch::begin();
     let plan = plan_format(io, encrypted, start_lba, total_sectors)?;
     for g in 0..plan.groups {
         format_group(&plan, g)?;
@@ -1011,6 +1014,7 @@ pub fn plan_format_raw(drive: Drive, start_lba: u32, total_sectors: u32) -> Resu
 pub fn write_file_raw(drive: Drive, start_lba: u32, max_sectors: u32, name: &str, data: &[u8]) -> Result<(), Ext2Error> {
     let v = load_vol(VolIo::Raw(drive), false, start_lba, max_sectors)?;
     validate_name(name)?;
+    let _batch = ata::FlushBatch::begin();
     write_file_at(&v, ROOT_INO, name, data)
 }
 
@@ -1367,11 +1371,13 @@ pub fn read_file(name: &str) -> Result<Vec<u8>, Ext2Error> {
 
 pub fn write_file(name: &str, data: &[u8]) -> Result<(), Ext2Error> {
     let v = vol(VolId::Userdata)?;
+    let _batch = ata::FlushBatch::begin();
     write_file_at(&v, ROOT_INO, name, data)
 }
 
 pub fn delete_file(name: &str) -> Result<(), Ext2Error> {
     let v = vol(VolId::Userdata)?;
+    let _batch = ata::FlushBatch::begin();
     validate_name(name)?;
     let found = find_in_dir(&v, ROOT_INO, name)?;
     let (_, _, ino) = found.ok_or(Ext2Error::FileNotFound)?;
@@ -1383,6 +1389,7 @@ pub fn delete_file(name: &str) -> Result<(), Ext2Error> {
 /// `mkdir -p`: создаёт всю цепочку каталогов пути.
 pub fn mkdir_p(path: &str) -> Result<u32, Ext2Error> {
     let v = vol(VolId::Userdata)?;
+    let _batch = ata::FlushBatch::begin();
     let (parent, last) = resolve_parent_at(&v, path, true)?;
     mkdir_at(&v, parent, &last)
 }
@@ -1401,6 +1408,7 @@ pub fn list_dir_path(path: &str) -> Result<Vec<FileEntry>, Ext2Error> {
 /// Записывает файл по пути, создавая недостающие каталоги (mkdir -p).
 pub fn write_file_path(path: &str, data: &[u8]) -> Result<(), Ext2Error> {
     let v = vol(VolId::Userdata)?;
+    let _batch = ata::FlushBatch::begin();
     write_file_path_at(&v, path, data)
 }
 
@@ -1413,6 +1421,7 @@ pub fn read_file_path(path: &str) -> Result<Vec<u8>, Ext2Error> {
 /// Удаляет файл по пути.
 pub fn delete_file_path(path: &str) -> Result<(), Ext2Error> {
     let v = vol(VolId::Userdata)?;
+    let _batch = ata::FlushBatch::begin();
     delete_file_path_at(&v, path)
 }
 
@@ -1430,16 +1439,19 @@ pub fn read_file_path_vol(id: VolId, path: &str) -> Result<Vec<u8>, Ext2Error> {
 
 pub fn write_file_path_vol(id: VolId, path: &str, data: &[u8]) -> Result<(), Ext2Error> {
     let v = vol(id)?;
+    let _batch = ata::FlushBatch::begin();
     write_file_path_at(&v, path, data)
 }
 
 pub fn delete_file_path_vol(id: VolId, path: &str) -> Result<(), Ext2Error> {
     let v = vol(id)?;
+    let _batch = ata::FlushBatch::begin();
     delete_file_path_at(&v, path)
 }
 
 pub fn mkdir_p_vol(id: VolId, path: &str) -> Result<u32, Ext2Error> {
     let v = vol(id)?;
+    let _batch = ata::FlushBatch::begin();
     let (parent, last) = resolve_parent_at(&v, path, true)?;
     mkdir_at(&v, parent, &last)
 }

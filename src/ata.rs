@@ -21,7 +21,8 @@
 //! Live-диск.
 
 use crate::port::{inb, insw, outb, outsw};
-use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use core::arch::asm;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 /// Накопленный дисковой I/O в секторах. Считается только успешные
 /// операции: счётчик увеличивается после завершения передачи данных.
@@ -90,18 +91,85 @@ impl Drive {
     }
 }
 
+/// Сколько раз опросить статус, прежде чем уступать процессор.
+const SPIN_POLLS: u32 = 32;
+/// Предел опросов, когда уступать процессор нельзя (без прерываний).
+const LEGACY_MAX_POLLS: u32 = 1_000_000;
+/// Предел ожидания устройства в режиме с уступкой процессора.
+const IRQ_WAIT_TIMEOUT_MS: u64 = 5000;
+
+/// Ожидание готовности устройства по прерыванию IRQ14 (включается
+/// `enable_irq_wait`). Пока оно выключено, статус опрашивается в цикле.
+static IRQ_WAIT: AtomicBool = AtomicBool::new(false);
+
+/// Включает ожидание по прерыванию: вместо плотного опроса порта процессор
+/// засыпает (`hlt`) до IRQ14 или тика таймера. Плотный опрос в эмуляторе
+/// не даёт потоку, завершающему дисковую операцию, получить управление, и
+/// каждая команда растягивается на миллисекунды.
+pub fn enable_irq_wait() {
+    crate::interrupts::enable_ata_irq();
+    IRQ_WAIT.store(true, Ordering::Relaxed);
+}
+
+fn interrupts_enabled() -> bool {
+    let flags: u64;
+    unsafe {
+        asm!("pushfq", "pop {}", out(reg) flags, options(nomem, preserves_flags));
+    }
+    flags & (1 << 9) != 0
+}
+
+/// Шаг ожидания между опросами статуса.
+struct Waiter {
+    polls: u32,
+    deadline_ms: u64,
+}
+
+impl Waiter {
+    fn new() -> Self {
+        Waiter { polls: 0, deadline_ms: 0 }
+    }
+
+    /// `false` — ожидание исчерпано, устройство не отвечает.
+    fn pause(&mut self) -> bool {
+        self.polls = self.polls.saturating_add(1);
+        if self.polls < SPIN_POLLS {
+            return true;
+        }
+        if IRQ_WAIT.load(Ordering::Relaxed) && interrupts_enabled() {
+            let now = crate::timer::uptime_ms();
+            if self.deadline_ms == 0 {
+                self.deadline_ms = now + IRQ_WAIT_TIMEOUT_MS;
+            }
+            if now > self.deadline_ms {
+                return false;
+            }
+            unsafe {
+                asm!("hlt", options(nomem, nostack, preserves_flags));
+            }
+            true
+        } else {
+            self.polls < LEGACY_MAX_POLLS
+        }
+    }
+}
+
 fn wait_bsy_clear() -> bool {
-    for _ in 0..1_000_000u32 {
+    let mut waiter = Waiter::new();
+    loop {
         let status = unsafe { inb(STATUS_PORT) };
         if status & STATUS_BSY == 0 {
             return true;
         }
+        if !waiter.pause() {
+            return false;
+        }
     }
-    false
 }
 
 fn wait_drq_or_err() -> Result<(), ()> {
-    for _ in 0..1_000_000u32 {
+    let mut waiter = Waiter::new();
+    loop {
         let status = unsafe { inb(STATUS_PORT) };
         if status & STATUS_ERR != 0 {
             return Err(());
@@ -109,8 +177,65 @@ fn wait_drq_or_err() -> Result<(), ()> {
         if status & STATUS_DRQ != 0 {
             return Ok(());
         }
+        if !waiter.pause() {
+            return Err(());
+        }
     }
-    Err(())
+}
+
+// ---------------- сброс кеша записи ----------------
+
+/// Глубина вложенных пакетов записи: пока она не нулевая, сброс кеша
+/// диска откладывается до конца пакета.
+static FLUSH_DEPTH: AtomicU32 = AtomicU32::new(0);
+/// Диски с записанными, но ещё не сброшенными данными (бит 0 — Master,
+/// бит 1 — Slave).
+static FLUSH_DIRTY: AtomicU8 = AtomicU8::new(0);
+
+fn drive_bit(drive: Drive) -> u8 {
+    match drive {
+        Drive::Master => 1,
+        Drive::Slave => 2,
+    }
+}
+
+fn flush_drive(drive: Drive) {
+    wait_bsy_clear();
+    unsafe {
+        outb(DRIVE_HEAD_PORT, drive.select_byte(0));
+        outb(COMMAND_PORT, CMD_CACHE_FLUSH);
+    }
+    wait_bsy_clear();
+}
+
+/// Пакет записей: одна высокоуровневая операция (создание файла,
+/// форматирование) пишет десятки блоков. Сброс кеша диска после КАЖДОГО
+/// блока заставляет эмулятор делать fsync образа на хосте; здесь он
+/// выполняется один раз, когда пакет закрыт. Гарантия «после возврата из
+/// операции данные сброшены на носитель» сохраняется, ослаблен лишь
+/// порядок записи блоков внутри операции.
+pub struct FlushBatch;
+
+impl FlushBatch {
+    pub fn begin() -> Self {
+        FLUSH_DEPTH.fetch_add(1, Ordering::SeqCst);
+        FlushBatch
+    }
+}
+
+impl Drop for FlushBatch {
+    fn drop(&mut self) {
+        if FLUSH_DEPTH.fetch_sub(1, Ordering::SeqCst) != 1 {
+            return;
+        }
+        let dirty = FLUSH_DIRTY.swap(0, Ordering::SeqCst);
+        if dirty & drive_bit(Drive::Master) != 0 {
+            flush_drive(Drive::Master);
+        }
+        if dirty & drive_bit(Drive::Slave) != 0 {
+            flush_drive(Drive::Slave);
+        }
+    }
 }
 
 /// Читает `count` секторов начиная с `lba` (LBA28, максимум 256 секторов
@@ -226,10 +351,11 @@ pub fn write_sectors_to(drive: Drive, lba: u32, count: u8, data: &[u8]) -> Resul
         }
     }
 
-    unsafe {
-        outb(COMMAND_PORT, CMD_CACHE_FLUSH);
+    if FLUSH_DEPTH.load(Ordering::SeqCst) > 0 {
+        FLUSH_DIRTY.fetch_or(drive_bit(drive), Ordering::SeqCst);
+    } else {
+        flush_drive(drive);
     }
-    wait_bsy_clear();
 
     SECTORS_WRITTEN.fetch_add(sectors as u64, Ordering::Relaxed);
     Ok(())

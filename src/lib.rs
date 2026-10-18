@@ -184,6 +184,7 @@ pub extern "C" fn kernel_main() -> ! {
             0 => crate::serial_println!("[ata] READ MULTIPLE недоступен — чтение по одному сектору"),
             n => crate::serial_println!("[ata] READ MULTIPLE включён: {} секторов за один DRQ", n),
         }
+        ata::enable_irq_wait();
         println!("ATA disk: OK (PIO mode)");
     } else {
         println!("ATA disk: not detected");
