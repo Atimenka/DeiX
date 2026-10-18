@@ -15,25 +15,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::ata;
-use crate::partition_map::{PartitionLayout, KERNEL_IMAGE_INFO_LBA, KERNEL_IMAGE_INFO_MAGIC};
-
-/// Читает весь раздел с диска напрямую в результирующий вектор без лишних аллокаций.
-pub fn read_partition_image(layout: &PartitionLayout) -> Result<Vec<u8>, String> {
-    let total_bytes = (layout.sectors as usize) * 512;
-    let mut out: Vec<u8> = vec![0u8; total_bytes];
-    let mut cur = 0u32;
-    let mut left = layout.sectors;
-    while left > 0 {
-        let batch = left.min(128) as u8;
-        let start_byte = (cur as usize) * 512;
-        let end_byte = start_byte + (batch as usize) * 512;
-        ata::read_sectors(layout.start_lba + cur, batch, &mut out[start_byte..end_byte])
-            .map_err(|_| format!("read {} err", layout.name))?;
-        left -= batch as u32;
-        cur += batch as u32;
-    }
-    Ok(out)
-}
+use crate::partition_map::{KERNEL_IMAGE_INFO_LBA, KERNEL_IMAGE_INFO_MAGIC};
 
 /// Дескриптор образа ядра из сектора LBA 2047 (пишется build.sh).
 struct KernelImageInfo {
@@ -109,7 +91,7 @@ pub fn run_boot_chain() -> Result<String, String> {
     // 1. /system/kernel/kernel.bin существует и читается из EROFS.
     let erofs_kernel = crate::vfs::read_file("/system/kernel/kernel.bin")
         .map_err(|e| format!("system: /system/kernel/kernel.bin: {}", e.message()))?;
-    crate::bootprof::mark("bootchain: /system/kernel/kernel.bin read (first /system access loads the whole image)");
+    crate::bootprof::mark("bootchain: /system/kernel/kernel.bin read from EROFS");
     out.push_str(&format!(
         "    /system/kernel/kernel.bin: {} байт\n",
         erofs_kernel.len()

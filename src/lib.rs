@@ -27,6 +27,7 @@ mod dinit;
 mod ds;
 mod duil;
 mod erofs;
+mod erofs_disk;
 mod ext2;
 mod font;
 mod font_cyrillic;

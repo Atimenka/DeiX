@@ -16,18 +16,16 @@
 //! Раздел `/system` неизменяем, поэтому записывающие операции на нём
 //! возвращают [`VfsError::ReadOnly`], а не обращаются к диску.
 //!
-//! ## Кеш образа /system
+//! ## Чтение /system
 //!
-//! EROFS-раздел читается с диска целиком при первом обращении и дальше
-//! держится в куче: повторное чтение каждого файла стоило бы полного
-//! прохода по 20480 секторам. Кеш инвалидируется только при явном
-//! перемонтировании.
+//! EROFS-раздел с диска целиком не читается: `erofs_disk` отдаёт
+//! читателю только запрошенные байты, а метаданные (суперблок, иноды,
+//! каталоги) держит в блочном LRU-кеше до 2 МиБ. Кеш сбрасывается только
+//! при явном перемонтировании.
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-
-use crate::spinlock::SpinLock;
 
 /// Точка монтирования /system.
 const MOUNT_SYSTEM: &str = "/system";
@@ -78,36 +76,14 @@ pub struct Stat {
     pub read_only: bool,
 }
 
-// ==================== Кеш образа /system ====================
+// ==================== Доступ к образу /system ====================
 
-/// Прочитанный образ EROFS-раздела /system.
-///
-/// Раздел смонтирован только для чтения и кеш нигде не сбрасывается,
-/// поэтому после первого чтения буфер утекается в `&'static` и дальше
-/// отдаётся без копирования: клонирование 4+ МиБ на каждое обращение
-/// к /system дробило кучу и валило ядро нехваткой непрерывного куска.
-static SYSTEM_IMAGE: SpinLock<Option<&'static [u8]>> = SpinLock::new(None);
-
-fn system_image() -> Result<&'static [u8], VfsError> {
-    // Блокировка держится на время чтения с диска: иначе два потока,
-    // одновременно промахнувшиеся мимо кеша, прочитают и утекут образ
-    // дважды. Чтение не трогает VFS повторно, взаимоблокировки нет.
-    let mut guard = SYSTEM_IMAGE.lock();
-    if let Some(img) = *guard {
-        return Ok(img);
-    }
-
+/// Раздел /system как источник байт для читателя EROFS. Ничего не
+/// читает с диска и не держит в памяти: данные подтягивает `erofs_disk`.
+fn system_image() -> Result<crate::erofs_disk::DiskImage, VfsError> {
     let layout = crate::partition_map::lookup_layout(MOUNT_SYSTEM)
         .ok_or_else(|| VfsError::NotMounted { path: String::from(MOUNT_SYSTEM) })?;
-    let img = crate::bootchain::read_partition_image(layout).map_err(|e| VfsError::Io {
-        path: String::from(MOUNT_SYSTEM),
-        cause: e,
-    })?;
-
-    crate::bootprof::mark("vfs: whole /system image read from disk");
-    let leaked: &'static [u8] = alloc::boxed::Box::leak(img.into_boxed_slice());
-    *guard = Some(leaked);
-    Ok(leaked)
+    Ok(crate::erofs_disk::DiskImage::new(layout.start_lba, layout.sectors))
 }
 
 // ==================== Тип ФС раздела /system ====================
@@ -140,20 +116,12 @@ fn system_writable() -> bool {
 }
 
 /// Перемонтирует /system после конверсии EROFS→ext2: сбрасывает
-/// определение типа ФС, кеш геометрии ext2 и кеш EROFS-образа.
+/// определение типа ФС, кеш геометрии ext2 и блочный кеш EROFS.
 pub fn remount_system() {
     use core::sync::atomic::Ordering;
     SYSTEM_FS.store(0, Ordering::Relaxed);
     crate::ext2::invalidate_cache(crate::ext2::VolId::System);
-    let mut guard = SYSTEM_IMAGE.lock();
-    if let Some(img) = guard.take() {
-        // Образ был отдан Box::leak при кешировании; возвращаем его
-        // аллокатору — ссылки на образ не живут дольше одной операции
-        // vfs, а новые после сброса кеша не появятся.
-        unsafe {
-            drop(alloc::boxed::Box::from_raw(img as *const [u8] as *mut [u8]));
-        }
-    }
+    crate::erofs_disk::invalidate();
 }
 
 fn system_ext2_err(path: &str, e: crate::ext2::Ext2Error) -> VfsError {
@@ -443,7 +411,7 @@ pub fn readdir(path: &str) -> Result<Vec<DirEnt>, VfsError> {
 
 /// Текущее состояние точек монтирования — для отчётов и `diagnostics`.
 ///
-/// Не загружает образ `/system` и не берёт блокировки безусловно: функция
+/// Не читает `/system` с диска и не берёт блокировки безусловно: функция
 /// вызывается в том числе из отчёта об отказе, где зависание на блокировке
 /// недопустимо, а чтение 8 МиБ с диска бессмысленно.
 pub fn describe_mounts() -> Vec<String> {
@@ -453,13 +421,7 @@ pub fn describe_mounts() -> Vec<String> {
         let mode = if crate::devmode::sudo_allowed() { "rw (dev)" } else { "ro" };
         format!("{} {} ext2 (converted)", MOUNT_SYSTEM, mode)
     } else {
-        match SYSTEM_IMAGE.try_lock() {
-            Some(guard) => match guard.as_ref() {
-                Some(img) => format!("{} ro erofs ({} КиБ в кеше)", MOUNT_SYSTEM, img.len() / 1024),
-                None => format!("{} ro erofs (образ ещё не читался)", MOUNT_SYSTEM),
-            },
-            None => format!("{} ro erofs (кеш занят)", MOUNT_SYSTEM),
-        }
+        format!("{} ro erofs ({})", MOUNT_SYSTEM, crate::erofs_disk::describe())
     };
     out.push(system);
 
