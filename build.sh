@@ -126,9 +126,19 @@ conv_snd "assets/usb connect.wav"     usbcon.dps
 conv_snd "assets/usb unconnected.wav" usbdisc.dps
 
 echo "==> [3/8] Собираем ядро на Rust (nightly, build-std, target: x86_64-unknown-none)"
-cargo +nightly build --release
+# DEIX_PROFILE=fast ./build.sh — быстрая сборка для отладки: без LTO, 16 единиц
+# кодогенерации, инкрементальная (повторная сборка после правки одного файла
+# в разы быстрее). Бинарник больше релизного; если не влезет в лимиты ниже,
+# сборка остановится с ошибкой — тогда соберите обычным ./build.sh.
+PROFILE="${DEIX_PROFILE:-release}"
+case "$PROFILE" in
+    release|fast) ;;
+    *) echo "DEIX_PROFILE: допустимо release или fast, получено '$PROFILE'"; exit 1 ;;
+esac
+echo "    профиль cargo: $PROFILE"
+cargo +nightly build --profile "$PROFILE"
 
-KERNEL_LIB="$ROOT/target/x86_64-unknown-none/release/libdeix_kernel.a"
+KERNEL_LIB="$ROOT/target/x86_64-unknown-none/$PROFILE/libdeix_kernel.a"
 if [ ! -f "$KERNEL_LIB" ]; then
     echo "Не найден $KERNEL_LIB — сборка Rust-части не удалась"
     exit 1
