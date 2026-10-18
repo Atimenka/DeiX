@@ -630,7 +630,7 @@ test('two-factor lifecycle: enroll, login step, backup code, disable', async () 
   assert.equal((await call(authHandler, { action: 'mfa_enroll_start' })).status, 401);
   const start = await call(authHandler, { action: 'mfa_enroll_start' }, { cookies: jar });
   assert.equal(start.status, 200);
-  assert.ok(start.json.qr.startsWith('data:image/svg+xml'));
+  assert.ok(start.json.uri.startsWith('otpauth://totp/'));
   assert.ok(start.json.secret);
 
   assert.equal((await call(authHandler, { action: 'mfa_enroll_finish', factor_id: 'nope', code: GOOD_CODE }, { cookies: jar })).status, 400);

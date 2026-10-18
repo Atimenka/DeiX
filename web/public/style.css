@@ -529,7 +529,9 @@ textarea { min-height: 96px; resize: vertical; }
 .sec-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; }
 .sec-row h3 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .qr { display: grid; grid-template-columns: auto 1fr; gap: 22px; align-items: center; margin: 16px 0; }
-.qr img { width: 188px; height: 188px; border-radius: 14px; background: #fff; padding: 10px; }
+.qr-box { width: 200px; height: 200px; border-radius: 14px; overflow: hidden; background: #fff; box-shadow: var(--shadow); }
+.qr-box svg { display: block; width: 100%; height: 100%; }
+.qr-box .hint { padding: 20px; color: #333; }
 .qr .secret { display: block; margin: 6px 0 10px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--glass); word-break: break-all; letter-spacing: 0.08em; user-select: all; }
 .codes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 14px 0; padding: 16px; border-radius: var(--radius-sm); border: 1px dashed rgba(139, 92, 246, 0.6); background: rgba(139, 92, 246, 0.08); font-family: var(--mono); font-size: 1rem; letter-spacing: 0.06em; user-select: all; }
 .inline-form { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }

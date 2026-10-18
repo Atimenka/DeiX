@@ -95,7 +95,7 @@
 
             <div id="mfa-setup" hidden>
               <div class="qr">
-                <img id="mfa-qr" alt="QR-код для приложения-аутентификатора" width="188" height="188">
+                <div id="mfa-qr" class="qr-box" role="img" aria-label="QR-код для приложения-аутентификатора"></div>
                 <div>
                   <b>1. Отсканируйте код</b>
                   <p class="hint">Google Authenticator, Aegis, 1Password, Authy или любое TOTP-приложение. Если сканировать нечем, введите ключ вручную:</p>
@@ -150,6 +150,7 @@
     </div>
   </main>
   <script src="/site.js"></script>
+  <script src="/qr.js"></script>
   <script src="/account.js"></script>
 </body>
 </html>

@@ -350,9 +350,10 @@ async function mfaEnrollStart(req, res) {
     console.error('mfa enroll failed:', r.status, r.data && r.data.msg);
     throw new HttpError(502, 'Не удалось начать подключение 2FA');
   }
-  let qr = String(r.data.totp.qr_code || '');
-  if (qr.startsWith('<svg')) qr = `data:image/svg+xml;utf-8,${encodeURIComponent(qr)}`;
-  return send(res, 200, { ok: true, factor_id: r.data.id, qr, secret: r.data.totp.secret, uri: r.data.totp.uri });
+  const secret = String(r.data.totp.secret || '');
+  const uri = String(r.data.totp.uri || '') ||
+    `otpauth://totp/${encodeURIComponent(`DeiX OS:${user.email}`)}?secret=${secret}&issuer=${encodeURIComponent('DeiX OS')}`;
+  return send(res, 200, { ok: true, factor_id: r.data.id, secret, uri });
 }
 
 async function mfaEnrollFinish(req, res, body) {

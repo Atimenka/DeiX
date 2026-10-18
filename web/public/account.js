@@ -224,7 +224,12 @@ document.getElementById('mfa-start').addEventListener('click', async (event) => 
   try {
     const data = await authApi({ action: 'mfa_enroll_start' });
     setupFactor = data.factor_id;
-    document.getElementById('mfa-qr').src = data.qr;
+    const qrBox = document.getElementById('mfa-qr');
+    try {
+      qrBox.replaceChildren(qrSvg(data.uri));
+    } catch (err) {
+      qrBox.replaceChildren(el('p', { class: 'hint', text: 'QR-код построить не удалось, введите ключ вручную.' }));
+    }
     document.getElementById('mfa-secret').textContent = data.secret;
     document.getElementById('mfa-setup').hidden = false;
     button.hidden = true;
