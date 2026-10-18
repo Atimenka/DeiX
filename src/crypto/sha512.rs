@@ -43,6 +43,7 @@ const K: [u64; 80] = [
     0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817,
 ];
 
+#[derive(Clone)]
 pub struct Sha512 {
     state: [u64; 8],
     buffer: [u8; 128],
@@ -93,13 +94,21 @@ impl Sha512 {
     pub fn finalize(mut self) -> [u8; DIGEST_LEN] {
         let bit_len = self.total_len * 8;
 
-        self.update_no_len_track(&[0x80]);
-        while self.buffer_len != 112 {
-            self.update_no_len_track(&[0x00]);
+        let mut at = self.buffer_len;
+        self.buffer[at] = 0x80;
+        at += 1;
+        if at > 112 {
+            self.buffer[at..].fill(0);
+            let block = self.buffer;
+            self.process_block(&block);
+            at = 0;
         }
+        self.buffer[at..112].fill(0);
         // 128-битная длина в битах, big-endian (SHA-512 использует
         // 128-битное поле длины, а не 64-битное, как SHA-256).
-        self.update_no_len_track(&bit_len.to_be_bytes());
+        self.buffer[112..].copy_from_slice(&bit_len.to_be_bytes());
+        let block = self.buffer;
+        self.process_block(&block);
 
         let mut out = [0u8; DIGEST_LEN];
         for (i, word) in self.state.iter().enumerate() {
@@ -108,31 +117,14 @@ impl Sha512 {
         out
     }
 
-    fn update_no_len_track(&mut self, mut data: &[u8]) {
-        if self.buffer_len > 0 {
-            let need = 128 - self.buffer_len;
-            let take = need.min(data.len());
-            self.buffer[self.buffer_len..self.buffer_len + take].copy_from_slice(&data[..take]);
-            self.buffer_len += take;
-            data = &data[take..];
-
-            if self.buffer_len == 128 {
-                let block = self.buffer;
-                self.process_block(&block);
-                self.buffer_len = 0;
-            }
+    /// Затирает внутреннее состояние через write_volatile: в нём лежит
+    /// материал, производный от ключа (HMAC-состояния PBKDF2).
+    pub fn wipe(&mut self) {
+        for word in self.state.iter_mut() {
+            unsafe { core::ptr::write_volatile(word, 0) };
         }
-
-        while data.len() >= 128 {
-            let mut block = [0u8; 128];
-            block.copy_from_slice(&data[..128]);
-            self.process_block(&block);
-            data = &data[128..];
-        }
-
-        if !data.is_empty() {
-            self.buffer[..data.len()].copy_from_slice(data);
-            self.buffer_len = data.len();
+        for byte in self.buffer.iter_mut() {
+            unsafe { core::ptr::write_volatile(byte, 0) };
         }
     }
 

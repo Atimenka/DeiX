@@ -62,7 +62,7 @@ pub struct Aes256 {
     round_keys: [[u8; 16]; NR + 1],
 }
 
-fn xtime(x: u8) -> u8 {
+const fn xtime(x: u8) -> u8 {
     if x & 0x80 != 0 {
         (x << 1) ^ 0x1b
     } else {
@@ -70,19 +70,41 @@ fn xtime(x: u8) -> u8 {
     }
 }
 
-fn gmul(a: u8, b: u8) -> u8 {
+const fn gmul(a: u8, b: u8) -> u8 {
     let mut a = a;
     let mut b = b;
     let mut p = 0u8;
-    for _ in 0..8 {
+    let mut i = 0;
+    while i < 8 {
         if b & 1 != 0 {
             p ^= a;
         }
         a = xtime(a);
         b >>= 1;
+        i += 1;
     }
     p
 }
+
+/// Таблица умножения на константу в GF(2^8): `t[x] = x * m`. Строится на
+/// этапе компиляции. Побитовое `gmul` в MixColumns стоило ~800 вызовов на
+/// блок при расшифровке — сектор XTS (32 блока) занимал десятки миллисекунд.
+const fn mul_table(m: u8) -> [u8; 256] {
+    let mut t = [0u8; 256];
+    let mut i = 0;
+    while i < 256 {
+        t[i] = gmul(i as u8, m);
+        i += 1;
+    }
+    t
+}
+
+static MUL2: [u8; 256] = mul_table(2);
+static MUL3: [u8; 256] = mul_table(3);
+static MUL9: [u8; 256] = mul_table(9);
+static MUL11: [u8; 256] = mul_table(11);
+static MUL13: [u8; 256] = mul_table(13);
+static MUL14: [u8; 256] = mul_table(14);
 
 impl Aes256 {
     /// Строит ключевое расписание из 32-байтного (256-битного) ключа.
@@ -269,21 +291,21 @@ fn inv_shift_rows(block: &mut [u8; 16]) {
 
 fn mix_columns(block: &mut [u8; 16]) {
     for c in 0..4 {
-        let col = [block[4 * c], block[4 * c + 1], block[4 * c + 2], block[4 * c + 3]];
-        block[4 * c] = gmul(col[0], 2) ^ gmul(col[1], 3) ^ col[2] ^ col[3];
-        block[4 * c + 1] = col[0] ^ gmul(col[1], 2) ^ gmul(col[2], 3) ^ col[3];
-        block[4 * c + 2] = col[0] ^ col[1] ^ gmul(col[2], 2) ^ gmul(col[3], 3);
-        block[4 * c + 3] = gmul(col[0], 3) ^ col[1] ^ col[2] ^ gmul(col[3], 2);
+        let col = [block[4 * c] as usize, block[4 * c + 1] as usize, block[4 * c + 2] as usize, block[4 * c + 3] as usize];
+        block[4 * c] = MUL2[col[0]] ^ MUL3[col[1]] ^ col[2] as u8 ^ col[3] as u8;
+        block[4 * c + 1] = col[0] as u8 ^ MUL2[col[1]] ^ MUL3[col[2]] ^ col[3] as u8;
+        block[4 * c + 2] = col[0] as u8 ^ col[1] as u8 ^ MUL2[col[2]] ^ MUL3[col[3]];
+        block[4 * c + 3] = MUL3[col[0]] ^ col[1] as u8 ^ col[2] as u8 ^ MUL2[col[3]];
     }
 }
 
 fn inv_mix_columns(block: &mut [u8; 16]) {
     for c in 0..4 {
-        let col = [block[4 * c], block[4 * c + 1], block[4 * c + 2], block[4 * c + 3]];
-        block[4 * c] = gmul(col[0], 0x0e) ^ gmul(col[1], 0x0b) ^ gmul(col[2], 0x0d) ^ gmul(col[3], 0x09);
-        block[4 * c + 1] = gmul(col[0], 0x09) ^ gmul(col[1], 0x0e) ^ gmul(col[2], 0x0b) ^ gmul(col[3], 0x0d);
-        block[4 * c + 2] = gmul(col[0], 0x0d) ^ gmul(col[1], 0x09) ^ gmul(col[2], 0x0e) ^ gmul(col[3], 0x0b);
-        block[4 * c + 3] = gmul(col[0], 0x0b) ^ gmul(col[1], 0x0d) ^ gmul(col[2], 0x09) ^ gmul(col[3], 0x0e);
+        let col = [block[4 * c] as usize, block[4 * c + 1] as usize, block[4 * c + 2] as usize, block[4 * c + 3] as usize];
+        block[4 * c] = MUL14[col[0]] ^ MUL11[col[1]] ^ MUL13[col[2]] ^ MUL9[col[3]];
+        block[4 * c + 1] = MUL9[col[0]] ^ MUL14[col[1]] ^ MUL11[col[2]] ^ MUL13[col[3]];
+        block[4 * c + 2] = MUL13[col[0]] ^ MUL9[col[1]] ^ MUL14[col[2]] ^ MUL11[col[3]];
+        block[4 * c + 3] = MUL11[col[0]] ^ MUL13[col[1]] ^ MUL9[col[2]] ^ MUL14[col[3]];
     }
 }
 
