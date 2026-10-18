@@ -693,3 +693,35 @@ test('two-factor can be disabled with a valid code', async () => {
   const again = await call(authHandler, { action: 'login', identifier: 'erin_1', password: 'secret-pass' });
   assert.equal(again.json.mfa, undefined);
 });
+
+test('API errors are answered in English when the site asks for it', async () => {
+  const headers = { 'x-deix-lang': 'en', 'x-forwarded-for': '9.9.9.1' };
+  const wrong = await call(authHandler, { action: 'login', identifier: 'nobody_here', password: 'whatever-pass' }, { headers });
+  assert.equal(wrong.status, 401);
+  assert.equal(wrong.json.error, 'Wrong username or password');
+  const unknown = await call(authHandler, { action: 'no_such_action' }, { headers });
+  assert.equal(unknown.json.error, 'Unknown action');
+  const short = await call(authHandler, { ...REG, password: 'abc', password2: 'abc' }, { headers });
+  assert.equal(short.json.error, 'The password must be at least 8 characters long');
+  const russian = await call(authHandler, { action: 'no_such_action' }, { headers: { 'x-forwarded-for': '9.9.9.2' } });
+  assert.equal(russian.json.error, 'Неизвестное действие');
+});
+
+test('verification email follows the language of the page', async () => {
+  process.env.RESEND_API_KEY = 're_test';
+  process.env.MAIL_FROM = 'DeiX <noreply@site.test>';
+  try {
+    const headers = { 'x-deix-lang': 'en', 'x-forwarded-for': '9.9.9.3' };
+    const before = db.mails.length;
+    const reg = await call(authHandler, { ...REG, email: 'lang@example.net', username: 'Lang_1' }, { headers });
+    assert.equal(reg.status, 200);
+    assert.equal(reg.json.verification, 'sent');
+    const mail = db.mails[before];
+    assert.equal(mail.subject, 'Verify your email for DeiX OS');
+    assert.match(mail.text, /^Hello, Lang_1!/);
+    assert.match(mail.text, /https:\/\/site\.test\/en\/verify\?token=[0-9a-f]{64}/);
+  } finally {
+    delete process.env.RESEND_API_KEY;
+    delete process.env.MAIL_FROM;
+  }
+});

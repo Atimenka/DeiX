@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { checkEmailDomain } = require('./_emailcheck');
 const { mailConfigured, sendMail } = require('./_mail');
+const { MAIL, requestLang } = require('./_i18n');
 const {
   EMAIL_RE,
   HttpError,
@@ -132,13 +133,15 @@ async function sendVerification(req, userId, email, username) {
     method: 'POST',
     body: { user_id: userId, token_hash: sha256(token), expires_at: new Date(Date.now() + VERIFY_TTL_MS).toISOString() },
   });
-  const link = `${siteUrl(req)}/verify?token=${token}`;
+  const lang = requestLang(req);
+  const link = `${siteUrl(req)}${lang === 'en' ? '/en' : ''}/verify?token=${token}`;
+  const mail = MAIL[lang];
   try {
     await sendMail({
       to: email,
-      subject: 'Подтвердите почту для DeiX OS',
-      text: `Здравствуйте, ${username}!\n\nПодтвердите почту по ссылке (действует 24 часа):\n${link}\n\nЕсли вы не регистрировались в DeiX OS, просто проигнорируйте письмо.`,
-      html: `<p>Здравствуйте, <b>${username}</b>!</p><p><a href="${link}">Подтвердить почту</a> (ссылка действует 24 часа).</p><p>Если вы не регистрировались в DeiX OS, просто проигнорируйте письмо.</p>`,
+      subject: mail.subject,
+      text: mail.text(username, link),
+      html: mail.html(username, link),
     });
     return 'sent';
   } catch (e) {

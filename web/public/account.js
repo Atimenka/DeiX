@@ -17,12 +17,12 @@ function renderProfile() {
   document.getElementById('acc-email').textContent = me.email;
   document.getElementById('ov-name').textContent = me.username;
   document.getElementById('ov-email').textContent = me.email;
-  document.getElementById('ov-role').textContent = me.role === 'owner' ? 'Owner' : 'Пользователь';
+  document.getElementById('ov-role').textContent = me.role === 'owner' ? 'Owner' : tr('Пользователь');
   document.getElementById('admin-link').hidden = me.role !== 'owner';
   const badges = document.getElementById('acc-badges');
   badges.replaceChildren(
-    el('span', { class: `badge ${me.role === 'owner' ? 'owner' : ''}`, text: me.role === 'owner' ? 'Owner' : 'Пользователь' }),
-    el('span', { class: `badge ${me.mfa ? 'on' : 'warn'}`, text: me.mfa ? '2FA включена' : '2FA выключена' }),
+    el('span', { class: `badge ${me.role === 'owner' ? 'owner' : ''}`, text: me.role === 'owner' ? 'Owner' : tr('Пользователь') }),
+    el('span', { class: `badge ${me.mfa ? 'on' : 'warn'}`, text: me.mfa ? tr('2FA включена') : tr('2FA выключена') }),
   );
   renderMail();
   renderMfa();
@@ -33,17 +33,17 @@ function renderMail() {
   const text = document.getElementById('mail-text');
   const resend = document.getElementById('mail-resend');
   badge.className = `badge ${me.email_verified ? 'on' : 'warn'}`;
-  badge.textContent = me.email_verified ? 'Подтверждена' : 'Не подтверждена';
+  badge.textContent = me.email_verified ? tr('Подтверждена') : tr('Не подтверждена');
   resend.hidden = me.email_verified || !mailEnabled;
-  if (me.email_verified) text.textContent = `Адрес ${me.email} подтверждён.`;
-  else if (mailEnabled) text.textContent = `Мы отправили письмо со ссылкой на ${me.email}. Без подтверждения недоступны ключи и заявки.`;
-  else text.textContent = 'Отправка писем на сервере не настроена, поэтому подтверждение пока не требуется.';
+  if (me.email_verified) text.textContent = tr('Адрес {email} подтверждён.', { email: me.email });
+  else if (mailEnabled) text.textContent = tr('Мы отправили письмо со ссылкой на {email}. Без подтверждения недоступны ключи и заявки.', { email: me.email });
+  else text.textContent = tr('Отправка писем на сервере не настроена, поэтому подтверждение пока не требуется.');
 }
 
 (async () => {
   me = await fetchMe();
   if (!me) {
-    location.replace('/login?next=/account');
+    location.replace(lp('/login?next=/account'));
     return;
   }
   try {
@@ -74,7 +74,7 @@ async function loadDevices() {
       ...data.devices.map((device) => el('option', { value: device.device_id })),
     );
     if (!data.devices.length) {
-      box.append(el('p', { class: 'hint', text: 'Привязанных устройств пока нет.' }));
+      box.append(el('p', { class: 'hint', text: tr('Привязанных устройств пока нет.') }));
       return;
     }
     for (const device of data.devices) {
@@ -82,9 +82,9 @@ async function loadDevices() {
         el('div', { class: 'mine-item device-row' }, [
           el('div', null, [
             el('span', { class: 'mono', text: device.device_id }),
-            el('div', { class: 'hint', text: `Привязано ${new Date(device.linked_at).toLocaleString('ru-RU')}` }),
+            el('div', { class: 'hint', text: tr('Привязано {date}', { date: new Date(device.linked_at).toLocaleString(LOCALE) }) }),
           ]),
-          el('button', { class: 'btn small', type: 'button', text: 'Отвязать', onclick: () => unlinkDevice(device.device_id) }),
+          el('button', { class: 'btn small', type: 'button', text: tr('Отвязать'), onclick: () => unlinkDevice(device.device_id) }),
         ]),
       );
     }
@@ -94,10 +94,10 @@ async function loadDevices() {
 }
 
 async function unlinkDevice(id) {
-  if (!confirm('Отвязать устройство? Подать заявку с него можно будет только после новой привязки.')) return;
+  if (!confirm(tr('Отвязать устройство? Подать заявку с него можно будет только после новой привязки.'))) return;
   try {
     await postJson('/api/devices', { action: 'unlink', device_id: id });
-    toast('Устройство отвязано', 'ok');
+    toast(tr('Устройство отвязано'), 'ok');
     loadDevices();
   } catch (err) {
     toast(err.message, 'err');
@@ -110,7 +110,7 @@ document.getElementById('link-form').addEventListener('submit', async (event) =>
   try {
     const data = await postJson('/api/devices', { action: 'link', code: document.getElementById('link-code').value });
     event.target.reset();
-    showResult(result, 'ok', `Устройство ${data.device_id.slice(0, 8)}… привязано. В DeiX можно выполнить «dev request».`);
+    showResult(result, 'ok', tr('Устройство {id}… привязано. В DeiX можно выполнить «dev request».', { id: data.device_id.slice(0, 8) }));
     loadDevices();
   } catch (err) {
     showResult(result, 'err', err.message);
@@ -121,7 +121,7 @@ document.getElementById('logout-btn').addEventListener('click', async () => {
   try {
     await authApi({ action: 'logout' });
   } finally {
-    location.assign('/');
+    location.assign(lp('/'));
   }
 });
 
@@ -130,13 +130,13 @@ document.getElementById('password-form').addEventListener('submit', async (event
   const result = document.getElementById('pw-result');
   const next = document.getElementById('pw-next').value;
   if (next !== document.getElementById('pw-next2').value) {
-    showResult(result, 'err', 'Новые пароли не совпадают');
+    showResult(result, 'err', tr('Новые пароли не совпадают'));
     return;
   }
   try {
     await authApi({ action: 'change_password', current: document.getElementById('pw-current').value, next });
     event.target.reset();
-    showResult(result, 'ok', 'Пароль изменён');
+    showResult(result, 'ok', tr('Пароль изменён'));
   } catch (err) {
     showResult(result, 'err', err.message);
   }
@@ -148,12 +148,12 @@ async function loadKeyHistory() {
     const data = await postJson('/api/keys', { action: 'list' });
     box.replaceChildren();
     if (!data.keys.length) return;
-    box.append(el('p', { class: 'hint', text: 'Недавно выданные ключи:' }));
+    box.append(el('p', { class: 'hint', text: tr('Недавно выданные ключи:') }));
     for (const item of data.keys) {
       box.append(
         el('div', { class: 'mine-item' }, [
           el('span', { class: 'mono', text: item.device_id }),
-          el('div', { class: 'hint', text: new Date(item.created_at).toLocaleString('ru-RU') }),
+          el('div', { class: 'hint', text: new Date(item.created_at).toLocaleString(LOCALE) }),
         ]),
       );
     }
@@ -172,7 +172,7 @@ document.getElementById('key-form').addEventListener('submit', async (event) => 
     out.textContent = data.key;
     out.hidden = false;
     copy.hidden = false;
-    showResult(result, 'ok', `Ключ для устройства ${data.device_id.slice(0, 8)}… готов. Он работает только на нём и только один раз.`);
+    showResult(result, 'ok', tr('Ключ для устройства {id}… готов. Он работает только на нём и только один раз.', { id: data.device_id.slice(0, 8) }));
     loadKeyHistory();
   } catch (err) {
     out.hidden = true;
@@ -184,9 +184,9 @@ document.getElementById('key-form').addEventListener('submit', async (event) => 
 document.getElementById('key-copy').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(document.getElementById('key-out').textContent);
-    toast('Ключ скопирован', 'ok');
+    toast(tr('Ключ скопирован'), 'ok');
   } catch {
-    toast('Не удалось скопировать: выделите ключ вручную', 'err');
+    toast(tr('Не удалось скопировать: выделите ключ вручную'), 'err');
   }
 });
 
@@ -200,12 +200,12 @@ function renderMfa() {
   const on = me.mfa;
   const badge = document.getElementById('mfa-badge');
   badge.className = `badge ${on ? 'on' : 'off'}`;
-  badge.textContent = on ? 'Включена' : 'Выключена';
+  badge.textContent = on ? tr('Включена') : tr('Выключена');
   document.getElementById('mfa-text').textContent = on
-    ? 'При входе нужен код из приложения. Резервные коды помогут, если телефон потерян.'
+    ? tr('При входе нужен код из приложения. Резервные коды помогут, если телефон потерян.')
     : me.role === 'owner'
-      ? 'Для панели Owner двухфакторная аутентификация обязательна: без неё доступ к заявкам закрыт.'
-      : 'Дополнительная защита аккаунта: после пароля потребуется код из приложения-аутентификатора.';
+      ? tr('Для панели Owner двухфакторная аутентификация обязательна: без неё доступ к заявкам закрыт.')
+      : tr('Дополнительная защита аккаунта: после пароля потребуется код из приложения-аутентификатора.');
   document.getElementById('mfa-start').hidden = on || !document.getElementById('mfa-setup').hidden;
   document.getElementById('mfa-manage').hidden = !on || !codesBox.hidden;
   if (!on) document.getElementById('mfa-confirm').hidden = true;
@@ -228,7 +228,7 @@ document.getElementById('mfa-start').addEventListener('click', async (event) => 
     try {
       qrBox.replaceChildren(qrSvg(data.uri));
     } catch (err) {
-      qrBox.replaceChildren(el('p', { class: 'hint', text: 'QR-код построить не удалось, введите ключ вручную.' }));
+      qrBox.replaceChildren(el('p', { class: 'hint', text: tr('QR-код построить не удалось, введите ключ вручную.') }));
     }
     document.getElementById('mfa-secret').textContent = data.secret;
     document.getElementById('mfa-setup').hidden = false;
@@ -263,7 +263,7 @@ document.getElementById('mfa-finish').addEventListener('submit', async (event) =
     document.getElementById('mfa-code').value = '';
     showCodes(data.backup_codes);
     await refreshMe();
-    toast('Двухфакторная аутентификация включена', 'ok');
+    toast(tr('Двухфакторная аутентификация включена'), 'ok');
   } catch (err) {
     showResult(mfaResult, 'err', err.message);
   }
@@ -272,14 +272,15 @@ document.getElementById('mfa-finish').addEventListener('submit', async (event) =
 document.getElementById('codes-copy').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(shownCodes.join('\n'));
-    toast('Коды скопированы', 'ok');
+    toast(tr('Коды скопированы'), 'ok');
   } catch {
-    toast('Не удалось скопировать: выделите коды вручную', 'err');
+    toast(tr('Не удалось скопировать: выделите коды вручную'), 'err');
   }
 });
 
 document.getElementById('codes-save').addEventListener('click', () => {
-  const text = `DeiX OS — резервные коды 2FA для ${me.username}\nКаждый код работает один раз.\n\n${shownCodes.join('\n')}\n`;
+  const header = tr('DeiX OS — резервные коды 2FA для {name}', { name: me.username });
+  const text = `${header}\n${tr('Каждый код работает один раз.')}\n\n${shownCodes.join('\n')}\n`;
   const link = el('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/plain' })), download: 'deix-backup-codes.txt' });
   document.body.append(link);
   link.click();
@@ -298,7 +299,7 @@ function askCode(action) {
   const form = document.getElementById('mfa-confirm');
   form.hidden = false;
   mfaResult.hidden = true;
-  document.getElementById('mfa-confirm-btn').textContent = action === 'mfa_disable' ? 'Отключить' : 'Создать коды';
+  document.getElementById('mfa-confirm-btn').textContent = action === 'mfa_disable' ? tr('Отключить') : tr('Создать коды');
   document.getElementById('mfa-confirm-code').focus();
 }
 
@@ -317,7 +318,7 @@ document.getElementById('mfa-confirm').addEventListener('submit', async (event) 
     document.getElementById('mfa-confirm').hidden = true;
     if (pendingAction === 'mfa_disable') {
       await refreshMe();
-      toast('Двухфакторная аутентификация отключена', 'ok');
+      toast(tr('Двухфакторная аутентификация отключена'), 'ok');
     } else {
       showCodes(data.backup_codes);
     }

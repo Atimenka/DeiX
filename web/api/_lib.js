@@ -7,6 +7,7 @@ const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET || '';
 const TURNSTILE_SITE_KEY = process.env.TURNSTILE_SITE_KEY || '';
 
 const { mailConfigured } = require('./_mail');
+const { requestLang, translatePayload } = require('./_i18n');
 
 const ACCESS_COOKIE = 'deix_at';
 const REFRESH_COOKIE = 'deix_rt';
@@ -28,7 +29,7 @@ function send(res, status, payload) {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
-  res.end(JSON.stringify(payload));
+  res.end(JSON.stringify(translatePayload(payload, res.deixLang)));
 }
 
 function fail(res, err) {
@@ -157,6 +158,7 @@ function sameOrigin(req) {
 
 /** Общая защита всех POST-эндпоинтов: метод, origin и заголовок против CSRF. */
 function guardPost(req, res) {
+  res.deixLang = requestLang(req);
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     throw new HttpError(405, 'Метод не поддерживается');

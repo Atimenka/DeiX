@@ -1,12 +1,12 @@
 'use strict';
 
-const STATUS_LABEL = { pending: 'На рассмотрении', approved: 'Одобрена', consumed: 'Токен выдан', denied: 'Отклонена' };
+const STATUS_LABEL = { pending: tr('На рассмотрении'), approved: tr('Одобрена'), consumed: tr('Токен выдан'), denied: tr('Отклонена') };
 const TABS = [
-  ['pending', 'Ожидают'],
-  ['approved', 'Одобренные'],
-  ['consumed', 'Токен выдан'],
-  ['denied', 'Отклонённые'],
-  ['all', 'Все'],
+  ['pending', tr('Ожидают')],
+  ['approved', tr('Одобренные')],
+  ['consumed', tr('Токен выдан')],
+  ['denied', tr('Отклонённые')],
+  ['all', tr('Все')],
 ];
 
 const $ = (id) => document.getElementById(id);
@@ -25,27 +25,27 @@ function showDenied(title, text, actions) {
   $('denied-actions').replaceChildren(...actions);
 }
 
-const loginButton = () => el('a', { class: 'btn primary', href: '/login?next=/admin', text: 'Войти' });
-const securityButton = () => el('a', { class: 'btn primary', href: '/account#security', text: 'Настроить 2FA' });
+const loginButton = () => el('a', { class: 'btn primary', href: lp('/login?next=/admin'), text: tr('Войти') });
+const securityButton = () => el('a', { class: 'btn primary', href: lp('/account#security'), text: tr('Настроить 2FA') });
 const relogButton = () =>
   el('button', {
     class: 'btn primary',
     type: 'button',
-    text: 'Войти заново с кодом',
+    text: tr('Войти заново с кодом'),
     onclick: async () => {
       try {
         await authApi({ action: 'logout' });
       } finally {
-        location.assign('/login?next=/admin');
+        location.assign(lp('/login?next=/admin'));
       }
     },
   });
 
 function denyMfa(user) {
   if (user && user.mfa) {
-    showDenied('Нужен вход с кодом', 'Эта сессия открыта без кода из приложения. Войдите заново и введите код.', [relogButton()]);
+    showDenied(tr('Нужен вход с кодом'), tr('Эта сессия открыта без кода из приложения. Войдите заново и введите код.'), [relogButton()]);
   } else {
-    showDenied('Включите 2FA', 'Панель Owner открывается только с двухфакторной аутентификацией. Подключите её в аккаунте, затем вернитесь сюда.', [securityButton()]);
+    showDenied(tr('Включите 2FA'), tr('Панель Owner открывается только с двухфакторной аутентификацией. Подключите её в аккаунте, затем вернитесь сюда.'), [securityButton()]);
   }
 }
 
@@ -58,7 +58,7 @@ function showPanel() {
 }
 
 function fmt(iso) {
-  return iso ? new Date(iso).toLocaleString('ru-RU') : '—';
+  return iso ? new Date(iso).toLocaleString(LOCALE) : '—';
 }
 
 function renderCounters() {
@@ -95,7 +95,7 @@ function renderTabs() {
 async function decide(row, decision) {
   try {
     await api({ action: 'decide', device_id: row.device_id, decision });
-    toast(decision === 'approve' ? 'Заявка одобрена' : 'Заявка отклонена', 'ok');
+    toast(decision === 'approve' ? tr('Заявка одобрена') : tr('Заявка отклонена'), 'ok');
     await refresh();
   } catch (err) {
     toast(err.message, 'err');
@@ -104,10 +104,10 @@ async function decide(row, decision) {
 }
 
 async function removeRow(row) {
-  if (!confirm(`Удалить заявку ${row.device_id}?`)) return;
+  if (!confirm(tr('Удалить заявку {id}?', { id: row.device_id }))) return;
   try {
     await api({ action: 'remove', device_id: row.device_id });
-    toast('Заявка удалена', 'ok');
+    toast(tr('Заявка удалена'), 'ok');
     await refresh();
   } catch (err) {
     toast(err.message, 'err');
@@ -117,19 +117,19 @@ async function removeRow(row) {
 function actionButtons(row) {
   const buttons = [];
   if (row.status === 'pending' || row.status === 'denied') {
-    buttons.push(el('button', { class: 'btn good small', type: 'button', text: 'Одобрить', onclick: () => decide(row, 'approve') }));
+    buttons.push(el('button', { class: 'btn good small', type: 'button', text: tr('Одобрить'), onclick: () => decide(row, 'approve') }));
   }
   if (row.status === 'pending' || row.status === 'approved') {
     buttons.push(
       el('button', {
         class: 'btn bad small',
         type: 'button',
-        text: row.status === 'approved' ? 'Отозвать' : 'Отклонить',
+        text: row.status === 'approved' ? tr('Отозвать') : tr('Отклонить'),
         onclick: () => decide(row, 'deny'),
       }),
     );
   }
-  buttons.push(el('button', { class: 'btn small', type: 'button', text: 'Удалить', onclick: () => removeRow(row) }));
+  buttons.push(el('button', { class: 'btn small', type: 'button', text: tr('Удалить'), onclick: () => removeRow(row) }));
   return buttons;
 }
 
@@ -146,11 +146,11 @@ function render() {
       el('tr', null, [
         el('td', { class: 'devcell' }, [
           el('span', { class: 'mono', text: row.device_id }),
-          el('small', { text: row.hostname || 'без названия' }),
+          el('small', { text: row.hostname || tr('без названия') }),
         ]),
-        el('td', null, [el('span', { text: row.requester || 'анонимно (из ОС)' })]),
+        el('td', null, [el('span', { text: row.requester || tr('анонимно (из ОС)') })]),
         el('td', null, [el('span', { class: `badge ${row.status}`, text: STATUS_LABEL[row.status] || row.status })]),
-        el('td', null, [el('span', { class: 'badge', text: row.source === 'web' ? 'сайт' : 'ОС' })]),
+        el('td', null, [el('span', { class: 'badge', text: row.source === 'web' ? tr('сайт') : tr('ОС') })]),
         el('td', null, [el('div', { class: 'note-text', text: row.note || '—' })]),
         el('td', null, [el('div', { text: fmt(row.created_at) }), el('small', { class: 'hint', text: decided })]),
         el('td', { class: 'actions' }, actionButtons(row)),
@@ -165,8 +165,8 @@ async function refresh() {
     state.requests = data.requests;
     state.counts = data.counts;
     $('open-switch').checked = data.requests_open;
-    $('open-label').textContent = data.requests_open ? 'Приём заявок открыт' : 'Приём заявок закрыт';
-    $('updated').textContent = `Обновлено: ${new Date().toLocaleTimeString('ru-RU')}`;
+    $('open-label').textContent = data.requests_open ? tr('Приём заявок открыт') : tr('Приём заявок закрыт');
+    $('updated').textContent = tr('Обновлено: {time}', { time: new Date().toLocaleTimeString(LOCALE) });
     render();
   } catch (err) {
     if (err.code === 'mfa_required') {
@@ -174,7 +174,7 @@ async function refresh() {
       return;
     }
     if (err.status === 401 || err.status === 403) {
-      showDenied('Нужен вход', 'Сессия закончилась. Войдите снова.', [loginButton()]);
+      showDenied(tr('Нужен вход'), tr('Сессия закончилась. Войдите снова.'), [loginButton()]);
       return;
     }
     toast(err.message, 'err');
@@ -187,7 +187,7 @@ $('open-switch').addEventListener('change', async (event) => {
   const open = event.target.checked;
   try {
     await api({ action: 'set_open', open });
-    toast(open ? 'Приём заявок открыт' : 'Приём заявок закрыт', 'ok');
+    toast(open ? tr('Приём заявок открыт') : tr('Приём заявок закрыт'), 'ok');
     await refresh();
   } catch (err) {
     event.target.checked = !open;
@@ -198,9 +198,9 @@ $('open-switch').addEventListener('change', async (event) => {
 (async () => {
   const user = await fetchMe();
   if (!user) {
-    showDenied('Нужен вход', 'Панель доступна только владельцу проекта. Войдите в аккаунт Owner.', [loginButton()]);
+    showDenied(tr('Нужен вход'), tr('Панель доступна только владельцу проекта. Войдите в аккаунт Owner.'), [loginButton()]);
   } else if (user.role !== 'owner') {
-    showDenied('Нет доступа', 'Ваш аккаунт не имеет прав Owner.', [el('a', { class: 'btn', href: '/account', text: 'В аккаунт' })]);
+    showDenied(tr('Нет доступа'), tr('Ваш аккаунт не имеет прав Owner.'), [el('a', { class: 'btn', href: lp('/account'), text: tr('В аккаунт') })]);
   } else if (user.aal !== 'aal2') {
     denyMfa(user);
   } else {

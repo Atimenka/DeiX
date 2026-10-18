@@ -16,13 +16,13 @@
   const token = new URLSearchParams(location.search).get('token') || '';
   try {
     await authApi({ action: 'verify_email', token });
-    finish(true, 'Почта подтверждена', 'Теперь вам доступны ключи dev-режима и заявки.', [
-      el('a', { class: 'btn primary', href: '/account', text: 'В аккаунт' }),
+    finish(true, tr('Почта подтверждена'), tr('Теперь вам доступны ключи dev-режима и заявки.'), [
+      el('a', { class: 'btn primary', href: lp('/account'), text: tr('В аккаунт') }),
     ]);
   } catch (err) {
-    finish(false, 'Не удалось подтвердить', err.message, [
-      el('a', { class: 'btn primary', href: '/account', text: 'В аккаунт' }),
-      el('a', { class: 'btn', href: '/', text: 'На главную' }),
+    finish(false, tr('Не удалось подтвердить'), err.message, [
+      el('a', { class: 'btn primary', href: lp('/account'), text: tr('В аккаунт') }),
+      el('a', { class: 'btn', href: lp('/'), text: tr('На главную') }),
     ]);
   }
 })();

@@ -806,3 +806,7 @@ tbody tr:hover { background: linear-gradient(90deg, rgba(139, 92, 246, 0.1), tra
   .ticker-track, .desktop::after, body::before { animation: none !important; }
   body::before { transform: scaleX(0); }
 }
+
+.lang-toggle { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em; }
+.lang-toggle:hover { text-decoration: none; }
+html:not([lang="en"]) [data-lang="en"], html[lang="en"] [data-lang="ru"] { display: none; }

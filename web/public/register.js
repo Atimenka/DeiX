@@ -2,7 +2,7 @@
 
 const result = document.getElementById('register-result');
 const next = nextPath();
-document.getElementById('to-login').href = `/login?next=${encodeURIComponent(next)}`;
+document.getElementById('to-login').href = `${lp('/login')}?next=${encodeURIComponent(next)}`;
 
 (async () => {
   if (await fetchMe()) location.replace(next);
@@ -10,7 +10,7 @@ document.getElementById('to-login').href = `/login?next=${encodeURIComponent(nex
 
 const captchaReady = mountCaptcha(document.getElementById('captcha'));
 
-const STRENGTH = ['Не короче 8 символов', 'Слабый пароль', 'Можно надёжнее', 'Хороший пароль', 'Отличный пароль'];
+const STRENGTH = [tr('Не короче 8 символов'), tr('Слабый пароль'), tr('Можно надёжнее'), tr('Хороший пароль'), tr('Отличный пароль')];
 
 function passwordScore(password) {
   if (password.length < 8) return password ? 1 : 0;
@@ -31,7 +31,7 @@ document.getElementById('register-form').addEventListener('submit', async (event
   event.preventDefault();
   const password = document.getElementById('password').value;
   if (password !== document.getElementById('password2').value) {
-    showResult(result, 'err', 'Пароли не совпадают');
+    showResult(result, 'err', tr('Пароли не совпадают'));
     return;
   }
   const captcha = await captchaReady;
@@ -48,9 +48,9 @@ document.getElementById('register-form').addEventListener('submit', async (event
       captcha: captcha.token(),
     });
     if (data.verification === 'sent') {
-      sessionStorage.setItem('deix-flash', 'Аккаунт создан. Мы отправили письмо со ссылкой подтверждения.');
+      sessionStorage.setItem('deix-flash', tr('Аккаунт создан. Мы отправили письмо со ссылкой подтверждения.'));
     } else if (data.verification === 'failed') {
-      sessionStorage.setItem('deix-flash', 'Аккаунт создан, но письмо отправить не удалось: запросите его ещё раз в аккаунте.');
+      sessionStorage.setItem('deix-flash', tr('Аккаунт создан, но письмо отправить не удалось: запросите его ещё раз в аккаунте.'));
     }
     location.assign(next);
   } catch (err) {

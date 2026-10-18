@@ -1,6 +1,6 @@
 'use strict';
 
-const STATUS_LABEL = { pending: 'На рассмотрении', approved: 'Одобрена', consumed: 'Токен выдан', denied: 'Отклонена' };
+const STATUS_LABEL = { pending: tr('На рассмотрении'), approved: tr('Одобрена'), consumed: tr('Токен выдан'), denied: tr('Отклонена') };
 const submitResult = document.getElementById('submit-result');
 
 async function loadMine() {
@@ -9,7 +9,7 @@ async function loadMine() {
     const data = await postJson('/api/request', { action: 'mine' });
     box.replaceChildren();
     if (!data.requests.length) {
-      box.append(el('p', { class: 'hint', text: 'Заявок пока нет.' }));
+      box.append(el('p', { class: 'hint', text: tr('Заявок пока нет.') }));
       return;
     }
     for (const row of data.requests) {
@@ -39,9 +39,9 @@ async function loadDevices() {
     button.disabled = data.devices.length === 0;
     if (!data.devices.length) {
       hint.replaceChildren(
-        document.createTextNode('Нет привязанных устройств. '),
-        el('a', { href: '/account', text: 'Привяжите устройство' }),
-        document.createTextNode(' командой dev link в DeiX.'),
+        document.createTextNode(tr('Нет привязанных устройств. ')),
+        el('a', { href: lp('/account'), text: tr('Привяжите устройство') }),
+        document.createTextNode(tr(' командой dev link в DeiX.')),
       );
     }
   } catch (err) {

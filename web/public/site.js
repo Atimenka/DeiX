@@ -20,11 +20,11 @@ async function postJson(url, body, extraHeaders) {
     resp = await fetch(url, {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', 'x-deix-csrf': '1', ...(extraHeaders || {}) },
+      headers: { 'Content-Type': 'application/json', 'x-deix-csrf': '1', 'x-deix-lang': LANG, ...(extraHeaders || {}) },
       body: JSON.stringify(body),
     });
   } catch {
-    throw new Error('Нет связи с сервером');
+    throw new Error(tr('Нет связи с сервером'));
   }
   let data = null;
   try {
@@ -33,7 +33,7 @@ async function postJson(url, body, extraHeaders) {
     data = null;
   }
   if (!resp.ok || !data || data.ok === false) {
-    const err = new Error((data && data.error) || `Ошибка сервера (${resp.status})`);
+    const err = new Error((data && data.error) || tr('Ошибка сервера ({status})', { status: resp.status }));
     err.status = resp.status;
     err.code = data && data.code;
     throw err;
@@ -63,7 +63,7 @@ function showResult(node, kind, text) {
 /** Безопасный адрес возврата после входа: только путь на этом же сайте. */
 function nextPath() {
   const next = new URLSearchParams(location.search).get('next') || '';
-  return /^\/[A-Za-z0-9_\-/]*$/.test(next) && !next.startsWith('//') ? next : '/account';
+  return /^\/[A-Za-z0-9_\-/]*$/.test(next) && !next.startsWith('//') ? lp(next) : lp('/account');
 }
 
 let mePromise = null;
@@ -98,10 +98,10 @@ function setTheme(theme) {
 }
 
 const NAV_LINKS = [
-  ['home', '/', 'Главная'],
-  ['features', '/#features', 'Возможности'],
-  ['dev', '/#dev', 'Dev-режим'],
-  ['request', '/request', 'Заявки'],
+  ['home', '/', tr('Главная')],
+  ['features', '/#features', tr('Возможности')],
+  ['dev', '/#dev', tr('Dev-режим')],
+  ['request', '/request', tr('Заявки')],
 ];
 
 function buildLayout() {
@@ -111,14 +111,31 @@ function buildLayout() {
   );
 
   const nav = el('header', { class: 'nav' });
-  const themeBtn = el('button', { class: 'icon-btn theme-toggle', type: 'button', 'aria-label': 'Сменить тему', title: 'Светлая / тёмная тема' }, [
+  const themeBtn = el('button', { class: 'icon-btn theme-toggle', type: 'button', 'aria-label': tr('Сменить тему'), title: tr('Светлая / тёмная тема') }, [
     icon('moon', 'moon'),
     icon('sun', 'sun'),
   ]);
   themeBtn.addEventListener('click', () => {
     setTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
   });
-  const burger = el('button', { class: 'icon-btn burger', type: 'button', 'aria-label': 'Меню', 'aria-expanded': 'false' }, [icon('menu')]);
+  const langBtn = el('a', {
+    class: 'icon-btn lang-toggle',
+    href: otherLangPath(),
+    hreflang: LANG === 'en' ? 'ru' : 'en',
+    lang: LANG === 'en' ? 'ru' : 'en',
+    'aria-label': LANG === 'en' ? 'Русская версия' : 'English version',
+    title: LANG === 'en' ? 'Русская версия' : 'English version',
+    text: LANG === 'en' ? 'RU' : 'EN',
+  });
+  langBtn.addEventListener('click', () => {
+    langBtn.href = otherLangPath();
+    try {
+      localStorage.setItem('deix-lang', LANG === 'en' ? 'ru' : 'en');
+    } catch {
+      return;
+    }
+  });
+  const burger = el('button', { class: 'icon-btn burger', type: 'button', 'aria-label': tr('Меню'), 'aria-expanded': 'false' }, [icon('menu')]);
   burger.addEventListener('click', () => {
     const open = nav.classList.toggle('open');
     burger.setAttribute('aria-expanded', String(open));
@@ -126,16 +143,16 @@ function buildLayout() {
   });
   const links = el(
     'nav',
-    { class: 'links', 'aria-label': 'Основная навигация' },
-    NAV_LINKS.map(([key, href, label]) => el('a', { class: `link${key === page ? ' active' : ''}`, href, text: label })),
+    { class: 'links', 'aria-label': tr('Основная навигация') },
+    NAV_LINKS.map(([key, href, label]) => el('a', { class: `link${key === page ? ' active' : ''}`, href: lp(href), text: label })),
   );
   links.append(el('a', { class: 'link', href: 'https://github.com/Atimenka/DeiX', rel: 'noopener', text: 'GitHub' }), el('span', { id: 'nav-auth', class: 'nav-auth' }));
   nav.append(
     el('div', { class: 'wrap' }, [
       el('div', { class: 'nav-bar' }, [
-        el('a', { class: 'brand', href: '/' }, [el('img', { src: '/favicon.svg', alt: '' }), document.createTextNode('DeiX OS')]),
+        el('a', { class: 'brand', href: lp('/') }, [el('img', { src: '/favicon.svg', alt: '' }), document.createTextNode('DeiX OS')]),
         links,
-        el('div', { class: 'nav-tools' }, [themeBtn, burger]),
+        el('div', { class: 'nav-tools' }, [langBtn, themeBtn, burger]),
       ]),
     ]),
   );
@@ -145,8 +162,8 @@ function buildLayout() {
     el('div', { class: 'wrap' }, [
       el('span', { text: `© ${new Date().getFullYear()} DeiX OS` }),
       el('nav', null, [
-        el('a', { href: '/request', text: 'Заявки' }),
-        el('a', { href: '/register', text: 'Регистрация' }),
+        el('a', { href: lp('/request'), text: tr('Заявки') }),
+        el('a', { href: lp('/register'), text: tr('Регистрация') }),
         el('a', { href: 'https://github.com/Atimenka/DeiX', rel: 'noopener', text: 'GitHub' }),
       ]),
     ]),
@@ -164,7 +181,7 @@ async function resendVerification(button) {
   button.disabled = true;
   try {
     await authApi({ action: 'resend_verification' });
-    toast('Письмо отправлено. Проверьте почту.', 'ok');
+    toast(tr('Письмо отправлено. Проверьте почту.'), 'ok');
   } catch (err) {
     toast(err.message, 'err');
     button.disabled = false;
@@ -180,16 +197,16 @@ async function accountBanners(user) {
       enabled = false;
     }
     if (enabled) {
-      const button = el('button', { class: 'btn small', type: 'button', text: 'Отправить письмо ещё раз' });
+      const button = el('button', { class: 'btn small', type: 'button', text: tr('Отправить письмо ещё раз') });
       button.addEventListener('click', () => resendVerification(button));
-      showBanner([el('span', { class: 'grow', text: `Почта ${user.email} не подтверждена: без этого недоступны ключи и заявки.` }), button]);
+      showBanner([el('span', { class: 'grow', text: tr('Почта {email} не подтверждена: без этого недоступны ключи и заявки.', { email: user.email }) }), button]);
       return;
     }
   }
   if (user.role === 'owner' && !user.mfa) {
     showBanner([
-      el('span', { class: 'grow', text: 'Для панели Owner обязательна двухфакторная аутентификация.' }),
-      el('a', { class: 'btn small primary', href: '/account#security', text: 'Включить 2FA' }),
+      el('span', { class: 'grow', text: tr('Для панели Owner обязательна двухфакторная аутентификация.') }),
+      el('a', { class: 'btn small primary', href: lp('/account#security'), text: tr('Включить 2FA') }),
     ]);
   }
 }
@@ -200,25 +217,25 @@ async function renderNav() {
   const user = await fetchMe();
   slot.replaceChildren();
   if (user) {
-    if (user.role === 'owner') slot.append(el('a', { class: 'link', href: '/admin', text: 'Панель' }));
-    slot.append(el('a', { class: 'btn small', href: '/account' }, [icon('user'), document.createTextNode(user.username)]));
+    if (user.role === 'owner') slot.append(el('a', { class: 'link', href: lp('/admin'), text: tr('Панель') }));
+    slot.append(el('a', { class: 'btn small', href: lp('/account') }, [icon('user'), document.createTextNode(user.username)]));
     accountBanners(user);
   } else {
-    slot.append(el('a', { class: 'link', href: '/login', text: 'Войти' }), el('a', { class: 'btn primary small', href: '/register', text: 'Регистрация' }));
+    slot.append(el('a', { class: 'link', href: lp('/login'), text: tr('Войти') }), el('a', { class: 'btn primary small', href: lp('/register'), text: tr('Регистрация') }));
   }
 }
 
 function enhancePasswords() {
   for (const input of document.querySelectorAll('input[type="password"]')) {
     const wrap = el('span', { class: 'pw' });
-    const toggle = el('button', { type: 'button', 'aria-label': 'Показать пароль', tabindex: '-1' }, [icon('eye')]);
+    const toggle = el('button', { type: 'button', 'aria-label': tr('Показать пароль'), tabindex: '-1' }, [icon('eye')]);
     input.replaceWith(wrap);
     wrap.append(input, toggle);
     toggle.addEventListener('click', () => {
       const show = input.type === 'password';
       input.type = show ? 'text' : 'password';
       toggle.replaceChildren(icon(show ? 'eyeoff' : 'eye'));
-      toggle.setAttribute('aria-label', show ? 'Скрыть пароль' : 'Показать пароль');
+      toggle.setAttribute('aria-label', show ? tr('Скрыть пароль') : tr('Показать пароль'));
     });
   }
 }
@@ -262,7 +279,7 @@ async function mountCaptcha(container) {
     config = null;
   }
   if (!config || !config.captcha) {
-    container.append(el('p', { class: 'hint', text: 'Защита от ботов на сервере пока не включена.' }));
+    container.append(el('p', { class: 'hint', text: tr('Защита от ботов на сервере пока не включена.') }));
     return { token: () => '', reset: () => {} };
   }
   await new Promise((resolve, reject) => {
@@ -271,7 +288,7 @@ async function mountCaptcha(container) {
     script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
     script.async = true;
     script.onload = resolve;
-    script.onerror = () => reject(new Error('Не удалось загрузить капчу'));
+    script.onerror = () => reject(new Error(tr('Не удалось загрузить капчу')));
     document.head.append(script);
   }).catch((err) => {
     container.append(el('p', { class: 'hint', text: err.message }));
@@ -285,7 +302,7 @@ async function mountCaptcha(container) {
     note.hidden = !text;
   };
   const host = location.hostname;
-  const hostHint = `Если виджет пишет «Unable to connect to website», добавьте ${host} в Cloudflare → Turnstile → ваш виджет → Hostname Management.`;
+  const hostHint = tr('Если виджет пишет «Unable to connect to website», добавьте {host} в Cloudflare → Turnstile → ваш виджет → Hostname Management.', { host });
   let waiting = null;
   if (window.turnstile) {
     widget = window.turnstile.render(container, {
@@ -303,21 +320,21 @@ async function mountCaptcha(container) {
         value = '';
       },
       'unsupported-callback': () => {
-        say('Браузер не поддерживается капчей Cloudflare. Обновите браузер.');
+        say(tr('Браузер не поддерживается капчей Cloudflare. Обновите браузер.'));
       },
       'error-callback': (code) => {
         value = '';
         clearTimeout(waiting);
         say(
           /^1[01]\d{4}$/.test(String(code))
-            ? `Капча отклонила адрес ${host} (код ${code}). ${hostHint}`
-            : `Капча не загрузилась (код ${code || 'неизвестен'}). Проверьте соединение, отключите блокировщики и VPN, затем обновите страницу.`,
+            ? tr('Капча отклонила адрес {host} (код {code}). {hint}', { host, code, hint: hostHint })
+            : tr('Капча не загрузилась (код {code}). Проверьте соединение, отключите блокировщики и VPN, затем обновите страницу.', { code: code || tr('неизвестен') }),
         );
         return true;
       },
     });
     waiting = setTimeout(() => {
-      if (!value) say(`Капча не завершила проверку за 10 секунд. ${hostHint}`);
+      if (!value) say(tr('Капча не завершила проверку за 10 секунд. {hint}', { hint: hostHint }));
     }, 10000);
   }
   return {

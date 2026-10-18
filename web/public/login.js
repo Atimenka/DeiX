@@ -2,7 +2,7 @@
 
 const result = document.getElementById('login-result');
 const next = nextPath();
-document.getElementById('to-register').href = `/register?next=${encodeURIComponent(next)}`;
+document.getElementById('to-register').href = `${lp('/register')}?next=${encodeURIComponent(next)}`;
 
 (async () => {
   if (await fetchMe()) location.replace(next);
@@ -32,10 +32,10 @@ function setBackupMode(on) {
   codeInput.classList.toggle('backup', on);
   codeInput.inputMode = on ? 'text' : 'numeric';
   codeInput.autocomplete = on ? 'off' : 'one-time-code';
-  codeMode.textContent = on ? 'Вернуться к коду из приложения' : 'Использовать резервный код';
+  codeMode.textContent = on ? tr('Вернуться к коду из приложения') : tr('Использовать резервный код');
   document.getElementById('code-hint').textContent = on
-    ? 'Введите один из резервных кодов. Он сработает один раз и отключит 2FA: потом её можно подключить заново.'
-    : 'Откройте приложение-аутентификатор и введите шесть цифр для DeiX.';
+    ? tr('Введите один из резервных кодов. Он сработает один раз и отключит 2FA: потом её можно подключить заново.')
+    : tr('Откройте приложение-аутентификатор и введите шесть цифр для DeiX.');
   codeInput.value = '';
   codeInput.focus();
 }
@@ -71,8 +71,8 @@ async function submitCode() {
   button.disabled = true;
   try {
     const data = await authApi({ action: 'mfa_verify', code: codeInput.value });
-    if (data.mfa_reset) toast('Резервный код использован: 2FA отключена. Подключите её заново в аккаунте.', 'ok');
-    location.assign(data.mfa_reset ? '/account#security' : next);
+    if (data.mfa_reset) toast(tr('Резервный код использован: 2FA отключена. Подключите её заново в аккаунте.'), 'ok');
+    location.assign(data.mfa_reset ? lp('/account#security') : next);
   } catch (err) {
     if (err.code === 'mfa_expired') {
       showStep(false);
