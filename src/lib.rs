@@ -180,6 +180,10 @@ pub extern "C" fn kernel_main() -> ! {
     println!("PS/2 mouse: OK (handled via IRQ12)");
 
     if ata::is_present() {
+        match ata::enable_multiple() {
+            0 => crate::serial_println!("[ata] READ MULTIPLE недоступен — чтение по одному сектору"),
+            n => crate::serial_println!("[ata] READ MULTIPLE включён: {} секторов за один DRQ", n),
+        }
         println!("ATA disk: OK (PIO mode)");
     } else {
         println!("ATA disk: not detected");
