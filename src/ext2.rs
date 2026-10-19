@@ -44,6 +44,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::spinlock::SpinLock;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 pub const BLOCK_SIZE: usize = 1024;
 const SECTOR_SIZE: usize = 512;
@@ -158,6 +159,7 @@ fn cache_idx(id: VolId) -> usize {
 /// Сбрасывает закешированную геометрию тома (после format/convert).
 pub fn invalidate_cache(id: VolId) {
     VOL_CACHE.lock()[cache_idx(id)] = None;
+    clear_block_cache();
 }
 
 /// Размер раздела /userdata в секторах из таблицы разделов MBR.
@@ -282,6 +284,91 @@ fn gdt_locate(g: u32) -> (u32, usize) {
     (GDT_BLOCK + (byte / BLOCK_SIZE) as u32, byte % BLOCK_SIZE)
 }
 
+// ---------------- кеш расшифрованных блоков ----------------
+
+/// Сколько блоков держит кеш (по 1 КиБ). Прямое отображение по номеру блока.
+const BCACHE_SLOTS: usize = 512;
+
+/// Расшифрованные блоки зашифрованного тома. XTS-AES в программной
+/// реализации стоит десятки тысяч инструкций на сектор, а ext2 читает одни и
+/// те же служебные блоки (суперблок, дескрипторы групп, битовые карты,
+/// таблицы инодов) десятки раз за операцию. Кеш сквозной: запись идёт на
+/// диск сразу, в кеше обновляется копия. Содержит открытый текст, поэтому
+/// затирается при блокировке тома и смене ключа.
+struct BlockCache {
+    tags: Vec<u32>,
+    data: Vec<u8>,
+}
+
+static BCACHE: SpinLock<Option<BlockCache>> = SpinLock::new(None);
+/// Поколение кеша: растёт при каждой записи и сбросе. Чтение, начатое до
+/// записи, не имеет права положить в кеш устаревший блок.
+static BCACHE_GEN: AtomicU32 = AtomicU32::new(0);
+
+fn bcache_slot(lba: u32) -> usize {
+    ((lba / SECTORS_PER_BLOCK) as usize) % BCACHE_SLOTS
+}
+
+fn bcache_get(lba: u32) -> Option<[u8; BLOCK_SIZE]> {
+    let guard = BCACHE.lock();
+    let cache = guard.as_ref()?;
+    let slot = bcache_slot(lba);
+    if cache.tags[slot] != lba {
+        return None;
+    }
+    let mut out = [0u8; BLOCK_SIZE];
+    out.copy_from_slice(&cache.data[slot * BLOCK_SIZE..(slot + 1) * BLOCK_SIZE]);
+    Some(out)
+}
+
+/// Кладёт блок в кеш. `generation` — поколение, снятое до чтения с диска; если оно
+/// изменилось, блок мог устареть и не сохраняется. `None` — запись на диск
+/// (безусловная).
+fn bcache_put(lba: u32, data: &[u8; BLOCK_SIZE], generation: Option<u32>) {
+    let mut guard = BCACHE.lock();
+    match generation {
+        Some(g) => {
+            if BCACHE_GEN.load(Ordering::SeqCst) != g {
+                return;
+            }
+        }
+        None => {
+            BCACHE_GEN.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let cache = guard.get_or_insert_with(|| BlockCache {
+        tags: alloc::vec![u32::MAX; BCACHE_SLOTS],
+        data: alloc::vec![0u8; BCACHE_SLOTS * BLOCK_SIZE],
+    });
+    let slot = bcache_slot(lba);
+    cache.tags[slot] = lba;
+    cache.data[slot * BLOCK_SIZE..(slot + 1) * BLOCK_SIZE].copy_from_slice(data);
+}
+
+fn bcache_forget(lba: u32) {
+    let mut guard = BCACHE.lock();
+    BCACHE_GEN.fetch_add(1, Ordering::SeqCst);
+    if let Some(cache) = guard.as_mut() {
+        let slot = bcache_slot(lba);
+        if cache.tags[slot] == lba {
+            cache.tags[slot] = u32::MAX;
+        }
+    }
+}
+
+/// Сбрасывает кеш и затирает открытый текст в памяти (блокировка тома,
+/// смена ключа).
+pub fn clear_block_cache() {
+    let mut guard = BCACHE.lock();
+    BCACHE_GEN.fetch_add(1, Ordering::SeqCst);
+    if let Some(cache) = guard.as_mut() {
+        for b in cache.data.iter_mut() {
+            unsafe { core::ptr::write_volatile(b, 0) };
+        }
+    }
+    *guard = None;
+}
+
 // ---------------- низкоуровневый ввод-вывод блоков ----------------
 
 /// Читает один ext2-блок (2 физических сектора). Для шифрованного тома
@@ -291,6 +378,13 @@ fn gdt_locate(g: u32) -> (u32, usize) {
 fn blk_read(io: VolIo, encrypted: bool, start_lba: u32, block: u32) -> Result<[u8; BLOCK_SIZE], Ext2Error> {
     let mut buf = [0u8; BLOCK_SIZE];
     let lba = start_lba + block * SECTORS_PER_BLOCK;
+    let cacheable = encrypted && io == VolIo::Standard;
+    if cacheable {
+        if let Some(hit) = bcache_get(lba) {
+            return Ok(hit);
+        }
+    }
+    let generation = BCACHE_GEN.load(Ordering::SeqCst);
     let res = match io {
         VolIo::Standard => ata::read_sectors(lba, SECTORS_PER_BLOCK as u8, &mut buf),
         VolIo::Raw(drive) => ata::read_sectors_from(drive, lba, SECTORS_PER_BLOCK as u8, &mut buf),
@@ -303,6 +397,9 @@ fn blk_read(io: VolIo, encrypted: bool, start_lba: u32, block: u32) -> Result<[u
             let start = (i as usize) * SECTOR_SIZE;
             let end = start + SECTOR_SIZE;
             crate::crypto_storage::decrypt_sector_after_read(sector_lba, &mut buf[start..end]);
+        }
+        if cacheable && crate::crypto_storage::is_unlocked() {
+            bcache_put(lba, &buf, Some(generation));
         }
     }
 
@@ -328,6 +425,14 @@ fn blk_write(io: VolIo, encrypted: bool, start_lba: u32, block: u32, data: &[u8;
         VolIo::Standard => ata::write_sectors(lba, SECTORS_PER_BLOCK as u8, &out),
         VolIo::Raw(drive) => ata::write_sectors_to(drive, lba, SECTORS_PER_BLOCK as u8, &out),
     };
+    let cacheable = encrypted && io == VolIo::Standard && crate::crypto_storage::is_unlocked();
+    if cacheable {
+        if res.is_ok() {
+            bcache_put(lba, data, None);
+        } else {
+            bcache_forget(lba);
+        }
+    }
     res.map_err(|_| Ext2Error::DiskError)
 }
 
