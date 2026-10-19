@@ -56,10 +56,13 @@ const RCON: [u8; 15] = [
     0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c, 0xd8, 0xab, 0x4d,
 ];
 
-/// Ключевой расписание (key schedule) для AES-256: NR+1 = 15 раундовых
-/// ключей по 16 байт каждый (240 байт всего).
+/// Ключевое расписание AES-256: NR+1 = 15 раундовых ключей по четыре
+/// 32-битных слова. `enc` — для шифрования, `dec` — для «эквивалентного
+/// обратного шифра» (FIPS-197 §5.3.5): раундовые ключи в обратном порядке,
+/// средние пропущены через InvMixColumns.
 pub struct Aes256 {
-    round_keys: [[u8; 16]; NR + 1],
+    enc: [[u32; 4]; NR + 1],
+    dec: [[u32; 4]; NR + 1],
 }
 
 const fn xtime(x: u8) -> u8 {
@@ -86,25 +89,140 @@ const fn gmul(a: u8, b: u8) -> u8 {
     p
 }
 
-/// Таблица умножения на константу в GF(2^8): `t[x] = x * m`. Строится на
-/// этапе компиляции. Побитовое `gmul` в MixColumns стоило ~800 вызовов на
-/// блок при расшифровке — сектор XTS (32 блока) занимал десятки миллисекунд.
-const fn mul_table(m: u8) -> [u8; 256] {
-    let mut t = [0u8; 256];
+/// T-таблицы: SubBytes + MixColumns одного байта целиком, столбец — слово
+/// big-endian. Остальные три таблицы получаются поворотом на 8/16/24 бита.
+/// Раунд — 16 обращений к таблице и XOR вместо побайтовых SubBytes,
+/// ShiftRows и MixColumns: при программном AES в эмуляторе это основной
+/// выигрыш для XTS-шифрования диска.
+const fn build_te0() -> [u32; 256] {
+    let mut t = [0u32; 256];
     let mut i = 0;
     while i < 256 {
-        t[i] = gmul(i as u8, m);
+        let s = SBOX[i];
+        t[i] = ((gmul(s, 2) as u32) << 24) | ((s as u32) << 16) | ((s as u32) << 8) | gmul(s, 3) as u32;
         i += 1;
     }
     t
 }
 
-static MUL2: [u8; 256] = mul_table(2);
-static MUL3: [u8; 256] = mul_table(3);
-static MUL9: [u8; 256] = mul_table(9);
-static MUL11: [u8; 256] = mul_table(11);
-static MUL13: [u8; 256] = mul_table(13);
-static MUL14: [u8; 256] = mul_table(14);
+/// То же для обратного шифра: InvSubBytes + InvMixColumns.
+const fn build_td0() -> [u32; 256] {
+    let mut t = [0u32; 256];
+    let mut i = 0;
+    while i < 256 {
+        let s = INV_SBOX[i];
+        t[i] = ((gmul(s, 14) as u32) << 24)
+            | ((gmul(s, 9) as u32) << 16)
+            | ((gmul(s, 13) as u32) << 8)
+            | gmul(s, 11) as u32;
+        i += 1;
+    }
+    t
+}
+
+static TE0: [u32; 256] = build_te0();
+static TD0: [u32; 256] = build_td0();
+
+#[inline(always)]
+fn te(x: u32, rot: u32) -> u32 {
+    TE0[(x & 0xff) as usize].rotate_right(rot)
+}
+
+#[inline(always)]
+fn td(x: u32, rot: u32) -> u32 {
+    TD0[(x & 0xff) as usize].rotate_right(rot)
+}
+
+#[inline(always)]
+fn sb(x: u32) -> u32 {
+    SBOX[(x & 0xff) as usize] as u32
+}
+
+#[inline(always)]
+fn isb(x: u32) -> u32 {
+    INV_SBOX[(x & 0xff) as usize] as u32
+}
+
+fn load_block(block: &[u8; 16]) -> [u32; 4] {
+    [
+        u32::from_be_bytes([block[0], block[1], block[2], block[3]]),
+        u32::from_be_bytes([block[4], block[5], block[6], block[7]]),
+        u32::from_be_bytes([block[8], block[9], block[10], block[11]]),
+        u32::from_be_bytes([block[12], block[13], block[14], block[15]]),
+    ]
+}
+
+fn store_block(s: [u32; 4], block: &mut [u8; 16]) {
+    for c in 0..4 {
+        block[4 * c..4 * c + 4].copy_from_slice(&s[c].to_be_bytes());
+    }
+}
+
+/// Байтовые раундовые ключи -> слова big-endian.
+fn key_words(round_keys: &[[u8; 16]], out: &mut [[u32; 4]]) {
+    for (r, rk) in round_keys.iter().enumerate() {
+        out[r] = load_block(rk);
+    }
+}
+
+/// InvMixColumns для слова раундового ключа (через TD0 и SBOX: TD0[S[b]]
+/// даёт вклад байта b в InvMixColumns без отдельной таблицы).
+fn inv_mix_word(w: u32) -> u32 {
+    TD0[sb(w >> 24) as usize]
+        ^ TD0[sb(w >> 16) as usize].rotate_right(8)
+        ^ TD0[sb(w >> 8) as usize].rotate_right(16)
+        ^ TD0[sb(w) as usize].rotate_right(24)
+}
+
+fn encrypt_words(rk: &[[u32; 4]], block: &mut [u8; 16]) {
+    let rounds = rk.len() - 1;
+    let mut s = load_block(block);
+    for c in 0..4 {
+        s[c] ^= rk[0][c];
+    }
+    for r in 1..rounds {
+        let k = &rk[r];
+        s = [
+            TE0[(s[0] >> 24) as usize] ^ te(s[1] >> 16, 8) ^ te(s[2] >> 8, 16) ^ te(s[3], 24) ^ k[0],
+            TE0[(s[1] >> 24) as usize] ^ te(s[2] >> 16, 8) ^ te(s[3] >> 8, 16) ^ te(s[0], 24) ^ k[1],
+            TE0[(s[2] >> 24) as usize] ^ te(s[3] >> 16, 8) ^ te(s[0] >> 8, 16) ^ te(s[1], 24) ^ k[2],
+            TE0[(s[3] >> 24) as usize] ^ te(s[0] >> 16, 8) ^ te(s[1] >> 8, 16) ^ te(s[2], 24) ^ k[3],
+        ];
+    }
+    let k = &rk[rounds];
+    let out = [
+        (sb(s[0] >> 24) << 24) | (sb(s[1] >> 16) << 16) | (sb(s[2] >> 8) << 8) | sb(s[3]),
+        (sb(s[1] >> 24) << 24) | (sb(s[2] >> 16) << 16) | (sb(s[3] >> 8) << 8) | sb(s[0]),
+        (sb(s[2] >> 24) << 24) | (sb(s[3] >> 16) << 16) | (sb(s[0] >> 8) << 8) | sb(s[1]),
+        (sb(s[3] >> 24) << 24) | (sb(s[0] >> 16) << 16) | (sb(s[1] >> 8) << 8) | sb(s[2]),
+    ];
+    store_block([out[0] ^ k[0], out[1] ^ k[1], out[2] ^ k[2], out[3] ^ k[3]], block);
+}
+
+fn decrypt_words(dk: &[[u32; 4]], block: &mut [u8; 16]) {
+    let rounds = dk.len() - 1;
+    let mut s = load_block(block);
+    for c in 0..4 {
+        s[c] ^= dk[0][c];
+    }
+    for r in 1..rounds {
+        let k = &dk[r];
+        s = [
+            TD0[(s[0] >> 24) as usize] ^ td(s[3] >> 16, 8) ^ td(s[2] >> 8, 16) ^ td(s[1], 24) ^ k[0],
+            TD0[(s[1] >> 24) as usize] ^ td(s[0] >> 16, 8) ^ td(s[3] >> 8, 16) ^ td(s[2], 24) ^ k[1],
+            TD0[(s[2] >> 24) as usize] ^ td(s[1] >> 16, 8) ^ td(s[0] >> 8, 16) ^ td(s[3], 24) ^ k[2],
+            TD0[(s[3] >> 24) as usize] ^ td(s[2] >> 16, 8) ^ td(s[1] >> 8, 16) ^ td(s[0], 24) ^ k[3],
+        ];
+    }
+    let k = &dk[rounds];
+    let out = [
+        (isb(s[0] >> 24) << 24) | (isb(s[3] >> 16) << 16) | (isb(s[2] >> 8) << 8) | isb(s[1]),
+        (isb(s[1] >> 24) << 24) | (isb(s[0] >> 16) << 16) | (isb(s[3] >> 8) << 8) | isb(s[2]),
+        (isb(s[2] >> 24) << 24) | (isb(s[1] >> 16) << 16) | (isb(s[0] >> 8) << 8) | isb(s[3]),
+        (isb(s[3] >> 24) << 24) | (isb(s[2] >> 16) << 16) | (isb(s[1] >> 8) << 8) | isb(s[0]),
+    ];
+    store_block([out[0] ^ k[0], out[1] ^ k[1], out[2] ^ k[2], out[3] ^ k[3]], block);
+}
 
 impl Aes256 {
     /// Строит ключевое расписание из 32-байтного (256-битного) ключа.
@@ -136,7 +254,21 @@ impl Aes256 {
             }
         }
 
-        Aes256 { round_keys }
+        let mut enc = [[0u32; 4]; NR + 1];
+        key_words(&round_keys, &mut enc);
+        let mut dec = [[0u32; 4]; NR + 1];
+        dec[0] = enc[NR];
+        dec[NR] = enc[0];
+        for r in 1..NR {
+            let src = enc[NR - r];
+            dec[r] = [inv_mix_word(src[0]), inv_mix_word(src[1]), inv_mix_word(src[2]), inv_mix_word(src[3])];
+        }
+        for rk in round_keys.iter_mut() {
+            for b in rk.iter_mut() {
+                unsafe { core::ptr::write_volatile(b, 0) };
+            }
+        }
+        Aes256 { enc, dec }
     }
 
     /// Шифрует ровно один 16-байтный блок на месте (ECB-уровня примитив
@@ -144,18 +276,7 @@ impl Aes256 {
     /// без режима сцепления это уязвимо; см. xts.rs для настоящего
     /// шифрования секторов).
     pub fn encrypt_block(&self, block: &mut [u8; 16]) {
-        add_round_key(block, &self.round_keys[0]);
-
-        for round in 1..NR {
-            sub_bytes(block);
-            shift_rows(block);
-            mix_columns(block);
-            add_round_key(block, &self.round_keys[round]);
-        }
-
-        sub_bytes(block);
-        shift_rows(block);
-        add_round_key(block, &self.round_keys[NR]);
+        encrypt_words(&self.enc, block);
     }
 
     /// Затирает ключевое расписание (round keys, производные от
@@ -164,26 +285,15 @@ impl Aes256 {
     /// обычного присваивания), см. использование в
     /// crypto_storage.rs::clear_master_key.
     pub fn zeroize(&mut self) {
-        for round_key in self.round_keys.iter_mut() {
-            for byte in round_key.iter_mut() {
-                unsafe { core::ptr::write_volatile(byte, 0) };
+        for round_key in self.enc.iter_mut().chain(self.dec.iter_mut()) {
+            for word in round_key.iter_mut() {
+                unsafe { core::ptr::write_volatile(word, 0) };
             }
         }
     }
 
     pub fn decrypt_block(&self, block: &mut [u8; 16]) {
-        add_round_key(block, &self.round_keys[NR]);
-        inv_shift_rows(block);
-        inv_sub_bytes(block);
-
-        for round in (1..NR).rev() {
-            add_round_key(block, &self.round_keys[round]);
-            inv_mix_columns(block);
-            inv_shift_rows(block);
-            inv_sub_bytes(block);
-        }
-
-        add_round_key(block, &self.round_keys[0]);
+        decrypt_words(&self.dec, block);
     }
 }
 
@@ -192,7 +302,7 @@ impl Aes256 {
 /// (TLS_AES_128_GCM_SHA256, RFC 8446 §9.1). Переиспользует SBOX и
 /// преобразования раунда AES-256 выше.
 pub struct Aes128 {
-    round_keys: [[u8; 16]; 11],
+    enc: [[u32; 4]; 11],
 }
 
 impl Aes128 {
@@ -223,22 +333,13 @@ impl Aes128 {
             }
         }
 
-        Aes128 { round_keys }
+        let mut enc = [[0u32; 4]; NR128 + 1];
+        key_words(&round_keys, &mut enc);
+        Aes128 { enc }
     }
 
     pub fn encrypt_block(&self, block: &mut [u8; 16]) {
-        add_round_key(block, &self.round_keys[0]);
-
-        for round in 1..10 {
-            sub_bytes(block);
-            shift_rows(block);
-            mix_columns(block);
-            add_round_key(block, &self.round_keys[round]);
-        }
-
-        sub_bytes(block);
-        shift_rows(block);
-        add_round_key(block, &self.round_keys[10]);
+        encrypt_words(&self.enc, block);
     }
 }
 
@@ -248,65 +349,6 @@ fn sub_word(word: [u8; 4]) -> [u8; 4] {
 
 fn rot_word(word: [u8; 4]) -> [u8; 4] {
     [word[1], word[2], word[3], word[0]]
-}
-
-fn add_round_key(block: &mut [u8; 16], round_key: &[u8; 16]) {
-    for i in 0..16 {
-        block[i] ^= round_key[i];
-    }
-}
-
-fn sub_bytes(block: &mut [u8; 16]) {
-    for b in block.iter_mut() {
-        *b = SBOX[*b as usize];
-    }
-}
-
-fn inv_sub_bytes(block: &mut [u8; 16]) {
-    for b in block.iter_mut() {
-        *b = INV_SBOX[*b as usize];
-    }
-}
-
-/// Состояние AES хранится как массив байт в column-major порядке:
-/// state[r + 4*c] соответствует строке r, столбцу c. ShiftRows сдвигает
-/// строку r влево на r позиций.
-fn shift_rows(block: &mut [u8; 16]) {
-    let s = *block;
-    for r in 1..4 {
-        for c in 0..4 {
-            block[r + 4 * c] = s[r + 4 * ((c + r) % 4)];
-        }
-    }
-}
-
-fn inv_shift_rows(block: &mut [u8; 16]) {
-    let s = *block;
-    for r in 1..4 {
-        for c in 0..4 {
-            block[r + 4 * c] = s[r + 4 * ((c + 4 - r) % 4)];
-        }
-    }
-}
-
-fn mix_columns(block: &mut [u8; 16]) {
-    for c in 0..4 {
-        let col = [block[4 * c] as usize, block[4 * c + 1] as usize, block[4 * c + 2] as usize, block[4 * c + 3] as usize];
-        block[4 * c] = MUL2[col[0]] ^ MUL3[col[1]] ^ col[2] as u8 ^ col[3] as u8;
-        block[4 * c + 1] = col[0] as u8 ^ MUL2[col[1]] ^ MUL3[col[2]] ^ col[3] as u8;
-        block[4 * c + 2] = col[0] as u8 ^ col[1] as u8 ^ MUL2[col[2]] ^ MUL3[col[3]];
-        block[4 * c + 3] = MUL3[col[0]] ^ col[1] as u8 ^ col[2] as u8 ^ MUL2[col[3]];
-    }
-}
-
-fn inv_mix_columns(block: &mut [u8; 16]) {
-    for c in 0..4 {
-        let col = [block[4 * c] as usize, block[4 * c + 1] as usize, block[4 * c + 2] as usize, block[4 * c + 3] as usize];
-        block[4 * c] = MUL14[col[0]] ^ MUL11[col[1]] ^ MUL13[col[2]] ^ MUL9[col[3]];
-        block[4 * c + 1] = MUL9[col[0]] ^ MUL14[col[1]] ^ MUL11[col[2]] ^ MUL13[col[3]];
-        block[4 * c + 2] = MUL13[col[0]] ^ MUL9[col[1]] ^ MUL14[col[2]] ^ MUL11[col[3]];
-        block[4 * c + 3] = MUL11[col[0]] ^ MUL13[col[1]] ^ MUL9[col[2]] ^ MUL14[col[3]];
-    }
 }
 
 #[cfg(test)]
