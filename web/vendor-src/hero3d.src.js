@@ -1,5 +1,6 @@
 import {
   AdditiveBlending,
+  BoxGeometry,
   BufferGeometry,
   Color,
   EdgesGeometry,
@@ -9,9 +10,12 @@ import {
   LineBasicMaterial,
   LineLoop,
   LineSegments,
+  Mesh,
+  MeshBasicMaterial,
   NormalBlending,
   PerspectiveCamera,
   Points,
+  Raycaster,
   Scene,
   ShaderMaterial,
   Vector2,
@@ -134,8 +138,8 @@ const smooth = (a, b, x) => {
 const PATH = [
   [0, 0.52, 1.2, 1],
   [0.2, -0.62, 0.7, 0.42],
-  [0.45, 0.66, 0.78, 0.4],
-  [0.7, -0.6, 0.72, 0.4],
+  [0.45, -0.62, 0.78, 0.4],
+  [0.7, 0.62, 0.72, 0.4],
   [0.9, 0.0, 1.0, 0.5],
   [1, 0.0, 1.3, 0.6],
 ];
@@ -364,4 +368,205 @@ export function mount(options = {}) {
   if (still) draw(2.5);
   else raf = requestAnimationFrame(frame);
   return { dispose, pulse };
+}
+
+/* Слои системы снизу вверх: ширина, глубина, высота плиты */
+const STACK = [
+  [2.1, 1.5, 0.2],
+  [2.5, 1.8, 0.3],
+  [3.1, 2.1, 0.26],
+  [3.1, 2.1, 0.26],
+  [2.7, 1.9, 0.22],
+  [3.3, 2.2, 0.12],
+];
+
+/**
+ * Интерактивный разборный стек DeiX в контейнере: тянуть — вращать, наведение подсвечивает слой.
+ * options: still (рисовать только по событиям), lite (ниже разрешение), onHover(index) — слой под курсором.
+ * Возвращает { setActive(index), dispose }.
+ */
+export function mountStack(container, options = {}) {
+  const still = Boolean(options.still);
+  const canvas = document.createElement('canvas');
+  canvas.className = 'stack-gl';
+  canvas.setAttribute('aria-hidden', 'true');
+  const renderer = new WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: 'default' });
+  renderer.setClearColor(0x000000, 0);
+  container.append(canvas);
+
+  const scene = new Scene();
+  const camera = new PerspectiveCamera(32, 1, 0.1, 60);
+  const group = new Group();
+  scene.add(group);
+
+  const slabs = STACK.map(([w, d, h], index) => {
+    const geometry = new BoxGeometry(w, h, d);
+    const fill = new MeshBasicMaterial({ transparent: true, opacity: 0.16, depthWrite: false });
+    const edge = new LineBasicMaterial({ transparent: true, opacity: 0.8 });
+    const mesh = new Mesh(geometry, fill);
+    const edgeGeometry = new EdgesGeometry(geometry);
+    mesh.add(new LineSegments(edgeGeometry, edge));
+    mesh.userData.index = index;
+    group.add(mesh);
+    return { mesh, fill, edge, geometry, edgeGeometry, glow: 0 };
+  });
+
+  const railPos = [];
+  for (const [x, z] of [[-0.85, -0.55], [0.85, -0.55], [0.85, 0.55], [-0.85, 0.55]]) railPos.push(x, -1, z, x, 1, z);
+  const railGeometry = new BufferGeometry();
+  railGeometry.setAttribute('position', new Float32BufferAttribute(railPos, 3));
+  const railMaterial = new LineBasicMaterial({ transparent: true, opacity: 0.28 });
+  const rails = new LineSegments(railGeometry, railMaterial);
+  group.add(rails);
+
+  let light = false;
+  function applyTheme() {
+    light = document.documentElement.getAttribute('data-theme') === 'light';
+    const low = cssColor('--accent-2', '#22d3ee');
+    const mid = cssColor('--accent', '#8b5cf6');
+    const high = new Color('#f472b6');
+    slabs.forEach((slab, i) => {
+      const t = i / (STACK.length - 1);
+      const color = t < 0.5 ? low.clone().lerp(mid, t * 2) : mid.clone().lerp(high, (t - 0.5) * 2);
+      slab.fill.color.copy(color);
+      slab.edge.color.copy(color);
+    });
+    railMaterial.color.copy(mid);
+    request();
+  }
+  const themeWatch = new MutationObserver(applyTheme);
+  themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+  let width = 1;
+  let height = 1;
+  function resize() {
+    width = Math.max(1, container.clientWidth);
+    height = Math.max(1, container.clientHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, options.lite ? 1.25 : 2));
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    camera.position.set(0, 0, 10 * Math.max(1, 4.9 / (5.73 * camera.aspect)));
+    camera.updateProjectionMatrix();
+    request();
+  }
+  const sizeWatch = new ResizeObserver(resize);
+  sizeWatch.observe(container);
+
+  const raycaster = new Raycaster();
+  const ndc = new Vector2();
+  const tilt = new Vector2();
+  let dragging = false;
+  let lastX = 0;
+  let velocity = 0;
+  let yaw = 0.7;
+  let hover = -1;
+  let active = options.initial ?? -1;
+  let explode = still ? 1 : 0;
+
+  function pick(event) {
+    const rect = canvas.getBoundingClientRect();
+    ndc.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -(((event.clientY - rect.top) / rect.height) * 2 - 1));
+    tilt.set(ndc.x, ndc.y);
+    raycaster.setFromCamera(ndc, camera);
+    const hit = raycaster.intersectObjects(slabs.map((slab) => slab.mesh), false)[0];
+    const index = hit ? hit.object.userData.index : -1;
+    if (index !== hover) {
+      hover = index;
+      canvas.classList.toggle('hit', index >= 0);
+      if (index >= 0 && options.onHover) options.onHover(index);
+    }
+  }
+  function onDown(event) {
+    dragging = true;
+    lastX = event.clientX;
+    canvas.classList.add('drag');
+    canvas.setPointerCapture(event.pointerId);
+  }
+  function onMove(event) {
+    if (dragging) {
+      velocity = (event.clientX - lastX) * 0.011;
+      yaw += velocity;
+      lastX = event.clientX;
+      request();
+    } else pick(event);
+  }
+  function onUp(event) {
+    dragging = false;
+    canvas.classList.remove('drag');
+    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+  }
+  canvas.addEventListener('pointerdown', onDown);
+  canvas.addEventListener('pointermove', onMove);
+  canvas.addEventListener('pointerup', onUp);
+  canvas.addEventListener('pointercancel', onUp);
+
+  function draw(time) {
+    explode += ((visible || still ? 1 : 0) - explode) * (still ? 1 : 0.05);
+    if (!dragging) {
+      velocity *= 0.94;
+      yaw += velocity + (still ? 0 : 0.0035);
+    }
+    const gap = 0.3 + explode * 0.58;
+    slabs.forEach((slab, i) => {
+      slab.glow += ((i === active || i === hover ? 1 : 0) - slab.glow) * (still ? 1 : 0.14);
+      slab.mesh.position.set(slab.glow * 0.45, (i - (STACK.length - 1) / 2) * gap, 0);
+      slab.mesh.scale.setScalar(1 + slab.glow * 0.04);
+      slab.fill.opacity = (light ? 0.24 : 0.14) + slab.glow * (light ? 0.36 : 0.3);
+      slab.edge.opacity = 0.55 + slab.glow * 0.45;
+    });
+    rails.scale.y = ((STACK.length - 1) / 2) * gap + 0.1;
+    group.rotation.y = yaw;
+    group.rotation.x = 0.5 - tilt.y * 0.12;
+    group.position.y = Math.sin(time * 0.8) * (still ? 0 : 0.06);
+    renderer.render(scene, camera);
+  }
+
+  let raf = 0;
+  let visible = still;
+  let disposed = false;
+  function loop(now) {
+    raf = requestAnimationFrame(loop);
+    if (!document.hidden) draw(now / 1000);
+  }
+  function request() {
+    if (still && !disposed) draw(0);
+  }
+  const viewWatch = new IntersectionObserver((entries) => {
+    visible = entries[0].isIntersecting;
+    if (still) return;
+    if (visible && !raf) raf = requestAnimationFrame(loop);
+    else if (!visible && raf) {
+      cancelAnimationFrame(raf);
+      raf = 0;
+    }
+  });
+  viewWatch.observe(container);
+
+  function setActive(index) {
+    active = index;
+    request();
+  }
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    cancelAnimationFrame(raf);
+    viewWatch.disconnect();
+    sizeWatch.disconnect();
+    themeWatch.disconnect();
+    slabs.forEach((slab) => {
+      slab.geometry.dispose();
+      slab.edgeGeometry.dispose();
+      slab.fill.dispose();
+      slab.edge.dispose();
+    });
+    railGeometry.dispose();
+    railMaterial.dispose();
+    renderer.dispose();
+    canvas.remove();
+  }
+
+  applyTheme();
+  resize();
+  return { setActive, dispose };
 }

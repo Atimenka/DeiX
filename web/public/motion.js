@@ -254,6 +254,43 @@
     else setTimeout(start, 300);
   }
 
+  /** Интерактивный 3D-стек системы в разделе «Архитектура»; список слоёв работает и без WebGL. */
+  function mountStack() {
+    const host = document.getElementById('stack3d');
+    const list = document.getElementById('stack-list');
+    if (!host || !list) return;
+    const box = host.closest('.stack');
+    const items = Array.from(list.querySelectorAll('.stack-item'));
+    let view = null;
+    const mark = (index) => {
+      items.forEach((item) => item.classList.toggle('on', Number(item.dataset.i) === index));
+      if (view) view.setActive(index);
+    };
+    items.forEach((item) => {
+      const index = Number(item.dataset.i);
+      item.addEventListener('pointerenter', () => mark(index));
+      item.addEventListener('focus', () => mark(index));
+    });
+    mark(1);
+    if (!webglOk()) return;
+    box.classList.add('has-3d');
+    const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4;
+    const start = () =>
+      load('/vendor/three-scene.js')
+        .then(() => {
+          view = window.DeixScene.mountStack(host, { still: reduce, lite, initial: 1, onHover: mark });
+        })
+        .catch(() => box.classList.remove('has-3d'));
+    if ('IntersectionObserver' in window) {
+      const watch = new IntersectionObserver((entries) => {
+        if (!entries[0].isIntersecting) return;
+        watch.disconnect();
+        start();
+      }, { rootMargin: '500px 0px' });
+      watch.observe(host);
+    } else start();
+  }
+
   /** Скролл-сцена: окно ОС разворачивается, шаги dev-режима зажигаются по мере прокрутки, лента ускоряется. */
   function scrollStory(gsap, ScrollTrigger) {
     const desktop = document.querySelector('.desktop');
@@ -340,6 +377,7 @@
   async function init() {
     watchNav();
     mountScene();
+    if (page === 'home') mountStack();
     if (reduce) return;
     root.classList.add('motion');
     cursor();

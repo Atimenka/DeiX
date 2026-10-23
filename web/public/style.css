@@ -1030,3 +1030,37 @@ html.motion .step:not(.on) { opacity: 0.45; }
 html.motion .step:not(.on) { opacity: 0.62; }
 .nav-solid .nav-bar { background: rgba(10, 10, 20, 0.8); }
 :root[data-theme="light"] .nav-solid .nav-bar { background: rgba(255, 255, 255, 0.82); }
+
+/* 3D-стек системы */
+.stack { display: grid; grid-template-columns: 1.15fr 1fr; gap: 28px; align-items: center; margin-top: 36px; }
+.stack-view {
+  position: relative; height: 540px; border-radius: 28px; overflow: hidden;
+  border: 1px solid var(--border); background: radial-gradient(60% 55% at 50% 50%, rgba(139, 92, 246, 0.18), transparent 70%), var(--glass);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+.stack-view::after {
+  content: ''; position: absolute; inset: auto 0 0; height: 90px; pointer-events: none;
+  background: linear-gradient(to top, rgba(139, 92, 246, 0.14), transparent);
+}
+.stack-gl { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: pan-y; cursor: grab; }
+.stack-gl.hit { cursor: pointer; }
+.stack-gl.drag { cursor: grabbing; }
+.stack:not(.has-3d) { grid-template-columns: 1fr; }
+.stack:not(.has-3d) .stack-view { display: none; }
+.stack-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.stack-item {
+  position: relative; display: grid; gap: 2px; width: 100%; padding: 14px 18px 14px 22px; text-align: left; color: inherit; font: inherit;
+  border: 1px solid var(--border); border-radius: 16px; background: var(--glass-solid); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); cursor: pointer; overflow: hidden;
+  transition: transform 0.35s var(--ease), border-color 0.3s, background 0.3s;
+}
+.stack-item::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--grad); opacity: 0.35; transition: opacity 0.3s, width 0.3s; }
+.stack-item b { font-size: 1.02rem; }
+.stack-item span { color: var(--muted); font-size: 0.9rem; }
+.stack-item:hover, .stack-item:focus-visible, .stack-item.on { transform: translateX(8px); border-color: rgba(139, 92, 246, 0.55); }
+.stack-item.on { background: linear-gradient(90deg, rgba(139, 92, 246, 0.22), var(--glass-solid)); }
+.stack-item:hover::before, .stack-item:focus-visible::before, .stack-item.on::before { opacity: 1; width: 6px; }
+@media (max-width: 900px) {
+  .stack { grid-template-columns: 1fr; }
+  .stack-view { height: 380px; }
+}
+@media (prefers-reduced-motion: reduce) { .stack-item { transition: none; } }
