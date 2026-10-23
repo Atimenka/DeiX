@@ -12,6 +12,7 @@ async function list(res) {
   const releases = await sb(
     `os_releases?ready=eq.true&published=eq.true&select=${PUBLIC_COLUMNS}&order=published_at.desc&limit=100`,
   );
+  res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
   return send(res, 200, { ok: true, releases });
 }
 

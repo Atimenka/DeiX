@@ -36,6 +36,10 @@ const REGISTER_WINDOW_MS = 60 * 60 * 1000;
 const LOGIN_MAX_FAILS = 8;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
+const ME_CACHE_TTL_MS = 20 * 1000;
+const ME_CACHE_MAX = 200;
+const meCache = new Map();
+
 const MFA_COOKIE = 'deix_mfa';
 const MFA_COOKIE_TTL_S = 5 * 60;
 const MFA_MAX_FAILS = 5;
@@ -451,6 +455,7 @@ module.exports = async function handler(req, res) {
   try {
     guardPost(req, res);
     const body = readBody(req);
+    if (body.action !== 'me') meCache.clear();
     switch (body.action) {
       case 'config':
         return send(res, 200, {
@@ -460,8 +465,16 @@ module.exports = async function handler(req, res) {
           email_verification: mailConfigured(),
         });
       case 'me': {
+        const token = cookieValue(req, 'deix_at');
+        const cached = token ? meCache.get(token) : null;
+        if (cached && cached.until > Date.now()) return send(res, 200, { ok: true, user: cached.user });
         const user = await currentUser(req, res);
-        return send(res, 200, { ok: true, user: user ? publicUser(user) : null });
+        const shown = user ? publicUser(user) : null;
+        if (shown && token && user.token === token) {
+          if (meCache.size >= ME_CACHE_MAX) meCache.clear();
+          meCache.set(token, { user: shown, until: Date.now() + ME_CACHE_TTL_MS });
+        }
+        return send(res, 200, { ok: true, user: shown });
       }
       case 'register':
         return await register(req, res, body);

@@ -29,10 +29,12 @@
   }
 
   let confettiFire = null;
+  let scene = null;
 
   /** Праздничный всплеск после удачного действия (регистрация, заявка, привязка). Без Web Worker: CSP его запрещает. */
   window.deixCelebrate = function celebrate() {
     if (reduce) return;
+    if (scene && scene.pulse) scene.pulse();
     load('/vendor/confetti.min.js')
       .then(() => {
         if (!confettiFire) {
@@ -228,21 +230,105 @@
     }
   }
 
-  function hero3d() {
-    const hero = document.querySelector('.hero');
-    if (!hero || window.innerWidth < 760 || !webglOk()) return;
+  const SCENE_PAGES = ['home', 'download', 'login', 'register', 'request', 'verify', '404'];
+
+  function mountScene() {
+    if (!SCENE_PAGES.includes(page) || !webglOk()) return;
+    const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4 || (navigator.hardwareConcurrency || 8) <= 4;
     const start = () =>
-      load('/vendor/three-hero.js')
+      load('/vendor/three-scene.js')
         .then(() => {
-          const scene = window.DeixHero.mount(hero, {
-            onSlow: () => root.classList.remove('has-gl'),
+          scene = window.DeixScene.mount({
+            still: reduce,
+            dim: page !== 'home',
+            lite,
+            onSlow: () => {
+              scene = null;
+              root.classList.remove('has-gl');
+            },
           });
           root.classList.add('has-gl');
-          return scene;
         })
         .catch(() => root.classList.remove('has-gl'));
-    if ('requestIdleCallback' in window) window.requestIdleCallback(start, { timeout: 1800 });
-    else setTimeout(start, 400);
+    if ('requestIdleCallback' in window) window.requestIdleCallback(start, { timeout: 1500 });
+    else setTimeout(start, 300);
+  }
+
+  /** Скролл-сцена: окно ОС разворачивается, шаги dev-режима зажигаются по мере прокрутки, лента ускоряется. */
+  function scrollStory(gsap, ScrollTrigger) {
+    const desktop = document.querySelector('.desktop');
+    const hero = document.querySelector('.hero');
+    if (desktop && hero && window.innerWidth > 900) {
+      gsap.to(desktop, { transformPerspective: 1100, rotationX: 14, rotationY: -13, y: -36, scale: 0.93, ease: 'none', scrollTrigger: { trigger: hero, start: 'top top', end: 'bottom top', scrub: 0.6 } });
+    }
+    const steps = document.querySelector('.steps');
+    if (steps) {
+      const items = Array.from(steps.querySelectorAll('.step'));
+      ScrollTrigger.create({
+        trigger: steps,
+        start: 'top 78%',
+        end: 'bottom 55%',
+        scrub: true,
+        onUpdate: (self) => {
+          steps.style.setProperty('--p', self.progress.toFixed(3));
+          items.forEach((item, index) => item.classList.toggle('on', self.progress >= index / items.length - 0.02));
+        },
+      });
+    }
+    const track = document.querySelector('.ticker-track');
+    if (track) {
+      let rate = 1;
+      let goal = 1;
+      ScrollTrigger.create({
+        onUpdate: (self) => {
+          goal = (self.direction >= 0 ? 1 : -1) * (1 + Math.min(Math.abs(self.getVelocity()) / 350, 7));
+        },
+      });
+      gsap.ticker.add(() => {
+        goal += ((goal >= 0 ? 1 : -1) - goal) * 0.04;
+        rate += (goal - rate) * 0.12;
+        for (const animation of track.getAnimations()) animation.playbackRate = rate;
+      });
+    }
+  }
+
+  /** Кольцо и точка следуют за курсором и увеличиваются над кликабельным. */
+  function cursor() {
+    if (!finePointer || page === 'admin') return;
+    const dot = document.createElement('div');
+    const ring = document.createElement('div');
+    dot.className = 'cursor-dot';
+    ring.className = 'cursor-ring';
+    dot.setAttribute('aria-hidden', 'true');
+    ring.setAttribute('aria-hidden', 'true');
+    document.body.append(ring, dot);
+    const pos = { x: -100, y: -100 };
+    const lag = { x: -100, y: -100 };
+    let running = false;
+    function tick() {
+      lag.x += (pos.x - lag.x) * 0.18;
+      lag.y += (pos.y - lag.y) * 0.18;
+      ring.style.translate = `${lag.x.toFixed(1)}px ${lag.y.toFixed(1)}px`;
+      dot.style.translate = `${pos.x.toFixed(1)}px ${pos.y.toFixed(1)}px`;
+      if (Math.abs(pos.x - lag.x) > 0.1 || Math.abs(pos.y - lag.y) > 0.1) requestAnimationFrame(tick);
+      else running = false;
+    }
+    window.addEventListener(
+      'pointermove',
+      (event) => {
+        pos.x = event.clientX;
+        pos.y = event.clientY;
+        root.classList.add('has-cursor');
+        const hot = event.target instanceof Element && event.target.closest('a, button, summary, input, select, textarea, label, .tab, .card');
+        ring.classList.toggle('hot', Boolean(hot));
+        if (!running) {
+          running = true;
+          requestAnimationFrame(tick);
+        }
+      },
+      { passive: true },
+    );
+    document.addEventListener('pointerleave', () => root.classList.remove('has-cursor'));
   }
 
   function panels(gsap) {
@@ -253,8 +339,10 @@
 
   async function init() {
     watchNav();
+    mountScene();
     if (reduce) return;
     root.classList.add('motion');
+    cursor();
     const marketing = page === 'home' || page === 'download';
     try {
       await load('/vendor/gsap.min.js');
@@ -270,7 +358,7 @@
         headings(gsap, window.SplitText);
         counters(gsap, window.ScrollTrigger);
         desktopParallax();
-        hero3d();
+        scrollStory(gsap, window.ScrollTrigger);
       } else if (page !== 'admin') {
         panels(gsap);
       }

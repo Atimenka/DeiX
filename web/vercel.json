@@ -28,7 +28,7 @@
       ]
     },
     {
-      "source": "/api/(.*)",
+      "source": "/api/((?!releases$|update$).*)",
       "headers": [
         {
           "key": "Cache-Control",

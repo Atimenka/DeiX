@@ -25,6 +25,7 @@ async function manifest(req, res, channel) {
   );
   res.statusCode = 200;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=120');
   if (!rows[0]) return res.end('{"none":true}');
   const row = rows[0];
   const parts = Math.ceil(Number(row.payload_size) / PART_SIZE);

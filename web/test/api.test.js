@@ -400,6 +400,7 @@ function call(handler, body, { cookies = {}, headers } = {}) {
       setHeader: (k, v) => {
         out.headers[k.toLowerCase()] = v;
       },
+      getHeader: (k) => out.headers[k.toLowerCase()],
       end: (text) => resolve({ status: res.statusCode, headers: out.headers, json: JSON.parse(text) }),
     };
     Object.defineProperty(res, 'statusCode', { get: () => out.statusCode, set: (v) => (out.statusCode = v) });
@@ -534,6 +535,7 @@ function callOs(fn, body, method = 'POST') {
     const req = { method, url: `/api/os?fn=${fn}`, body, headers: { host: 'site.test', 'x-forwarded-for': '7.7.7.7' } };
     const res = {
       setHeader: () => {},
+      getHeader: () => undefined,
       end: (text) => resolve({ status: out.statusCode, json: JSON.parse(text) }),
     };
     Object.defineProperty(res, 'statusCode', { get: () => out.statusCode, set: (v) => (out.statusCode = v) });
@@ -827,6 +829,7 @@ function callGet(handler, url, headers) {
       setHeader: (k, v) => {
         out.headers[k.toLowerCase()] = v;
       },
+      getHeader: (k) => out.headers[k.toLowerCase()],
       end: (text) => resolve({ status: res.statusCode, headers: out.headers, json: text ? JSON.parse(text) : null }),
     };
     Object.defineProperty(res, 'statusCode', { get: () => out.statusCode, set: (v) => (out.statusCode = v) });
@@ -842,6 +845,7 @@ function callRaw(handler, url) {
       setHeader: (k, v) => {
         out.headers[k.toLowerCase()] = v;
       },
+      getHeader: (k) => out.headers[k.toLowerCase()],
       end: (data) => resolve({ status: res.statusCode, headers: out.headers, bytes: Buffer.from(data || ''), body: Buffer.from(data || '').toString('latin1') }),
     };
     Object.defineProperty(res, 'statusCode', { get: () => out.statusCode, set: (v) => (out.statusCode = v) });
@@ -1033,4 +1037,13 @@ test('flood guard: one address cannot exceed the per-minute ceiling on any endpo
   } finally {
     process.env.FLOOD_MAX_PER_MINUTE = '100000';
   }
+});
+
+test('public read endpoints are CDN-cacheable, private ones are not', async () => {
+  const list = await callGet(releasesHandler, '/api/releases');
+  assert.match(list.headers['cache-control'], /s-maxage=60/);
+  const manifest = await callGet(updateHandler, '/api/update?channel=stable');
+  assert.match(manifest.headers['cache-control'], /s-maxage=60/);
+  const me = await call(authHandler, { action: 'me' });
+  assert.equal(me.headers['cache-control'], 'no-store');
 });
