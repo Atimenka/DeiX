@@ -13,6 +13,7 @@ import {
   LineSegments,
   Mesh,
   MeshBasicMaterial,
+  Path,
   NormalBlending,
   PerspectiveCamera,
   Points,
@@ -96,6 +97,42 @@ void main(){
   if (r > 0.5) discard;
   gl_FragColor = vec4(uColor, smoothstep(0.5, 0.0, r) * uAlpha * vTw);
 }`;
+
+const WARP_VERT = `
+uniform float uTravel;
+uniform float uStreak;
+attribute float aEnd;
+varying float vA;
+void main(){
+  float z = mod(position.z + uTravel + 40.0, 46.0) - 40.0;
+  z -= aEnd * uStreak;
+  vec4 mv = modelViewMatrix * vec4(position.x, position.y, z, 1.0);
+  gl_Position = projectionMatrix * mv;
+  vA = (1.0 - aEnd * 0.85) * smoothstep(-40.0, -22.0, z) * smoothstep(5.5, 1.5, z);
+}`;
+
+const WARP_FRAG = `
+uniform vec3 uColor;
+uniform float uAlpha;
+varying float vA;
+void main(){ gl_FragColor = vec4(uColor, vA * uAlpha); }`;
+
+function warpGeometry(count) {
+  const pos = new Float32Array(count * 6);
+  const end = new Float32Array(count * 2);
+  for (let i = 0; i < count; i += 1) {
+    const x = (Math.random() * 2 - 1) * 15;
+    const y = (Math.random() * 2 - 1) * 9;
+    const z = -40 + Math.random() * 46;
+    pos.set([x, y, z, x, y, z], i * 6);
+    end[i * 2] = 0;
+    end[i * 2 + 1] = 1;
+  }
+  const geo = new BufferGeometry();
+  geo.setAttribute('position', new Float32BufferAttribute(pos, 3));
+  geo.setAttribute('aEnd', new Float32BufferAttribute(end, 1));
+  return geo;
+}
 
 function circle(radius, segments) {
   const pos = [];
@@ -224,10 +261,40 @@ export function mount(options = {}) {
   const dust = new Points(dustGeometry(options.lite ? 700 : 1700), dustMaterial);
   scene.add(dust);
 
+  const warpUniforms = { uTravel: { value: 0 }, uStreak: { value: 0.05 }, uColor: { value: new Color() }, uAlpha: { value: 0.5 } };
+  const warpMaterial = new ShaderMaterial({ uniforms: warpUniforms, vertexShader: WARP_VERT, fragmentShader: WARP_FRAG, transparent: true, depthWrite: false });
+  const warp = new LineSegments(warpGeometry(options.lite ? 260 : 620), warpMaterial);
+  warp.frustumCulled = false;
+  scene.add(warp);
+
+  const packetGeometry = new EdgesGeometry(new BoxGeometry(0.17, 0.17, 0.17));
+  const packetMaterial = new LineBasicMaterial({ transparent: true, opacity: 0.9, depthWrite: false });
+  const packets = [];
+  for (let i = 0; i < 7; i += 1) {
+    const orbit = new Group();
+    orbit.rotation.set(0.25 + i * 0.37, i * 0.9, i * 0.5);
+    const box = new LineSegments(packetGeometry, packetMaterial);
+    box.position.x = 2.2 + (i % 3) * 0.32;
+    orbit.add(box);
+    orbit.userData.speed = 0.25 + (i % 4) * 0.11;
+    group.add(orbit);
+    packets.push({ orbit, box });
+  }
+
+  const shockMaterial = new LineBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+  const shockRing = new LineLoop(circle(1, 160), shockMaterial);
+  shockRing.rotation.x = 1.15;
+  group.add(shockRing);
+
   let light = false;
   function applyTheme() {
     light = document.documentElement.getAttribute('data-theme') === 'light';
     uniforms.uA.value.copy(cssColor('--accent', '#ff3b30'));
+    warpUniforms.uColor.value.copy(light ? cssColor('--accent', '#ff3b30') : cssColor('--accent-2', '#f3f2ee'));
+    warpMaterial.blending = light ? NormalBlending : AdditiveBlending;
+    warpMaterial.needsUpdate = true;
+    packetMaterial.color.copy(cssColor('--accent', '#ff3b30'));
+    shockMaterial.color.copy(cssColor('--accent', '#ff3b30'));
     scanMaterial.color.copy(cssColor('--accent', '#ff3b30'));
     uniforms.uB.value.copy(cssColor('--accent-2', '#f3f2ee'));
     uniforms.uC.value.set(light ? '#ff3b30' : '#ff7a3c');
@@ -280,9 +347,20 @@ export function mount(options = {}) {
   document.addEventListener('pointerleave', onLeave);
 
   let burst = 0;
+  let shock = 0;
   function pulse() {
     burst = 1;
+    shock = 1;
   }
+  function onPress(event) {
+    if (still || !(event.target instanceof Element)) return;
+    if (event.target.closest('a, button, input, select, textarea, summary, label, .stack-view, .logo-stage, .sh')) return;
+    pulse();
+  }
+  window.addEventListener('pointerdown', onPress, { passive: true });
+  let lastScrollY = window.scrollY;
+  let scrollSpeed = 0;
+  let travel = 0;
 
   let progress = 0;
   let progressSmooth = 0;
@@ -326,8 +404,19 @@ export function mount(options = {}) {
 
   function draw(time) {
     eased.lerp(target, 0.06);
+    const dy = still ? 0 : window.scrollY - lastScrollY;
+    lastScrollY = window.scrollY;
+    scrollSpeed += (dy - scrollSpeed) * 0.2;
+    travel += scrollSpeed * 0.02 + 0.012;
+    burst = Math.max(burst, Math.min(0.85, Math.abs(scrollSpeed) / 60));
+    warpUniforms.uTravel.value = travel;
+    warpUniforms.uStreak.value = 0.06 + Math.min(11, Math.abs(scrollSpeed) * 0.22);
+    camera.position.x = eased.x * 0.55;
+    camera.position.y = eased.y * 0.35;
+    camera.lookAt(0, 0, 0);
     progressSmooth += (progress - progressSmooth) * (still ? 1 : 0.08);
     burst *= 0.94;
+    shock *= 0.968;
     uniforms.uTime.value = time;
     dustUniforms.uTime.value = time;
     uniforms.uBurst.value = burst;
@@ -351,6 +440,15 @@ export function mount(options = {}) {
     dust.rotation.y = time * 0.01 + progressSmooth * 1.2;
     dust.position.y = progressSmooth * 3.5;
 
+    packets.forEach((p, i) => {
+      p.orbit.rotation.y += p.orbit.userData.speed * 0.012;
+      p.box.rotation.set(time * 0.6 + i, time * 0.8, 0);
+    });
+    const shockScale = 1 + (1 - shock) * 8;
+    shockRing.scale.setScalar(shockScale);
+    shockMaterial.opacity = Math.min(1, shock * 1.2);
+    warpUniforms.uAlpha.value = (light ? 0.5 : 0.55) * (dim ? 0.5 : 1);
+    packetMaterial.opacity = (wide ? 0.9 : 0.3) * alpha;
     const base = (dim ? 0.45 : 1) * (wide ? 1 : 0.22) * alpha;
     uniforms.uAlpha.value = (light ? 0.8 : 0.95) * base;
     uniforms.uHue.value = smooth(0.35, 0.95, progressSmooth) * 0.7;
@@ -366,6 +464,7 @@ export function mount(options = {}) {
     cancelAnimationFrame(raf);
     window.removeEventListener('resize', resize);
     window.removeEventListener('scroll', onScroll);
+    window.removeEventListener('pointerdown', onPress);
     window.removeEventListener('pointermove', onMove);
     document.removeEventListener('pointerleave', onLeave);
     themeWatch.disconnect();
@@ -380,6 +479,12 @@ export function mount(options = {}) {
     scanMaterial.dispose();
     scanRing.geometry.dispose();
     dustMaterial.dispose();
+    warp.geometry.dispose();
+    warpMaterial.dispose();
+    packetGeometry.dispose();
+    packetMaterial.dispose();
+    shockRing.geometry.dispose();
+    shockMaterial.dispose();
     renderer.dispose();
     canvas.remove();
   }
@@ -456,10 +561,11 @@ function createStage(container, options) {
   function draw(time) {
     if (!dragging) {
       velocity *= 0.94;
-      stage.yaw += velocity + (still ? 0 : 0.0035);
+      stage.yaw += velocity + (still || options.spring ? 0 : 0.0035);
+      if (options.spring) stage.yaw -= stage.yaw * 0.03;
     }
     options.update(time, stage);
-    group.rotation.y = stage.yaw;
+    group.rotation.y = stage.yaw + (stage.yawOffset || 0);
     renderer.render(scene, camera);
   }
   function loop(now) {
@@ -727,6 +833,151 @@ export function mountDisk(container, options = {}) {
         armMaterial.dispose();
         tipGeometry.dispose();
         tipMaterial.dispose();
+      }),
+  };
+}
+
+
+const LOGO_VERT = `
+varying vec3 vN;
+varying vec3 vW;
+void main(){
+  vN = normalize(normalMatrix * normal);
+  vec4 w = modelMatrix * vec4(position, 1.0);
+  vW = w.xyz;
+  gl_Position = projectionMatrix * viewMatrix * w;
+}`;
+
+const LOGO_FRAG = `
+uniform vec3 uBase;
+uniform vec3 uAccent;
+uniform float uScan;
+uniform float uGlow;
+varying vec3 vN;
+varying vec3 vW;
+void main(){
+  float l = dot(normalize(vN), normalize(vec3(0.35, 0.7, 0.62))) * 0.5 + 0.5;
+  float band = smoothstep(0.55, 0.0, abs(vW.x - uScan));
+  vec3 c = uBase * (0.65 + 0.75 * l) + uAccent * (band * 0.85 + uGlow * 0.5);
+  gl_FragColor = vec4(c, 1.0);
+}`;
+
+function logoShape(letter) {
+  const shape = new Shape();
+  if (letter === 'I') {
+    shape.moveTo(0, 0);
+    shape.lineTo(0.24, 0);
+    shape.lineTo(0.24, 1);
+    shape.lineTo(0, 1);
+    return { shape, width: 0.24 };
+  }
+  if (letter === 'E') {
+    [[0, 0], [0.72, 0], [0.72, 0.2], [0.24, 0.2], [0.24, 0.4], [0.62, 0.4], [0.62, 0.6], [0.24, 0.6], [0.24, 0.8], [0.72, 0.8], [0.72, 1], [0, 1]].forEach(([x, y], i) => (i ? shape.lineTo(x, y) : shape.moveTo(x, y)));
+    return { shape, width: 0.72 };
+  }
+  if (letter === 'X') {
+    [[0, 0], [0.26, 0], [0.46, 0.38], [0.66, 0], [0.92, 0], [0.6, 0.5], [0.92, 1], [0.66, 1], [0.46, 0.62], [0.26, 1], [0, 1], [0.32, 0.5]].forEach(([x, y], i) => (i ? shape.lineTo(x, y) : shape.moveTo(x, y)));
+    return { shape, width: 0.92 };
+  }
+  shape.moveTo(0, 0);
+  shape.lineTo(0.4, 0);
+  shape.absarc(0.4, 0.5, 0.5, -Math.PI / 2, Math.PI / 2, false);
+  shape.lineTo(0, 1);
+  shape.closePath();
+  const hole = new Path();
+  hole.moveTo(0.24, 0.2);
+  hole.lineTo(0.4, 0.2);
+  hole.absarc(0.4, 0.5, 0.3, -Math.PI / 2, Math.PI / 2, false);
+  hole.lineTo(0.24, 0.8);
+  hole.closePath();
+  shape.holes.push(hole);
+  return { shape, width: 0.9 };
+}
+
+/**
+ * Объёмные буквы DEIX: свет пробегает по граням, буква под курсором выезжает вперёд,
+ * клик переворачивает её. options: still, lite, onFlip().
+ */
+export function mountLogo(container, options = {}) {
+  const GAP = 0.32;
+  const defs = Array.from('DEIX').map(logoShape);
+  const total = defs.reduce((sum, d) => sum + d.width, 0) + GAP * (defs.length - 1);
+  let cursor = -total / 2;
+  const parts = defs.map((def, index) => {
+    const geometry = new ExtrudeGeometry(def.shape, { depth: 0.36, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.025, bevelSegments: 1, curveSegments: 16 });
+    geometry.translate(-def.width / 2, -0.5, -0.18);
+    const material = new ShaderMaterial({
+      vertexShader: LOGO_VERT,
+      fragmentShader: LOGO_FRAG,
+      uniforms: { uBase: { value: new Color() }, uAccent: { value: new Color() }, uScan: { value: 0 }, uGlow: { value: 0 } },
+    });
+    const mesh = new Mesh(geometry, material);
+    mesh.userData.index = index;
+    const edgeGeometry = new EdgesGeometry(geometry, 28);
+    const edgeMaterial = new LineBasicMaterial({ transparent: true, opacity: 0.95 });
+    mesh.add(new LineSegments(edgeGeometry, edgeMaterial));
+    const holder = new Group();
+    holder.position.x = cursor + def.width / 2;
+    cursor += def.width + GAP;
+    holder.add(mesh);
+    return { holder, mesh, geometry, material, edgeGeometry, edgeMaterial, glow: 0, spin: 1 };
+  });
+
+  const stage = createStage(container, {
+    className: 'stack-gl',
+    lite: options.lite,
+    still: options.still,
+    spring: true,
+    fit: (camera, aspect) => {
+      camera.position.set(0, 0, Math.max(3.6, 8.6 / aspect));
+      camera.lookAt(0, 0, 0);
+    },
+    pickables: () => parts.map((part) => part.mesh),
+    onTheme: (st) => {
+      const accent = cssColor('--accent', '#ff3b30');
+      parts.forEach((part) => {
+        part.material.uniforms.uBase.value.set(st.light ? '#d9d6cf' : '#3a3a40');
+        part.material.uniforms.uAccent.value.copy(accent);
+        part.edgeMaterial.color.copy(st.light ? cssColor('--text', '#0c0c0c') : accent);
+      });
+    },
+    update: (time, st) => {
+      const scan = st.still ? 0.2 : Math.sin(time * 0.9) * (total / 2 + 0.6);
+      st.yawOffset = st.still ? 0.28 : Math.sin(time * 0.45) * 0.3 + st.tilt.x * 0.25;
+      st.group.rotation.x = -st.tilt.y * 0.2 + 0.08;
+      parts.forEach((part, i) => {
+        part.glow += ((st.hover === i ? 1 : 0) - part.glow) * (st.still ? 1 : 0.16);
+        part.holder.position.z = part.glow * 0.55;
+        part.holder.position.y = st.still ? 0 : Math.sin(time * 1.1 + i * 0.9) * 0.05;
+        if (part.spin < 1) part.spin = Math.min(1, part.spin + 0.022);
+        const e = 1 - (1 - part.spin) ** 3;
+        part.holder.rotation.y = e * Math.PI * 2;
+        part.material.uniforms.uScan.value = scan;
+        part.material.uniforms.uGlow.value = part.glow;
+      });
+    },
+  });
+  stage.yaw = 0;
+  stage.group.add(...parts.map((part) => part.holder));
+  const onClick = () => {
+    const part = parts[stage.hover];
+    if (!part || part.spin < 1) return;
+    part.spin = 0;
+    if (options.onFlip) options.onFlip();
+  };
+  stage.canvas.addEventListener('click', onClick);
+  stage.request();
+  return {
+    setActive() {},
+    dispose: () =>
+      stage.dispose(() => {
+        stage.canvas.removeEventListener('click', onClick);
+        parts.forEach((part) => {
+          part.geometry.dispose();
+          part.edgeGeometry.dispose();
+          part.material.dispose();
+          part.edgeMaterial.dispose();
+        });
       }),
   };
 }

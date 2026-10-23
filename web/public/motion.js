@@ -236,7 +236,7 @@
     if (!SCENE_PAGES.includes(page) || !webglOk()) return;
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4 || (navigator.hardwareConcurrency || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js?v=3')
+      load('/vendor/three-scene.js?v=4')
         .then(() => {
           scene = window.DeixScene.mount({
             still: reduce,
@@ -276,9 +276,32 @@
     box.classList.add('has-3d');
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js?v=3')
+      load('/vendor/three-scene.js?v=4')
         .then(() => {
           view = window.DeixScene[factory](host, { still: reduce, lite, initial, onHover: mark });
+        })
+        .catch(() => box.classList.remove('has-3d'));
+    if ('IntersectionObserver' in window) {
+      const watch = new IntersectionObserver((entries) => {
+        if (!entries[0].isIntersecting) return;
+        watch.disconnect();
+        start();
+      }, { rootMargin: '500px 0px' });
+      watch.observe(host);
+    } else start();
+  }
+
+  /** Объёмный логотип: без WebGL остаётся плоская надпись. */
+  function mountLogo() {
+    const host = document.getElementById('logo3d');
+    if (!host || !webglOk()) return;
+    const box = host.closest('.logo-stage');
+    box.classList.add('has-3d');
+    const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4;
+    const start = () =>
+      load('/vendor/three-scene.js?v=4')
+        .then(() => {
+          window.DeixScene.mountLogo(host, { still: reduce, lite, onFlip: () => scene && scene.pulse() });
         })
         .catch(() => box.classList.remove('has-3d'));
     if ('IntersectionObserver' in window) {
@@ -669,6 +692,7 @@
     if (page === 'home') {
       mountModel('stack3d', 'stack-list', 'mountStack', 1);
       mountModel('disk3d', 'disk-list', 'mountDisk', 3);
+      mountLogo();
     }
     if (reduce) return;
     root.classList.add('motion');
