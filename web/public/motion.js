@@ -236,7 +236,7 @@
     if (!SCENE_PAGES.includes(page) || !webglOk()) return;
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4 || (navigator.hardwareConcurrency || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js')
+      load('/vendor/three-scene.js?v=2')
         .then(() => {
           scene = window.DeixScene.mount({
             still: reduce,
@@ -276,7 +276,7 @@
     box.classList.add('has-3d');
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js')
+      load('/vendor/three-scene.js?v=2')
         .then(() => {
           view = window.DeixScene.mountStack(host, { still: reduce, lite, initial: 1, onHover: mark });
         })
