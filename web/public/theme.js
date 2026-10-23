@@ -10,6 +10,14 @@
   }
   root.setAttribute('data-theme', theme);
   root.classList.add('js');
+  try {
+    if (sessionStorage.getItem('deix-wipe')) {
+      sessionStorage.removeItem('deix-wipe');
+      root.classList.add('wiped');
+    }
+  } catch (e) {
+    root.classList.remove('wiped');
+  }
   var path = location.pathname;
   if (path === '/en' || path.indexOf('/en/') === 0) {
     root.lang = 'en';

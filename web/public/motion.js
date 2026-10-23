@@ -25,7 +25,7 @@
 
   function accentColors() {
     const css = getComputedStyle(root);
-    return [css.getPropertyValue('--accent').trim() || '#8b5cf6', css.getPropertyValue('--accent-2').trim() || '#22d3ee', '#ec4899', '#fbbf24'];
+    return [css.getPropertyValue('--accent').trim() || '#ff3b30', css.getPropertyValue('--accent-2').trim() || '#f3f2ee', '#ff7a3c', '#ffffff'];
   }
 
   let confettiFire = null;
@@ -236,7 +236,7 @@
     if (!SCENE_PAGES.includes(page) || !webglOk()) return;
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4 || (navigator.hardwareConcurrency || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js?v=2')
+      load('/vendor/three-scene.js?v=3')
         .then(() => {
           scene = window.DeixScene.mount({
             still: reduce,
@@ -254,10 +254,10 @@
     else setTimeout(start, 300);
   }
 
-  /** Интерактивный 3D-стек системы в разделе «Архитектура»; список слоёв работает и без WebGL. */
-  function mountStack() {
-    const host = document.getElementById('stack3d');
-    const list = document.getElementById('stack-list');
+  /** Интерактивная 3D-модель в разделе главной; список рядом работает и без WebGL. */
+  function mountModel(hostId, listId, factory, initial) {
+    const host = document.getElementById(hostId);
+    const list = document.getElementById(listId);
     if (!host || !list) return;
     const box = host.closest('.stack');
     const items = Array.from(list.querySelectorAll('.stack-item'));
@@ -271,14 +271,14 @@
       item.addEventListener('pointerenter', () => mark(index));
       item.addEventListener('focus', () => mark(index));
     });
-    mark(1);
+    mark(initial);
     if (!webglOk()) return;
     box.classList.add('has-3d');
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js?v=2')
+      load('/vendor/three-scene.js?v=3')
         .then(() => {
-          view = window.DeixScene.mountStack(host, { still: reduce, lite, initial: 1, onHover: mark });
+          view = window.DeixScene[factory](host, { still: reduce, lite, initial, onHover: mark });
         })
         .catch(() => box.classList.remove('has-3d'));
     if ('IntersectionObserver' in window) {
@@ -289,6 +289,60 @@
       }, { rootMargin: '500px 0px' });
       watch.observe(host);
     } else start();
+  }
+
+  /** Эффекты «расшифровки»: подписи разделов проявляются из случайных символов. */
+  function scramble() {
+    const glyphs = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%/<>';
+    const labels = Array.from(document.querySelectorAll('.eyebrow'));
+    if (!labels.length || !('IntersectionObserver' in window)) return;
+    const watch = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        watch.unobserve(entry.target);
+        const el = entry.target;
+        const text = el.textContent;
+        const started = performance.now();
+        const tick = (now) => {
+          const done = Math.min(1, (now - started) / 650);
+          let out = '';
+          for (let i = 0; i < text.length; i += 1) {
+            out += text[i] === ' ' || i < done * text.length ? text[i] : glyphs[Math.floor(Math.random() * glyphs.length)];
+          }
+          el.textContent = out;
+          if (done < 1) requestAnimationFrame(tick);
+          else el.textContent = text;
+        };
+        requestAnimationFrame(tick);
+      });
+    }, { threshold: 0.6 });
+    labels.forEach((label) => watch.observe(label));
+  }
+
+  /** Красная шторка при переходе между страницами сайта. */
+  function wipe() {
+    const veil = document.createElement('div');
+    veil.className = 'wipe';
+    veil.setAttribute('aria-hidden', 'true');
+    document.body.append(veil);
+    window.addEventListener('pageshow', () => veil.classList.remove('go'));
+    document.addEventListener('click', (event) => {
+      const link = event.target.closest && event.target.closest('a[href]');
+      if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      if (link.target || link.hasAttribute('download')) return;
+      const url = new URL(link.href, location.href);
+      if (url.origin !== location.origin || url.pathname === location.pathname || url.pathname.startsWith('/api/')) return;
+      event.preventDefault();
+      try {
+        sessionStorage.setItem('deix-wipe', '1');
+      } catch {
+        /* без хранилища шторка работает только на уходе */
+      }
+      veil.classList.add('go');
+      setTimeout(() => {
+        location.href = url.href;
+      }, 360);
+    });
   }
 
   /** Скролл-сцена: окно ОС разворачивается, шаги dev-режима зажигаются по мере прокрутки, лента ускоряется. */
@@ -377,10 +431,15 @@
   async function init() {
     watchNav();
     mountScene();
-    if (page === 'home') mountStack();
+    if (page === 'home') {
+      mountModel('stack3d', 'stack-list', 'mountStack', 1);
+      mountModel('disk3d', 'disk-list', 'mountDisk', 3);
+    }
     if (reduce) return;
     root.classList.add('motion');
     cursor();
+    wipe();
+    scramble();
     const marketing = page === 'home' || page === 'download';
     try {
       await load('/vendor/gsap.min.js');

@@ -4,6 +4,7 @@ import {
   BufferGeometry,
   Color,
   EdgesGeometry,
+  ExtrudeGeometry,
   Float32BufferAttribute,
   Group,
   IcosahedronGeometry,
@@ -18,6 +19,7 @@ import {
   Raycaster,
   Scene,
   ShaderMaterial,
+  Shape,
   Vector2,
   WebGLRenderer,
 } from 'three';
@@ -28,8 +30,10 @@ uniform vec2 uPointer;
 uniform float uSize;
 uniform float uPx;
 uniform float uBurst;
+uniform float uScan;
 varying float vMix;
 varying float vGlow;
+varying float vScan;
 float hash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
 float noise(vec3 x){
   vec3 i = floor(x); vec3 f = fract(x); f = f * f * (3.0 - 2.0 * f);
@@ -47,7 +51,8 @@ void main(){
   float push = smoothstep(0.38, 0.0, distance(clip.xy / clip.w, uPointer));
   mv.xyz += normalize(mat3(modelViewMatrix) * dir) * push * 0.46;
   gl_Position = projectionMatrix * mv;
-  gl_PointSize = uSize * uPx * (1.0 + push * 1.9) * (7.0 / -mv.z);
+  vScan = smoothstep(0.26, 0.0, abs(p.y - uScan));
+  gl_PointSize = uSize * uPx * (1.0 + push * 1.9 + vScan * 1.1) * (7.0 / -mv.z);
   vMix = n;
   vGlow = push;
 }`;
@@ -60,12 +65,14 @@ uniform float uHue;
 uniform float uAlpha;
 varying float vMix;
 varying float vGlow;
+varying float vScan;
 void main(){
   float r = length(gl_PointCoord - 0.5);
   if (r > 0.5) discard;
   float soft = smoothstep(0.5, 0.02, r);
-  vec3 col = mix(mix(uA, uB, smoothstep(0.3, 0.7, vMix)), uC, uHue) + vGlow * 0.5;
-  gl_FragColor = vec4(col, soft * uAlpha * (0.5 + vGlow * 0.8));
+  vec3 col = mix(mix(uB, uA, smoothstep(0.35, 0.65, vMix)), uC, uHue);
+  col = mix(col, uA, vScan) + vGlow * 0.4;
+  gl_FragColor = vec4(col, soft * uAlpha * (0.5 + vGlow * 0.8 + vScan * 0.9));
 }`;
 
 const DUST_VERT = `
@@ -186,6 +193,7 @@ export function mount(options = {}) {
     uSize: { value: 7.2 },
     uPx: { value: 1 },
     uBurst: { value: 0 },
+    uScan: { value: 0 },
     uHue: { value: 0 },
     uA: { value: new Color() },
     uB: { value: new Color() },
@@ -207,6 +215,10 @@ export function mount(options = {}) {
   ringB.rotation.set(0.45, 0, -0.5);
   group.add(ringA, ringB);
 
+  const scanMaterial = new LineBasicMaterial({ transparent: true, opacity: 0.8, depthWrite: false });
+  const scanRing = new LineLoop(circle(1, 120), scanMaterial);
+  group.add(scanRing);
+
   const dustUniforms = { uPx: { value: 1 }, uTime: { value: 0 }, uColor: { value: new Color() }, uAlpha: { value: 0.8 } };
   const dustMaterial = new ShaderMaterial({ uniforms: dustUniforms, vertexShader: DUST_VERT, fragmentShader: DUST_FRAG, transparent: true, depthWrite: false });
   const dust = new Points(dustGeometry(options.lite ? 700 : 1700), dustMaterial);
@@ -215,9 +227,10 @@ export function mount(options = {}) {
   let light = false;
   function applyTheme() {
     light = document.documentElement.getAttribute('data-theme') === 'light';
-    uniforms.uA.value.copy(cssColor('--accent', '#8b5cf6'));
-    uniforms.uB.value.copy(cssColor('--accent-2', '#22d3ee'));
-    uniforms.uC.value.set(light ? '#db2777' : '#f472b6');
+    uniforms.uA.value.copy(cssColor('--accent', '#ff3b30'));
+    scanMaterial.color.copy(cssColor('--accent', '#ff3b30'));
+    uniforms.uB.value.copy(cssColor('--accent-2', '#f3f2ee'));
+    uniforms.uC.value.set(light ? '#ff3b30' : '#ff7a3c');
     dustUniforms.uColor.value.copy(light ? uniforms.uA.value : uniforms.uB.value);
     material.blending = light ? NormalBlending : AdditiveBlending;
     dustMaterial.blending = light ? NormalBlending : AdditiveBlending;
@@ -318,6 +331,10 @@ export function mount(options = {}) {
     uniforms.uTime.value = time;
     dustUniforms.uTime.value = time;
     uniforms.uBurst.value = burst;
+    const scanY = Math.sin(time * 0.9) * 1.55;
+    uniforms.uScan.value = scanY;
+    scanRing.position.y = scanY;
+    scanRing.scale.setScalar(Math.sqrt(Math.max(0.04, 2.6 - scanY * scanY)));
     uniforms.uPointer.value.lerp(pointer, 0.18);
 
     const wide = width > 900;
@@ -334,7 +351,7 @@ export function mount(options = {}) {
     dust.rotation.y = time * 0.01 + progressSmooth * 1.2;
     dust.position.y = progressSmooth * 3.5;
 
-    const base = (dim ? 0.45 : 1) * (wide ? 1 : 0.3) * alpha;
+    const base = (dim ? 0.45 : 1) * (wide ? 1 : 0.22) * alpha;
     uniforms.uAlpha.value = (light ? 0.8 : 0.95) * base;
     uniforms.uHue.value = smooth(0.35, 0.95, progressSmooth) * 0.7;
     coreMaterial.opacity = (light ? 0.5 : 0.5) * base;
@@ -360,6 +377,8 @@ export function mount(options = {}) {
     material.dispose();
     coreMaterial.dispose();
     ringMaterial.dispose();
+    scanMaterial.dispose();
+    scanRing.geometry.dispose();
     dustMaterial.dispose();
     renderer.dispose();
     canvas.remove();
@@ -370,108 +389,42 @@ export function mount(options = {}) {
   return { dispose, pulse };
 }
 
-/* Слои системы снизу вверх: ширина, глубина, высота плиты */
-const STACK = [
-  [2.1, 1.5, 0.2],
-  [2.5, 1.8, 0.3],
-  [3.1, 2.1, 0.26],
-  [3.1, 2.1, 0.26],
-  [2.7, 1.9, 0.22],
-  [3.3, 2.2, 0.12],
-];
-
 /**
- * Интерактивный разборный стек DeiX в контейнере: тянуть — вращать, наведение подсвечивает слой.
- * options: still (рисовать только по событиям), lite (ниже разрешение), onHover(index) — слой под курсором.
- * Возвращает { setActive(index), dispose }.
+ * Общая основа интерактивных 3D-моделей на страницах: холст, камера, вращение перетаскиванием,
+ * наведение на части модели, пауза вне экрана и по смене темы.
+ * options: className, lite, still, fit(camera, aspect), pickables(), onHover(index), onTheme(), update(time, stage).
  */
-export function mountStack(container, options = {}) {
+function createStage(container, options) {
   const still = Boolean(options.still);
   const canvas = document.createElement('canvas');
-  canvas.className = 'stack-gl';
+  canvas.className = options.className;
   canvas.setAttribute('aria-hidden', 'true');
   const renderer = new WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: 'default' });
   renderer.setClearColor(0x000000, 0);
   container.append(canvas);
-
   const scene = new Scene();
   const camera = new PerspectiveCamera(32, 1, 0.1, 60);
   const group = new Group();
   scene.add(group);
 
-  const slabs = STACK.map(([w, d, h], index) => {
-    const geometry = new BoxGeometry(w, h, d);
-    const fill = new MeshBasicMaterial({ transparent: true, opacity: 0.16, depthWrite: false });
-    const edge = new LineBasicMaterial({ transparent: true, opacity: 0.8 });
-    const mesh = new Mesh(geometry, fill);
-    const edgeGeometry = new EdgesGeometry(geometry);
-    mesh.add(new LineSegments(edgeGeometry, edge));
-    mesh.userData.index = index;
-    group.add(mesh);
-    return { mesh, fill, edge, geometry, edgeGeometry, glow: 0 };
-  });
-
-  const railPos = [];
-  for (const [x, z] of [[-0.85, -0.55], [0.85, -0.55], [0.85, 0.55], [-0.85, 0.55]]) railPos.push(x, -1, z, x, 1, z);
-  const railGeometry = new BufferGeometry();
-  railGeometry.setAttribute('position', new Float32BufferAttribute(railPos, 3));
-  const railMaterial = new LineBasicMaterial({ transparent: true, opacity: 0.28 });
-  const rails = new LineSegments(railGeometry, railMaterial);
-  group.add(rails);
-
-  let light = false;
-  function applyTheme() {
-    light = document.documentElement.getAttribute('data-theme') === 'light';
-    const low = cssColor('--accent-2', '#22d3ee');
-    const mid = cssColor('--accent', '#8b5cf6');
-    const high = new Color('#f472b6');
-    slabs.forEach((slab, i) => {
-      const t = i / (STACK.length - 1);
-      const color = t < 0.5 ? low.clone().lerp(mid, t * 2) : mid.clone().lerp(high, (t - 0.5) * 2);
-      slab.fill.color.copy(color);
-      slab.edge.color.copy(color);
-    });
-    railMaterial.color.copy(mid);
-    request();
-  }
-  const themeWatch = new MutationObserver(applyTheme);
-  themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-
-  let width = 1;
-  let height = 1;
-  function resize() {
-    width = Math.max(1, container.clientWidth);
-    height = Math.max(1, container.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, options.lite ? 1.25 : 2));
-    renderer.setSize(width, height, false);
-    camera.aspect = width / height;
-    camera.position.set(0, 0, 10 * Math.max(1, 4.9 / (5.73 * camera.aspect)));
-    camera.updateProjectionMatrix();
-    request();
-  }
-  const sizeWatch = new ResizeObserver(resize);
-  sizeWatch.observe(container);
-
+  const stage = { scene, group, camera, renderer, canvas, still, yaw: 0.7, tilt: new Vector2(), hover: -1, visible: still, light: false };
   const raycaster = new Raycaster();
   const ndc = new Vector2();
-  const tilt = new Vector2();
   let dragging = false;
   let lastX = 0;
   let velocity = 0;
-  let yaw = 0.7;
-  let hover = -1;
-  let active = options.initial ?? -1;
-  let explode = still ? 1 : 0;
+  let raf = 0;
+  let disposed = false;
 
   function pick(event) {
     const rect = canvas.getBoundingClientRect();
     ndc.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -(((event.clientY - rect.top) / rect.height) * 2 - 1));
-    tilt.set(ndc.x, ndc.y);
+    stage.tilt.copy(ndc);
     raycaster.setFromCamera(ndc, camera);
-    const hit = raycaster.intersectObjects(slabs.map((slab) => slab.mesh), false)[0];
+    const hit = raycaster.intersectObjects(options.pickables(), false)[0];
     const index = hit ? hit.object.userData.index : -1;
-    if (index !== hover) {
-      hover = index;
+    if (index !== stage.hover) {
+      stage.hover = index;
       canvas.classList.toggle('hit', index >= 0);
       if (index >= 0 && options.onHover) options.onHover(index);
     }
@@ -485,7 +438,7 @@ export function mountStack(container, options = {}) {
   function onMove(event) {
     if (dragging) {
       velocity = (event.clientX - lastX) * 0.011;
-      yaw += velocity;
+      stage.yaw += velocity;
       lastX = event.clientX;
       request();
     } else pick(event);
@@ -501,29 +454,14 @@ export function mountStack(container, options = {}) {
   canvas.addEventListener('pointercancel', onUp);
 
   function draw(time) {
-    explode += ((visible || still ? 1 : 0) - explode) * (still ? 1 : 0.05);
     if (!dragging) {
       velocity *= 0.94;
-      yaw += velocity + (still ? 0 : 0.0035);
+      stage.yaw += velocity + (still ? 0 : 0.0035);
     }
-    const gap = 0.3 + explode * 0.58;
-    slabs.forEach((slab, i) => {
-      slab.glow += ((i === active || i === hover ? 1 : 0) - slab.glow) * (still ? 1 : 0.14);
-      slab.mesh.position.set(slab.glow * 0.45, (i - (STACK.length - 1) / 2) * gap, 0);
-      slab.mesh.scale.setScalar(1 + slab.glow * 0.04);
-      slab.fill.opacity = (light ? 0.24 : 0.14) + slab.glow * (light ? 0.36 : 0.3);
-      slab.edge.opacity = 0.55 + slab.glow * 0.45;
-    });
-    rails.scale.y = ((STACK.length - 1) / 2) * gap + 0.1;
-    group.rotation.y = yaw;
-    group.rotation.x = 0.5 - tilt.y * 0.12;
-    group.position.y = Math.sin(time * 0.8) * (still ? 0 : 0.06);
+    options.update(time, stage);
+    group.rotation.y = stage.yaw;
     renderer.render(scene, camera);
   }
-
-  let raf = 0;
-  let visible = still;
-  let disposed = false;
   function loop(now) {
     raf = requestAnimationFrame(loop);
     if (!document.hidden) draw(now / 1000);
@@ -531,42 +469,264 @@ export function mountStack(container, options = {}) {
   function request() {
     if (still && !disposed) draw(0);
   }
+  stage.request = request;
+
+  function applyTheme() {
+    stage.light = document.documentElement.getAttribute('data-theme') === 'light';
+    options.onTheme(stage);
+    request();
+  }
+  const themeWatch = new MutationObserver(applyTheme);
+  themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+  function resize() {
+    const width = Math.max(1, container.clientWidth);
+    const height = Math.max(1, container.clientHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, options.lite ? 1.25 : 2));
+    renderer.setSize(width, height, false);
+    camera.aspect = width / height;
+    options.fit(camera, camera.aspect);
+    camera.updateProjectionMatrix();
+    request();
+  }
+  const sizeWatch = new ResizeObserver(resize);
+  sizeWatch.observe(container);
+
   const viewWatch = new IntersectionObserver((entries) => {
-    visible = entries[0].isIntersecting;
+    stage.visible = entries[0].isIntersecting;
     if (still) return;
-    if (visible && !raf) raf = requestAnimationFrame(loop);
-    else if (!visible && raf) {
+    if (stage.visible && !raf) raf = requestAnimationFrame(loop);
+    else if (!stage.visible && raf) {
       cancelAnimationFrame(raf);
       raf = 0;
     }
   });
   viewWatch.observe(container);
 
-  function setActive(index) {
-    active = index;
-    request();
-  }
-
-  function dispose() {
+  stage.dispose = (free) => {
     if (disposed) return;
     disposed = true;
     cancelAnimationFrame(raf);
     viewWatch.disconnect();
     sizeWatch.disconnect();
     themeWatch.disconnect();
-    slabs.forEach((slab) => {
-      slab.geometry.dispose();
-      slab.edgeGeometry.dispose();
-      slab.fill.dispose();
-      slab.edge.dispose();
-    });
-    railGeometry.dispose();
-    railMaterial.dispose();
+    free();
     renderer.dispose();
     canvas.remove();
-  }
-
+  };
   applyTheme();
   resize();
-  return { setActive, dispose };
+  return stage;
+}
+
+/* Слои системы снизу вверх: ширина, глубина, высота плиты */
+const STACK = [
+  [2.1, 1.5, 0.2],
+  [2.5, 1.8, 0.3],
+  [3.1, 2.1, 0.26],
+  [3.1, 2.1, 0.26],
+  [2.7, 1.9, 0.22],
+  [3.3, 2.2, 0.12],
+];
+
+/** Градиент слоёв: от нейтрального (accent-2) к акценту. */
+function ramp(t) {
+  return cssColor('--accent-2', '#f3f2ee').lerp(cssColor('--accent', '#ff3b30'), t);
+}
+
+/**
+ * Разборный стек DeiX: тянуть — вращать, наведение подсвечивает слой.
+ * options: still, lite, initial, onHover(index). Возвращает { setActive, dispose }.
+ */
+export function mountStack(container, options = {}) {
+  let active = options.initial ?? -1;
+  let explode = options.still ? 1 : 0;
+  const slabs = STACK.map(([w, d, h], index) => {
+    const geometry = new BoxGeometry(w, h, d);
+    const fill = new MeshBasicMaterial({ transparent: true, opacity: 0.16, depthWrite: false });
+    const edge = new LineBasicMaterial({ transparent: true, opacity: 0.8 });
+    const mesh = new Mesh(geometry, fill);
+    const edgeGeometry = new EdgesGeometry(geometry);
+    mesh.add(new LineSegments(edgeGeometry, edge));
+    mesh.userData.index = index;
+    return { mesh, fill, edge, geometry, edgeGeometry, glow: 0 };
+  });
+  const railPos = [];
+  for (const [x, z] of [[-0.85, -0.55], [0.85, -0.55], [0.85, 0.55], [-0.85, 0.55]]) railPos.push(x, -1, z, x, 1, z);
+  const railGeometry = new BufferGeometry();
+  railGeometry.setAttribute('position', new Float32BufferAttribute(railPos, 3));
+  const railMaterial = new LineBasicMaterial({ transparent: true, opacity: 0.3 });
+  const rails = new LineSegments(railGeometry, railMaterial);
+
+  const stage = createStage(container, {
+    className: 'stack-gl',
+    lite: options.lite,
+    still: options.still,
+    fit: (camera, aspect) => camera.position.set(0, 0, 10 * Math.max(1, 4.9 / (5.73 * aspect))),
+    pickables: () => slabs.map((slab) => slab.mesh),
+    onHover: options.onHover,
+    onTheme: () => {
+      slabs.forEach((slab, i) => {
+        const color = ramp(i / (STACK.length - 1));
+        slab.fill.color.copy(color);
+        slab.edge.color.copy(color);
+      });
+      railMaterial.color.copy(cssColor('--accent', '#ff3b30'));
+    },
+    update: (time, st) => {
+      explode += ((st.visible || st.still ? 1 : 0) - explode) * (st.still ? 1 : 0.05);
+      const gap = 0.3 + explode * 0.58;
+      slabs.forEach((slab, i) => {
+        slab.glow += ((i === active || i === st.hover ? 1 : 0) - slab.glow) * (st.still ? 1 : 0.14);
+        slab.mesh.position.set(slab.glow * 0.45, (i - (STACK.length - 1) / 2) * gap, 0);
+        slab.mesh.scale.setScalar(1 + slab.glow * 0.04);
+        slab.fill.opacity = (st.light ? 0.2 : 0.12) + slab.glow * (st.light ? 0.4 : 0.34);
+        slab.edge.opacity = 0.55 + slab.glow * 0.45;
+      });
+      rails.scale.y = ((STACK.length - 1) / 2) * gap + 0.1;
+      st.group.rotation.x = 0.5 - st.tilt.y * 0.12;
+      st.group.position.y = Math.sin(time * 0.8) * (st.still ? 0 : 0.06);
+    },
+  });
+  stage.group.add(rails, ...slabs.map((slab) => slab.mesh));
+  stage.request();
+  return {
+    setActive(index) {
+      active = index;
+      stage.request();
+    },
+    dispose: () =>
+      stage.dispose(() => {
+        slabs.forEach((slab) => {
+          slab.geometry.dispose();
+          slab.edgeGeometry.dispose();
+          slab.fill.dispose();
+          slab.edge.dispose();
+        });
+        railGeometry.dispose();
+        railMaterial.dispose();
+      }),
+  };
+}
+
+/* Сектора диска: угол в градусах. Схема раскладки, не масштаб. */
+const DISK = [28, 40, 22, 130, 120];
+const DISK_GAP = 4;
+
+function sector(r0, r1, a0, a1) {
+  const shape = new Shape();
+  const steps = Math.max(6, Math.round(Math.abs(a1 - a0) / 3));
+  for (let i = 0; i <= steps; i += 1) {
+    const a = a0 + ((a1 - a0) * i) / steps;
+    const x = Math.cos(a) * r1;
+    const y = Math.sin(a) * r1;
+    if (i === 0) shape.moveTo(x, y);
+    else shape.lineTo(x, y);
+  }
+  for (let i = steps; i >= 0; i -= 1) {
+    const a = a0 + ((a1 - a0) * i) / steps;
+    shape.lineTo(Math.cos(a) * r0, Math.sin(a) * r0);
+  }
+  shape.closePath();
+  return new ExtrudeGeometry(shape, { depth: 0.2, bevelEnabled: false });
+}
+
+/**
+ * Диск DeiX: области раскладки секторами, «головка» чтения наводится на выбранную область.
+ * options: still, lite, initial, onHover(index). Возвращает { setActive, dispose }.
+ */
+export function mountDisk(container, options = {}) {
+  let active = options.initial ?? -1;
+  let head = 0;
+  let cursor = 0;
+  const mids = [];
+  const parts = DISK.map((deg, index) => {
+    const a0 = (cursor * Math.PI) / 180;
+    cursor += deg;
+    const a1 = (cursor * Math.PI) / 180;
+    cursor += DISK_GAP;
+    mids.push((a0 + a1) / 2);
+    const geometry = sector(1.1, 2.5, a0, a1);
+    const fill = new MeshBasicMaterial({ transparent: true, opacity: 0.2, depthWrite: false });
+    const edge = new LineBasicMaterial({ transparent: true, opacity: 0.8 });
+    const mesh = new Mesh(geometry, fill);
+    mesh.rotation.x = -Math.PI / 2;
+    const edgeGeometry = new EdgesGeometry(geometry, 20);
+    mesh.add(new LineSegments(edgeGeometry, edge));
+    mesh.userData.index = index;
+    return { mesh, fill, edge, geometry, edgeGeometry, glow: 0 };
+  });
+  const hubGeometry = circle(0.55, 64);
+  const hubMaterial = new LineBasicMaterial({ transparent: true, opacity: 0.7 });
+  const hub = new LineLoop(hubGeometry, hubMaterial);
+  const armGeometry = new BufferGeometry();
+  armGeometry.setAttribute('position', new Float32BufferAttribute([0.6, 0.35, 0, 2.85, 0.35, 0], 3));
+  const armMaterial = new LineBasicMaterial({ transparent: true, opacity: 1 });
+  const arm = new LineSegments(armGeometry, armMaterial);
+  const tipGeometry = new BoxGeometry(0.16, 0.16, 0.16);
+  const tipMaterial = new MeshBasicMaterial();
+  const tip = new Mesh(tipGeometry, tipMaterial);
+  tip.position.set(2.85, 0.35, 0);
+  const headGroup = new Group();
+  headGroup.add(arm, tip);
+
+  const stage = createStage(container, {
+    className: 'stack-gl',
+    lite: options.lite,
+    still: options.still,
+    fit: (camera, aspect) => camera.position.set(0, 0, 11 * Math.max(1, 5.6 / (6.3 * aspect))),
+    pickables: () => parts.map((part) => part.mesh),
+    onHover: options.onHover,
+    onTheme: () => {
+      parts.forEach((part, i) => {
+        const color = ramp(i / (DISK.length - 1));
+        part.fill.color.copy(color);
+        part.edge.color.copy(color);
+      });
+      const accent = cssColor('--accent', '#ff3b30');
+      hubMaterial.color.copy(accent);
+      armMaterial.color.copy(accent);
+      tipMaterial.color.copy(accent);
+    },
+    update: (time, st) => {
+      const target = active >= 0 ? mids[active] : mids[0];
+      let delta = target - head;
+      while (delta > Math.PI) delta -= Math.PI * 2;
+      while (delta < -Math.PI) delta += Math.PI * 2;
+      head += delta * (st.still ? 1 : 0.08);
+      headGroup.rotation.y = -head;
+      parts.forEach((part, i) => {
+        part.glow += ((i === active || i === st.hover ? 1 : 0) - part.glow) * (st.still ? 1 : 0.14);
+        part.mesh.position.y = part.glow * 0.3;
+        part.fill.opacity = (st.light ? 0.2 : 0.12) + part.glow * (st.light ? 0.4 : 0.34);
+        part.edge.opacity = 0.55 + part.glow * 0.45;
+      });
+      headGroup.position.y = 0.2 + parts[Math.max(active, 0)].glow * 0.3;
+      st.group.rotation.x = 0.85 - st.tilt.y * 0.1;
+      st.group.position.y = Math.sin(time * 0.7) * (st.still ? 0 : 0.05);
+    },
+  });
+  stage.group.add(hub, headGroup, ...parts.map((part) => part.mesh));
+  stage.request();
+  return {
+    setActive(index) {
+      active = index;
+      stage.request();
+    },
+    dispose: () =>
+      stage.dispose(() => {
+        parts.forEach((part) => {
+          part.geometry.dispose();
+          part.edgeGeometry.dispose();
+          part.fill.dispose();
+          part.edge.dispose();
+        });
+        hubGeometry.dispose();
+        hubMaterial.dispose();
+        armGeometry.dispose();
+        armMaterial.dispose();
+        tipGeometry.dispose();
+        tipMaterial.dispose();
+      }),
+  };
 }
