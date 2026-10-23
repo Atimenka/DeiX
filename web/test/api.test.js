@@ -38,6 +38,8 @@ const db = {
   backup: [],
   mails: [],
   challenges: new Map(),
+  releases: [],
+  objects: new Map(),
   seq: 0,
 };
 
@@ -142,8 +144,56 @@ globalThis.fetch = async (url, init = {}) => {
     return jsonResponse(200, {});
   }
 
+  if (p.startsWith('/storage/v1/')) {
+    assert.equal(init.headers.apikey, 'service-key');
+    const rel = p.slice('/storage/v1'.length);
+    const upload = /^\/object\/upload\/sign\/os-images\/(.+)$/.exec(rel);
+    if (upload) return jsonResponse(200, { url: `/object/upload/sign/os-images/${upload[1]}?token=up` });
+    const sign = /^\/object\/sign\/os-images\/(.+)$/.exec(rel);
+    if (sign) {
+      assert.equal(body.expiresIn, 300);
+      return jsonResponse(200, { signedURL: `/object/sign/os-images/${sign[1]}?token=dl` });
+    }
+    const info = /^\/object\/info\/os-images\/(.+)$/.exec(rel);
+    if (info) {
+      return db.objects.has(info[1]) ? jsonResponse(200, { size: db.objects.get(info[1]) }) : jsonResponse(404, { error: 'not_found' });
+    }
+    if (rel === '/object/os-images' && init.method === 'DELETE') {
+      for (const prefix of body.prefixes) db.objects.delete(prefix);
+      return jsonResponse(200, []);
+    }
+  }
+
   const path = p.replace('/rest/v1/', '');
   assert.equal(init.headers.apikey, 'service-key');
+  if (path === 'os_releases') {
+    const q = u.searchParams;
+    const eq = (name) => (q.get(name) || '').slice(3);
+    if (init.method === 'POST') {
+      const row = { id: `00000000-0000-0000-0000-${String(++db.seq).padStart(12, '0')}`, downloads: 0, created_at: new Date().toISOString(), published_at: null, ...body };
+      db.releases.push(row);
+      return jsonResponse(201, [row]);
+    }
+    let rows = db.releases;
+    if (q.get('id')) rows = rows.filter((r) => r.id === eq('id'));
+    if (q.get('version')) rows = rows.filter((r) => r.version === eq('version'));
+    if (q.get('ready')) rows = rows.filter((r) => String(r.ready) === eq('ready'));
+    if (q.get('published')) rows = rows.filter((r) => String(r.published) === eq('published'));
+    if (init.method === 'PATCH') {
+      for (const row of rows) Object.assign(row, body);
+      return jsonResponse(204);
+    }
+    if (init.method === 'DELETE') {
+      db.releases = db.releases.filter((r) => !rows.includes(r));
+      return jsonResponse(204);
+    }
+    const cols = (q.get('select') || '*').split(',');
+    return jsonResponse(200, cols.includes('*') ? rows : rows.map((r) => Object.fromEntries(cols.map((c) => [c, r[c]]))));
+  }
+  if (path === 'rpc/bump_release_downloads') {
+    for (const row of db.releases) if (row.id === body.p_id) row.downloads += 1;
+    return jsonResponse(200);
+  }
   if (path === 'profiles') {
     let rows = [...db.profiles.values()];
     const id = u.searchParams.get('id');
@@ -290,6 +340,7 @@ const requestHandler = require('../api/request');
 const devicesHandler = require('../api/devices');
 const osHandler = require('../api/os');
 const keysHandler = require('../api/keys');
+const releasesHandler = require('../api/releases');
 const { signedMessage } = require('../api/_keys');
 
 function call(handler, body, { cookies = {}, headers } = {}) {
@@ -724,4 +775,102 @@ test('verification email follows the language of the page', async () => {
     delete process.env.RESEND_API_KEY;
     delete process.env.MAIL_FROM;
   }
+});
+
+function callGet(handler, url, headers) {
+  return new Promise((resolve) => {
+    const out = { headers: {}, statusCode: 200 };
+    const req = { method: 'GET', url, headers: { host: 'site.test', 'x-forwarded-for': '9.9.9.9', ...headers } };
+    const res = {
+      setHeader: (k, v) => {
+        out.headers[k.toLowerCase()] = v;
+      },
+      end: (text) => resolve({ status: res.statusCode, headers: out.headers, json: text ? JSON.parse(text) : null }),
+    };
+    Object.defineProperty(res, 'statusCode', { get: () => out.statusCode, set: (v) => (out.statusCode = v) });
+    handler(req, res);
+  });
+}
+
+test('OS releases: owner uploads, the public downloads', async () => {
+  const sha = 'ab'.repeat(32);
+  const good = { action: 'release_prepare', version: '0.1.0', title: 'First', notes: 'Hello', filename: 'disk.IMG', size: 2048, sha256: sha };
+
+  assert.equal((await call(adminHandler, good)).status, 401);
+  addUser('bob@example.com', 'bob-pass', 'Bob', 'user');
+  const user = sessionOf(await call(authHandler, { action: 'login', identifier: 'Bob', password: 'bob-pass' }));
+  assert.equal((await call(adminHandler, good, { cookies: user })).status, 403);
+
+  const owner = await loginOwner();
+  const bad = async (patch) => (await call(adminHandler, { ...good, ...patch }, { cookies: owner })).status;
+  assert.equal(await bad({ version: '../x' }), 400);
+  assert.equal(await bad({ version: '' }), 400);
+  assert.equal(await bad({ filename: 'disk.exe' }), 400);
+  assert.equal(await bad({ size: 0 }), 400);
+  assert.equal(await bad({ size: 50 * 1024 * 1024 + 1 }), 400);
+  assert.equal(await bad({ sha256: 'xyz' }), 400);
+  assert.equal(await bad({ title: 'x'.repeat(121) }), 400);
+  assert.equal(db.releases.length, 0);
+
+  const prepared = await call(adminHandler, good, { cookies: owner });
+  assert.equal(prepared.status, 200, JSON.stringify(prepared.json));
+  assert.equal(prepared.json.upload_url, 'https://db.test/storage/v1/object/upload/sign/os-images/0.1.0/deix-0.1.0.img?token=up');
+  assert.equal(db.releases[0].file_name, 'deix-0.1.0.img');
+  assert.equal(db.releases[0].created_by, 'Atimenka');
+  const id = prepared.json.id;
+
+  assert.equal((await callGet(releasesHandler, '/api/releases')).json.releases.length, 0);
+  assert.equal((await call(adminHandler, { action: 'release_finalize', id, publish: true }, { cookies: owner })).status, 400);
+
+  db.objects.set('0.1.0/deix-0.1.0.img', 1000);
+  const mismatch = await call(adminHandler, { action: 'release_finalize', id, publish: true }, { cookies: owner });
+  assert.equal(mismatch.status, 400);
+  assert.equal(db.objects.has('0.1.0/deix-0.1.0.img'), false);
+  assert.equal(db.releases[0].ready, false);
+
+  const again = await call(adminHandler, good, { cookies: owner });
+  assert.equal(again.json.id, id);
+  assert.equal(db.releases.length, 1);
+  db.objects.set('0.1.0/deix-0.1.0.img', 2048);
+  const done = await call(adminHandler, { action: 'release_finalize', id, publish: true }, { cookies: owner });
+  assert.equal(done.json.published, true);
+  assert.equal((await call(adminHandler, good, { cookies: owner })).status, 409);
+
+  const listed = await call(adminHandler, { action: 'releases' }, { cookies: owner });
+  assert.equal(listed.json.releases[0].published, true);
+  assert.equal(listed.json.releases[0].file_path, undefined);
+
+  const open = await callGet(releasesHandler, '/api/releases');
+  assert.equal(open.json.releases.length, 1);
+  assert.equal(open.json.releases[0].sha256, sha);
+  assert.equal(open.json.releases[0].file_path, undefined);
+  assert.equal(open.json.releases[0].id, undefined);
+
+  assert.equal((await callGet(releasesHandler, '/api/releases?download=..%2Fx')).status, 400);
+  assert.equal((await callGet(releasesHandler, '/api/releases?download=9.9.9')).status, 404);
+  const link = await callGet(releasesHandler, '/api/releases?download=0.1.0');
+  assert.equal(link.status, 302);
+  assert.equal(link.headers.location, 'https://db.test/storage/v1/object/sign/os-images/0.1.0/deix-0.1.0.img?token=dl&download=deix-0.1.0.img');
+  assert.equal(db.releases[0].downloads, 1);
+
+  await call(adminHandler, { action: 'release_publish', id, published: false }, { cookies: owner });
+  assert.equal((await callGet(releasesHandler, '/api/releases?download=0.1.0')).status, 404);
+  assert.equal((await callGet(releasesHandler, '/api/releases')).json.releases.length, 0);
+  assert.equal((await call(adminHandler, { action: 'release_publish', id, published: 'yes' }, { cookies: owner })).status, 400);
+  assert.equal((await call(adminHandler, { action: 'release_publish', id: 'nope', published: true }, { cookies: owner })).status, 400);
+
+  assert.equal((await call(adminHandler, { action: 'release_remove', id }, { cookies: owner })).status, 200);
+  assert.equal(db.releases.length, 0);
+  assert.equal(db.objects.size, 0);
+
+  const english = await callGet(releasesHandler, '/api/releases?download=..%2Fx', { 'x-deix-lang': 'en' });
+  assert.equal(english.json.error, 'Invalid version');
+});
+
+test('OS releases: downloads are rate limited per address', async () => {
+  db.releases.push({ id: 'r1', version: '1.0', file_path: '1.0/deix-1.0.img', file_name: 'deix-1.0.img', ready: true, published: true, downloads: 0 });
+  const headers = { 'x-forwarded-for': '7.7.7.7' };
+  for (let i = 0; i < 30; i += 1) assert.equal((await callGet(releasesHandler, '/api/releases?download=1.0', headers)).status, 302);
+  assert.equal((await callGet(releasesHandler, '/api/releases?download=1.0', headers)).status, 429);
+  db.releases.length = 0;
 });

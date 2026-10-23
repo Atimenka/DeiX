@@ -76,6 +76,12 @@ function fetchMe() {
   return mePromise;
 }
 
+function fmtSize(bytes) {
+  if (bytes >= 1048576) return tr('{n} МиБ', { n: (bytes / 1048576).toFixed(1) });
+  if (bytes >= 1024) return tr('{n} КиБ', { n: Math.round(bytes / 1024) });
+  return tr('{n} Б', { n: bytes });
+}
+
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 function icon(name, extra) {
@@ -101,6 +107,7 @@ const NAV_LINKS = [
   ['home', '/', tr('Главная')],
   ['features', '/#features', tr('Возможности')],
   ['dev', '/#dev', tr('Dev-режим')],
+  ['download', '/download', tr('Скачать')],
   ['request', '/request', tr('Заявки')],
 ];
 
@@ -162,6 +169,7 @@ function buildLayout() {
     el('div', { class: 'wrap' }, [
       el('span', { text: `© ${new Date().getFullYear()} DeiX OS` }),
       el('nav', null, [
+        el('a', { href: lp('/download'), text: tr('Скачать') }),
         el('a', { href: lp('/request'), text: tr('Заявки') }),
         el('a', { href: lp('/register'), text: tr('Регистрация') }),
         el('a', { href: 'https://github.com/Atimenka/DeiX', rel: 'noopener', text: 'GitHub' }),

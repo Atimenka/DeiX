@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Скачать — DeiX OS</title>
+  <meta name="theme-color" content="#06060c">
+  <link rel="alternate" hreflang="ru" href="/download">
+  <link rel="alternate" hreflang="en" href="/en/download">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-page="download">
+  <main class="page wrap">
+    <div class="page-head">
+      <h1>Скачать <span class="grad">DeiX OS</span></h1>
+      <p>Готовые образы диска с ОС. Скачайте образ, проверьте контрольную сумму и запустите его в QEMU.</p>
+    </div>
+
+    <div class="stack" id="releases"></div>
+    <div class="panel" id="releases-empty" hidden>
+      <h3>Версий пока нет</h3>
+      <p class="hint">Владелец проекта ещё не опубликовал ни одного образа. Загляните позже.</p>
+    </div>
+
+    <div class="panel run-panel">
+      <h3>Как запустить</h3>
+      <p class="hint">Распакуйте файл, если он в архиве (.gz, .xz или .zip), и запустите образ как диск виртуальной машины:</p>
+      <pre class="codeblock"><code>qemu-system-x86_64 -m 512M \
+  -drive format=raw,file=deix.img \
+  -netdev user,id=n0 -device rtl8139,netdev=n0</code></pre>
+      <p class="hint">Сверьте SHA-256 скачанного файла с суммой на карточке версии: в Linux команда sha256sum файл, в Windows — certutil -hashfile файл SHA256.</p>
+    </div>
+  </main>
+  <script src="/i18n.js"></script>
+  <script src="/site.js"></script>
+  <script src="/download.js"></script>
+</body>
+</html>

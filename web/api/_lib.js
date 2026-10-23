@@ -85,6 +85,32 @@ async function sb(path, { method = 'GET', body, headers = {} } = {}) {
   return data;
 }
 
+/** Запрос к Supabase Storage. Возвращает { status, data } без выброса на 4xx. */
+async function storage(path, { method = 'GET', body, headers = {} } = {}) {
+  requireConfigured();
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/storage/v1/${path}`, {
+      method,
+      headers: {
+        apikey: SERVICE_KEY,
+        Authorization: `Bearer ${SERVICE_KEY}`,
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return { status: resp.status, data: await parseResponse(resp) };
+  } catch (e) {
+    console.error('supabase storage unreachable:', e && e.message);
+    throw new HttpError(502, 'Хранилище файлов недоступно');
+  }
+}
+
+/** Абсолютный адрес по относительному пути, который вернул Storage (`/object/...`). */
+function storageUrl(relative) {
+  return `${SUPABASE_URL}/storage/v1${relative}`;
+}
+
 function rpc(name, args) {
   return sb(`rpc/${name}`, { method: 'POST', body: args });
 }
@@ -334,5 +360,7 @@ module.exports = {
   sb,
   send,
   setSession,
+  storage,
+  storageUrl,
   verifyCaptcha,
 };

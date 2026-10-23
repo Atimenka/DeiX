@@ -10,7 +10,8 @@ const TABS = [
 ];
 
 const $ = (id) => document.getElementById(id);
-let state = { requests: [], counts: {}, tab: 'pending', timer: null };
+let state = { requests: [], counts: {}, tab: 'pending', timer: null, section: 'requests', releases: [] };
+const MAX_IMAGE = 50 * 1024 * 1024;
 
 function api(body) {
   return postJson('/api/admin', body);
@@ -52,6 +53,7 @@ function denyMfa(user) {
 function showPanel() {
   $('denied-view').hidden = true;
   $('panel-view').hidden = false;
+  renderSections();
   refresh();
   clearInterval(state.timer);
   state.timer = setInterval(refresh, 15000);
@@ -180,6 +182,175 @@ async function refresh() {
     toast(err.message, 'err');
   }
 }
+
+function renderSections() {
+  const box = $('section-tabs');
+  box.replaceChildren();
+  for (const [key, label] of [['requests', tr('Заявки')], ['releases', tr('Версии ОС')]]) {
+    box.append(
+      el('button', {
+        class: `tab${state.section === key ? ' active' : ''}`,
+        type: 'button',
+        text: label,
+        onclick: () => {
+          state.section = key;
+          renderSections();
+          if (key === 'releases') loadReleases();
+        },
+      }),
+    );
+  }
+  $('requests-section').hidden = state.section !== 'requests';
+  $('releases-section').hidden = state.section !== 'releases';
+}
+
+function releaseBadge(row) {
+  if (!row.ready) return ['pending', tr('Загрузка не завершена')];
+  return row.published ? ['approved', tr('Опубликована')] : ['consumed', tr('Черновик')];
+}
+
+function renderReleases() {
+  const body = $('rel-rows');
+  body.replaceChildren();
+  $('rel-empty').hidden = state.releases.length > 0;
+  for (const row of state.releases) {
+    const [kind, label] = releaseBadge(row);
+    const buttons = [];
+    if (row.ready) {
+      buttons.push(
+        el('button', {
+          class: `btn small ${row.published ? '' : 'good'}`,
+          type: 'button',
+          text: row.published ? tr('Скрыть') : tr('Опубликовать'),
+          onclick: () => setPublished(row, !row.published),
+        }),
+      );
+    }
+    buttons.push(el('button', { class: 'btn bad small', type: 'button', text: tr('Удалить'), onclick: () => removeRelease(row) }));
+    body.append(
+      el('tr', null, [
+        el('td', { class: 'devcell' }, [el('span', { class: 'mono', text: row.version }), el('small', { text: row.title || '—' })]),
+        el('td', { class: 'devcell' }, [
+          el('span', { class: 'mono', text: row.file_name }),
+          el('small', { text: `${fmtSize(row.size_bytes)} · SHA-256 ${row.sha256.slice(0, 12)}…`, title: row.sha256 }),
+        ]),
+        el('td', null, [el('span', { class: `badge ${kind}`, text: label })]),
+        el('td', null, [el('span', { text: String(row.downloads) })]),
+        el('td', null, [el('div', { text: fmt(row.created_at) }), el('small', { class: 'hint', text: row.created_by || '' })]),
+        el('td', { class: 'actions' }, buttons),
+      ]),
+    );
+  }
+}
+
+async function loadReleases() {
+  try {
+    state.releases = (await api({ action: 'releases' })).releases;
+    renderReleases();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function setPublished(row, published) {
+  try {
+    await api({ action: 'release_publish', id: row.id, published });
+    toast(published ? tr('Версия опубликована') : tr('Версия скрыта'), 'ok');
+    await loadReleases();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function removeRelease(row) {
+  if (!confirm(tr('Удалить версию {version}? Файл будет удалён из хранилища.', { version: row.version }))) return;
+  try {
+    await api({ action: 'release_remove', id: row.id });
+    toast(tr('Версия удалена'), 'ok');
+    await loadReleases();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function sha256Hex(file) {
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function uploadFile(url, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append('cacheControl', '3600');
+    form.append('', file);
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100));
+    });
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error(tr('Хранилище отклонило файл ({status})', { status: xhr.status })));
+    });
+    xhr.addEventListener('error', () => {
+      reject(new Error(tr('Не удалось загрузить файл в хранилище. Если supabase.co недоступен в вашей сети, включите VPN.')));
+    });
+    xhr.send(form);
+  });
+}
+
+async function submitRelease(event) {
+  event.preventDefault();
+  const result = $('rel-result');
+  const progress = $('rel-progress');
+  const button = $('rel-submit');
+  const file = $('rel-file').files[0];
+  if (!file) {
+    showResult(result, 'err', tr('Выберите файл образа'));
+    return;
+  }
+  if (file.size > MAX_IMAGE) {
+    showResult(result, 'err', tr('Файл больше 50 МиБ: это предел хранилища'));
+    return;
+  }
+  const publish = $('rel-publish').checked;
+  button.disabled = true;
+  progress.hidden = true;
+  try {
+    showResult(result, '', tr('Считаем контрольную сумму SHA-256…'));
+    const sha256 = await sha256Hex(file);
+    showResult(result, '', tr('Готовим загрузку…'));
+    const prepared = await api({
+      action: 'release_prepare',
+      version: $('rel-version').value.trim(),
+      title: $('rel-title').value,
+      notes: $('rel-notes').value,
+      filename: file.name,
+      size: file.size,
+      sha256,
+    });
+    progress.value = 0;
+    progress.hidden = false;
+    await uploadFile(prepared.upload_url, file, (percent) => {
+      progress.value = percent;
+      showResult(result, '', tr('Загружаем файл: {percent}%', { percent }));
+    });
+    showResult(result, '', tr('Проверяем файл…'));
+    await api({ action: 'release_finalize', id: prepared.id, publish });
+    showResult(result, 'ok', publish ? tr('Версия загружена и опубликована.') : tr('Версия загружена как черновик.'));
+    $('release-form').reset();
+    await loadReleases();
+  } catch (err) {
+    showResult(result, 'err', err.message);
+    await loadReleases();
+  } finally {
+    progress.hidden = true;
+    button.disabled = false;
+  }
+}
+
+$('release-form').addEventListener('submit', submitRelease);
+$('rel-refresh-btn').addEventListener('click', loadReleases);
 
 $('refresh-btn').addEventListener('click', refresh);
 

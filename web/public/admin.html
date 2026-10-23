@@ -22,6 +22,9 @@
     </section>
 
     <section id="panel-view" hidden>
+      <div class="tabs section-tabs" id="section-tabs"></div>
+
+      <div id="requests-section">
       <div class="toolbar">
         <h1 class="title">Заявки на <span class="grad">dev-токен</span></h1>
         <div class="right">
@@ -48,6 +51,51 @@
         <div class="empty" id="empty" hidden>Заявок нет.</div>
       </div>
       <p class="hint">Токен генерирует база при одобрении и не показывается на сайте: устройство получает его само при следующей проверке статуса и только один раз.</p>
+      </div>
+
+      <div id="releases-section" hidden>
+        <div class="toolbar">
+          <h1 class="title">Версии <span class="grad">ОС</span></h1>
+          <div class="right">
+            <button class="btn small" id="rel-refresh-btn" type="button">Обновить</button>
+          </div>
+        </div>
+
+        <div class="panel rel-panel">
+          <h3>Новая версия</h3>
+          <p class="hint">Готовый образ диска с ОС. Файл уходит из браузера прямо в хранилище, сайт его не пропускает через себя.</p>
+          <form id="release-form" class="stack" autocomplete="off">
+            <label>Версия
+              <input id="rel-version" name="version" maxlength="32" placeholder="0.4.0" required>
+            </label>
+            <label>Название (необязательно)
+              <input id="rel-title" name="title" maxlength="120" placeholder="Например: Первая публичная сборка">
+            </label>
+            <label>Что нового (необязательно)
+              <textarea id="rel-notes" name="notes" maxlength="4000" placeholder="Коротко об изменениях"></textarea>
+            </label>
+            <label>Файл образа
+              <input id="rel-file" name="file" type="file" accept=".img,.gz,.xz,.zip,.qcow2" required>
+              <span class="hint">.img, .img.gz, .img.xz, .zip или .qcow2, до 50 МиБ. Контрольная сумма SHA-256 считается в браузере.</span>
+            </label>
+            <label class="switch"><input type="checkbox" id="rel-publish" checked><span>Опубликовать сразу после загрузки</span></label>
+            <button class="btn primary" id="rel-submit" type="submit">Загрузить версию</button>
+            <progress id="rel-progress" max="100" value="0" hidden></progress>
+            <div class="result" id="rel-result" hidden></div>
+          </form>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Версия</th><th>Файл</th><th>Статус</th><th>Скачиваний</th><th>Добавлена</th><th>Действия</th></tr>
+            </thead>
+            <tbody id="rel-rows"></tbody>
+          </table>
+          <div class="empty" id="rel-empty" hidden>Версий пока нет.</div>
+        </div>
+        <p class="hint">Опубликованные версии видны всем на странице «Скачать». Черновик виден только здесь.</p>
+      </div>
     </section>
   </main>
   <script src="/i18n.js"></script>
