@@ -141,7 +141,7 @@
       mask: 'lines',
       autoSplit: true,
       onSplit(self) {
-        return gsap.from(self.lines, { yPercent: 112, duration: 1.1, ease: 'expo.out', stagger: 0.12, delay: 0.1 });
+        return gsap.from(self.lines, { yPercent: 112, duration: 1.1, ease: 'expo.out', stagger: 0.12, delay: root.classList.contains('booting') ? 1.75 : 0.1 });
       },
     });
   }
@@ -422,6 +422,241 @@
     document.addEventListener('pointerleave', () => root.classList.remove('has-cursor'));
   }
 
+  /** Свет под курсором в сетке возможностей, плитках и шагах. */
+  function spotlight() {
+    if (!finePointer) return;
+    const groups = document.querySelectorAll('.bento, .steps, .stats');
+    groups.forEach((group) => {
+      const items = Array.from(group.children);
+      group.addEventListener(
+        'pointermove',
+        (event) => {
+          items.forEach((item) => {
+            const box = item.getBoundingClientRect();
+            item.style.setProperty('--mx', `${(event.clientX - box.left).toFixed(0)}px`);
+            item.style.setProperty('--my', `${(event.clientY - box.top).toFixed(0)}px`);
+          });
+        },
+        { passive: true },
+      );
+    });
+  }
+
+  /** Огромная строка между разделами наклоняется по скорости прокрутки. */
+  function megaSkew(gsap) {
+    const track = document.querySelector('.mega-track');
+    if (!track) return;
+    const setSkew = gsap.quickSetter(track, 'skewX', 'deg');
+    let lastY = window.scrollY;
+    let velocity = 0;
+    let skew = 0;
+    gsap.ticker.add(() => {
+      velocity = velocity * 0.9 + (window.scrollY - lastY) * 0.1;
+      lastY = window.scrollY;
+      const target = Math.max(-16, Math.min(16, -velocity * 0.9));
+      skew += (target - skew) * 0.15;
+      setSkew(skew);
+    });
+  }
+
+  /** Скрытый шелл: клавиша ` или Ctrl+K. */
+  function shell() {
+    const base = location.pathname === '/en' || location.pathname.startsWith('/en/') ? '/en' : '';
+    const pages = { home: '/', download: '/download', request: '/request', login: '/login', register: '/register', account: '/account' };
+    const facts = [
+      'OS      DeiX OS 0.3.0-beta',
+      'Kernel  Rust no_std, x86_64 long mode',
+      '/system EROFS, read-only',
+      '/user   ext2/4 over XTS-AES-256',
+      'Net     RTL8139, own TLS 1.3 stack',
+      'GUI     VBE 32 bpp',
+      'Init    dinit (PID 1)',
+    ];
+    let box = null;
+    let out = null;
+    let input = null;
+    let rain = null;
+    const past = [];
+    let cursorAt = 0;
+
+    function print(text, cls) {
+      const row = document.createElement('div');
+      row.textContent = text;
+      if (cls) row.className = cls;
+      out.append(row);
+      out.scrollTop = out.scrollHeight;
+    }
+
+    function go(path) {
+      const a = document.createElement('a');
+      a.href = path;
+      a.hidden = true;
+      document.body.append(a);
+      a.click();
+      a.remove();
+    }
+
+    function matrix() {
+      if (rain) return;
+      rain = document.createElement('canvas');
+      rain.className = 'sh-rain';
+      box.prepend(rain);
+      const ctx = rain.getContext('2d');
+      const w = (rain.width = window.innerWidth);
+      const h = (rain.height = window.innerHeight);
+      const cols = Math.ceil(w / 16);
+      const drops = Array.from({ length: cols }, () => Math.random() * -40);
+      const chars = '01DEIX<>/{}#';
+      const started = performance.now();
+      const draw = (now) => {
+        if (!rain) return;
+        ctx.fillStyle = 'rgba(11,11,12,0.14)';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = accentColors()[0];
+        ctx.font = '15px monospace';
+        drops.forEach((y, i) => {
+          ctx.fillText(chars[Math.floor(Math.random() * chars.length)], i * 16, y * 16);
+          drops[i] = y * 16 > h && Math.random() > 0.97 ? 0 : y + 1;
+        });
+        if (now - started < 9000) requestAnimationFrame(draw);
+        else {
+          rain.remove();
+          rain = null;
+        }
+      };
+      requestAnimationFrame(draw);
+    }
+
+    const commands = {
+      help: () => print('help  about  neofetch  ls  open <page>  theme  lang  github  matrix  clear  exit'),
+      about: () => print('DeiX is a small operating system written from scratch in Rust. This page is its website.'),
+      neofetch: () => facts.forEach((line) => print(line, 'sh-fact')),
+      ls: () => print(Object.keys(pages).join('  ')),
+      open: (arg) => {
+        const key = (arg || '').trim();
+        if (!pages[key]) return print(`open: no such page: ${key || '(none)'}`, 'sh-err');
+        print(`opening ${key}...`);
+        return setTimeout(() => go(base + (pages[key] === '/' ? (base ? '/en' : '/') : pages[key])), 200);
+      },
+      theme: () => {
+        const btn = document.querySelector('.theme-toggle');
+        if (btn) btn.click();
+        print(`theme: ${root.getAttribute('data-theme')}`);
+      },
+      lang: () => {
+        try {
+          localStorage.setItem('deix-lang', base ? 'ru' : 'en');
+        } catch {
+          /* язык не сохранится */
+        }
+        go(base ? '/' : '/en');
+      },
+      github: () => {
+        const link = document.querySelector('a[href*="github.com"]');
+        if (!link) return print('github: link not found on this page', 'sh-err');
+        print(link.href);
+        return window.open(link.href, '_blank', 'noopener');
+      },
+      matrix,
+      sudo: () => print('this website has no root. the kernel does.', 'sh-err'),
+      clear: () => {
+        out.textContent = '';
+      },
+      exit: () => close(),
+    };
+
+    function run(line) {
+      print(`$ ${line}`, 'sh-cmd');
+      const [name, ...rest] = line.trim().split(/\s+/);
+      if (!name) return;
+      if (Object.prototype.hasOwnProperty.call(commands, name)) commands[name](rest.join(' '));
+      else print(`${name}: command not found. try help`, 'sh-err');
+    }
+
+    function close() {
+      if (!box) return;
+      box.classList.remove('on');
+      rain = null;
+      document.body.classList.remove('sh-open');
+      setTimeout(() => {
+        if (box.classList.contains('on')) return;
+        box.classList.remove('show');
+        const canvas = box.querySelector('canvas');
+        if (canvas) canvas.remove();
+      }, 300);
+    }
+
+    function open() {
+      if (!box) {
+        box = document.createElement('div');
+        box.className = 'sh';
+        box.setAttribute('role', 'dialog');
+        box.setAttribute('aria-label', 'DeiX shell');
+        const win = document.createElement('div');
+        win.className = 'sh-win';
+        const bar = document.createElement('div');
+        bar.className = 'sh-bar';
+        bar.textContent = 'deix — shell';
+        out = document.createElement('div');
+        out.className = 'sh-out';
+        const row = document.createElement('label');
+        row.className = 'sh-row';
+        const prompt = document.createElement('span');
+        prompt.textContent = '$';
+        input = document.createElement('input');
+        input.className = 'sh-in';
+        input.spellcheck = false;
+        input.autocomplete = 'off';
+        input.setAttribute('aria-label', 'command');
+        row.append(prompt, input);
+        win.append(bar, out, row);
+        box.append(win);
+        document.body.append(box);
+        box.addEventListener('pointerdown', (event) => {
+          if (event.target === box) close();
+        });
+        input.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') {
+            const line = input.value;
+            input.value = '';
+            if (line.trim()) past.push(line);
+            cursorAt = past.length;
+            run(line);
+          } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            cursorAt = Math.max(0, cursorAt - 1);
+            input.value = past[cursorAt] || '';
+          } else if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            cursorAt = Math.min(past.length, cursorAt + 1);
+            input.value = past[cursorAt] || '';
+          } else if (event.key === 'Tab') {
+            event.preventDefault();
+            const hit = Object.keys(commands).filter((name) => name.startsWith(input.value));
+            if (hit.length === 1) input.value = hit[0];
+          }
+        });
+        print('DeiX shell. type help.');
+      }
+      document.body.classList.add('sh-open');
+      box.classList.add('show');
+      box.getBoundingClientRect();
+      box.classList.add('on');
+      input.focus();
+    }
+
+    document.addEventListener('keydown', (event) => {
+      const typing = event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable]');
+      if (event.key === 'Escape') return close();
+      if (typing) return;
+      if (event.key === '`' || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k')) {
+        event.preventDefault();
+        if (box && box.classList.contains('on')) close();
+        else open();
+      }
+    });
+  }
+
   function panels(gsap) {
     const targets = document.querySelectorAll('.auth-card:not(.reveal), .page-head:not(.reveal), .panel:not(.reveal):not(.rel-panel)');
     if (!targets.length) return;
@@ -440,6 +675,8 @@
     cursor();
     wipe();
     scramble();
+    spotlight();
+    shell();
     const marketing = page === 'home' || page === 'download';
     try {
       await load('/vendor/gsap.min.js');
@@ -456,6 +693,7 @@
         counters(gsap, window.ScrollTrigger);
         desktopParallax();
         scrollStory(gsap, window.ScrollTrigger);
+        megaSkew(gsap);
       } else if (page !== 'admin') {
         panels(gsap);
       }
