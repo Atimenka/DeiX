@@ -8,6 +8,7 @@ import {
   Float32BufferAttribute,
   Group,
   IcosahedronGeometry,
+  Line,
   LineBasicMaterial,
   LineLoop,
   LineSegments,
@@ -17,11 +18,15 @@ import {
   NormalBlending,
   PerspectiveCamera,
   Points,
+  PointsMaterial,
+  QuadraticBezierCurve3,
   Raycaster,
   Scene,
   ShaderMaterial,
   Shape,
+  SphereGeometry,
   Vector2,
+  Vector3,
   WebGLRenderer,
 } from 'three';
 
@@ -133,6 +138,27 @@ function warpGeometry(count) {
   geo.setAttribute('aEnd', new Float32BufferAttribute(end, 1));
   return geo;
 }
+
+const COMET_VERT = `
+uniform float uPx;
+attribute float aI;
+varying float vA;
+void main(){
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mv;
+  vA = 1.0 - aI;
+  gl_PointSize = (1.5 + vA * vA * 26.0) * uPx * (7.0 / -mv.z);
+}`;
+
+const COMET_FRAG = `
+uniform vec3 uColor;
+uniform float uAlpha;
+varying float vA;
+void main(){
+  float r = length(gl_PointCoord - 0.5);
+  if (r > 0.5) discard;
+  gl_FragColor = vec4(uColor, smoothstep(0.5, 0.0, r) * uAlpha * vA * vA);
+}`;
 
 function circle(radius, segments) {
   const pos = [];
@@ -286,10 +312,27 @@ export function mount(options = {}) {
   shockRing.rotation.x = 1.15;
   group.add(shockRing);
 
+  const TRAIL = 56;
+  const cometPos = new Float32Array(TRAIL * 3);
+  const cometIdx = new Float32Array(TRAIL);
+  for (let i = 0; i < TRAIL; i += 1) cometIdx[i] = i / TRAIL;
+  const cometGeometry = new BufferGeometry();
+  const cometAttr = new Float32BufferAttribute(cometPos, 3);
+  cometGeometry.setAttribute('position', cometAttr);
+  cometGeometry.setAttribute('aI', new Float32BufferAttribute(cometIdx, 1));
+  const cometUniforms = { uPx: { value: 1 }, uColor: { value: new Color() }, uAlpha: { value: 0 } };
+  const cometMaterial = new ShaderMaterial({ uniforms: cometUniforms, vertexShader: COMET_VERT, fragmentShader: COMET_FRAG, transparent: true, depthWrite: false });
+  const comet = new Points(cometGeometry, cometMaterial);
+  comet.frustumCulled = false;
+  scene.add(comet);
+
   let light = false;
   function applyTheme() {
     light = document.documentElement.getAttribute('data-theme') === 'light';
     uniforms.uA.value.copy(cssColor('--accent', '#ff3b30'));
+    cometUniforms.uColor.value.copy(cssColor('--accent', '#ff3b30'));
+    cometMaterial.blending = light ? NormalBlending : AdditiveBlending;
+    cometMaterial.needsUpdate = true;
     warpUniforms.uColor.value.copy(light ? cssColor('--accent', '#ff3b30') : cssColor('--accent-2', '#f3f2ee'));
     warpMaterial.blending = light ? NormalBlending : AdditiveBlending;
     warpMaterial.needsUpdate = true;
@@ -324,6 +367,7 @@ export function mount(options = {}) {
     renderer.setSize(width, height, false);
     uniforms.uPx.value = ratio;
     dustUniforms.uPx.value = ratio;
+    cometUniforms.uPx.value = ratio;
     camera.aspect = width / height;
     halfWidth = Math.tan((camera.fov * Math.PI) / 360) * camera.position.z * camera.aspect;
     camera.updateProjectionMatrix();
@@ -414,6 +458,21 @@ export function mount(options = {}) {
     camera.position.x = eased.x * 0.55;
     camera.position.y = eased.y * 0.35;
     camera.lookAt(0, 0, 0);
+    const vh = halfWidth / camera.aspect;
+    const live = pointer.x < 5;
+    const hx = live ? pointer.x * halfWidth : cometPos[0];
+    const hy = live ? pointer.y * vh : cometPos[1];
+    cometPos[0] += (hx - cometPos[0]) * 0.5;
+    cometPos[1] += (hy - cometPos[1]) * 0.5;
+    cometPos[2] = 0.4;
+    for (let i = 1; i < TRAIL; i += 1) {
+      cometPos[i * 3] += (cometPos[(i - 1) * 3] - cometPos[i * 3]) * 0.22;
+      cometPos[i * 3 + 1] += (cometPos[(i - 1) * 3 + 1] - cometPos[i * 3 + 1]) * 0.22;
+      cometPos[i * 3 + 2] = 0.4;
+    }
+    cometAttr.needsUpdate = true;
+    cometUniforms.uAlpha.value += ((live && !still ? (light ? 0.9 : 1) : 0) - cometUniforms.uAlpha.value) * 0.1;
+    scene.rotation.z += (Math.max(-0.14, Math.min(0.14, -scrollSpeed * 0.004)) - scene.rotation.z) * 0.1;
     progressSmooth += (progress - progressSmooth) * (still ? 1 : 0.08);
     burst *= 0.94;
     shock *= 0.968;
@@ -480,6 +539,8 @@ export function mount(options = {}) {
     scanRing.geometry.dispose();
     dustMaterial.dispose();
     warp.geometry.dispose();
+    cometGeometry.dispose();
+    cometMaterial.dispose();
     warpMaterial.dispose();
     packetGeometry.dispose();
     packetMaterial.dispose();
@@ -978,6 +1039,149 @@ export function mountLogo(container, options = {}) {
           part.material.dispose();
           part.edgeMaterial.dispose();
         });
+      }),
+  };
+}
+
+
+function fibonacciSphere(count, radius) {
+  const pos = new Float32Array(count * 3);
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < count; i += 1) {
+    const y = 1 - (i / (count - 1)) * 2;
+    const r = Math.sqrt(1 - y * y);
+    const a = golden * i;
+    pos.set([Math.cos(a) * r * radius, y * radius, Math.sin(a) * r * radius], i * 3);
+  }
+  return pos;
+}
+
+/**
+ * Иллюстрация сети: точечный глобус, узлы и дуги, по которым бегут пакеты.
+ * options: still, lite.
+ */
+export function mountGlobe(container, options = {}) {
+  const dotsGeometry = new BufferGeometry();
+  dotsGeometry.setAttribute('position', new Float32BufferAttribute(fibonacciSphere(options.lite ? 1400 : 2600, 1), 3));
+  const dotsMaterial = new PointsMaterial({ size: 0.022, transparent: true, opacity: 0.8, depthWrite: false });
+  const dots = new Points(dotsGeometry, dotsMaterial);
+
+  const maskGeometry = new SphereGeometry(0.985, 40, 28);
+  const maskMaterial = new MeshBasicMaterial({ colorWrite: false });
+  const mask = new Mesh(maskGeometry, maskMaterial);
+  mask.renderOrder = -1;
+
+  const gridGeometry = new EdgesGeometry(new IcosahedronGeometry(1.012, 3), 1);
+  const gridMaterial = new LineBasicMaterial({ transparent: true, opacity: 0.1, depthWrite: false });
+  const grid = new LineSegments(gridGeometry, gridMaterial);
+
+  const nodeCount = 16;
+  const nodes = Array.from({ length: nodeCount }, (_, i) => {
+    const y = ((i * 0.618 + 0.13) % 1) * 1.7 - 0.85;
+    const a = i * 2.399963;
+    const r = Math.sqrt(1 - y * y);
+    return new Vector3(Math.cos(a) * r, y, Math.sin(a) * r);
+  });
+  const nodePos = new Float32Array(nodeCount * 3);
+  nodes.forEach((n, i) => nodePos.set([n.x * 1.012, n.y * 1.012, n.z * 1.012], i * 3));
+  const nodeGeometry = new BufferGeometry();
+  nodeGeometry.setAttribute('position', new Float32BufferAttribute(nodePos, 3));
+  const nodeMaterial = new PointsMaterial({ size: 0.075, transparent: true, depthWrite: false });
+  const nodePoints = new Points(nodeGeometry, nodeMaterial);
+
+  const links = [];
+  for (let i = 0; i < nodeCount; i += 1) {
+    links.push([i, (i * 5 + 3) % nodeCount]);
+    if (i % 3 === 0) links.push([i, (i + 7) % nodeCount]);
+  }
+  const arcs = links
+    .filter(([a, b]) => a !== b)
+    .map(([a, b]) => {
+      const from = nodes[a];
+      const to = nodes[b];
+      const lift = 1.15 + from.distanceTo(to) * 0.42;
+      const mid = from.clone().add(to).normalize().multiplyScalar(lift);
+      return new QuadraticBezierCurve3(from.clone().multiplyScalar(1.012), mid, to.clone().multiplyScalar(1.012));
+    });
+  const arcMaterial = new LineBasicMaterial({ transparent: true, opacity: 0.42, depthWrite: false });
+  const arcLines = arcs.map((curve) => {
+    const geo = new BufferGeometry().setFromPoints(curve.getPoints(48));
+    return new Line(geo, arcMaterial);
+  });
+
+  const packetPos = new Float32Array(arcs.length * 3);
+  const packetGeometry = new BufferGeometry();
+  const packetAttr = new Float32BufferAttribute(packetPos, 3);
+  packetGeometry.setAttribute('position', packetAttr);
+  const packetMaterial = new PointsMaterial({ size: 0.085, transparent: true, depthWrite: false });
+  const packets = new Points(packetGeometry, packetMaterial);
+  const scratch = new Vector3();
+
+  const ringMaterial = new LineBasicMaterial({ transparent: true, opacity: 0.35, depthWrite: false });
+  const equator = new LineLoop(circle(1.34, 200), ringMaterial);
+  equator.rotation.set(0.4, 0, 0.3);
+  const equatorB = new LineLoop(circle(1.62, 220), ringMaterial);
+  equatorB.rotation.set(-0.5, 0, -0.2);
+
+  const stage = createStage(container, {
+    className: 'stack-gl',
+    lite: options.lite,
+    still: options.still,
+    fit: (camera, aspect) => {
+      camera.position.set(0, 0, 4.9 * Math.max(1, 1.15 / aspect));
+      camera.lookAt(0, 0, 0);
+    },
+    pickables: () => [],
+    onTheme: (st) => {
+      const accent = cssColor('--accent', '#ff3b30');
+      const text = cssColor('--text', '#f3f2ee');
+      dotsMaterial.color.copy(st.light ? text : cssColor('--accent-2', '#f3f2ee'));
+      dotsMaterial.opacity = st.light ? 0.55 : 0.7;
+      dotsMaterial.blending = st.light ? NormalBlending : AdditiveBlending;
+      gridMaterial.color.copy(text);
+      nodeMaterial.color.copy(accent);
+      arcMaterial.color.copy(accent);
+      packetMaterial.color.copy(st.light ? text : cssColor('--accent-2', '#f3f2ee'));
+      ringMaterial.color.copy(accent);
+      [dotsMaterial, packetMaterial, nodeMaterial].forEach((m) => {
+        m.needsUpdate = true;
+      });
+    },
+    update: (time, st) => {
+      st.group.rotation.x = 0.35 - st.tilt.y * 0.15;
+      st.yawOffset = st.still ? 0 : time * 0.05;
+      equator.rotation.z = 0.3 + time * 0.08;
+      equatorB.rotation.y = time * -0.06;
+      nodeMaterial.size = 0.075 + Math.sin(time * 3) * 0.015;
+      arcs.forEach((curve, i) => {
+        const t = st.still ? (i * 0.17) % 1 : (time * (0.12 + (i % 5) * 0.03) + i * 0.173) % 1;
+        curve.getPoint(t, scratch);
+        packetPos.set([scratch.x, scratch.y, scratch.z], i * 3);
+      });
+      packetAttr.needsUpdate = true;
+    },
+  });
+  stage.group.add(mask, dots, grid, nodePoints, packets, equator, equatorB, ...arcLines);
+  stage.request();
+  return {
+    setActive() {},
+    dispose: () =>
+      stage.dispose(() => {
+        dotsGeometry.dispose();
+        dotsMaterial.dispose();
+        maskGeometry.dispose();
+        maskMaterial.dispose();
+        gridGeometry.dispose();
+        gridMaterial.dispose();
+        nodeGeometry.dispose();
+        nodeMaterial.dispose();
+        arcLines.forEach((line) => line.geometry.dispose());
+        arcMaterial.dispose();
+        packetGeometry.dispose();
+        packetMaterial.dispose();
+        equator.geometry.dispose();
+        equatorB.geometry.dispose();
+        ringMaterial.dispose();
       }),
   };
 }

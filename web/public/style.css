@@ -1249,3 +1249,21 @@ html.has-cursor body.sh-open { cursor: auto; }
 .logo-view { position: absolute; inset: 0; }
 .logo-fallback { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--sans); font-weight: 900; font-size: clamp(5rem, 22vw, 17rem); letter-spacing: -0.06em; color: transparent; -webkit-text-stroke: 2px var(--accent); }
 .logo-stage.has-3d .logo-fallback { display: none; }
+
+/* ===== седьмой проход: сеть, бегущая рамка ===== */
+.net-stage { height: clamp(340px, 46vw, 600px); }
+.net-tags { position: absolute; left: 18px; bottom: 16px; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0; padding: 0; pointer-events: none; }
+.net-tags li { padding: 6px 10px; border: 1px solid var(--border-strong); background: var(--bg); font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.net-tags li:first-child { color: var(--accent); border-color: var(--accent); }
+
+@property --ang { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+.logo-stage, .stack-view, .auth-card {
+  border-color: transparent;
+  background:
+    radial-gradient(55% 60% at 50% 50%, rgba(255, 59, 48, 0.18), transparent 72%) padding-box,
+    linear-gradient(var(--bg), var(--bg)) padding-box,
+    conic-gradient(from var(--ang), var(--border-strong) 0 62%, var(--accent) 82%, #fff 88%, var(--border-strong) 100%) border-box;
+  animation: ang 7s linear infinite;
+}
+@keyframes ang { to { --ang: 360deg; } }
+@media (prefers-reduced-motion: reduce) { .logo-stage, .stack-view, .auth-card { animation: none; } }

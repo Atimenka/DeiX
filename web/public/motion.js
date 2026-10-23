@@ -236,7 +236,7 @@
     if (!SCENE_PAGES.includes(page) || !webglOk()) return;
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4 || (navigator.hardwareConcurrency || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js?v=4')
+      load('/vendor/three-scene.js?v=5')
         .then(() => {
           scene = window.DeixScene.mount({
             still: reduce,
@@ -276,7 +276,7 @@
     box.classList.add('has-3d');
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js?v=4')
+      load('/vendor/three-scene.js?v=5')
         .then(() => {
           view = window.DeixScene[factory](host, { still: reduce, lite, initial, onHover: mark });
         })
@@ -292,16 +292,16 @@
   }
 
   /** Объёмный логотип: без WebGL остаётся плоская надпись. */
-  function mountLogo() {
-    const host = document.getElementById('logo3d');
+  function mountSolo(hostId, factory, extra) {
+    const host = document.getElementById(hostId);
     if (!host || !webglOk()) return;
     const box = host.closest('.logo-stage');
     box.classList.add('has-3d');
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js?v=4')
+      load('/vendor/three-scene.js?v=5')
         .then(() => {
-          window.DeixScene.mountLogo(host, { still: reduce, lite, onFlip: () => scene && scene.pulse() });
+          window.DeixScene[factory](host, { still: reduce, lite, ...extra });
         })
         .catch(() => box.classList.remove('has-3d'));
     if ('IntersectionObserver' in window) {
@@ -692,7 +692,8 @@
     if (page === 'home') {
       mountModel('stack3d', 'stack-list', 'mountStack', 1);
       mountModel('disk3d', 'disk-list', 'mountDisk', 3);
-      mountLogo();
+      mountSolo('logo3d', 'mountLogo', { onFlip: () => scene && scene.pulse() });
+      mountSolo('net3d', 'mountGlobe', {});
     }
     if (reduce) return;
     root.classList.add('motion');
