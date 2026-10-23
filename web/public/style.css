@@ -1267,3 +1267,26 @@ html.has-cursor body.sh-open { cursor: auto; }
 }
 @keyframes ang { to { --ang: 360deg; } }
 @media (prefers-reduced-motion: reduce) { .logo-stage, .stack-view, .auth-card { animation: none; } }
+
+
+/* ===== восьмой проход: фон следит за курсором ===== */
+.bg::after {
+  content: ""; position: absolute; inset: 0; opacity: 0; transition: opacity 0.5s ease;
+  background:
+    radial-gradient(380px circle at var(--px, 50%) var(--py, 30%), rgba(255, 59, 48, 0.2), transparent 70%),
+    linear-gradient(rgba(255, 59, 48, 0.6) 1px, transparent 1px) 0 0 / 54px 54px,
+    linear-gradient(90deg, rgba(255, 59, 48, 0.6) 1px, transparent 1px) 0 0 / 54px 54px;
+  -webkit-mask-image: radial-gradient(300px circle at var(--px, 50%) var(--py, 30%), #000, transparent 72%);
+  mask-image: radial-gradient(300px circle at var(--px, 50%) var(--py, 30%), #000, transparent 72%);
+}
+html.has-cursor .bg::after { opacity: 1; }
+:root[data-theme="light"] .bg::after {
+  background:
+    radial-gradient(380px circle at var(--px, 50%) var(--py, 30%), rgba(225, 29, 46, 0.16), transparent 70%),
+    linear-gradient(rgba(225, 29, 46, 0.5) 1px, transparent 1px) 0 0 / 54px 54px,
+    linear-gradient(90deg, rgba(225, 29, 46, 0.5) 1px, transparent 1px) 0 0 / 54px 54px;
+}
+@media (min-width: 761px) {
+  .hero-grid > div:first-child { transform: perspective(1500px) rotateY(calc(var(--tx, 0) * 2.6deg)) rotateX(calc(var(--ty, 0) * -1.8deg)); transform-origin: 20% 50%; transition: transform 0.35s ease-out; }
+}
+@media (prefers-reduced-motion: reduce) { .bg::after { display: none; } .hero-grid > div:first-child { transform: none; } }

@@ -37,6 +37,7 @@ uniform float uSize;
 uniform float uPx;
 uniform float uBurst;
 uniform float uScan;
+uniform float uHold;
 varying float vMix;
 varying float vGlow;
 varying float vScan;
@@ -52,6 +53,8 @@ void main(){
   float wave = sin(dir.y * 9.0 + uTime * 1.4) * 0.5 + 0.5;
   float amp = 0.7 + uBurst * 0.9;
   vec3 p = dir * (1.55 + (n - 0.5) * amp + wave * 0.05 * (1.0 + uBurst));
+  p *= 1.0 - uHold * 0.46;
+  p += dir * sin(uTime * 38.0 + dir.x * 30.0) * 0.02 * uHold;
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
   vec4 clip = projectionMatrix * mv;
   float push = smoothstep(0.38, 0.0, distance(clip.xy / clip.w, uPointer));
@@ -84,14 +87,57 @@ void main(){
 const DUST_VERT = `
 uniform float uPx;
 uniform float uTime;
+uniform vec2 uPointer;
 attribute float aSeed;
 varying float vTw;
 void main(){
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
-  gl_Position = projectionMatrix * mv;
-  vTw = 0.55 + 0.45 * sin(uTime * (0.6 + aSeed) + aSeed * 40.0);
-  gl_PointSize = (1.2 + aSeed * 2.2) * uPx * (12.0 / -mv.z);
+  vec4 clip = projectionMatrix * mv;
+  vec2 d = clip.xy / clip.w - uPointer;
+  float push = smoothstep(0.42, 0.0, length(d));
+  clip.xy += normalize(d + vec2(0.0001)) * push * 0.22 * clip.w;
+  gl_Position = clip;
+  vTw = 0.55 + 0.45 * sin(uTime * (0.6 + aSeed) + aSeed * 40.0) + push;
+  gl_PointSize = (1.2 + aSeed * 2.2 + push * 5.0) * uPx * (12.0 / -mv.z);
 }`;
+
+const FLOOR_VERT = `
+uniform float uTime;
+uniform vec3 uHit;
+uniform float uRip;
+uniform float uBurst;
+varying float vA;
+void main(){
+  vec3 p = position;
+  float d = distance(p.xz, uHit.xz);
+  float wave = sin(d * 2.4 - uTime * 3.2) * exp(-d * 0.42) * uRip * 0.9;
+  float base = sin(p.x * 0.45 + uTime * 0.8) * sin(p.z * 0.45 + uTime * 0.6) * 0.14;
+  float blast = sin(d * 1.3 - uTime * 7.0) * exp(-d * 0.22) * uBurst * 1.1;
+  p.y += wave + base + blast;
+  vec4 mv = modelViewMatrix * vec4(p, 1.0);
+  gl_Position = projectionMatrix * mv;
+  vA = smoothstep(30.0, 5.0, -mv.z) * (0.3 + 0.7 * clamp(abs(wave) * 2.2 + abs(base) * 3.0 + abs(blast), 0.0, 1.0));
+}`;
+
+const FLOOR_FRAG = `
+uniform vec3 uColor;
+uniform float uAlpha;
+varying float vA;
+void main(){ gl_FragColor = vec4(uColor, vA * uAlpha); }`;
+
+function floorGeometry() {
+  const pos = [];
+  const SPAN_X = 22;
+  for (let x = -SPAN_X; x <= SPAN_X; x += 2) {
+    for (let z = -34; z < 6; z += 1) pos.push(x, 0, z, x, 0, z + 1);
+  }
+  for (let z = -34; z <= 6; z += 2) {
+    for (let x = -SPAN_X; x < SPAN_X; x += 1) pos.push(x, 0, z, x + 1, 0, z);
+  }
+  const geo = new BufferGeometry();
+  geo.setAttribute('position', new Float32BufferAttribute(pos, 3));
+  return geo;
+}
 
 const DUST_FRAG = `
 uniform vec3 uColor;
@@ -257,6 +303,7 @@ export function mount(options = {}) {
     uPx: { value: 1 },
     uBurst: { value: 0 },
     uScan: { value: 0 },
+    uHold: { value: 0 },
     uHue: { value: 0 },
     uA: { value: new Color() },
     uB: { value: new Color() },
@@ -282,7 +329,7 @@ export function mount(options = {}) {
   const scanRing = new LineLoop(circle(1, 120), scanMaterial);
   group.add(scanRing);
 
-  const dustUniforms = { uPx: { value: 1 }, uTime: { value: 0 }, uColor: { value: new Color() }, uAlpha: { value: 0.8 } };
+  const dustUniforms = { uPointer: uniforms.uPointer, uPx: { value: 1 }, uTime: { value: 0 }, uColor: { value: new Color() }, uAlpha: { value: 0.8 } };
   const dustMaterial = new ShaderMaterial({ uniforms: dustUniforms, vertexShader: DUST_VERT, fragmentShader: DUST_FRAG, transparent: true, depthWrite: false });
   const dust = new Points(dustGeometry(options.lite ? 700 : 1700), dustMaterial);
   scene.add(dust);
@@ -312,6 +359,14 @@ export function mount(options = {}) {
   shockRing.rotation.x = 1.15;
   group.add(shockRing);
 
+  const floorUniforms = { uTime: { value: 0 }, uHit: { value: new Vector3(0, 0, -8) }, uRip: { value: 0 }, uBurst: { value: 0 }, uColor: { value: new Color() }, uAlpha: { value: 0.5 } };
+  const floorMaterial = new ShaderMaterial({ uniforms: floorUniforms, vertexShader: FLOOR_VERT, fragmentShader: FLOOR_FRAG, transparent: true, depthWrite: false });
+  const floor = new LineSegments(floorGeometry(), floorMaterial);
+  floor.position.y = -2.9;
+  floor.frustumCulled = false;
+  scene.add(floor);
+  const ray = new Vector3();
+
   const TRAIL = 56;
   const cometPos = new Float32Array(TRAIL * 3);
   const cometIdx = new Float32Array(TRAIL);
@@ -331,6 +386,9 @@ export function mount(options = {}) {
     light = document.documentElement.getAttribute('data-theme') === 'light';
     uniforms.uA.value.copy(cssColor('--accent', '#ff3b30'));
     cometUniforms.uColor.value.copy(cssColor('--accent', '#ff3b30'));
+    floorUniforms.uColor.value.copy(cssColor('--accent', '#ff3b30'));
+    floorMaterial.blending = light ? NormalBlending : AdditiveBlending;
+    floorMaterial.needsUpdate = true;
     cometMaterial.blending = light ? NormalBlending : AdditiveBlending;
     cometMaterial.needsUpdate = true;
     warpUniforms.uColor.value.copy(light ? cssColor('--accent', '#ff3b30') : cssColor('--accent-2', '#f3f2ee'));
@@ -396,12 +454,23 @@ export function mount(options = {}) {
     burst = 1;
     shock = 1;
   }
+  let holding = false;
+  let hold = 0;
+  let spin = 0;
   function onPress(event) {
     if (still || !(event.target instanceof Element)) return;
     if (event.target.closest('a, button, input, select, textarea, summary, label, .stack-view, .logo-stage, .sh')) return;
+    holding = true;
+  }
+  function onRelease() {
+    if (!holding) return;
+    holding = false;
     pulse();
+    burst = 1 + hold * 1.2;
   }
   window.addEventListener('pointerdown', onPress, { passive: true });
+  window.addEventListener('pointerup', onRelease, { passive: true });
+  window.addEventListener('pointercancel', onRelease, { passive: true });
   let lastScrollY = window.scrollY;
   let scrollSpeed = 0;
   let travel = 0;
@@ -472,6 +541,24 @@ export function mount(options = {}) {
     }
     cometAttr.needsUpdate = true;
     cometUniforms.uAlpha.value += ((live && !still ? (light ? 0.9 : 1) : 0) - cometUniforms.uAlpha.value) * 0.1;
+    hold += ((holding ? 1 : 0) - hold) * 0.07;
+    spin += hold * 0.05;
+    uniforms.uHold.value = hold;
+    floorUniforms.uTime.value = time;
+    floorUniforms.uBurst.value = shock;
+    let hitNow = false;
+    if (live && !still) {
+      ray.set(pointer.x, pointer.y, 0.5).unproject(camera).sub(camera.position).normalize();
+      if (ray.y < -0.02) {
+        const t = (floor.position.y - camera.position.y) / ray.y;
+        if (t < 70) {
+          floorUniforms.uHit.value.copy(camera.position).addScaledVector(ray, t);
+          hitNow = true;
+        }
+      }
+    }
+    floorUniforms.uRip.value += ((hitNow ? 1 : 0) - floorUniforms.uRip.value) * 0.08;
+    floorUniforms.uAlpha.value = (light ? 0.55 : 0.6) * (dim ? 0.55 : 1);
     scene.rotation.z += (Math.max(-0.14, Math.min(0.14, -scrollSpeed * 0.004)) - scene.rotation.z) * 0.1;
     progressSmooth += (progress - progressSmooth) * (still ? 1 : 0.08);
     burst *= 0.94;
@@ -490,7 +577,7 @@ export function mount(options = {}) {
     group.position.x = wide ? halfWidth * px : 0;
     group.position.y = wide ? 0 : 0.9 * (1 - smooth(0, 0.2, progressSmooth));
     group.scale.setScalar(wide ? scale : scale * 0.78);
-    group.rotation.y = time * 0.07 + eased.x * 0.5 + progressSmooth * Math.PI * 3;
+    group.rotation.y = time * 0.07 + eased.x * 0.5 + progressSmooth * Math.PI * 3 + spin;
     group.rotation.x = -eased.y * 0.3 + Math.sin(progressSmooth * Math.PI * 2) * 0.25;
     core.rotation.y = -time * 0.18;
     core.rotation.x = time * 0.09;
@@ -524,6 +611,10 @@ export function mount(options = {}) {
     window.removeEventListener('resize', resize);
     window.removeEventListener('scroll', onScroll);
     window.removeEventListener('pointerdown', onPress);
+    window.removeEventListener('pointerup', onRelease);
+    window.removeEventListener('pointercancel', onRelease);
+    floor.geometry.dispose();
+    floorMaterial.dispose();
     window.removeEventListener('pointermove', onMove);
     document.removeEventListener('pointerleave', onLeave);
     themeWatch.disconnect();

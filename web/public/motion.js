@@ -236,7 +236,7 @@
     if (!SCENE_PAGES.includes(page) || !webglOk()) return;
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4 || (navigator.hardwareConcurrency || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js?v=5')
+      load('/vendor/three-scene.js?v=6')
         .then(() => {
           scene = window.DeixScene.mount({
             still: reduce,
@@ -276,7 +276,7 @@
     box.classList.add('has-3d');
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js?v=5')
+      load('/vendor/three-scene.js?v=6')
         .then(() => {
           view = window.DeixScene[factory](host, { still: reduce, lite, initial, onHover: mark });
         })
@@ -299,7 +299,7 @@
     box.classList.add('has-3d');
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js?v=5')
+      load('/vendor/three-scene.js?v=6')
         .then(() => {
           window.DeixScene[factory](host, { still: reduce, lite, ...extra });
         })
@@ -680,6 +680,31 @@
     });
   }
 
+  /** Фон светится под курсором, текст hero чуть поворачивается вслед. */
+  function followPointer() {
+    if (!finePointer) return;
+    const lead = document.querySelector('.hero-grid > div:first-child');
+    let frame = 0;
+    let ev = null;
+    const apply = () => {
+      frame = 0;
+      root.style.setProperty('--px', `${ev.clientX}px`);
+      root.style.setProperty('--py', `${ev.clientY}px`);
+      if (lead) {
+        lead.style.setProperty('--tx', ((ev.clientX / window.innerWidth) * 2 - 1).toFixed(3));
+        lead.style.setProperty('--ty', ((ev.clientY / window.innerHeight) * 2 - 1).toFixed(3));
+      }
+    };
+    window.addEventListener(
+      'pointermove',
+      (event) => {
+        ev = event;
+        if (!frame) frame = requestAnimationFrame(apply);
+      },
+      { passive: true },
+    );
+  }
+
   function panels(gsap) {
     const targets = document.querySelectorAll('.auth-card:not(.reveal), .page-head:not(.reveal), .panel:not(.reveal):not(.rel-panel)');
     if (!targets.length) return;
@@ -701,6 +726,7 @@
     wipe();
     scramble();
     spotlight();
+    followPointer();
     shell();
     const marketing = page === 'home' || page === 'download';
     try {
