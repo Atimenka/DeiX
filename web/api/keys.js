@@ -11,11 +11,6 @@ module.exports = async function handler(req, res) {
     const user = await requireUser(req, res);
     const body = readBody(req);
 
-    if (body.action === 'list') {
-      const keys = await sb(`dev_keys?user_id=eq.${user.id}&select=device_id,created_at&order=created_at.desc&limit=20`);
-      return send(res, 200, { ok: true, keys });
-    }
-
     if (body.action === 'issue') {
       requireVerified(user);
       const id = String(body.device_id || '').trim().toLowerCase();
@@ -37,7 +32,7 @@ module.exports = async function handler(req, res) {
       await sb('dev_keys', {
         method: 'POST',
         headers: { Prefer: 'return=minimal' },
-        body: { user_id: user.id, device_id: id, nonce: issued.nonce },
+        body: { user_id: user.id },
       });
       return send(res, 200, { ok: true, key: issued.key, device_id: id });
     }

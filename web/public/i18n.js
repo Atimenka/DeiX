@@ -167,6 +167,19 @@ const EN = {
   'Скачать {file} ({size})': 'Download {file} ({size})',
   'Скачиваний: {n}': 'Downloads: {n}',
   'Не удалось загрузить список версий': 'Could not load the release list',
+  'Локальные данные закрыты': 'Local data is locked',
+  'Локальное хранилище не создано': 'Local storage has not been created',
+  'Введите пароль, чтобы открыть имена устройств и историю ключей, сохранённые в этом браузере.': 'Enter your password to unlock the device names and key history saved in this browser.',
+  'Введите пароль, чтобы создать зашифрованное хранилище в этом браузере: в нём будут имена устройств и история ключей.': 'Enter your password to create an encrypted storage in this browser: it will hold device names and key history.',
+  'Пароль не подходит к сохранённым данным. Если вы меняли пароль в другом браузере, сбросьте локальные данные.': 'The password does not match the saved data. If you changed your password in another browser, reset the local data.',
+  'Сбросить локальные данные? Имена устройств и история ключей в этом браузере будут удалены.': 'Reset local data? Device names and key history in this browser will be deleted.',
+  'Локальные данные открыты': 'Local data unlocked',
+  'Локальное хранилище создано': 'Local storage created',
+  'Локальные данные сброшены': 'Local data reset',
+  'Имя': 'Name',
+  'Имя устройства. Хранится только в этом браузере.': 'Device name. Stored only in this browser.',
+  'Пароль изменён. Локальные данные остались под старым паролем: откройте их им или сбросьте.': 'Password changed. The local data is still under the old password: unlock it with that or reset it.',
+  'Этот браузер не поддерживает шифрованное хранилище: имена устройств и история ключей не сохраняются.': 'This browser does not support encrypted storage: device names and key history are not saved.',
 };
 
 /** Перевод строки интерфейса: ключ — русский текст, `{имя}` — подстановки. */

@@ -583,8 +583,8 @@ test('dev keys: need login, are signed for the device, and are rate limited', as
   assert.equal(verify(ID), true);
   assert.equal(verify('b'.repeat(32)), false);
   assert.equal(db.keys.length, 1);
-  assert.equal(db.keys[0].nonce, nonce.toString('hex'));
-  assert.equal((await call(keysHandler, { action: 'list' }, { cookies: user })).json.keys.length, 1);
+  assert.deepEqual(Object.keys(db.keys[0]).sort(), ['created_at', 'user_id']);
+  assert.equal((await call(keysHandler, { action: 'list' }, { cookies: user })).status, 400);
 
   const second = await call(keysHandler, { action: 'issue', device_id: ID }, { cookies: user });
   assert.notEqual(second.json.key, out.json.key);

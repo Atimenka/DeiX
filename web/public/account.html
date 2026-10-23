@@ -29,6 +29,17 @@
       </aside>
 
       <div>
+        <div class="panel vault-box" id="vault-box" hidden>
+          <h3 id="vault-title"></h3>
+          <p class="hint" id="vault-text"></p>
+          <form id="vault-form" class="inline-form" autocomplete="off">
+            <input id="vault-password" name="password" type="password" required autocomplete="current-password" placeholder="Пароль" aria-label="Пароль">
+            <button class="btn primary" type="submit">Открыть</button>
+          </form>
+          <div class="row-gap"><button class="btn small bad" id="vault-reset" type="button" hidden>Сбросить локальные данные</button></div>
+          <div class="result" id="vault-result" hidden></div>
+        </div>
+
         <section class="tabpane" data-pane="overview">
           <div class="panel">
             <h3>Профиль</h3>
@@ -79,6 +90,7 @@
             <div class="result" id="key-result" hidden></div>
             <pre class="keybox mono" id="key-out" hidden></pre>
             <div class="row-gap"><button class="btn small" id="key-copy" type="button" hidden>Скопировать</button></div>
+            <p class="hint" id="vault-note">История выданных ключей и имена устройств хранятся только в этом браузере и зашифрованы вашим паролем (AES-256-GCM). На сервере их нет.</p>
             <div id="key-history"></div>
           </div>
         </section>
@@ -151,6 +163,7 @@
   </main>
   <script src="/i18n.js"></script>
   <script src="/site.js"></script>
+  <script src="/vault.js"></script>
   <script src="/qr.js"></script>
   <script src="/account.js"></script>
 </body>

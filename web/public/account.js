@@ -54,6 +54,7 @@ function renderMail() {
   renderProfile();
   document.getElementById('account-view').hidden = false;
   showTab(location.hash.slice(1));
+  await refreshVault();
   loadDevices();
   loadKeyHistory();
 })();
@@ -65,10 +66,81 @@ window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
 
 document.getElementById('mail-resend').addEventListener('click', (event) => resendVerification(event.currentTarget));
 
+let vaultData = null;
+
+async function readVault() {
+  if (!Vault) return null;
+  try {
+    return await Vault.read(me.id);
+  } catch {
+    return null;
+  }
+}
+
+async function refreshVault() {
+  const box = document.getElementById('vault-box');
+  const note = document.getElementById('vault-note');
+  if (!Vault) {
+    box.hidden = true;
+    note.textContent = tr('Этот браузер не поддерживает шифрованное хранилище: имена устройств и история ключей не сохраняются.');
+    return;
+  }
+  vaultData = await readVault();
+  box.hidden = vaultData !== null;
+  if (vaultData !== null) return;
+  const exists = Vault.exists(me.id);
+  document.getElementById('vault-title').textContent = exists ? tr('Локальные данные закрыты') : tr('Локальное хранилище не создано');
+  document.getElementById('vault-text').textContent = exists
+    ? tr('Введите пароль, чтобы открыть имена устройств и историю ключей, сохранённые в этом браузере.')
+    : tr('Введите пароль, чтобы создать зашифрованное хранилище в этом браузере: в нём будут имена устройств и история ключей.');
+  document.getElementById('vault-reset').hidden = !exists;
+}
+
+document.getElementById('vault-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const result = document.getElementById('vault-result');
+  try {
+    const outcome = await Vault.open(me.id, document.getElementById('vault-password').value);
+    if (outcome === 'wrong') {
+      showResult(result, 'err', tr('Пароль не подходит к сохранённым данным. Если вы меняли пароль в другом браузере, сбросьте локальные данные.'));
+      return;
+    }
+    event.target.reset();
+    result.hidden = true;
+    toast(outcome === 'created' ? tr('Локальное хранилище создано') : tr('Локальные данные открыты'), 'ok');
+    await refreshVault();
+    loadDevices();
+    loadKeyHistory();
+  } catch (err) {
+    showResult(result, 'err', err.message);
+  }
+});
+
+document.getElementById('vault-reset').addEventListener('click', async () => {
+  if (!confirm(tr('Сбросить локальные данные? Имена устройств и история ключей в этом браузере будут удалены.'))) return;
+  await Vault.reset(me.id);
+  toast(tr('Локальные данные сброшены'), 'ok');
+  await refreshVault();
+  loadDevices();
+  loadKeyHistory();
+});
+
+async function renameDevice(id, current) {
+  const name = prompt(tr('Имя устройства. Хранится только в этом браузере.'), current || '');
+  if (name === null) return;
+  const label = name.trim().slice(0, 48);
+  await Vault.update(me.id, (data) => {
+    if (label) data.labels[id] = label;
+    else delete data.labels[id];
+  });
+  loadDevices();
+}
+
 async function loadDevices() {
   const box = document.getElementById('devices');
   try {
     const data = await postJson('/api/devices', { action: 'list' });
+    const labels = ((await readVault()) || { labels: {} }).labels;
     box.replaceChildren();
     document.getElementById('key-devices').replaceChildren(
       ...data.devices.map((device) => el('option', { value: device.device_id })),
@@ -81,10 +153,16 @@ async function loadDevices() {
       box.append(
         el('div', { class: 'mine-item device-row' }, [
           el('div', null, [
-            el('span', { class: 'mono', text: device.device_id }),
+            labels[device.device_id] ? el('b', { text: labels[device.device_id] }) : document.createTextNode(''),
+            el('div', null, [el('span', { class: 'mono', text: device.device_id })]),
             el('div', { class: 'hint', text: tr('Привязано {date}', { date: new Date(device.linked_at).toLocaleString(LOCALE) }) }),
           ]),
-          el('button', { class: 'btn small', type: 'button', text: tr('Отвязать'), onclick: () => unlinkDevice(device.device_id) }),
+          el('div', { class: 'row-gap' }, [
+            vaultData === null
+              ? document.createTextNode('')
+              : el('button', { class: 'btn small', type: 'button', text: tr('Имя'), onclick: () => renameDevice(device.device_id, labels[device.device_id]) }),
+            el('button', { class: 'btn small', type: 'button', text: tr('Отвязать'), onclick: () => unlinkDevice(device.device_id) }),
+          ]),
         ]),
       );
     }
@@ -97,6 +175,7 @@ async function unlinkDevice(id) {
   if (!confirm(tr('Отвязать устройство? Подать заявку с него можно будет только после новой привязки.'))) return;
   try {
     await postJson('/api/devices', { action: 'unlink', device_id: id });
+    if (Vault) await Vault.update(me.id, (data) => delete data.labels[id]);
     toast(tr('Устройство отвязано'), 'ok');
     loadDevices();
   } catch (err) {
@@ -134,9 +213,15 @@ document.getElementById('password-form').addEventListener('submit', async (event
     return;
   }
   try {
-    await authApi({ action: 'change_password', current: document.getElementById('pw-current').value, next });
+    const current = document.getElementById('pw-current').value;
+    await authApi({ action: 'change_password', current, next });
     event.target.reset();
-    showResult(result, 'ok', tr('Пароль изменён'));
+    const kept = !Vault || !Vault.exists(me.id) || (await Vault.rekey(me.id, current, next));
+    showResult(
+      result,
+      kept ? 'ok' : 'err',
+      kept ? tr('Пароль изменён') : tr('Пароль изменён. Локальные данные остались под старым паролем: откройте их им или сбросьте.'),
+    );
   } catch (err) {
     showResult(result, 'err', err.message);
   }
@@ -144,21 +229,17 @@ document.getElementById('password-form').addEventListener('submit', async (event
 
 async function loadKeyHistory() {
   const box = document.getElementById('key-history');
-  try {
-    const data = await postJson('/api/keys', { action: 'list' });
-    box.replaceChildren();
-    if (!data.keys.length) return;
-    box.append(el('p', { class: 'hint', text: tr('Недавно выданные ключи:') }));
-    for (const item of data.keys) {
-      box.append(
-        el('div', { class: 'mine-item' }, [
-          el('span', { class: 'mono', text: item.device_id }),
-          el('div', { class: 'hint', text: new Date(item.created_at).toLocaleString(LOCALE) }),
-        ]),
-      );
-    }
-  } catch (err) {
-    box.replaceChildren(el('p', { class: 'hint', text: err.message }));
+  box.replaceChildren();
+  const data = await readVault();
+  if (!data || !data.keys.length) return;
+  box.append(el('p', { class: 'hint', text: tr('Недавно выданные ключи:') }));
+  for (const item of data.keys) {
+    box.append(
+      el('div', { class: 'mine-item' }, [
+        el('span', { class: 'mono', text: item.device_id }),
+        el('div', { class: 'hint', text: new Date(item.created_at).toLocaleString(LOCALE) }),
+      ]),
+    );
   }
 }
 
@@ -173,6 +254,12 @@ document.getElementById('key-form').addEventListener('submit', async (event) => 
     out.hidden = false;
     copy.hidden = false;
     showResult(result, 'ok', tr('Ключ для устройства {id}… готов. Он работает только на нём и только один раз.', { id: data.device_id.slice(0, 8) }));
+    if (Vault) {
+      await Vault.update(me.id, (vault) => {
+        vault.keys.unshift({ device_id: data.device_id, created_at: new Date().toISOString() });
+        vault.keys.length = Math.min(vault.keys.length, 50);
+      });
+    }
     loadKeyHistory();
   } catch (err) {
     out.hidden = true;

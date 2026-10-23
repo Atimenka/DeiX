@@ -52,6 +52,7 @@ document.getElementById('register-form').addEventListener('submit', async (event
     } else if (data.verification === 'failed') {
       sessionStorage.setItem('deix-flash', tr('Аккаунт создан, но письмо отправить не удалось: запросите его ещё раз в аккаунте.'));
     }
+    await unlockVault(data.user && data.user.id, password);
     location.assign(next);
   } catch (err) {
     showResult(result, 'err', err.message);

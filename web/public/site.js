@@ -41,7 +41,10 @@ async function postJson(url, body, extraHeaders) {
   return data;
 }
 
-const authApi = (body) => postJson('/api/auth', body);
+async function authApi(body) {
+  if (body.action === 'logout' && typeof Vault !== 'undefined' && Vault) await Vault.lock().catch(() => {});
+  return postJson('/api/auth', body);
+}
 
 function toast(text, kind) {
   let box = document.getElementById('toasts');
@@ -70,7 +73,10 @@ let mePromise = null;
 function fetchMe() {
   if (!mePromise) {
     mePromise = authApi({ action: 'me' })
-      .then((data) => data.user)
+      .then((data) => {
+        if (!data.user && typeof Vault !== 'undefined' && Vault) Vault.lock().catch(() => {});
+        return data.user;
+      })
       .catch(() => null);
   }
   return mePromise;

@@ -52,6 +52,7 @@ const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex'
 
 function publicUser(user) {
   return {
+    id: user.id,
     username: user.username,
     email: user.email,
     role: user.role,
@@ -123,7 +124,7 @@ async function register(req, res, body) {
   return send(res, 200, {
     ok: true,
     verification,
-    user: { username, email, role: 'user', email_verified: false, mfa: false, aal: 'aal1' },
+    user: { id: created.data.id, username, email, role: 'user', email_verified: false, mfa: false, aal: 'aal1' },
   });
 }
 
@@ -212,6 +213,7 @@ async function login(req, res, body) {
   return send(res, 200, {
     ok: true,
     user: {
+      id: session.user.id,
       username: profile[0].username,
       email: session.user.email,
       role: profile[0].role,
@@ -329,6 +331,7 @@ async function mfaVerify(req, res, body) {
     ok: true,
     mfa_reset: reset,
     user: {
+      id: user.id,
       username: profile.username,
       email: user.email,
       role: profile.role,

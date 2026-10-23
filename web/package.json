@@ -7,6 +7,6 @@
     "node": "22.x"
   },
   "scripts": {
-    "test": "node --test test/api.test.js test/i18n.test.js"
+    "test": "node --test test/api.test.js test/i18n.test.js test/vault.test.js"
   }
 }

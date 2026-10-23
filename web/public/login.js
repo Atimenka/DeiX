@@ -58,6 +58,7 @@ document.getElementById('login-form').addEventListener('submit', async (event) =
       button.disabled = false;
       return;
     }
+    await unlockVault(data.user && data.user.id, document.getElementById('password').value);
     location.assign(next);
   } catch (err) {
     showResult(result, 'err', err.message);
@@ -72,6 +73,7 @@ async function submitCode() {
   try {
     const data = await authApi({ action: 'mfa_verify', code: codeInput.value });
     if (data.mfa_reset) toast(tr('Резервный код использован: 2FA отключена. Подключите её заново в аккаунте.'), 'ok');
+    await unlockVault(data.user && data.user.id, document.getElementById('password').value);
     location.assign(data.mfa_reset ? lp('/account#security') : next);
   } catch (err) {
     if (err.code === 'mfa_expired') {
