@@ -87,24 +87,30 @@
     return `${info.prefix}${body}${info.suffix}`;
   }
 
-  function counters(gsap) {
+  function counters(gsap, ScrollTrigger) {
     document.querySelectorAll('.stat b').forEach((node) => {
       const info = parseCounter(node.textContent);
       if (!info || !Number.isFinite(info.value)) return;
-      const state = { v: 0 };
       const final = node.textContent;
       node.style.minWidth = `${node.offsetWidth}px`;
-      node.textContent = formatCounter(info, 0);
-      gsap.to(state, {
-        v: info.value,
-        duration: 1.8,
-        ease: 'power3.out',
-        scrollTrigger: { trigger: node, start: 'top 92%', once: true },
-        onUpdate: () => {
-          node.textContent = formatCounter(info, state.v);
-        },
-        onComplete: () => {
-          node.textContent = final;
+      ScrollTrigger.create({
+        trigger: node,
+        start: 'top 92%',
+        once: true,
+        onEnter: () => {
+          const state = { v: 0 };
+          node.textContent = formatCounter(info, 0);
+          gsap.to(state, {
+            v: info.value,
+            duration: 1.8,
+            ease: 'power3.out',
+            onUpdate: () => {
+              node.textContent = formatCounter(info, state.v);
+            },
+            onComplete: () => {
+              node.textContent = final;
+            },
+          });
         },
       });
     });
@@ -262,7 +268,7 @@
       if (page === 'home') {
         heroTitle(gsap, window.SplitText);
         headings(gsap, window.SplitText);
-        counters(gsap);
+        counters(gsap, window.ScrollTrigger);
         desktopParallax();
         hero3d();
       } else if (page !== 'admin') {
