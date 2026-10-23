@@ -27,6 +27,13 @@ cd "$ROOT"
 BUILD="$ROOT/build"
 mkdir -p "$BUILD"
 
+DEIX_VERSION="0.3.0-beta"
+
+# Идентификатор сборки для центра обновлений: время HEAD-коммита (новый
+# коммит — новая сборка). Для несохранённых правок задайте DEIX_BUILD_ID сами.
+DEIX_BUILD_ID="${DEIX_BUILD_ID:-$(git log -1 --format=%ct 2>/dev/null || echo 0)}"
+export DEIX_BUILD_ID
+
 echo "==> [1/8] Ассемблируем stage2 (32-бит вход + long mode + ATA-ридер ядра)"
 # Временные значения KERNEL_LBA/KERNEL_SECTORS — нужны только для размера
 # stage2 (на адреса/размер не влияют), финальные подставим на шаге [6/8].
@@ -124,6 +131,17 @@ conv_snd "assets/low battery.wav"     lowbat.dps
 conv_snd "assets/full battery.wav"    fullbat.dps
 conv_snd "assets/usb connect.wav"     usbcon.dps
 conv_snd "assets/usb unconnected.wav" usbdisc.dps
+
+# Публичный ключ обновлений вшивается в ядро. Без приватного ключа
+# (tools/make_update.py keygen) вшивается нулевой — обновления выключены.
+UPDATE_KEY="${DEIX_UPDATE_KEY:-$HOME/.deix/update_key.pem}"
+if [ -f "$UPDATE_KEY" ]; then
+    python3 tools/make_update.py pubkey --key "$UPDATE_KEY" --out "$BUILD/update_pubkey.bin"
+    echo "    центр обновлений: ключ $UPDATE_KEY, сборка $DEIX_BUILD_ID"
+else
+    python3 tools/make_update.py pubkey --zero --out "$BUILD/update_pubkey.bin"
+    echo "    центр обновлений выключен: нет ключа $UPDATE_KEY (см. docs/UPDATE.md)"
+fi
 
 echo "==> [3/8] Собираем ядро на Rust (nightly, build-std, target: x86_64-unknown-none)"
 # DEIX_PROFILE=fast ./build.sh — быстрая сборка для отладки: без LTO, 16 единиц
@@ -268,6 +286,12 @@ echo "==> [7b/8] Форматируем разделы: MBR + ext2 + НАСТО�
 # (магия 0xE0F5E1E2, проходят fsck.erofs).
 python3 tools/make_deix_fs.py "$DISK_IMG" --kernel-lba=$KERNEL_LBA
 
+if [ -f "$UPDATE_KEY" ]; then
+    echo "==> [7c/8] Пакет обновления (подписанный манифест + нагрузка)"
+    python3 tools/make_update.py pack --image "$DISK_IMG" --key "$UPDATE_KEY" \
+        --version "$DEIX_VERSION" --build "$DEIX_BUILD_ID" --out-dir "$BUILD/update"
+fi
+
 echo "==> [8/8] Компилируем ISO-загрузчик (RAM-диск 20 МиБ)"
 # Отдельный маленький загрузчик (boot/boot_sector_iso.asm): BIOS грузит
 # весь boot-образ по 0x7c00, стаб копирует stage2 на 0x10000, kernel.bin
@@ -281,8 +305,7 @@ nasm -f bin -D STAGE2_SIZE_DWORDS=$STAGE2_DWORDS -D KERNEL_SIZE_DWORDS=$KERNEL_D
     -D RAMDISK_SIZE_DWORDS=5242880 \
     boot/boot_sector_iso.asm -o "$BUILD/boot_sector_iso.bin"
 
-echo "==> [8b] Релизные артефакты (DeiX 0.3.0-beta x86_64)"
-DEIX_VERSION="0.3.0-beta"
+echo "==> [8b] Релизные артефакты (DeiX $DEIX_VERSION x86_64)"
 cp "$DISK_IMG" "$BUILD/deix-$DEIX_VERSION-x86_64.img"
 if [ -f "$BUILD/deix.iso" ]; then
     cp "$BUILD/deix.iso" "$BUILD/deix-$DEIX_VERSION-x86_64.iso"
