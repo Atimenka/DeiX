@@ -190,6 +190,7 @@ document.getElementById('link-form').addEventListener('submit', async (event) =>
     const data = await postJson('/api/devices', { action: 'link', code: document.getElementById('link-code').value });
     event.target.reset();
     showResult(result, 'ok', tr('Устройство {id}… привязано. В DeiX можно выполнить «dev request».', { id: data.device_id.slice(0, 8) }));
+    if (window.deixCelebrate) window.deixCelebrate();
     loadDevices();
   } catch (err) {
     showResult(result, 'err', err.message);

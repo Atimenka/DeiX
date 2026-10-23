@@ -73,6 +73,7 @@ document.getElementById('submit-form').addEventListener('submit', async (event) 
       note: document.getElementById('note').value,
     });
     showResult(submitResult, data.result === 'created' ? 'ok' : '', data.message);
+    if (data.result === 'created' && window.deixCelebrate) window.deixCelebrate();
     loadMine();
   } catch (err) {
     showResult(submitResult, 'err', err.message);
