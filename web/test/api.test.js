@@ -3,6 +3,7 @@
 process.env.SUPABASE_URL = 'https://db.test';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key';
 process.env.SUPABASE_ANON_KEY = 'anon-key';
+process.env.FLOOD_MAX_PER_MINUTE = '100000';
 
 const nodeCrypto = require('node:crypto');
 const dnsPromises = require('node:dns').promises;
@@ -39,7 +40,9 @@ const db = {
   mails: [],
   challenges: new Map(),
   releases: [],
+  updates: [],
   objects: new Map(),
+  blobs: new Map(),
   seq: 0,
 };
 
@@ -154,6 +157,14 @@ globalThis.fetch = async (url, init = {}) => {
       assert.equal(body.expiresIn, 300);
       return jsonResponse(200, { signedURL: `/object/sign/os-images/${sign[1]}?token=dl` });
     }
+    const authed = /^\/object\/authenticated\/os-images\/(.+)$/.exec(rel);
+    if (authed) {
+      const blob = db.blobs.get(authed[1]);
+      if (!blob) return jsonResponse(404, { error: 'not_found' });
+      const [, from, to] = /^bytes=(\d+)-(\d+)$/.exec(init.headers.Range);
+      const slice = blob.subarray(Number(from), Number(to) + 1);
+      return { ok: true, status: 206, arrayBuffer: async () => slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.length) };
+    }
     const info = /^\/object\/info\/os-images\/(.+)$/.exec(rel);
     if (info) {
       return db.objects.has(info[1]) ? jsonResponse(200, { size: db.objects.get(info[1]) }) : jsonResponse(404, { error: 'not_found' });
@@ -189,6 +200,36 @@ globalThis.fetch = async (url, init = {}) => {
     }
     const cols = (q.get('select') || '*').split(',');
     return jsonResponse(200, cols.includes('*') ? rows : rows.map((r) => Object.fromEntries(cols.map((c) => [c, r[c]]))));
+  }
+  if (path === 'os_updates') {
+    const q = u.searchParams;
+    const eq = (name) => (q.get(name) || '').slice(3);
+    if (init.method === 'POST') {
+      const row = { id: `00000000-0000-0000-0000-${String(++db.seq).padStart(12, '0')}`, downloads: 0, created_at: new Date().toISOString(), published_at: null, ...body };
+      db.updates.push(row);
+      return jsonResponse(201, [row]);
+    }
+    let rows = db.updates;
+    if (q.get('id')) rows = rows.filter((r) => r.id === eq('id'));
+    if (q.get('build')) rows = rows.filter((r) => String(r.build) === eq('build'));
+    if (q.get('channel')) rows = rows.filter((r) => r.channel === eq('channel'));
+    if (q.get('ready')) rows = rows.filter((r) => String(r.ready) === eq('ready'));
+    if (q.get('published')) rows = rows.filter((r) => String(r.published) === eq('published'));
+    if (init.method === 'PATCH') {
+      for (const row of rows) Object.assign(row, body);
+      return jsonResponse(204);
+    }
+    if (init.method === 'DELETE') {
+      db.updates = db.updates.filter((r) => !rows.includes(r));
+      return jsonResponse(204);
+    }
+    rows = [...rows].sort((a, b) => b.build - a.build).slice(0, Number(q.get('limit') || 1000));
+    const cols = (q.get('select') || '*').split(',');
+    return jsonResponse(200, rows.map((r) => Object.fromEntries(cols.map((c) => [c, r[c]]))));
+  }
+  if (path === 'rpc/bump_update_downloads') {
+    for (const row of db.updates) if (row.id === body.p_id) row.downloads += 1;
+    return jsonResponse(200);
   }
   if (path === 'rpc/bump_release_downloads') {
     for (const row of db.releases) if (row.id === body.p_id) row.downloads += 1;
@@ -341,6 +382,7 @@ const devicesHandler = require('../api/devices');
 const osHandler = require('../api/os');
 const keysHandler = require('../api/keys');
 const releasesHandler = require('../api/releases');
+const updateHandler = require('../api/update');
 const { signedMessage } = require('../api/_keys');
 
 function call(handler, body, { cookies = {}, headers } = {}) {
@@ -792,6 +834,21 @@ function callGet(handler, url, headers) {
   });
 }
 
+function callRaw(handler, url) {
+  return new Promise((resolve) => {
+    const out = { headers: {}, statusCode: 200 };
+    const req = { method: 'GET', url, headers: { host: 'site.test', 'x-forwarded-for': '7.7.7.7' } };
+    const res = {
+      setHeader: (k, v) => {
+        out.headers[k.toLowerCase()] = v;
+      },
+      end: (data) => resolve({ status: res.statusCode, headers: out.headers, bytes: Buffer.from(data || ''), body: Buffer.from(data || '').toString('latin1') }),
+    };
+    Object.defineProperty(res, 'statusCode', { get: () => out.statusCode, set: (v) => (out.statusCode = v) });
+    handler(req, res);
+  });
+}
+
 test('OS releases: owner uploads, the public downloads', async () => {
   const sha = 'ab'.repeat(32);
   const good = { action: 'release_prepare', version: '0.1.0', title: 'First', notes: 'Hello', filename: 'disk.IMG', size: 2048, sha256: sha };
@@ -873,4 +930,107 @@ test('OS releases: downloads are rate limited per address', async () => {
   for (let i = 0; i < 30; i += 1) assert.equal((await callGet(releasesHandler, '/api/releases?download=1.0', headers)).status, 302);
   assert.equal((await callGet(releasesHandler, '/api/releases?download=1.0', headers)).status, 429);
   db.releases.length = 0;
+});
+
+const updateKeys = nodeCrypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+
+function updateManifestFile(overrides = {}, signer = updateKeys.privateKey) {
+  const payload = overrides.payload || nodeCrypto.randomBytes(300 * 1024);
+  const doc = {
+    build: 1790000000,
+    channel: 'stable',
+    payload_sha256: nodeCrypto.createHash('sha256').update(payload).digest('hex'),
+    payload_size: payload.length,
+    product: 'deix',
+    version: '0.4.0',
+    ...overrides.doc,
+  };
+  const text = JSON.stringify(Object.fromEntries(Object.entries(doc).sort(([a], [b]) => (a < b ? -1 : 1))));
+  const message = Buffer.concat([Buffer.from('DEIX-UPDATE-1\0', 'latin1'), Buffer.from(text, 'latin1')]);
+  const signature = nodeCrypto.sign('sha256', message, { key: signer, dsaEncoding: 'ieee-p1363' }).toString('hex');
+  return { file: `DEIXMANIFEST1\n${signature}\n${text}\n`, text, signature, payload, doc };
+}
+
+test('OS updates: owner publishes, the OS fetches the manifest and the payload in parts', async () => {
+  const pub = updateKeys.publicKey.export({ type: 'spki', format: 'der' }).subarray(-65).toString('hex');
+  process.env.UPDATE_PUBKEY = pub;
+  const owner = await loginOwner();
+  const made = updateManifestFile();
+  const prepare = (manifest_file) => call(adminHandler, { action: 'update_prepare', manifest_file }, { cookies: owner });
+
+  assert.equal((await call(adminHandler, { action: 'update_prepare', manifest_file: made.file })).status, 401);
+  assert.equal((await prepare('junk')).status, 400);
+  assert.equal((await prepare(made.file.replace(made.signature, '0'.repeat(128)))).status, 400);
+  assert.equal((await prepare(updateManifestFile({}, nodeCrypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey).file)).status, 400);
+  assert.equal((await prepare(updateManifestFile({ doc: { channel: 'nightly' } }).file)).status, 400);
+  assert.equal((await prepare(updateManifestFile({ doc: { payload_size: 7 * 1024 * 1024 } }).file)).status, 400);
+  assert.equal(db.updates.length, 0);
+
+  const prepared = await prepare(made.file);
+  assert.equal(prepared.status, 200);
+  assert.equal(prepared.json.upload_url, 'https://db.test/storage/v1/object/upload/sign/os-images/updates/1790000000/payload.bin?token=up');
+  assert.equal(db.updates[0].manifest, made.text);
+
+  assert.equal((await call(adminHandler, { action: 'update_finalize', id: prepared.json.id }, { cookies: owner })).status, 400);
+  db.objects.set('updates/1790000000/payload.bin', made.payload.length - 1);
+  assert.equal((await call(adminHandler, { action: 'update_finalize', id: prepared.json.id }, { cookies: owner })).status, 400);
+  assert.equal(db.objects.has('updates/1790000000/payload.bin'), false);
+
+  assert.equal((await callGet(updateHandler, '/api/update')).json.none, true);
+  db.objects.set('updates/1790000000/payload.bin', made.payload.length);
+  db.blobs.set('updates/1790000000/payload.bin', made.payload);
+  const done = await call(adminHandler, { action: 'update_finalize', id: prepared.json.id, publish: true }, { cookies: owner });
+  assert.equal(done.json.published, true);
+
+  const head = await callRaw(updateHandler, '/api/update?channel=stable');
+  assert.equal(head.status, 200);
+  const doc = JSON.parse(head.body);
+  assert.equal(doc.parts, 3);
+  assert.equal(doc.part_size, 131072);
+  assert.equal(doc.signature, made.signature);
+  assert.ok(head.body.includes(`"manifest":${made.text},`), 'the manifest must be embedded byte for byte');
+  assert.equal((await callGet(updateHandler, '/api/update?channel=beta')).json.none, true);
+  assert.equal((await callGet(updateHandler, '/api/update?channel=x')).status, 400);
+
+  const parts = [];
+  for (let i = 0; i < 3; i += 1) {
+    const part = await callRaw(updateHandler, `/api/update?build=1790000000&part=${i}`);
+    assert.equal(part.status, 200);
+    parts.push(part.bytes);
+  }
+  assert.equal(Buffer.concat(parts).equals(made.payload), true);
+  assert.equal((await callGet(updateHandler, '/api/update?build=1790000000&part=3')).status, 404);
+  assert.equal((await callGet(updateHandler, '/api/update?build=1&part=0')).status, 404);
+  assert.equal((await callGet(updateHandler, '/api/update?build=x&part=0')).status, 400);
+  assert.equal(db.updates[0].downloads, 1);
+
+  const listed = await call(adminHandler, { action: 'updates' }, { cookies: owner });
+  assert.equal(listed.json.updates[0].published, true);
+  assert.equal(listed.json.updates[0].manifest, undefined);
+  assert.equal((await call(adminHandler, { action: 'update_publish', id: prepared.json.id, published: false }, { cookies: owner })).status, 200);
+  assert.equal((await callGet(updateHandler, '/api/update')).json.none, true);
+  assert.equal((await prepare(made.file)).status, 409);
+  assert.equal((await call(adminHandler, { action: 'update_remove', id: prepared.json.id }, { cookies: owner })).status, 200);
+  assert.equal(db.updates.length, 0);
+  delete process.env.UPDATE_PUBKEY;
+});
+
+test('OS updates: requests are rate limited per address', async () => {
+  const headers = { 'x-forwarded-for': '8.8.4.4' };
+  for (let i = 0; i < 120; i += 1) assert.equal((await callGet(updateHandler, '/api/update', headers)).status, 200);
+  assert.equal((await callGet(updateHandler, '/api/update', headers)).status, 429);
+});
+
+test('flood guard: one address cannot exceed the per-minute ceiling on any endpoint', async () => {
+  process.env.FLOOD_MAX_PER_MINUTE = '5';
+  try {
+    const headers = { 'x-forwarded-for': '10.20.30.40' };
+    for (let i = 0; i < 5; i += 1) assert.equal((await callGet(releasesHandler, '/api/releases', headers)).status, 200);
+    assert.equal((await callGet(releasesHandler, '/api/releases', headers)).status, 429);
+    assert.equal((await callGet(updateHandler, '/api/update', headers)).status, 429);
+    assert.equal((await call(authHandler, { action: 'config' }, { headers })).status, 429);
+    assert.equal((await callGet(releasesHandler, '/api/releases', { 'x-forwarded-for': '10.20.30.41' })).status, 200);
+  } finally {
+    process.env.FLOOD_MAX_PER_MINUTE = '100000';
+  }
 });

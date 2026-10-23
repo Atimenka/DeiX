@@ -1,6 +1,6 @@
 'use strict';
 
-const { HttpError, clientIp, fail, overLimit, recordHit, rpc, sb, send, storage, storageUrl } = require('./_lib');
+const { HttpError, clientIp, fail, floodGuard, overLimit, recordHit, rpc, sb, send, storage, storageUrl } = require('./_lib');
 const { BUCKET, VERSION_RE } = require('./_releases');
 const { requestLang } = require('./_i18n');
 
@@ -42,6 +42,7 @@ async function download(req, res, version) {
 module.exports = async function handler(req, res) {
   try {
     res.deixLang = requestLang(req);
+    floodGuard(req);
     if (req.method !== 'GET') {
       res.setHeader('Allow', 'GET');
       throw new HttpError(405, 'Метод не поддерживается');

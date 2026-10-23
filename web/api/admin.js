@@ -2,6 +2,7 @@
 
 const { DEVICE_ID_RE, HttpError, fail, guardPost, readBody, requireOwner, rpc, sb, send, storage, storageUrl } = require('./_lib');
 const { BUCKET, EXT_RE, MAX_SIZE, UUID_RE, VERSION_RE, objectPath } = require('./_releases');
+const { parseManifestFile, payloadPath } = require('./_updates');
 
 const LIST_COLUMNS =
   'device_id,hostname,note,source,status,created_at,decided_at,decided_by,consumed_at,profiles(username)';
@@ -153,6 +154,94 @@ async function releaseRemove(res, body) {
   return send(res, 200, { ok: true });
 }
 
+const UPDATE_COLUMNS = 'id,build,version,channel,payload_size,ready,published,downloads,created_by,created_at,published_at';
+
+async function updateRow(id) {
+  const rows = await sb(`os_updates?id=eq.${id}&select=id,build,payload_path,payload_size,ready`);
+  if (!rows[0]) throw new HttpError(404, 'Обновление не найдено');
+  return rows[0];
+}
+
+async function updatesList(res) {
+  const updates = await sb(`os_updates?select=${UPDATE_COLUMNS}&order=build.desc&limit=100`);
+  return send(res, 200, { ok: true, updates });
+}
+
+async function updatePrepare(res, owner, body) {
+  const { manifest, signature, doc } = parseManifestFile(body.manifest_file);
+  const path = payloadPath(doc.build);
+  const fields = {
+    version: doc.version,
+    channel: doc.channel,
+    manifest,
+    signature,
+    payload_path: path,
+    payload_size: doc.payload_size,
+    ready: false,
+    published: false,
+  };
+  const existing = await sb(`os_updates?build=eq.${doc.build}&select=id,ready`);
+  let id;
+  if (existing[0]) {
+    if (existing[0].ready) throw new HttpError(409, 'Обновление с такой сборкой уже добавлено');
+    id = existing[0].id;
+    await sb(`os_updates?id=eq.${id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: fields });
+  } else {
+    const rows = await sb('os_updates', {
+      method: 'POST',
+      headers: { Prefer: 'return=representation' },
+      body: { build: doc.build, created_by: owner.username, ...fields },
+    });
+    id = rows[0].id;
+  }
+  const signed = await storage(`object/upload/sign/${BUCKET}/${path}`, { method: 'POST', headers: { 'x-upsert': 'true' } });
+  if (signed.status !== 200 || !signed.data || typeof signed.data.url !== 'string') {
+    throw new HttpError(502, 'Не удалось подготовить загрузку в хранилище');
+  }
+  return send(res, 200, { ok: true, id, payload_size: doc.payload_size, upload_url: storageUrl(signed.data.url) });
+}
+
+async function updateFinalize(res, body) {
+  const row = await updateRow(releaseId(body));
+  const info = await storage(`object/info/${BUCKET}/${row.payload_path}`);
+  if (info.status === 404 || info.status === 400) {
+    throw new HttpError(400, 'Файла нет в хранилище: загрузка не завершилась');
+  }
+  if (info.status !== 200 || !info.data) throw new HttpError(502, 'Не удалось проверить файл в хранилище');
+  const stored = Number(info.data.size !== undefined ? info.data.size : info.data.metadata && info.data.metadata.size);
+  if (stored !== Number(row.payload_size)) {
+    await storage(`object/${BUCKET}`, { method: 'DELETE', body: { prefixes: [row.payload_path] } });
+    throw new HttpError(400, 'Размер загруженного файла не совпал с заявленным, файл удалён');
+  }
+  const publish = body.publish === true;
+  await sb(`os_updates?id=eq.${row.id}`, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=minimal' },
+    body: { ready: true, published: publish, published_at: publish ? new Date().toISOString() : null },
+  });
+  return send(res, 200, { ok: true, published: publish });
+}
+
+async function updatePublish(res, body) {
+  if (typeof body.published !== 'boolean') throw new HttpError(400, 'Нужно значение published: true или false');
+  const row = await updateRow(releaseId(body));
+  if (!row.ready) throw new HttpError(400, 'Файл обновления ещё не загружен');
+  await sb(`os_updates?id=eq.${row.id}`, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=minimal' },
+    body: { published: body.published, published_at: body.published ? new Date().toISOString() : null },
+  });
+  return send(res, 200, { ok: true, published: body.published });
+}
+
+async function updateRemove(res, body) {
+  const row = await updateRow(releaseId(body));
+  const removed = await storage(`object/${BUCKET}`, { method: 'DELETE', body: { prefixes: [row.payload_path] } });
+  if (removed.status >= 500) throw new HttpError(502, 'Не удалось удалить файл из хранилища');
+  await sb(`os_updates?id=eq.${row.id}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
+  return send(res, 200, { ok: true });
+}
+
 module.exports = async function handler(req, res) {
   try {
     guardPost(req, res);
@@ -177,6 +266,16 @@ module.exports = async function handler(req, res) {
         return await releasePublish(res, body);
       case 'release_remove':
         return await releaseRemove(res, body);
+      case 'updates':
+        return await updatesList(res);
+      case 'update_prepare':
+        return await updatePrepare(res, owner, body);
+      case 'update_finalize':
+        return await updateFinalize(res, body);
+      case 'update_publish':
+        return await updatePublish(res, body);
+      case 'update_remove':
+        return await updateRemove(res, body);
       default:
         throw new HttpError(400, 'Неизвестное действие');
     }

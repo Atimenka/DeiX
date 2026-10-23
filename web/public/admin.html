@@ -96,6 +96,44 @@
         </div>
         <p class="hint">Опубликованные версии видны всем на странице «Скачать». Черновик виден только здесь.</p>
       </div>
+
+      <div id="updates-section" hidden>
+        <div class="toolbar">
+          <h1 class="title">Обновления <span class="grad">ОС</span></h1>
+          <div class="right">
+            <button class="btn small" id="upd-refresh-btn" type="button">Обновить</button>
+          </div>
+        </div>
+
+        <div class="panel rel-panel">
+          <h3>Новое обновление</h3>
+          <p class="hint">Пакет из build/update/ после ./build.sh: файл манифеста (.manifest) и нагрузка (.payload). Подпись проверяет сама ОС, поэтому сайт только хранит и раздаёт файлы.</p>
+          <form id="update-form" class="stack" autocomplete="off">
+            <label>Файл манифеста
+              <input id="upd-manifest" name="manifest" type="file" accept=".manifest" required>
+            </label>
+            <label>Файл нагрузки
+              <input id="upd-payload" name="payload" type="file" accept=".payload" required>
+              <span class="hint">До 6 МиБ.</span>
+            </label>
+            <label class="switch"><input type="checkbox" id="upd-publish" checked><span>Опубликовать сразу после загрузки</span></label>
+            <button class="btn primary" id="upd-submit" type="submit">Загрузить обновление</button>
+            <progress id="upd-progress" max="100" value="0" hidden></progress>
+            <div class="result" id="upd-result" hidden></div>
+          </form>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Версия</th><th>Сборка</th><th>Статус</th><th>Скачиваний</th><th>Добавлено</th><th>Действия</th></tr>
+            </thead>
+            <tbody id="upd-rows"></tbody>
+          </table>
+          <div class="empty" id="upd-empty" hidden>Обновлений пока нет.</div>
+        </div>
+        <p class="hint">Опубликованное обновление видно устройствам по команде update check. Черновик виден только здесь.</p>
+      </div>
     </section>
   </main>
   <script src="/i18n.js"></script>

@@ -19,6 +19,15 @@ function otherLangPath() {
 }
 
 const EN = {
+  'Обновления ОС': 'OS updates',
+  'Выберите файлы манифеста и нагрузки': 'Choose the manifest and payload files',
+  'Размер нагрузки не совпадает с манифестом': 'The payload size does not match the manifest',
+  'Обновление опубликовано': 'The update is published',
+  'Обновление скрыто': 'The update is hidden',
+  'Обновление удалено': 'The update was deleted',
+  'Удалить обновление {build}? Нагрузка будет удалена из хранилища.': 'Delete update {build}? The payload will be removed from storage.',
+  'Обновление загружено и опубликовано.': 'The update was uploaded and published.',
+  'Обновление загружено как черновик.': 'The update was uploaded as a draft.',
   ' командой dev link в DeiX.': ' with the dev link command in DeiX.',
   '2FA включена': '2FA on',
   '2FA выключена': '2FA off',

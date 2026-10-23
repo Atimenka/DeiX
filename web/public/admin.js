@@ -10,7 +10,7 @@ const TABS = [
 ];
 
 const $ = (id) => document.getElementById(id);
-let state = { requests: [], counts: {}, tab: 'pending', timer: null, section: 'requests', releases: [] };
+let state = { requests: [], counts: {}, tab: 'pending', timer: null, section: 'requests', releases: [], updates: [] };
 const MAX_IMAGE = 50 * 1024 * 1024;
 
 function api(body) {
@@ -186,7 +186,7 @@ async function refresh() {
 function renderSections() {
   const box = $('section-tabs');
   box.replaceChildren();
-  for (const [key, label] of [['requests', tr('Заявки')], ['releases', tr('Версии ОС')]]) {
+  for (const [key, label] of [['requests', tr('Заявки')], ['releases', tr('Версии ОС')], ['updates', tr('Обновления ОС')]]) {
     box.append(
       el('button', {
         class: `tab${state.section === key ? ' active' : ''}`,
@@ -196,12 +196,14 @@ function renderSections() {
           state.section = key;
           renderSections();
           if (key === 'releases') loadReleases();
+          if (key === 'updates') loadUpdates();
         },
       }),
     );
   }
   $('requests-section').hidden = state.section !== 'requests';
   $('releases-section').hidden = state.section !== 'releases';
+  $('updates-section').hidden = state.section !== 'updates';
 }
 
 function releaseBadge(row) {
@@ -351,6 +353,110 @@ async function submitRelease(event) {
 
 $('release-form').addEventListener('submit', submitRelease);
 $('rel-refresh-btn').addEventListener('click', loadReleases);
+
+function renderUpdates() {
+  const body = $('upd-rows');
+  body.replaceChildren();
+  $('upd-empty').hidden = state.updates.length > 0;
+  for (const row of state.updates) {
+    const [kind, label] = releaseBadge(row);
+    const buttons = [];
+    if (row.ready) {
+      buttons.push(
+        el('button', {
+          class: `btn small ${row.published ? '' : 'good'}`,
+          type: 'button',
+          text: row.published ? tr('Скрыть') : tr('Опубликовать'),
+          onclick: () => setUpdatePublished(row, !row.published),
+        }),
+      );
+    }
+    buttons.push(el('button', { class: 'btn bad small', type: 'button', text: tr('Удалить'), onclick: () => removeUpdate(row) }));
+    body.append(
+      el('tr', null, [
+        el('td', { class: 'devcell' }, [el('span', { class: 'mono', text: row.version }), el('small', { text: row.channel })]),
+        el('td', { class: 'devcell' }, [el('span', { class: 'mono', text: String(row.build) }), el('small', { text: fmtSize(row.payload_size) })]),
+        el('td', null, [el('span', { class: `badge ${kind}`, text: label })]),
+        el('td', null, [el('span', { text: String(row.downloads) })]),
+        el('td', null, [el('div', { text: fmt(row.created_at) }), el('small', { class: 'hint', text: row.created_by || '' })]),
+        el('td', { class: 'actions' }, buttons),
+      ]),
+    );
+  }
+}
+
+async function loadUpdates() {
+  try {
+    state.updates = (await api({ action: 'updates' })).updates;
+    renderUpdates();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function setUpdatePublished(row, published) {
+  try {
+    await api({ action: 'update_publish', id: row.id, published });
+    toast(published ? tr('Обновление опубликовано') : tr('Обновление скрыто'), 'ok');
+    await loadUpdates();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function removeUpdate(row) {
+  if (!confirm(tr('Удалить обновление {build}? Нагрузка будет удалена из хранилища.', { build: row.build }))) return;
+  try {
+    await api({ action: 'update_remove', id: row.id });
+    toast(tr('Обновление удалено'), 'ok');
+    await loadUpdates();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function submitUpdate(event) {
+  event.preventDefault();
+  const result = $('upd-result');
+  const progress = $('upd-progress');
+  const button = $('upd-submit');
+  const manifestFile = $('upd-manifest').files[0];
+  const payloadFile = $('upd-payload').files[0];
+  if (!manifestFile || !payloadFile) {
+    showResult(result, 'err', tr('Выберите файлы манифеста и нагрузки'));
+    return;
+  }
+  const publish = $('upd-publish').checked;
+  button.disabled = true;
+  progress.hidden = true;
+  try {
+    showResult(result, '', tr('Готовим загрузку…'));
+    const prepared = await api({ action: 'update_prepare', manifest_file: await manifestFile.text() });
+    if (prepared.payload_size !== payloadFile.size) {
+      throw new Error(tr('Размер нагрузки не совпадает с манифестом'));
+    }
+    progress.value = 0;
+    progress.hidden = false;
+    await uploadFile(prepared.upload_url, payloadFile, (percent) => {
+      progress.value = percent;
+      showResult(result, '', tr('Загружаем файл: {percent}%', { percent }));
+    });
+    showResult(result, '', tr('Проверяем файл…'));
+    await api({ action: 'update_finalize', id: prepared.id, publish });
+    showResult(result, 'ok', publish ? tr('Обновление загружено и опубликовано.') : tr('Обновление загружено как черновик.'));
+    $('update-form').reset();
+    await loadUpdates();
+  } catch (err) {
+    showResult(result, 'err', err.message);
+    await loadUpdates();
+  } finally {
+    progress.hidden = true;
+    button.disabled = false;
+  }
+}
+
+$('update-form').addEventListener('submit', submitUpdate);
+$('upd-refresh-btn').addEventListener('click', loadUpdates);
 
 $('refresh-btn').addEventListener('click', refresh);
 

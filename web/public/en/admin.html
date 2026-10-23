@@ -98,6 +98,44 @@
         </div>
         <p class="hint">Published releases are visible to everyone on the Download page. A draft is visible only here.</p>
       </div>
+
+      <div id="updates-section" hidden>
+        <div class="toolbar">
+          <h1 class="title">OS <span class="grad">updates</span></h1>
+          <div class="right">
+            <button class="btn small" id="upd-refresh-btn" type="button">Refresh</button>
+          </div>
+        </div>
+
+        <div class="panel rel-panel">
+          <h3>New update</h3>
+          <p class="hint">The package from build/update/ after ./build.sh: the manifest file (.manifest) and the payload (.payload). The OS itself verifies the signature, so the site only stores and serves the files.</p>
+          <form id="update-form" class="stack" autocomplete="off">
+            <label>Manifest file
+              <input id="upd-manifest" name="manifest" type="file" accept=".manifest" required>
+            </label>
+            <label>Payload file
+              <input id="upd-payload" name="payload" type="file" accept=".payload" required>
+              <span class="hint">Up to 6 MiB.</span>
+            </label>
+            <label class="switch"><input type="checkbox" id="upd-publish" checked><span>Publish right after the upload</span></label>
+            <button class="btn primary" id="upd-submit" type="submit">Upload the update</button>
+            <progress id="upd-progress" max="100" value="0" hidden></progress>
+            <div class="result" id="upd-result" hidden></div>
+          </form>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Version</th><th>Build</th><th>Status</th><th>Downloads</th><th>Added</th><th>Actions</th></tr>
+            </thead>
+            <tbody id="upd-rows"></tbody>
+          </table>
+          <div class="empty" id="upd-empty" hidden>No updates yet.</div>
+        </div>
+        <p class="hint">A published update is visible to devices through the update check command. A draft is visible only here.</p>
+      </div>
     </section>
   </main>
   <script src="/i18n.js"></script>

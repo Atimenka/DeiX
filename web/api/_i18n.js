@@ -5,6 +5,21 @@
  * в коде; язык берётся из заголовка `x-deix-lang`, который шлёт сайт.
  */
 const EN = {
+  'Файл манифеста не распознан': 'The manifest file was not recognised',
+  'Подпись манифеста: нужно 128 hex-символов': 'Manifest signature: 128 hex characters are required',
+  'Манифест должен быть одной строкой ASCII-JSON до 16000 символов': 'The manifest must be a single ASCII JSON line of up to 16000 characters',
+  'Манифест не является корректным JSON': 'The manifest is not valid JSON',
+  'Манифест содержит некорректные поля': 'The manifest contains invalid fields',
+  'Подпись манифеста не сходится с ключом обновлений': 'The manifest signature does not match the update key',
+  'Обновление не найдено': 'Update not found',
+  'Обновление с такой сборкой уже добавлено': 'An update with this build has already been added',
+  'Файл обновления ещё не загружен': 'The update file has not been uploaded yet',
+  'Слишком много запросов с этого адреса. Попробуйте позже.': 'Too many requests from this address. Try again later.',
+  'Неизвестный канал обновлений': 'Unknown update channel',
+  'Некорректный номер сборки или части': 'Invalid build or part number',
+  'Такой сборки нет или она не опубликована': 'No such build, or it is not published',
+  'Такой части нет': 'No such part',
+  'Не удалось прочитать файл из хранилища': 'Could not read the file from storage',
   'Укажите корректную почту': 'Enter a valid email address',
   'Одноразовые адреса почты не принимаются': 'Disposable email addresses are not accepted',
   'У этого домена нет почтового сервера. Проверьте адрес.': 'This domain has no mail server. Check the address.',

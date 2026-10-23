@@ -106,6 +106,23 @@ async function storage(path, { method = 'GET', body, headers = {} } = {}) {
   }
 }
 
+/** Читает диапазон байт объекта приватного бакета. */
+async function storageBytes(path, start, end) {
+  requireConfigured();
+  let resp;
+  try {
+    resp = await fetch(`${SUPABASE_URL}/storage/v1/${path}`, {
+      headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, Range: `bytes=${start}-${end}` },
+    });
+  } catch (e) {
+    console.error('supabase storage unreachable:', e && e.message);
+    throw new HttpError(502, 'Хранилище файлов недоступно');
+  }
+  if (resp.status !== 200 && resp.status !== 206) return null;
+  const bytes = Buffer.from(await resp.arrayBuffer());
+  return resp.status === 206 ? bytes : bytes.subarray(start, end + 1);
+}
+
 /** Абсолютный адрес по относительному пути, который вернул Storage (`/object/...`). */
 function storageUrl(relative) {
   return `${SUPABASE_URL}/storage/v1${relative}`;
@@ -182,9 +199,24 @@ function sameOrigin(req) {
   }
 }
 
+/**
+ * Грубый потолок запросов с одного адреса. Счётчик живёт в памяти одного
+ * экземпляра функции, поэтому это защита от одиночного шумного клиента, а не
+ * от распределённого потока: от него — фильтры Vercel (Attack Challenge Mode).
+ */
+function floodGuard(req) {
+  const max = Number(process.env.FLOOD_MAX_PER_MINUTE) || 300;
+  const key = `flood:${clientIp(req)}`;
+  if (overLimit(key, max, 60 * 1000)) {
+    throw new HttpError(429, 'Слишком много запросов с этого адреса. Попробуйте позже.');
+  }
+  recordHit(key);
+}
+
 /** Общая защита всех POST-эндпоинтов: метод, origin и заголовок против CSRF. */
 function guardPost(req, res) {
   res.deixLang = requestLang(req);
+  floodGuard(req);
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     throw new HttpError(405, 'Метод не поддерживается');
@@ -350,6 +382,7 @@ module.exports = {
   clientIp,
   currentUser,
   fail,
+  floodGuard,
   guardPost,
   overLimit,
   readBody,
@@ -361,6 +394,7 @@ module.exports = {
   send,
   setSession,
   storage,
+  storageBytes,
   storageUrl,
   verifyCaptcha,
 };
