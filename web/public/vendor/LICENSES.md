@@ -10,8 +10,9 @@
 | `confetti.min.js` | canvas-confetti | 1.9.4 | ISC |
 | `three-scene.js` | three.js (r186, с tree-shaking) + сцена `web/vendor-src/hero3d.src.js` | 0.186.1 | MIT |
 | `fonts/inter-*.woff2` | Inter Variable (@fontsource-variable/inter) | — | SIL OFL 1.1 |
+| `fonts/nunito-*.woff2` | Nunito Variable (@fontsource-variable/nunito), режим «Фембой» | 5.3.0 | SIL OFL 1.1 |
 | `fonts/jbmono-*.woff2` | JetBrains Mono Variable (@fontsource-variable/jetbrains-mono) | — | SIL OFL 1.1 |
 
 `three-scene.js` собирается из исходников командой `web/vendor-src/build.sh` (нужны npm-пакеты `three` и `esbuild` во временной папке; они не входят в `web/package.json`).
 
-Авторские права: GSAP © GreenSock; Lenis © darkroom.engineering; vanilla-tilt © Șandor Sergiu; canvas-confetti © Kiril Vatev; three.js © 2010–2026 three.js authors; Inter © The Inter Project Authors; JetBrains Mono © The JetBrains Mono Project Authors. Тексты лицензий MIT/ISC разрешают распространение при сохранении этого уведомления.
+Авторские права: GSAP © GreenSock; Lenis © darkroom.engineering; vanilla-tilt © Șandor Sergiu; canvas-confetti © Kiril Vatev; three.js © 2010–2026 three.js authors; Inter © The Inter Project Authors; JetBrains Mono © The JetBrains Mono Project Authors; Nunito © The Nunito Project Authors. Тексты лицензий MIT/ISC разрешают распространение при сохранении этого уведомления.

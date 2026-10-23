@@ -5,7 +5,9 @@
   'use strict';
 
   const root = document.documentElement;
-  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const mode = root.getAttribute('data-mode') || 'beauty';
+  const plain = mode === 'plain';
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches || plain;
   const finePointer = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
   const page = document.body.dataset.page || '';
   const loaded = {};
@@ -233,10 +235,10 @@
   const SCENE_PAGES = ['home', 'download', 'login', 'register', 'request', 'verify', '404'];
 
   function mountScene() {
-    if (!SCENE_PAGES.includes(page) || !webglOk()) return;
+    if (plain || !SCENE_PAGES.includes(page) || !webglOk()) return;
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4 || (navigator.hardwareConcurrency || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js?v=6')
+      load('/vendor/three-scene.js?v=7')
         .then(() => {
           scene = window.DeixScene.mount({
             still: reduce,
@@ -276,7 +278,7 @@
     box.classList.add('has-3d');
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js?v=6')
+      load('/vendor/three-scene.js?v=7')
         .then(() => {
           view = window.DeixScene[factory](host, { still: reduce, lite, initial, onHover: mark });
         })
@@ -299,7 +301,7 @@
     box.classList.add('has-3d');
     const lite = window.innerWidth < 760 || (navigator.deviceMemory || 8) <= 4;
     const start = () =>
-      load('/vendor/three-scene.js?v=6')
+      load('/vendor/three-scene.js?v=7')
         .then(() => {
           window.DeixScene[factory](host, { still: reduce, lite, ...extra });
         })
@@ -551,7 +553,20 @@
     }
 
     const commands = {
-      help: () => print('help  about  neofetch  ls  open <page>  theme  lang  github  matrix  clear  exit'),
+      help: () => print('help  about  neofetch  ls  open <page>  theme  mode <beauty|femboy|plain>  lang  github  matrix  clear  exit'),
+      mode: (arg) => {
+        const key = (arg || '').trim();
+        if (!['beauty', 'femboy', 'plain'].includes(key)) return print(`mode: now ${mode}. usage: mode beauty | femboy | plain`, 'sh-err');
+        if (key === mode) return print(`mode: already ${key}`);
+        print(`mode: ${key}, reloading...`);
+        try {
+          localStorage.setItem('deix-mode', key);
+        } catch {
+          return print('mode: storage is blocked, cannot save', 'sh-err');
+        }
+        return setTimeout(() => location.reload(), 300);
+      },
+      femboy: () => commands.mode('femboy'),
       about: () => print('DeiX is a small operating system written from scratch in Rust. This page is its website.'),
       neofetch: () => facts.forEach((line) => print(line, 'sh-fact')),
       ls: () => print(Object.keys(pages).join('  ')),
@@ -680,6 +695,46 @@
     });
   }
 
+  /** Режим «Фембой»: плывущие сердечки и звёздочки, сердечки по клику. */
+  function femFx() {
+    if (reduce || mode !== 'femboy') return;
+    const glyphs = ['♡', '✦', '♥', '✧', '♡', '✿'];
+    const colors = ['var(--accent)', 'var(--accent-2)', '#ffffff', 'var(--accent-soft)'];
+    const layer = document.createElement('div');
+    layer.className = 'fem-fx';
+    layer.setAttribute('aria-hidden', 'true');
+    const count = window.innerWidth < 760 ? 9 : 18;
+    for (let i = 0; i < count; i += 1) {
+      const node = document.createElement('i');
+      node.textContent = glyphs[i % glyphs.length];
+      node.style.setProperty('--x', `${(Math.random() * 100).toFixed(1)}vw`);
+      node.style.setProperty('--s', `${(14 + Math.random() * 20).toFixed(0)}px`);
+      node.style.setProperty('--c', colors[i % colors.length]);
+      node.style.setProperty('--d', `${(14 + Math.random() * 14).toFixed(1)}s`);
+      node.style.setProperty('--w', `${(-Math.random() * 24).toFixed(1)}s`);
+      node.style.setProperty('--dx', `${(Math.random() * 80 - 40).toFixed(0)}px`);
+      layer.append(node);
+    }
+    document.body.append(layer);
+    document.addEventListener('pointerdown', (event) => {
+      if (!(event.target instanceof Element) || event.target.closest('input, textarea, select, .sh')) return;
+      for (let i = 0; i < 6; i += 1) {
+        const node = document.createElement('i');
+        node.className = 'fem-pop';
+        node.setAttribute('aria-hidden', 'true');
+        node.textContent = glyphs[(i + Math.floor(Math.random() * 3)) % glyphs.length];
+        node.style.setProperty('--x', `${event.clientX}px`);
+        node.style.setProperty('--y', `${event.clientY}px`);
+        node.style.setProperty('--dx', `${(Math.random() * 120 - 60).toFixed(0)}px`);
+        node.style.setProperty('--dy', `${(-30 - Math.random() * 90).toFixed(0)}px`);
+        node.style.setProperty('--s', `${(14 + Math.random() * 14).toFixed(0)}px`);
+        node.style.setProperty('--c', colors[i % colors.length]);
+        document.body.append(node);
+        setTimeout(() => node.remove(), 950);
+      }
+    });
+  }
+
   /** Фон светится под курсором, текст hero чуть поворачивается вслед. */
   function followPointer() {
     if (!finePointer) return;
@@ -727,6 +782,7 @@
     scramble();
     spotlight();
     followPointer();
+    femFx();
     shell();
     const marketing = page === 'home' || page === 'download';
     try {

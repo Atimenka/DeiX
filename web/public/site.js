@@ -100,6 +100,26 @@ function icon(name, extra) {
   return svg;
 }
 
+const MODES = [
+  ['beauty', '✦', tr('Красота')],
+  ['femboy', '♡', tr('Фембой')],
+  ['plain', '○', tr('Обычный')],
+];
+
+function currentMode() {
+  return document.documentElement.getAttribute('data-mode') || 'beauty';
+}
+
+function setMode(mode) {
+  document.documentElement.setAttribute('data-mode', mode);
+  try {
+    localStorage.setItem('deix-mode', mode);
+  } catch {
+    return;
+  }
+  location.reload();
+}
+
 function setTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   try {
@@ -131,6 +151,36 @@ function buildLayout() {
   themeBtn.addEventListener('click', () => {
     setTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
   });
+  const modeNow = currentMode();
+  const modeBtn = el(
+    'button',
+    { class: 'icon-btn mode-toggle', type: 'button', 'aria-label': tr('Режим сайта'), 'aria-haspopup': 'true', 'aria-expanded': 'false', title: tr('Режим сайта') },
+    [document.createTextNode(MODES.find(([key]) => key === modeNow)[1])],
+  );
+  const modeMenu = el(
+    'div',
+    { class: 'mode-menu', role: 'menu' },
+    MODES.map(([key, glyph, label]) => {
+      const item = el('button', { type: 'button', role: 'menuitem', class: key === modeNow ? 'on' : '' }, [el('span', { class: 'g', text: glyph }), document.createTextNode(label)]);
+      item.addEventListener('click', () => setMode(key));
+      return item;
+    }),
+  );
+  modeMenu.append(el('small', { text: tr('Страница перезагрузится') }));
+  const closeModes = () => {
+    modeMenu.classList.remove('open');
+    modeBtn.setAttribute('aria-expanded', 'false');
+  };
+  modeBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const open = modeMenu.classList.toggle('open');
+    modeBtn.setAttribute('aria-expanded', String(open));
+  });
+  document.addEventListener('click', closeModes);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeModes();
+  });
+  const modeWrap = el('div', { class: 'mode-wrap' }, [modeBtn, modeMenu]);
   const langBtn = el('a', {
     class: 'icon-btn lang-toggle',
     href: otherLangPath(),
@@ -165,7 +215,7 @@ function buildLayout() {
       el('div', { class: 'nav-bar' }, [
         el('a', { class: 'brand', href: lp('/') }, [el('img', { src: '/favicon.svg', alt: '' }), document.createTextNode('DeiX OS')]),
         links,
-        el('div', { class: 'nav-tools' }, [langBtn, themeBtn, burger]),
+        el('div', { class: 'nav-tools' }, [modeWrap, langBtn, themeBtn, burger]),
       ]),
     ]),
   );

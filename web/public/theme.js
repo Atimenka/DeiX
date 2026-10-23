@@ -9,6 +9,14 @@
     theme = 'dark';
   }
   root.setAttribute('data-theme', theme);
+  var mode = 'beauty';
+  try {
+    var savedMode = localStorage.getItem('deix-mode');
+    mode = savedMode === 'femboy' || savedMode === 'plain' ? savedMode : 'beauty';
+  } catch (e) {
+    mode = 'beauty';
+  }
+  root.setAttribute('data-mode', mode);
   root.classList.add('js');
   try {
     if (sessionStorage.getItem('deix-wipe')) {
@@ -33,7 +41,7 @@
   } catch (e) {
     seen = true;
   }
-  if (isHome && !seen && !reduced && !root.classList.contains('wiped') && !location.hash) {
+  if (isHome && !seen && !reduced && mode !== 'plain' && !root.classList.contains('wiped') && !location.hash) {
     try {
       sessionStorage.setItem('deix-boot', '1');
     } catch (e) {
@@ -48,7 +56,7 @@
     var log = boot.querySelector('.boot-log');
     var num = boot.querySelector('.boot-num');
     var bar = boot.querySelector('.boot-bar i');
-    var steps = ['DEIX OS 0.3.0-beta  x86_64', 'cpu: long mode', 'mm: heap ready', 'vfs: /system erofs ro', 'vfs: /userdata xts-aes-256', 'net: rtl8139 + tls 1.3', 'gui: vbe 32 bpp', 'dinit: pid 1'];
+    var steps = [mode === 'femboy' ? 'DEIX OS 0.3.0-beta  x86_64  <3' : 'DEIX OS 0.3.0-beta  x86_64', 'cpu: long mode', 'mm: heap ready', 'vfs: /system erofs ro', 'vfs: /userdata xts-aes-256', 'net: rtl8139 + tls 1.3', 'gui: vbe 32 bpp', 'dinit: pid 1'];
     var n = 0;
     var timer = setInterval(function () {
       if (n < steps.length) {

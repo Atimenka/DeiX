@@ -398,7 +398,7 @@ export function mount(options = {}) {
     shockMaterial.color.copy(cssColor('--accent', '#ff3b30'));
     scanMaterial.color.copy(cssColor('--accent', '#ff3b30'));
     uniforms.uB.value.copy(cssColor('--accent-2', '#f3f2ee'));
-    uniforms.uC.value.set(light ? '#ff3b30' : '#ff7a3c');
+    uniforms.uC.value.copy(cssColor('--accent-3', light ? '#ff3b30' : '#ff7a3c'));
     dustUniforms.uColor.value.copy(light ? uniforms.uA.value : uniforms.uB.value);
     material.blending = light ? NormalBlending : AdditiveBlending;
     dustMaterial.blending = light ? NormalBlending : AdditiveBlending;
@@ -1088,7 +1088,8 @@ export function mountLogo(container, options = {}) {
     onTheme: (st) => {
       const accent = cssColor('--accent', '#ff3b30');
       parts.forEach((part) => {
-        part.material.uniforms.uBase.value.set(st.light ? '#d9d6cf' : '#3a3a40');
+        const soft = document.documentElement.getAttribute('data-mode') === 'femboy';
+        part.material.uniforms.uBase.value.set(soft ? (st.light ? '#ffd0e8' : '#6a4488') : st.light ? '#d9d6cf' : '#3a3a40');
         part.material.uniforms.uAccent.value.copy(accent);
         part.edgeMaterial.color.copy(st.light ? cssColor('--text', '#0c0c0c') : accent);
       });
