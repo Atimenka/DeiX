@@ -129,6 +129,7 @@ pub const PARTITION_LAYOUT: [PartitionLayout; 2] = [
 ///   LBA 1..=2046     — stage2 + ramboot + сырой kernel.bin
 ///   LBA 2047         — дескриптор образа ядра (DEIXKIMG: LBA/размер/SHA-256)
 ///   LBA 2048..=2111  — область аварийного дампа (DEIXPNIC, см. diag/panic.rs)
+///   LBA 4000         — управляющий сектор обновления (DEIXUPDC, см. update.rs)
 pub const BOOTLOADER_LBA: u32 = 1;
 pub const BOOTLOADER_SECTORS: u32 = 2046;
 

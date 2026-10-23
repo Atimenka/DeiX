@@ -69,6 +69,7 @@ mod sync;
 mod sysfs;
 mod timer;
 mod ui;
+mod update;
 mod userfs;
 mod usermode;
 mod vault;
@@ -266,7 +267,11 @@ pub extern "C" fn kernel_main() -> ! {
     // Модули расширяют функциональность ядра: сеть, графика, криптография.
     // Если модуль не найден на диске — система продолжает работу без него.
     bootprof::mark("crypto state check");
-    module::load_boot_modules();
+    if update::pending() {
+        crate::println!("  [update] an update is waiting: kernel modules are not loaded, /system is about to be replaced.");
+    } else {
+        module::load_boot_modules();
+    }
     bootprof::mark("kmod load");
 
     // GDT/TSS ставим ПЕРВЫМИ: планировщик кладёт в начальный кадр задачи
@@ -331,6 +336,7 @@ pub extern "C" fn kernel_main() -> ! {
         None => auth::run_login_screen(),
     };
     bootprof::mark("login finished (includes the time the user spent typing)");
+    update::run_apply_mode();
     cli::set_current_user(&username);
     let uid = if username == "root" { 0 } else { 1000 };
     if let Some(dinit) = crate::dinit::DINIT.lock().as_mut() {

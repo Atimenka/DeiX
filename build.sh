@@ -15,6 +15,7 @@
 #   LBA 1..2046     — stage2 + ramboot + сырой kernel.bin
 #   LBA 2047        — дескриптор образа ядра DEIXKIMG (LBA/размер/SHA-256)
 #   LBA 2048..2111  — область аварийного дампа (DEIXPNIC, src/diag/panic.rs)
+#   LBA 4000        — управляющий сектор обновления (DEIXUPDC, src/update.rs)
 #   LBA 4096..24575 — /system   (EROFS RO, 20480 сект)
 #   LBA 24576..40959 — /userdata (EXT2 RW, 16384 сект)
 set -euo pipefail

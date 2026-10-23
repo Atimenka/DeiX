@@ -311,6 +311,7 @@ pub fn execute(line: &str) {
         "diagnostics" => crate::diag::cli::cmd_diagnostics(rest),
         "notify" => cmd_notify(rest),
         "curl" => cmd_curl(rest),
+        "update" => crate::update::cmd_update(rest),
         "dev" => {
             let sub = rest.trim();
             let (word, arg) = match sub.find(char::is_whitespace) {
@@ -545,6 +546,7 @@ fn cmd_help() {
     println!("  error [show DX-...]     - {}", t!(en: "error list and code cards", ru: "список ошибок и карточки кодов"));
     println!("  panic [last|clear]      - {}", t!(en: "last kernel panic report", ru: "последний отчёт об отказе ядра"));
     println!("  diagnostics [mode on]   - {}", t!(en: "diagnostic summary / verbose mode", ru: "сводка диагностики / подробный режим"));
+    println!("  update [check|download|apply yes|cancel] - {}", t!(en: "update center: signed OS updates from the server", ru: "центр обновлений: подписанные обновления ОС с сервера"));
     println!("  reboot                  - {}", t!(en: "reboot system", ru: "перезагрузка системы"));
     println!("  poweroff / shutdown     - {}", t!(en: "power off system (ACPI / QEMU)", ru: "выключение системы (ACPI / QEMU)"));
     println!("  halt                    - {}", t!(en: "halt CPU low-level (cli; hlt)", ru: "остановить процессор (cli; hlt)"));
@@ -1850,7 +1852,7 @@ pub const VALID_COMMANDS: &[&str] = &[
     "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",
     "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "dev", "profile",
     "ps", "kill", "log", "error", "panic", "diagnostics", "wallpaper", "sysfs",
-    "notify", "curl"
+    "notify", "curl", "update"
 ];
 
 pub fn is_valid_command(name: &str) -> bool {
