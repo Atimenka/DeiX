@@ -67,15 +67,34 @@ ITEMS = [
      "Золотая дорожка и парусник на горизонте", "A golden path and a sailboat on the horizon"),
     ("space-station", "Орбитальная станция", "Space station",
      "Станция над Землёй на рассвете", "A station above the Earth at sunrise"),
+    ("savanna", "Саванна", "Savanna",
+     "Акация и слоны в золотой дымке заката", "An acacia and elephants in golden sunset haze"),
+    ("glacier", "Ледник", "Glacier",
+     "Бирюзовая река среди снежных вершин", "A turquoise river among snowy peaks"),
+    ("canyon", "Каньон", "Canyon",
+     "Луч света в красном песчанике", "A beam of light in red sandstone"),
+    ("reef", "Риф", "Reef",
+     "Кораллы и рыбы под солнечными лучами", "Corals and fish under sun rays"),
+    ("galaxy", "Галактика", "Galaxy",
+     "Спиральное ядро и звёздные рукава", "A spiral core and stellar arms"),
+    ("mono", "Монохром", "Mono",
+     "Светящиеся фигуры на графите", "Glowing shapes on graphite"),
+    ("lavender", "Лаванда", "Lavender",
+     "Поле на закате в Провансе", "A field at dusk in Provence"),
 ]
+
+# Слиги, для которых дополнительно готовится PNG 3840x2160 (gallery/4k/).
+UHD = {"savanna", "glacier", "canyon", "reef", "galaxy", "mono", "lavender"}
+UHD_SIZE = (3840, 2160)
 
 TEXT = {
     "ru": {
         "lang": "ru",
         "title": "Обои — DeiX OS",
         "h1": 'Обои <span class="grad">DeiX</span>',
-        "lead": "Двадцать картинок, созданных нейросетью. Скачайте PNG для своего рабочего стола или поставьте обои прямо в DeiX OS одной командой.",
+        "lead": "Двадцать семь картинок, созданных нейросетью. Скачайте PNG для своего рабочего стола или поставьте обои прямо в DeiX OS одной командой.",
         "download": "Скачать PNG",
+        "download4k": "Скачать PNG 4K",
         "command": "Команда для DeiX OS",
         "how": "Как поставить в DeiX OS",
         "how_hint": "Нажмите «Команда для DeiX OS» и вставьте её в терминал системы. ОС скачает картинку по HTTPS, сохранит её в /userdata/wallpaper.bmp и включит стиль обоев Custom. Файлы подготовлены под лимит файла в ОС (268 КиБ), поэтому ОС их не уменьшает. Нужна работающая сеть: в QEMU это флаги -netdev user и -device rtl8139.",
@@ -87,8 +106,9 @@ TEXT = {
         "lang": "en",
         "title": "Wallpapers — DeiX OS",
         "h1": 'DeiX <span class="grad">wallpapers</span>',
-        "lead": "Twenty AI-generated pictures. Download a PNG for your own desktop, or set one in DeiX OS with a single command.",
+        "lead": "Twenty-seven AI-generated pictures. Download a PNG for your own desktop, or set one in DeiX OS with a single command.",
         "download": "Download PNG",
+        "download4k": "Download 4K PNG",
         "command": "Command for DeiX OS",
         "how": "How to set one in DeiX OS",
         "how_hint": "Press “Command for DeiX OS” and paste it into the system terminal. The OS downloads the picture over HTTPS, saves it to /userdata/wallpaper.bmp and switches the wallpaper style to Custom. The files are sized for the OS file limit (268 KiB), so the OS does not shrink them. A working network is required: in QEMU that is the -netdev user and -device rtl8139 flags.",
@@ -104,10 +124,11 @@ def bmp24_size(w, h):
 
 
 def build_images(src_dir):
-    from PIL import Image, ImageOps
+    from PIL import Image, ImageFilter, ImageOps
 
     out = os.path.join(PUBLIC, "gallery")
     os.makedirs(os.path.join(out, "os"), exist_ok=True)
+    os.makedirs(os.path.join(out, "4k"), exist_ok=True)
     assert bmp24_size(*OS_SIZE) <= BMP_BUDGET
     for slug, *_ in ITEMS:
         path = os.path.join(src_dir, slug + ".png")
@@ -116,12 +137,22 @@ def build_images(src_dir):
             os.path.join(out, slug + ".jpg"), quality=82, optimize=True, progressive=True)
         ImageOps.fit(img, OS_SIZE, Image.LANCZOS).save(
             os.path.join(out, "os", slug + ".png"), optimize=True)
+        if slug in UHD:
+            # Исходники галереи меньше 4K: кадр поднимается до 3840x2160
+            # Lanczos с мягкой резкостью — это апскейл, а не родное 4K.
+            up = ImageOps.fit(img, UHD_SIZE, Image.LANCZOS).filter(
+                ImageFilter.UnsharpMask(radius=2, percent=40, threshold=2))
+            up.save(os.path.join(out, "4k", slug + ".png"), optimize=True)
 
 
 def card(lang, slug, ru_t, en_t, ru_d, en_d):
     t = TEXT[lang]
     title, desc = (ru_t, ru_d) if lang == "ru" else (en_t, en_d)
     command = "wallpaper %s/gallery/os/%s.png" % (BASE_URL, slug)
+    uhd = ""
+    if slug in UHD:
+        uhd = ('<a class="btn small" href="/gallery/4k/%(slug)s.png" download>'
+               '%(dl4k)s</a>\n            ' % {"slug": slug, "dl4k": t["download4k"]})
     return (
         '      <figure class="panel wp-card">\n'
         '        <a class="wp-shot" href="/gallery/%(slug)s.jpg"><img src="/gallery/%(slug)s.jpg" alt="%(alt)s" width="640" height="480" loading="lazy"></a>\n'
@@ -130,6 +161,7 @@ def card(lang, slug, ru_t, en_t, ru_d, en_d):
         '          <p class="hint">%(alt)s</p>\n'
         '          <div class="row-gap">\n'
         '            <a class="btn small primary" href="/gallery/os/%(slug)s.png" download>%(download)s</a>\n'
+        '            %(uhd)s'
         '            <button class="btn small" type="button" data-copy="%(command)s">%(cmd)s</button>\n'
         '          </div>\n'
         '        </figcaption>\n'
@@ -137,6 +169,7 @@ def card(lang, slug, ru_t, en_t, ru_d, en_d):
     ) % {
         "slug": slug, "alt": html.escape(desc), "title": html.escape(title),
         "download": t["download"], "command": html.escape(command), "cmd": t["command"],
+        "uhd": uhd,
     }
 
 
