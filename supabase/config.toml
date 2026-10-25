@@ -1,3 +1,0 @@
-# Конфигурация Supabase CLI для DeiX (минимальная: используется только
-# link + db push, локальный стек supabase start не применяется).
-project_id = "DeiX"
