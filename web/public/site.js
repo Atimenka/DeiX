@@ -134,6 +134,7 @@ const NAV_LINKS = [
   ['features', '/#features', tr('Возможности')],
   ['dev', '/#dev', tr('Dev-режим')],
   ['download', '/download', tr('Скачать')],
+  ['wallpapers', '/wallpapers', tr('Обои')],
   ['request', '/request', tr('Заявки')],
 ];
 
@@ -226,6 +227,7 @@ function buildLayout() {
       el('span', { text: `© ${new Date().getFullYear()} DeiX OS` }),
       el('nav', null, [
         el('a', { href: lp('/download'), text: tr('Скачать') }),
+        el('a', { href: lp('/wallpapers'), text: tr('Обои') }),
         el('a', { href: lp('/request'), text: tr('Заявки') }),
         el('a', { href: lp('/register'), text: tr('Регистрация') }),
         el('a', { href: lp('/privacy'), text: tr('Конфиденциальность') }),

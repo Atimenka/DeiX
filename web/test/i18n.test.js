@@ -65,7 +65,7 @@ test('English pages mirror the Russian ones and contain no Russian text', () => 
 
 test('every Russian page has an English twin', () => {
   const skip = new Set(['404.html']);
-  for (const name of fs.readdirSync(pub).filter((n) => n.endsWith('.html') && !skip.has(n))) {
+  for (const name of fs.readdirSync(pub).filter((n) => n.endsWith('.html') && !skip.has(n) && !n.startsWith('google'))) {
     assert.ok(fs.existsSync(path.join(pub, 'en', name)), `en/${name} is missing`);
   }
 });

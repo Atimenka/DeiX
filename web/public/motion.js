@@ -487,7 +487,7 @@
   /** Скрытый шелл: клавиша ` или Ctrl+K. */
   function shell() {
     const base = location.pathname === '/en' || location.pathname.startsWith('/en/') ? '/en' : '';
-    const pages = { home: '/', download: '/download', request: '/request', login: '/login', register: '/register', account: '/account' };
+    const pages = { home: '/', download: '/download', wallpapers: '/wallpapers', request: '/request', login: '/login', register: '/register', account: '/account' };
     const facts = [
       'OS      DeiX OS 0.3.0-beta',
       'Kernel  Rust no_std, x86_64 long mode',
