@@ -684,6 +684,7 @@ pub fn fetch_and_render_web_page(url: &str) -> (Vec<String>, Vec<String>, String
         return (alloc::vec![
             String::from("# DeiX Browser"),
             String::from("Limited text-oriented HTTP/HTTPS client."),
+            format!("{} | build {}", crate::OS_RELEASE, crate::update::installed_build()),
             String::new(),
             String::from("## Quick Navigation (click a link):"),
             String::from("[1] https://example.com — HTTPS test page (TLS 1.3)"),
@@ -782,9 +783,21 @@ pub fn fetch_and_render_web_page(url: &str) -> (Vec<String>, Vec<String>, String
             String::from("* server does not support TLS 1.3 (older HTTPS sites will not load)"),
             String::from("* server certificate failed verification (expiry, hostname, CA chain)"),
             String::new(),
+            network_summary_line(),
             String::from("Check in the CLI: `ifconfig`, `dns <host>`, `ping <ip>`."),
         ], Vec::new(), String::from("Load failed")),
     }
+}
+
+/// Строка с текущей сетевой конфигурацией для страницы ошибки загрузки.
+fn network_summary_line() -> String {
+    let ip = crate::net::my_ip();
+    let gw = crate::net::gateway_ip();
+    let dns = crate::net::dns_ip();
+    format!(
+        "Network now: eth0 {}.{}.{}.{} gw {}.{}.{}.{} dns {}.{}.{}.{}",
+        ip[0], ip[1], ip[2], ip[3], gw[0], gw[1], gw[2], gw[3], dns[0], dns[1], dns[2], dns[3]
+    )
 }
 
 /// Бинарный ли ответ: смотрим Content-Type, сигнатуры картинок и долю

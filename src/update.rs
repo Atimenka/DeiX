@@ -317,7 +317,8 @@ fn is_enabled() -> bool {
     UPDATE_PUBKEY.iter().any(|&b| b != 0)
 }
 
-fn installed_build() -> u64 {
+/// Идентификатор сборки, вшитый при компиляции (0 — не задан).
+pub fn installed_build() -> u64 {
     BUILD_ID.and_then(|s| s.parse::<u64>().ok()).unwrap_or(0)
 }
 
