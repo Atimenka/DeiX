@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 import tempfile
 import unittest
 
@@ -133,3 +134,34 @@ class Packaging(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BuildIdCounter(unittest.TestCase):
+    """Счётчик build id монотонен даже внутри одной секунды и одного коммита."""
+
+    def run_tool(self, state, *args):
+        import subprocess
+        env = dict(os.environ, DEIX_BUILD_ID_STATE=state)
+        r = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "tools", "next_build_id.py"), *args],
+            capture_output=True, text=True, env=env, check=True,
+        )
+        return r.stdout.strip()
+
+    def test_monotonic(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "last_build_id")
+            first = int(self.run_tool(state))
+            second = int(self.run_tool(state))
+            third = int(self.run_tool(state))
+            self.assertLess(first, second)
+            self.assertLess(second, third)
+            self.assertGreaterEqual(first, int(time.time()))
+
+    def test_mark_moves_counter(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            state = os.path.join(d, "last_build_id")
+            self.run_tool(state, "--mark", "9000000000")
+            self.assertGreater(int(self.run_tool(state)), 9000000000)

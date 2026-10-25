@@ -28,9 +28,15 @@ mkdir -p "$BUILD"
 
 DEIX_VERSION="0.3.0-beta"
 
-# Идентификатор сборки для центра обновлений: время HEAD-коммита (новый
-# коммит — новая сборка). Для несохранённых правок задайте DEIX_BUILD_ID сами.
-DEIX_BUILD_ID="${DEIX_BUILD_ID:-$(git log -1 --format=%ct 2>/dev/null || echo 0)}"
+# Идентификатор сборки для центра обновлений: монотонный счётчик
+# tools/next_build_id.py — каждая сборка строго новее предыдущей, даже если
+# коммит и секунда те же. Явный DEIX_BUILD_ID тоже двигает счётчик (--mark),
+# чтобы следующая автосборка не оказалась старее заданной вручную.
+if [ -n "${DEIX_BUILD_ID:-}" ]; then
+    python3 tools/next_build_id.py --mark "$DEIX_BUILD_ID"
+else
+    DEIX_BUILD_ID="$(python3 tools/next_build_id.py)"
+fi
 export DEIX_BUILD_ID
 printf '%s\n' "$DEIX_BUILD_ID" > "$BUILD/build_id"
 printf '%s\n' "$DEIX_VERSION" > "$BUILD/version"
