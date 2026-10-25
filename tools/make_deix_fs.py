@@ -19,10 +19,6 @@
   - etc/init.deix
   - services/dinit.cfg
   - media/audio/ui/*.dps
-  - media/wallpapers/*.bmp
-
-Просмотр /system готового образа (ничего не пишет):
-    python3 tools/make_deix_fs.py build/deix_disk.img --ls [media]
 
 В /system кладутся только настоящие файлы. Заглушки (поддельное ядро,
 пустые kmod/*.kmod, lib*.so) не создаются: отсутствие kernel.bin —
@@ -404,100 +400,6 @@ def init_all_partitions(img, kernel_bytes):
             write_erofs_image(img, start, secs, name, system_files)
 
 
-
-# ---------------------------------------------------------------------------
-# Просмотр /system готового образа: python3 tools/make_deix_fs.py ОБРАЗ --ls [ПУТЬ]
-# Читает EROFS v1 (компактные и расширенные inode, flat plain и flat inline) и
-# ничего не записывает в образ.
-# ---------------------------------------------------------------------------
-EROFS_MAGIC = 0xE0F5E1E2
-
-
-class ErofsReader:
-    def __init__(self, img, base):
-        self.img = img
-        self.base = base
-        sb = base + 1024
-        if struct.unpack_from("<I", img, sb)[0] != EROFS_MAGIC:
-            raise ValueError("в разделе /system нет EROFS (магия не совпала)")
-        self.bs = 1 << img[sb + 12]
-        self.root_nid = struct.unpack_from("<H", img, sb + 14)[0]
-        self.meta = struct.unpack_from("<I", img, sb + 40)[0]
-
-    def inode(self, nid):
-        off = self.base + self.meta * self.bs + nid * 32
-        fmt, xcount, mode = struct.unpack_from("<HHH", self.img, off)
-        extended = fmt & 1
-        layout = (fmt >> 1) & 7
-        if extended:
-            size = struct.unpack_from("<Q", self.img, off + 8)[0]
-        else:
-            size = struct.unpack_from("<I", self.img, off + 8)[0]
-        blkaddr = struct.unpack_from("<I", self.img, off + 16)[0]
-        header = 64 if extended else 32
-        xattr = 12 + (xcount - 1) * 4 if xcount else 0
-        return {"mode": mode, "size": size, "layout": layout,
-                "blkaddr": blkaddr, "tail": off + header + xattr}
-
-    def data(self, nid):
-        node = self.inode(nid)
-        size, layout = node["size"], node["layout"]
-        if layout == 0:
-            start = self.base + node["blkaddr"] * self.bs
-            return bytes(self.img[start:start + size])
-        if layout == 2:
-            full = size - size % self.bs
-            start = self.base + node["blkaddr"] * self.bs
-            out = bytes(self.img[start:start + full])
-            return out + bytes(self.img[node["tail"]:node["tail"] + size - full])
-        raise ValueError("неподдерживаемая раскладка данных EROFS (%d)" % layout)
-
-    def entries(self, nid):
-        data = self.data(nid)
-        found = []
-        for block in range(0, len(data), self.bs):
-            chunk = data[block:block + self.bs]
-            first = struct.unpack_from("<Q", chunk, 0)[0]
-            nameoff = struct.unpack_from("<H", chunk, 8)[0]
-            count = nameoff // 12
-            for i in range(count):
-                child, off, ftype = struct.unpack_from("<QHB", chunk, i * 12)
-                end = struct.unpack_from("<H", chunk, (i + 1) * 12 + 8)[0] if i + 1 < count else len(chunk)
-                name = chunk[off:end].rstrip(b"\0").decode("utf-8", "replace")
-                if name not in (".", ".."):
-                    found.append((name, child, ftype == 2))
-        return found
-
-    def walk(self, nid=None, prefix=""):
-        for name, child, is_dir in sorted(self.entries(self.root_nid if nid is None else nid)):
-            path = prefix + "/" + name
-            if is_dir:
-                yield path + "/", None
-                yield from self.walk(child, path)
-            else:
-                yield path, self.inode(child)["size"]
-
-
-def list_system(img_path, prefix=""):
-    """Печатает файлы /system образа; prefix — подстрока пути (например media)."""
-    with open(img_path, "rb") as f:
-        img = f.read()
-    start = next(s for _, _, s, _, name in PRIMARY if name == "/system")
-    reader = ErofsReader(img, start * SECTOR)
-    want = prefix.strip("/")
-    total = count = 0
-    for path, size in reader.walk():
-        if want and want not in path:
-            continue
-        if size is None:
-            print("  %-48s <dir>" % path)
-            continue
-        print("  %-48s %10d B  %8.1f KiB" % (path, size, size / 1024))
-        total += size
-        count += 1
-    print("  файлов: %d, всего %.1f KiB" % (count, total / 1024))
-
-
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     opts = {}
@@ -507,13 +409,6 @@ def main():
             opts[k] = v
 
     img_path = args[0] if args else "build/deix_disk.img"
-    if "--ls" in sys.argv:
-        try:
-            list_system(img_path, args[1] if len(args) > 1 else "")
-        except (OSError, ValueError, StopIteration) as e:
-            print("ОШИБКА: %s: %s" % (img_path, e), file=sys.stderr)
-            sys.exit(1)
-        return
     parent_dir = os.path.dirname(img_path)
     if parent_dir:
         os.makedirs(parent_dir, exist_ok=True)
