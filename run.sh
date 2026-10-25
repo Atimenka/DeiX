@@ -36,8 +36,16 @@ fi
 # Сеть: user-mode networking (slirp) + RTL8139 — гость получает
 # 10.0.2.15/24, шлюз 10.0.2.2, DNS 10.0.2.3; без этих флагов браузер и
 # команды dns/ping честно сообщат об отсутствии сетевой карты.
+# Кеш диска: ядро после каждой операции шлёт ATA FLUSH CACHE, а QEMU по
+# умолчанию (cache=writeback) превращает его в fsync образа на хосте — на
+# WSL это десятки миллисекунд на каждую запись. cache=unsafe флаши игнорирует:
+# образ пишется быстро, но при внезапном отключении ХОСТА (не гостя и не QEMU)
+# может остаться несогласованным — для отладочного образа это допустимо.
+# DEIX_DISK_CACHE=writeback ./run.sh — прежнее поведение.
+DISK_CACHE="${DEIX_DISK_CACHE:-unsafe}"
+
 qemu-system-x86_64 \
-    -drive format=raw,file="$IMG" \
+    -drive format=raw,file="$IMG",cache="$DISK_CACHE" \
     -m 512M \
     -netdev user,id=n0 -device rtl8139,netdev=n0 \
     "${AUDIO_ARGS[@]}" \

@@ -344,6 +344,11 @@ pub extern "C" fn kernel_main() -> ! {
         dinit.register_user(uid, &username);
     }
 
+    // Все записи первого входа (профиль, журналы, каталоги, autostart) идут
+    // одним пакетом: кеш диска сбрасывается один раз в конце, а не после
+    // каждой мелкой операции (каждый сброс — fsync образа на хосте).
+    let first_login_writes = ata::FlushBatch::begin();
+
     // Профиль пользователя: /userdata/home/<имя>/{files,configs}.
     if let Err(e) = userfs::init_profile(&username) {
         crate::println!("  [userfs] профиль не создан: {}", e.message());
@@ -369,6 +374,8 @@ pub extern "C" fn kernel_main() -> ! {
     // Базовый /userdata/config/autostart.cfg — создаём при первом входе.
     autostart::ensure_default();
     bootprof::mark("userdata dirs + autostart defaults");
+    drop(first_login_writes);
+    bootprof::mark("first login writes flushed");
     crate::serial_println!("[deix] K: autostart ensure_default done ({} ms)", timer::uptime_ms());
 
     // Автозапуск ТОЛЬКО после успешного входа: команды выполняются от
