@@ -158,6 +158,10 @@ fn alert_text(p: &[u8]) -> String {
 /// Дочитывает rx из TCP до need байт или до дедлайна.
 fn tcp_fill(rx: &mut Vec<u8>, need: usize, deadline_ms: u64) -> bool {
     while rx.len() < need {
+        // Сервер закрыл соединение — новых байт уже не будет: не ждём дедлайн.
+        if tcp::peer_fin() {
+            return false;
+        }
         let now = crate::timer::uptime_ms();
         if now >= deadline_ms {
             return false;
@@ -320,9 +324,12 @@ fn build_client_hello(
     // supported_versions: только 1.3
     push_ext(&mut ext, 0x002b, &[2, 0x03, 0x04]);
 
-    // ALPN: http/1.1. Без ALPN некоторые TLS-терминаторы облаков не выбирают
-    // протокол и молча рвут рукопожатие.
-    push_ext(&mut ext, 0x0010, &[0, 8, 8, b'h', b't', b't', b'p', b'/', b'1', b'.', b'1']);
+    // ALPN: http/1.1 (RFC 7301). ProtocolNameList = длина_списка(2) +
+    // записи длина(1)+имя; для "http/1.1" список = 1 + 8 = 9 байт.
+    // С длиной 8 расширение неполное: строгий парсер (BoringSSL на краю
+    // Vercel) считает ClientHello испорченным и молча рвёт рукопожатие —
+    // TCP подтверждает байты, но ServerHello никогда не приходит.
+    push_ext(&mut ext, 0x0010, &[0, 9, 8, b'h', b't', b't', b'p', b'/', b'1', b'.', b'1']);
 
     // key_share: X25519
     let mut ks = Vec::with_capacity(38);

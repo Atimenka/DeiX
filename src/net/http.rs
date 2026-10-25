@@ -248,6 +248,11 @@ fn attempt_once(
                 break;
             }
         }
+        if tcp::peer_fin() {
+            // Сервер прислал FIN — ответ целиком доставлен, ждать
+            // простоя незачем (мы всегда работаем с Connection: close).
+            break;
+        }
         if let Some(he) = find_header_end(&raw) {
             let head = String::from_utf8_lossy(&raw[..he]).into_owned();
             if header_contains(&head, "transfer-encoding", "chunked") {

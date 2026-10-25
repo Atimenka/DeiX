@@ -8,7 +8,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::collections::VecDeque;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 const TCP_PROTO: u8 = 6;
 const FIN: u8 = 0x01; const SYN: u8 = 0x02;
@@ -31,6 +31,8 @@ static NPORT: SpinLock<u16> = SpinLock::new(1024);
 // Диагностика приёма: почему recv вернул пустой результат и сколько
 // байт данных принято с начала текущего соединения.
 static LAST_END: SpinLock<&'static str> = SpinLock::new("данных ещё не ждали");
+/// Сервер закрыл свою сторону соединения (FIN): данных больше не будет.
+static PEER_FIN: AtomicBool = AtomicBool::new(false);
 static RX_BYTES: AtomicU32 = AtomicU32::new(0);
 static DUP_DROPPED: AtomicU32 = AtomicU32::new(0);
 static GAP_DROPPED: AtomicU32 = AtomicU32::new(0);
@@ -57,6 +59,12 @@ const ISN: u32 = 0xDEADBEEF;
 /// Причина последнего пустого результата `recv`.
 pub fn last_end() -> &'static str {
     *LAST_END.lock()
+}
+
+/// true, если сервер прислал FIN в текущем соединении: ожидание данных
+/// можно прекращать сразу, не дожидаясь таймаутов.
+pub fn peer_fin() -> bool {
+    PEER_FIN.load(Ordering::Relaxed)
 }
 
 /// Сводка по соединению: сколько байт отправлено и сколько из них
@@ -187,6 +195,7 @@ fn connect_one(dip: [u8;4], dport: u16, waits: &[u64]) -> Result<(), &'static st
     RX_QUEUE.lock().clear();
     let mut c = TcpConn { state:0, sport:sp, dip, dport, seq:isn, ack:0 };
     RX_BYTES.store(0, Ordering::Relaxed);
+    PEER_FIN.store(false, Ordering::Relaxed);
     DUP_DROPPED.store(0, Ordering::Relaxed);
     GAP_DROPPED.store(0, Ordering::Relaxed);
     RETRANSMITS.store(0, Ordering::Relaxed);
@@ -227,15 +236,23 @@ fn connect_one(dip: [u8;4], dport: u16, waits: &[u64]) -> Result<(), &'static st
     Err(why)
 }
 
+/// Наибольший объём данных в одном сегменте: IPv4-буфер отправки равен
+/// 1500 байт (20 заголовок IP + 20 заголовок TCP + данные).
+const MSS: usize = 1460;
+
 pub fn send(data: &[u8]) -> bool {
     let mut cl = CONN.lock();
     let c = match *cl {
         Some(ref mut c) if c.state == 1 => c,
         _ => return false,
     };
-    send_seg(c, PSH|ACK, data);
-    UNACKED.lock().push((c.seq, data.to_vec()));
-    c.seq = c.seq.wrapping_add(data.len() as u32);
+    // Крупные данные (тело POST, TLS-записи с сертификатами) режем на
+    // сегменты по MSS: один большой сегмент не влез бы в кадр и не ушёл.
+    for chunk in data.chunks(MSS) {
+        send_seg(c, PSH | ACK, chunk);
+        UNACKED.lock().push((c.seq, chunk.to_vec()));
+        c.seq = c.seq.wrapping_add(chunk.len() as u32);
+    }
     SENT_END.store(c.seq, Ordering::Relaxed);
     LAST_TX_MS.store(crate::timer::uptime_ms(), Ordering::Relaxed);
     RTO_MS.store(RTO_INITIAL_MS, Ordering::Relaxed);
@@ -277,6 +294,10 @@ fn retransmit_if_due() {
 pub fn recv(to: u64) -> Vec<u8> {
     let t0 = crate::timer::uptime_ms();
     loop {
+        if PEER_FIN.load(Ordering::Relaxed) {
+            *LAST_END.lock() = "сервер закрыл TCP-соединение (FIN)";
+            return Vec::new();
+        }
         if rx_dequeue_len() == 0 {
             // Страховка: читаем RX-буфер RTL8139 напрямую, не полагаясь на
             // прерывания (QEMU заливает большой ответ быстрее, чем приходят
@@ -325,6 +346,12 @@ pub fn recv(to: u64) -> Vec<u8> {
                     let fresh = p[skip..].to_vec();
                     let mut nc = *c;
                     nc.ack = c.ack.wrapping_add(fresh.len() as u32);
+                    if f & FIN != 0 {
+                        // FIN может прийти в одном сегменте с последними
+                        // данными: подтверждаем его вместе с ними.
+                        nc.ack = nc.ack.wrapping_add(1);
+                        PEER_FIN.store(true, Ordering::Relaxed);
+                    }
                     drop(cl);
                     RX_BYTES.fetch_add(fresh.len() as u32, Ordering::Relaxed);
                     *CONN.lock() = Some(nc);
@@ -336,6 +363,14 @@ pub fn recv(to: u64) -> Vec<u8> {
             }
             if f&FIN != 0 {
                 *LAST_END.lock() = "сервер закрыл TCP-соединение (FIN)";
+                let mut nc = *c;
+                nc.ack = s.wrapping_add(1);
+                drop(cl);
+                PEER_FIN.store(true, Ordering::Relaxed);
+                *CONN.lock() = Some(nc);
+                // Подтверждаем FIN, чтобы сервер не повторял его и закрыл
+                // сокет; повторные recv после этого возвращают пусто сразу.
+                send_seg(&nc, ACK, &[]);
                 return Vec::new();
             }
         }
