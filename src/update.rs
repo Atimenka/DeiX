@@ -29,7 +29,7 @@ const SECTOR_SIZE: usize = 512;
 const MBR_CODE_BYTES: usize = 446;
 const MAX_PAYLOAD: usize = 6 * 1024 * 1024;
 const MAX_PARTS: usize = 128;
-const PART_RETRIES: u32 = 3;
+const PART_RETRIES: u32 = 5;
 const WRITE_BATCH_SECTORS: usize = 128;
 
 /// Версия схемы данных `/userdata`, которую понимает это ядро.
@@ -415,6 +415,9 @@ fn download_part(build: u64, index: usize, expected: usize) -> Result<Vec<u8>, S
             Err(e) => last = e,
         }
         println!("  [update] part {} failed (attempt {}/{}): {}", index, attempt, PART_RETRIES, last);
+        if attempt < PART_RETRIES {
+            crate::timer::sleep_ms(1000 * u64::from(attempt));
+        }
     }
     Err(last)
 }
@@ -656,8 +659,24 @@ fn cmd_download() {
         Err(e) => {
             println!("  [update] download failed: {}", e);
             clear_staged();
+            if stashed_parts() > 0 {
+                println!("  [update] {} parts are kept in memory: run 'update download' again to continue.", stashed_parts());
+            }
         }
     }
+}
+
+static mut STASH: Option<(u64, usize, Vec<u8>)> = None;
+
+fn take_stash(build: u64) -> Option<(usize, Vec<u8>)> {
+    match unsafe { (*(&raw mut STASH)).take() } {
+        Some((b, next, payload)) if b == build => Some((next, payload)),
+        _ => None,
+    }
+}
+
+fn stashed_parts() -> usize {
+    unsafe { (*(&raw const STASH)).as_ref().map_or(0, |s| s.1) }
 }
 
 /// Пошаговая загрузка нагрузки: один кусок за `step`, чтобы графический центр
@@ -669,7 +688,22 @@ struct Download {
 
 impl Download {
     fn new(offer: &Offer) -> Download {
-        Download { payload: Vec::with_capacity(offer.signed.manifest.payload_size), next: 0 }
+        let m = &offer.signed.manifest;
+        if let Some((next, payload)) = take_stash(m.build) {
+            if next < offer.parts && payload.len() == next * offer.part_size {
+                println!("  [update] resuming from part {} of {}", next, offer.parts);
+                return Download { payload, next };
+            }
+        }
+        Download { payload: Vec::with_capacity(m.payload_size), next: 0 }
+    }
+
+    /// Сохраняет принятые куски в памяти, чтобы повторная загрузка продолжилась
+    /// с места обрыва; целостность всё равно проверяет sha256 из манифеста.
+    fn stash(self, build: u64) {
+        if self.next > 0 {
+            unsafe { *(&raw mut STASH) = Some((build, self.next, self.payload)) };
+        }
     }
 
     fn done(&self, offer: &Offer) -> bool {
@@ -706,7 +740,10 @@ impl Download {
 fn download_all(offer: &Offer) -> Result<(), String> {
     let mut download = Download::new(offer);
     while !download.done(offer) {
-        download.step(offer)?;
+        if let Err(e) = download.step(offer) {
+            download.stash(offer.signed.manifest.build);
+            return Err(e);
+        }
         if download.next % 8 == 0 || download.done(offer) {
             println!(
                 "  [update] downloaded {} of {} KiB",

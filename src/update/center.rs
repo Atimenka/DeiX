@@ -304,6 +304,7 @@ impl Center {
             return;
         };
         if let Err(e) = download.step(&offer) {
+            download.stash(offer.signed.manifest.build);
             clear_staged();
             notify::push(Kind::Error, "Update download failed", &clip(&e, 90));
             self.offer = Some(offer);
