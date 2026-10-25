@@ -1251,20 +1251,27 @@ pub fn load_partition_entries(partition: &str, path: &str) -> (Vec<FileViewEntry
                 Err(_) => (Vec::new(), Some(String::from("Failed to list directory"))),
             }
         }
-        "/system" => match crate::vfs::readdir("/system") {
-            Ok(entries) => {
-                let mut items = Vec::new();
-                for e in entries {
-                    items.push(FileViewEntry {
-                        name: e.name,
-                        is_dir: e.is_dir,
-                        size: e.size.min(u32::MAX as u64) as u32,
-                    });
+        "/system" => {
+            let full = if path == "/" || path.is_empty() {
+                String::from("/system")
+            } else {
+                format!("/system{}", path)
+            };
+            match crate::vfs::readdir(&full) {
+                Ok(entries) => {
+                    let mut items = Vec::new();
+                    for e in entries {
+                        items.push(FileViewEntry {
+                            name: e.name,
+                            is_dir: e.is_dir,
+                            size: e.size.min(u32::MAX as u64) as u32,
+                        });
+                    }
+                    (items, None)
                 }
-                (items, None)
+                Err(e) => (Vec::new(), Some(format!("/system: {}", e.message()))),
             }
-            Err(e) => (Vec::new(), Some(format!("/system: {}", e.message()))),
-        },
+        }
         _ => (Vec::new(), Some(String::from("Unknown partition"))),
     }
 }

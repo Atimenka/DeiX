@@ -113,9 +113,9 @@ pub fn draw_files(
         None,
     );
 
-    // Создание файлов возможно только на записываемом разделе: на
-    // /system (EROFS, read-only) кнопки не рисуются и не кликаются.
-    let writable = current_partition == "/userdata";
+    // Создание файлов возможно только на записываемом разделе: на /system
+    // кнопки есть, только если он ext2 и включён dev-режим (vfs::is_writable).
+    let writable = crate::vfs::is_writable(current_partition);
     if writable {
         let fb = new_file_btn_rect(w.width);
         r.fill_rounded_rect(w.x + fb.x, content_y + fb.y, fb.w, fb.h, 4, theme.accent);
@@ -172,12 +172,21 @@ pub fn draw_files(
     } else if let Some(err) = error {
         r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, err, Color::RED, None);
     } else {
-        let loc = if current_path == "/" {
+        let mut loc = if current_path == "/" {
             String::from(current_partition)
         } else {
             format!("{}{}", current_partition, current_path)
         };
-        r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, &loc, theme.text_secondary, None);
+        if !writable {
+            if current_partition == "/system" && crate::vfs::system_is_ext2_mounted() {
+                loc.push_str("  [read-only: dev mode off]");
+            } else {
+                loc.push_str("  [read-only]");
+            }
+        }
+        let max_cells = ((w.width as i32 - SIDEBAR_W - 16) / 8).max(8) as usize;
+        let shown = crate::ui::text::truncate_to_cells(&loc, max_cells).0;
+        r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, shown, theme.text_secondary, None);
     }
 }
 

@@ -115,6 +115,21 @@ fn system_writable() -> bool {
     system_is_ext2() && crate::devmode::sudo_allowed()
 }
 
+/// Можно ли сейчас писать в раздел `/system` или `/userdata`. `/userdata`
+/// всегда записываемый; `/system` — только на ext2 и в dev-режиме.
+pub fn is_writable(mount: &str) -> bool {
+    match mount {
+        MOUNT_SYSTEM => system_writable(),
+        MOUNT_USERDATA => true,
+        _ => false,
+    }
+}
+
+/// `/system` смонтирован как ext2 (после `sysfs convert`), а не как EROFS.
+pub fn system_is_ext2_mounted() -> bool {
+    system_is_ext2()
+}
+
 /// Перемонтирует /system после конверсии EROFS→ext2: сбрасывает
 /// определение типа ФС, кеш геометрии ext2 и блочный кеш EROFS.
 pub fn remount_system() {

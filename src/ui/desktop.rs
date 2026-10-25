@@ -1419,18 +1419,18 @@ impl Desktop {
                     return;
                 }
 
-                let writable = current_partition == "/userdata";
+                let writable = crate::vfs::is_writable(current_partition.as_str());
                 if writable && files_ui::new_file_btn_rect(win.width).contains(rel_x, rel_y) {
                     // Свободное имя вместо повторяющихся по modulo uptime:
                     // существующий файл не перезаписывается.
                     match free_name(entries, "NEW_FILE_", ".TXT") {
                         Some(fname) => {
-                            let path = join_fs_path(current_path, &fname);
-                            match ext2::write_file_path(&path, b"New file created in DeiX Files.\r\n") {
+                            let path = format!("{}{}", current_partition, join_fs_path(current_path, &fname));
+                            match crate::vfs::write_file(&path, b"New file created in DeiX Files.\r\n") {
                                 Ok(()) => *status_msg = Some(format!("Created {}", fname)),
                                 Err(e) => {
                                     *status_msg = None;
-                                    *error = Some(format!("Create failed: {:?}", e));
+                                    *error = Some(format!("Create failed: {}", e.message()));
                                 }
                             }
                         }
@@ -1450,12 +1450,12 @@ impl Desktop {
                 if writable && files_ui::new_folder_btn_rect(win.width).contains(rel_x, rel_y) {
                     match free_name(entries, "FOLDER_", "") {
                         Some(dname) => {
-                            let path = join_fs_path(current_path, &dname);
-                            match ext2::mkdir(&path) {
-                                Ok(_) => *status_msg = Some(format!("Created folder {}", dname)),
+                            let path = format!("{}{}", current_partition, join_fs_path(current_path, &dname));
+                            match crate::vfs::mkdir(&path) {
+                                Ok(()) => *status_msg = Some(format!("Created folder {}", dname)),
                                 Err(e) => {
                                     *status_msg = None;
-                                    *error = Some(format!("Create failed: {:?}", e));
+                                    *error = Some(format!("Create failed: {}", e.message()));
                                 }
                             }
                         }
@@ -1499,33 +1499,31 @@ impl Desktop {
                     let idx = ((rel_y - files_ui::LIST_START_Y) / files_ui::ROW_H) as usize;
                     if idx < entries.len() {
                         // Повторный клик по уже выбранному элементу:
-                        // каталог — переход внутрь, файл — редактор.
-                        // /system смонтирован только для чтения.
+                        // каталог — переход внутрь, файл — редактор (на
+                        // разделе только для чтения — просмотр).
                         if *selected_idx == Some(idx) {
                             let name = entries[idx].name.clone();
                             if entries[idx].is_dir {
-                                if current_partition == "/userdata" {
-                                    let new_path = match name.as_str() {
-                                        "." => current_path.clone(),
-                                        ".." => parent_path(current_path),
-                                        _ => join_fs_path(current_path, &name),
-                                    };
-                                    let (new_entries, err) =
-                                        load_partition_entries(current_partition, &new_path);
-                                    match err {
-                                        Some(e) => *error = Some(e),
-                                        None => {
-                                            *current_path = new_path;
-                                            *entries = new_entries;
-                                            *selected_idx = None;
-                                            *error = None;
-                                            *status_msg = None;
-                                        }
+                                let new_path = match name.as_str() {
+                                    "." => current_path.clone(),
+                                    ".." => parent_path(current_path),
+                                    _ => join_fs_path(current_path, &name),
+                                };
+                                let (new_entries, err) =
+                                    load_partition_entries(current_partition, &new_path);
+                                match err {
+                                    Some(e) => *error = Some(e),
+                                    None => {
+                                        *current_path = new_path;
+                                        *entries = new_entries;
+                                        *selected_idx = None;
+                                        *error = None;
+                                        *status_msg = None;
                                     }
                                 }
-                                // /system: readdir поддерживает только
-                                // корень раздела — вход внутрь не
-                                // изображается работающим.
+                            } else if entries[idx].size as usize > EDITOR_MAX_BYTES {
+                                *status_msg = None;
+                                *error = Some(format!("{}: too large for the editor (max {} KiB)", name, EDITOR_MAX_BYTES / 1024));
                             } else {
                                 let base = current_partition.trim_end_matches('/');
                                 let dir = current_path.trim_matches('/');
@@ -1534,7 +1532,7 @@ impl Desktop {
                                 } else {
                                     format!("{}/{}/{}", base, dir, name)
                                 };
-                                let read_only = current_partition != "/userdata";
+                                let read_only = !crate::vfs::is_writable(current_partition.as_str());
                                 open_editor = Some((win.x + 28, win.y + 28, name, full, read_only));
                             }
                         } else {
@@ -2676,6 +2674,9 @@ fn clamp_window_geometry(
 
 /// Первое свободное имя вида `{prefix}{n}{suffix}` среди текущих записей
 /// каталога. Существующие файлы не перезаписываются.
+/// Файлы больше этого размера редактор не открывает (текст строится в куче целиком).
+const EDITOR_MAX_BYTES: usize = 256 * 1024;
+
 fn free_name(
     entries: &[crate::ui::window::FileViewEntry],
     prefix: &str,
