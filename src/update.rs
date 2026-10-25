@@ -16,6 +16,8 @@ use alloc::vec::Vec;
 
 use crate::println;
 
+pub mod center;
+
 const GATEWAY_URL: &str = "https://deix-atimenkas-projects.vercel.app/api/update";
 const LANG_HEADER: (&str, &str) = ("X-Deix-Lang", "en");
 
@@ -621,12 +623,8 @@ fn cmd_download() {
     if !require_enabled() {
         return;
     }
-    if pending() {
-        println!("  [update] an update is already waiting to be applied; finish it or run 'update cancel'.");
-        return;
-    }
-    if let Err(e) = check_target() {
-        println!("  [update] cannot update this system: {}", e);
+    if let Err(e) = download_precheck() {
+        println!("  [update] {}", e);
         return;
     }
     let offer = match fetch_offer() {
@@ -644,11 +642,9 @@ fn cmd_download() {
         println!("  [update] {}", e);
         return;
     }
-    if let Ok(staged) = load_staged() {
-        if staged.manifest.build == offer.signed.manifest.build && read_payload(&staged.manifest).is_ok() {
-            println!("  [update] build {} is already downloaded and verified: run 'update apply yes'.", staged.manifest.build);
-            return;
-        }
+    if is_staged(offer.signed.manifest.build) {
+        println!("  [update] build {} is already downloaded and verified: run 'update apply yes'.", offer.signed.manifest.build);
+        return;
     }
     match download_all(&offer) {
         Ok(()) => {
@@ -663,26 +659,98 @@ fn cmd_download() {
     }
 }
 
+/// Пошаговая загрузка нагрузки: один кусок за `step`, чтобы графический центр
+/// обновлений не замораживал рабочий стол.
+struct Download {
+    payload: Vec<u8>,
+    next: usize,
+}
+
+impl Download {
+    fn new(offer: &Offer) -> Download {
+        Download { payload: Vec::with_capacity(offer.signed.manifest.payload_size), next: 0 }
+    }
+
+    fn done(&self, offer: &Offer) -> bool {
+        self.next >= offer.parts
+    }
+
+    fn step(&mut self, offer: &Offer) -> Result<(), String> {
+        let m = &offer.signed.manifest;
+        let expected = core::cmp::min(offer.part_size, m.payload_size - self.next * offer.part_size);
+        let part = download_part(m.build, self.next, expected)?;
+        self.payload.extend_from_slice(&part);
+        self.next += 1;
+        Ok(())
+    }
+
+    fn downloaded_bytes(&self) -> usize {
+        self.payload.len()
+    }
+
+    fn finish(&self, offer: &Offer) -> Result<(), String> {
+        let m = &offer.signed.manifest;
+        if crate::crypto::sha256::sha256(&self.payload) != m.payload_sha256 {
+            return Err(String::from("the payload does not match the signed sha256"));
+        }
+        println!("  [update] sha256 matches the signed manifest, saving to {}", UPDATE_DIR);
+        crate::vfs::mkdir(UPDATE_DIR).map_err(|e| e.message())?;
+        crate::vfs::write_file(STAGED_PAYLOAD, &self.payload).map_err(|e| {
+            format!("{} (is there enough free space on /userdata for {} KiB?)", e.message(), m.payload_size / 1024)
+        })?;
+        crate::vfs::write_file(STAGED_MANIFEST, &manifest_file_bytes(&offer.signed)).map_err(|e| e.message())
+    }
+}
+
 fn download_all(offer: &Offer) -> Result<(), String> {
-    let m = &offer.signed.manifest;
-    let mut payload: Vec<u8> = Vec::with_capacity(m.payload_size);
-    for index in 0..offer.parts {
-        let expected = core::cmp::min(offer.part_size, m.payload_size - index * offer.part_size);
-        let part = download_part(m.build, index, expected)?;
-        payload.extend_from_slice(&part);
-        if index % 8 == 7 || index + 1 == offer.parts {
-            println!("  [update] downloaded {} of {} KiB", payload.len() / 1024, m.payload_size / 1024);
+    let mut download = Download::new(offer);
+    while !download.done(offer) {
+        download.step(offer)?;
+        if download.next % 8 == 0 || download.done(offer) {
+            println!(
+                "  [update] downloaded {} of {} KiB",
+                download.downloaded_bytes() / 1024,
+                offer.signed.manifest.payload_size / 1024
+            );
         }
     }
-    if crate::crypto::sha256::sha256(&payload) != m.payload_sha256 {
-        return Err(String::from("the payload does not match the signed sha256"));
+    download.finish(offer)
+}
+
+/// Уже скачанный и проверенный пакет этой сборки лежит на диске?
+fn is_staged(build: u64) -> bool {
+    match load_staged() {
+        Ok(staged) => staged.manifest.build == build && read_payload(&staged.manifest).is_ok(),
+        Err(_) => false,
     }
-    println!("  [update] sha256 matches the signed manifest, saving to {}", UPDATE_DIR);
-    crate::vfs::mkdir(UPDATE_DIR).map_err(|e| e.message())?;
-    crate::vfs::write_file(STAGED_PAYLOAD, &payload).map_err(|e| {
-        format!("{} (is there enough free space on /userdata for {} KiB?)", e.message(), m.payload_size / 1024)
-    })?;
-    crate::vfs::write_file(STAGED_MANIFEST, &manifest_file_bytes(&offer.signed)).map_err(|e| e.message())
+}
+
+/// Предусловия скачивания, общие для оболочки и графического центра.
+fn download_precheck() -> Result<(), String> {
+    if pending() {
+        return Err(String::from("an update is already waiting to be applied; finish it or cancel it"));
+    }
+    check_target().map_err(|e| format!("cannot update this system: {}", e))
+}
+
+/// Проверяет скачанный пакет и записывает запрос на применение в управляющий
+/// сектор. Перезагрузку выполняет вызывающий. Возвращает номер сборки.
+fn request_apply() -> Result<u64, String> {
+    if pending() {
+        return Err(String::from("an update is already waiting to be applied."));
+    }
+    check_target().map_err(|e| format!("cannot update this system: {}", e))?;
+    let staged = load_staged().map_err(|_| String::from("nothing is downloaded: download the update first."))?;
+    ensure_newer(&staged.manifest)?;
+    read_payload(&staged.manifest).map_err(|e| format!("the downloaded payload is damaged: {}", e))?;
+    let control = Control {
+        state: STATE_REQUESTED,
+        phase: PHASE_NONE,
+        build: staged.manifest.build,
+        manifest_hash: crate::crypto::sha256::sha256(&manifest_file_bytes(&staged)),
+    };
+    write_control(&control)?;
+    Ok(staged.manifest.build)
 }
 
 fn cmd_apply(arg: &str) {
@@ -695,60 +763,36 @@ fn cmd_apply(arg: &str) {
         println!("  [update] if you accept that, run 'update apply yes'.");
         return;
     }
-    if pending() {
-        println!("  [update] an update is already waiting; run 'update status'.");
-        return;
-    }
-    if let Err(e) = check_target() {
-        println!("  [update] cannot update this system: {}", e);
-        return;
-    }
-    let staged = match load_staged() {
-        Ok(s) => s,
-        Err(_) => {
-            println!("  [update] nothing is downloaded: run 'update download' first.");
-            return;
+    match request_apply() {
+        Ok(build) => {
+            println!("  [update] update mode requested for build {}. Rebooting...", build);
+            crate::cli::cmd_reboot();
         }
-    };
-    if let Err(e) = ensure_newer(&staged.manifest) {
-        println!("  [update] {}", e);
-        return;
+        Err(e) => println!("  [update] {}", e),
     }
-    if let Err(e) = read_payload(&staged.manifest) {
-        println!("  [update] the downloaded payload is damaged: {}", e);
-        return;
-    }
-    let control = Control {
-        state: STATE_REQUESTED,
-        phase: PHASE_NONE,
-        build: staged.manifest.build,
-        manifest_hash: crate::crypto::sha256::sha256(&manifest_file_bytes(&staged)),
-    };
-    if let Err(e) = write_control(&control) {
-        println!("  [update] {}", e);
-        return;
-    }
-    println!("  [update] update mode requested for build {}. Rebooting...", staged.manifest.build);
-    crate::cli::cmd_reboot();
 }
 
-fn cmd_cancel() {
+/// Снимает запрос на применение и удаляет скачанный пакет. Частично
+/// применённое обновление отменить нельзя.
+fn cancel_staged() -> Result<(), String> {
     match read_control() {
         Some(c) if c.state == STATE_APPLYING => {
-            println!("  [update] the update is partially applied: cancelling would leave /system and the kernel mismatched.");
-            println!("  [update] reboot and sign in to finish it.");
-            return;
+            return Err(String::from(
+                "the update is partially applied: cancelling would leave /system and the kernel mismatched; reboot and sign in to finish it.",
+            ));
         }
-        Some(c) if c.state == STATE_REQUESTED => {
-            if let Err(e) = write_control(&idle_control()) {
-                println!("  [update] {}", e);
-                return;
-            }
-        }
+        Some(c) if c.state == STATE_REQUESTED => write_control(&idle_control())?,
         _ => {}
     }
     clear_staged();
-    println!("  [update] cancelled, the downloaded package was removed.");
+    Ok(())
+}
+
+fn cmd_cancel() {
+    match cancel_staged() {
+        Ok(()) => println!("  [update] cancelled, the downloaded package was removed."),
+        Err(e) => println!("  [update] {}", e),
+    }
 }
 
 // ==================== схема /userdata ====================

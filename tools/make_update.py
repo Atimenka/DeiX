@@ -6,6 +6,7 @@
   pubkey  записать публичный ключ в 65 байт (build/update_pubkey.bin)
   pack    упаковать образ диска в манифест и нагрузку
   verify  проверить подпись и нагрузку готового пакета
+  inspect показать манифест: сводка или полный JSON (--json)
 
 Внешняя зависимость одна — утилита openssl. Формат описан в docs/UPDATE.md.
 """
@@ -291,6 +292,39 @@ def verify(args):
     print("пакет %s (сборка %d, канал %s): подпись и нагрузка верны" % (manifest["version"], manifest["build"], manifest["channel"]))
 
 
+def inspect(args):
+    signature, body = load_manifest(args.manifest)
+    doc = json.loads(body)
+    if canonical(doc) != body:
+        raise UpdateError("манифест не в каноническом виде")
+    state = "не проверялась (нужен --key или --pub)"
+    if args.pub or args.key:
+        if args.pub:
+            with open(args.pub, "rb") as f:
+                pub = f.read()
+        else:
+            pub = public_key_raw(args.key)
+        if not verify_signature(pub, body, signature):
+            raise UpdateError("подпись манифеста не сходится")
+        state = "верна"
+    if args.json:
+        print(json.dumps({"signature": signature.hex(), "manifest": doc}, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    print("версия:        %s" % doc["version"])
+    print("сборка:        %d (минимальная для установки: %d)" % (doc["build"], doc["min_build"]))
+    print("канал:         %s" % doc["channel"])
+    print("схема данных:  %d" % doc["schema"])
+    print("заметки:       %s" % (doc["notes"] or "-"))
+    print("нагрузка:      %d Б, sha256 %s" % (doc["payload_size"], doc["payload_sha256"]))
+    print("куски:         %d по %d секторов" % (len(doc["chunks"]), doc["chunk_sectors"]))
+    for seg in doc["segments"]:
+        print("сегмент:       LBA %d, секторов %d, режим %s" % (seg["lba"], seg["sectors"], seg.get("mode", "raw")))
+    print("операции /userdata: %d" % len(doc["userdata_ops"]))
+    for op in doc["userdata_ops"]:
+        print("  %s %s" % (op["op"], op["path"]))
+    print("подпись:       %s" % state)
+
+
 def keygen(args):
     if os.path.exists(args.key) and not args.force:
         raise UpdateError("%s уже существует (--force перезапишет)" % args.key)
@@ -342,6 +376,13 @@ def main(argv):
     p.add_argument("--pub")
     p.add_argument("--key")
     p.set_defaults(fn=verify)
+
+    p = sub.add_parser("inspect", help="показать манифест: сводка или полный JSON (--json)")
+    p.add_argument("--manifest", required=True)
+    p.add_argument("--pub")
+    p.add_argument("--key")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=inspect)
 
     args = ap.parse_args(argv)
     if args.cmd == "pubkey" and not args.zero and not args.key:

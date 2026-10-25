@@ -41,6 +41,31 @@ class Packaging(unittest.TestCase):
         self.assertEqual(rc, 0)
         return os.path.join(out, "deix-update-0.4.0.manifest"), os.path.join(out, "deix-update-0.4.0.payload")
 
+    def test_inspect_summary_and_json(self):
+        import contextlib
+        import io
+
+        manifest, _ = self.pack("--notes", "first build", "--op", "mkdir:/userdata/new")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(mu.main(["inspect", "--manifest", manifest, "--key", self.key]), 0)
+        text = out.getvalue()
+        self.assertIn("версия:        0.4.0", text)
+        self.assertIn("подпись:       верна", text)
+        self.assertIn("mkdir /userdata/new", text)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(mu.main(["inspect", "--manifest", manifest, "--json"]), 0)
+        doc = json.loads(out.getvalue())
+        self.assertEqual(doc["manifest"]["notes"], "first build")
+        self.assertEqual(len(doc["signature"]), 128)
+
+    def test_inspect_rejects_wrong_key(self):
+        manifest, _ = self.pack()
+        other = os.path.join(self.dir, "other.pem")
+        mu.main(["keygen", "--key", other])
+        self.assertEqual(mu.main(["inspect", "--manifest", manifest, "--key", other]), 1)
+
     def test_roundtrip_verifies(self):
         manifest, payload = self.pack("--op", "mkdir:/userdata/new", "--op", "write:/userdata/new/a=0102")
         self.assertEqual(mu.main(["verify", "--manifest", manifest, "--payload", payload, "--key", self.key]), 0)

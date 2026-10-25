@@ -18,6 +18,7 @@ use crate::ui::taskbar::{
 };
 use crate::ui::theme::{get_theme, set_theme, UiTheme};
 use crate::ui::apps::installer as installer_ui;
+use crate::ui::apps::updates as updates_ui;
 use crate::ui::window::{
     draw_window, load_partition_entries, maximized_geometry,
     BrowserTab, InstallerPage, Window, WindowContent, WindowFrame, MIN_WINDOW_H, MIN_WINDOW_W,
@@ -311,6 +312,20 @@ impl Desktop {
             return;
         }
         self.open_placed(520, 360, screen_w, screen_h, Window::new_installer);
+    }
+
+    pub fn open_updates(&mut self, screen_w: i32, screen_h: i32) {
+        if let Some(i) = self
+            .windows
+            .iter()
+            .position(|w| matches!(w.content, WindowContent::Updates { .. }))
+        {
+            self.windows[i].minimized = false;
+            self.focus_window(i);
+            self.start_menu_open = false;
+            return;
+        }
+        self.open_placed(480, 340, screen_w, screen_h, Window::new_updates);
     }
 
     pub fn open_display_settings(&mut self, screen_w: i32, screen_h: i32) {
@@ -1030,6 +1045,18 @@ impl Desktop {
         }
     }
 
+    /// Шаг фоновой работы окна Updates: проверка сервера и загрузка пакета
+    /// идут по одному блокирующему вызову за кадр.
+    fn pump_update_centers(&mut self) {
+        for w in self.windows.iter_mut() {
+            if let WindowContent::Updates { center } = &mut w.content {
+                if center.step() {
+                    self.dirty = true;
+                }
+            }
+        }
+    }
+
     /// Закрывает меню Пуск, очищая поисковый запрос.
     fn close_start_menu(&mut self) {
         self.start_menu_open = false;
@@ -1058,6 +1085,7 @@ impl Desktop {
             StartMenuAction::OpenAbout => self.open_about(screen_w, screen_h),
             StartMenuAction::OpenDisplaySettings => self.open_display_settings(screen_w, screen_h),
             StartMenuAction::OpenInstaller => self.open_installer(screen_w, screen_h),
+            StartMenuAction::OpenUpdates => self.open_updates(screen_w, screen_h),
         }
         self.menu_search.clear();
     }
@@ -1746,6 +1774,20 @@ impl Desktop {
                     _ => {}
                 }
             }
+            WindowContent::Updates { center } => {
+                let (ww, wh) = (win.width, win.height);
+                if center.primary_label().is_some()
+                    && updates_ui::primary_btn_rect(ww, wh).contains(rel_x, rel_y)
+                {
+                    center.primary();
+                    self.dirty = true;
+                } else if center.secondary_label().is_some()
+                    && updates_ui::secondary_btn_rect(ww, wh).contains(rel_x, rel_y)
+                {
+                    center.secondary();
+                    self.dirty = true;
+                }
+            }
             WindowContent::FileEditor {
                 full_path,
                 lines,
@@ -2096,6 +2138,7 @@ impl Desktop {
             // Активная установка (окно Install DeiX): несколько шагов
             // работы за кадр, прогресс перерисовывается честно.
             self.pump_installer_jobs();
+            self.pump_update_centers();
 
             // Уведомления: шаг анимации раз в ~33 мс, пока есть карточки.
             {

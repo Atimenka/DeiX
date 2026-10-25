@@ -330,6 +330,10 @@ pub enum WindowContent {
     Installer {
         st: InstallerState,
     },
+    /// Центр обновлений ОС (Updates).
+    Updates {
+        center: crate::update::center::Center,
+    },
 }
 
 impl WindowContent {
@@ -347,6 +351,7 @@ impl WindowContent {
             WindowContent::About => IconType::About,
             WindowContent::DisplaySettings { .. } => IconType::Display,
             WindowContent::Installer { .. } => IconType::Install,
+            WindowContent::Updates { .. } => IconType::Reload,
         }
     }
 }
@@ -589,6 +594,21 @@ impl Window {
             maximized: false,
             restore_geometry: (x, y, 520, 360),
             content: WindowContent::Installer { st: InstallerState::new() },
+        }
+    }
+
+    pub fn new_updates(x: i32, y: i32) -> Self {
+        Window {
+            id: 0,
+            title: String::from("Updates"),
+            x,
+            y,
+            width: 480,
+            height: 340,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 480, 340),
+            content: WindowContent::Updates { center: crate::update::center::Center::new() },
         }
     }
 
@@ -1405,6 +1425,9 @@ pub fn draw_window(
         }
         WindowContent::Installer { st } => {
             apps::draw_installer(r, theme, w, st, content_y);
+        }
+        WindowContent::Updates { center } => {
+            apps::draw_updates(r, theme, w, center, content_y);
         }
     }
 }

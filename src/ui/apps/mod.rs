@@ -8,6 +8,7 @@ pub mod installer;
 pub mod settings;
 pub mod task_manager;
 pub mod terminal;
+pub mod updates;
 
 pub use about::*;
 pub use browser::*;
@@ -17,3 +18,4 @@ pub use files::*;
 pub use settings::*;
 pub use task_manager::*;
 pub use terminal::*;
+pub use updates::draw_updates;

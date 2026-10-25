@@ -27,10 +27,11 @@ pub enum StartMenuAction {
     OpenAbout,
     OpenDisplaySettings,
     OpenInstaller,
+    OpenUpdates,
 }
 
 /// Приложения меню Пуск и закреплённая часть Dock.
-pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 9] = [
+pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 10] = [
     ("Terminal", StartMenuAction::OpenTerminal, IconType::Terminal),
     ("Files", StartMenuAction::OpenFiles, IconType::Files),
     ("Browser", StartMenuAction::OpenBrowser, IconType::Browser),
@@ -39,6 +40,7 @@ pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 9] = [
     ("Personalize", StartMenuAction::OpenThemeSettings, IconType::Theme),
     ("Display", StartMenuAction::OpenDisplaySettings, IconType::Display),
     ("Install DeiX", StartMenuAction::OpenInstaller, IconType::Install),
+    ("Updates", StartMenuAction::OpenUpdates, IconType::Reload),
     ("About", StartMenuAction::OpenAbout, IconType::About),
 ];
 
@@ -54,6 +56,7 @@ pub fn launch_matches(action: StartMenuAction, content: &WindowContent) -> bool 
         (StartMenuAction::OpenAbout, WindowContent::About) => true,
         (StartMenuAction::OpenDisplaySettings, WindowContent::DisplaySettings { .. }) => true,
         (StartMenuAction::OpenInstaller, WindowContent::Installer { .. }) => true,
+        (StartMenuAction::OpenUpdates, WindowContent::Updates { .. }) => true,
         _ => false,
     }
 }

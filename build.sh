@@ -34,6 +34,8 @@ DEIX_VERSION="0.3.0-beta"
 # коммит — новая сборка). Для несохранённых правок задайте DEIX_BUILD_ID сами.
 DEIX_BUILD_ID="${DEIX_BUILD_ID:-$(git log -1 --format=%ct 2>/dev/null || echo 0)}"
 export DEIX_BUILD_ID
+printf '%s\n' "$DEIX_BUILD_ID" > "$BUILD/build_id"
+printf '%s\n' "$DEIX_VERSION" > "$BUILD/version"
 
 echo "==> [1/8] Ассемблируем stage2 (32-бит вход + long mode + ATA-ридер ядра)"
 # Временные значения KERNEL_LBA/KERNEL_SECTORS — нужны только для размера
@@ -287,7 +289,7 @@ echo "==> [7b/8] Форматируем разделы: MBR + ext2 + НАСТО�
 # (магия 0xE0F5E1E2, проходят fsck.erofs).
 python3 tools/make_deix_fs.py "$DISK_IMG" --kernel-lba=$KERNEL_LBA
 
-if [ -f "$UPDATE_KEY" ]; then
+if [ -f "$UPDATE_KEY" ] && [ -z "${DEIX_SKIP_PACK:-}" ]; then
     echo "==> [7c/8] Пакет обновления (подписанный манифест + нагрузка)"
     python3 tools/make_update.py pack --image "$DISK_IMG" --key "$UPDATE_KEY" \
         --version "$DEIX_VERSION" --build "$DEIX_BUILD_ID" --out-dir "$BUILD/update"
