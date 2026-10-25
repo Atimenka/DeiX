@@ -6,6 +6,7 @@
 
 use crate::renderer::{Color, IconType, Rect, Renderer};
 use crate::ui::theme::UiTheme;
+use crate::ui::widgets::icon_button;
 use crate::ui::window::{FileViewEntry, Window};
 use alloc::format;
 use alloc::string::String;
@@ -61,20 +62,24 @@ pub fn breadcrumbs(
     out
 }
 
-/// Кнопка «+File» (относительно области содержимого). Правый якорь —
+/// Левый край самой левой кнопки панели инструментов (Delete): строка поиска
+/// должна заканчиваться до него.
+const TOOLBAR_LEFT: i32 = 248;
+
+/// Кнопка «File» (относительно области содержимого). Правый якорь —
 /// как и при отрисовке.
 pub fn new_file_btn_rect(win_w: u32) -> Rect {
-    Rect::new(win_w as i32 - 120, 6, 50, 24)
+    Rect::new(win_w as i32 - 160, 6, 64, 24)
 }
 
-/// Кнопка «+Folder».
+/// Кнопка «Folder».
 pub fn new_folder_btn_rect(win_w: u32) -> Rect {
-    Rect::new(win_w as i32 - 64, 6, 55, 24)
+    Rect::new(win_w as i32 - 88, 6, 80, 24)
 }
 
 /// Кнопка «Delete» (видна, когда на записываемом разделе выбран элемент).
 pub fn delete_btn_rect(win_w: u32) -> Rect {
-    Rect::new(win_w as i32 - 182, 6, 54, 24)
+    Rect::new(win_w as i32 - TOOLBAR_LEFT, 6, 80, 24)
 }
 
 /// Кнопка раздела в боковой панели.
@@ -105,15 +110,18 @@ pub fn draw_files(
         let bg = if is_sel { theme.titlebar_active } else { theme.titlebar_inactive };
         let fg = if is_sel { theme.accent } else { theme.text_secondary };
         r.fill_rounded_rect(w.x + item.x, content_y + item.y, item.w, item.h, 4, bg);
-        r.draw_text(w.x + item.x + 8, content_y + item.y + 6, p, fg, None);
+        r.draw_icon(w.x + item.x + 4, content_y + item.y + 6, IconType::Drive, fg);
+        r.draw_text(w.x + item.x + 24, content_y + item.y + 6, p, fg, None);
     }
 
     r.fill_rect(w.x + SIDEBAR_W, content_y, w.width - SIDEBAR_W as u32, 36, theme.titlebar_active);
     r.draw_icon(w.x + SIDEBAR_W + 6, content_y + 10, IconType::Search, theme.text_secondary);
+    let query = format!("[{}]", search_query);
+    let query_cells = ((w.width as i32 - TOOLBAR_LEFT - SIDEBAR_W - 34) / 8).max(4) as usize;
     r.draw_text(
         w.x + SIDEBAR_W + 26,
         content_y + 10,
-        &format!("[{}]", search_query),
+        crate::ui::text::truncate_to_cells(&query, query_cells).0,
         theme.text_primary,
         None,
     );
@@ -123,17 +131,23 @@ pub fn draw_files(
     let writable = crate::vfs::is_writable(current_partition);
     if writable {
         let fb = new_file_btn_rect(w.width);
-        r.fill_rounded_rect(w.x + fb.x, content_y + fb.y, fb.w, fb.h, 4, theme.accent);
-        r.draw_text(w.x + fb.x + 5, content_y + fb.y + 4, "+File", Color::WHITE, None);
+        icon_button(
+            r, w.x + fb.x, content_y + fb.y, fb.w, fb.h, 4, theme.accent, Color::WHITE,
+            IconType::Plus, "File",
+        );
 
         let db = new_folder_btn_rect(w.width);
-        r.fill_rounded_rect(w.x + db.x, content_y + db.y, db.w, db.h, 4, theme.accent);
-        r.draw_text(w.x + db.x + 4, content_y + db.y + 4, "+Folder", Color::WHITE, None);
+        icon_button(
+            r, w.x + db.x, content_y + db.y, db.w, db.h, 4, theme.accent, Color::WHITE,
+            IconType::NewFolder, "Folder",
+        );
 
         if selected_idx.is_some() {
             let xb = delete_btn_rect(w.width);
-            r.fill_rounded_rect(w.x + xb.x, content_y + xb.y, xb.w, xb.h, 4, Color::RED);
-            r.draw_text(w.x + xb.x + 5, content_y + xb.y + 4, "Delete", Color::WHITE, None);
+            icon_button(
+                r, w.x + xb.x, content_y + xb.y, xb.w, xb.h, 4, Color::RED, Color::WHITE,
+                IconType::Trash, "Delete",
+            );
         }
     }
 
@@ -163,8 +177,12 @@ pub fn draw_files(
         let bg = if is_selected { theme.titlebar_active } else { theme.window_bg };
         r.fill_rect(w.x + SIDEBAR_W + 4, ey - 2, w.width - (SIDEBAR_W as u32 + 10), 20, bg);
 
-        let icon_color = if entry.is_dir { Color::YELLOW } else { theme.accent };
-        r.draw_icon(w.x + SIDEBAR_W + 8, ey, IconType::Files, icon_color);
+        let (glyph, icon_color) = if entry.is_dir {
+            (IconType::Files, Color::YELLOW)
+        } else {
+            (IconType::Document, theme.accent)
+        };
+        r.draw_icon(w.x + SIDEBAR_W + 8, ey, glyph, icon_color);
 
         let entry_str = if entry.is_dir {
             format!("{:<18} <DIR>", entry.name)
@@ -302,9 +320,12 @@ pub fn draw_file_editor(
                 _ => theme.titlebar_inactive,
             };
             let fg = if i == 2 { theme.text_primary } else { Color::WHITE };
-            r.fill_rounded_rect(bx, by, b.w, b.h, 4, bg);
-            let tw = label.len() as i32 * 8;
-            r.draw_text(bx + (b.w as i32 - tw) / 2, by + 5, label, fg, None);
+            let icon = match i {
+                0 => IconType::Save,
+                1 => IconType::Trash,
+                _ => IconType::Cross,
+            };
+            icon_button(r, bx, by, b.w, b.h, 4, bg, fg, icon, label);
         }
     }
 }

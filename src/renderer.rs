@@ -235,6 +235,15 @@ pub enum IconType {
     ArrowRight,
     /// Установщик: стрелка вниз в диск.
     Install,
+    Plus,
+    NewFolder,
+    Trash,
+    Save,
+    Cross,
+    Download,
+    Document,
+    Drive,
+    Stop,
 }
 
 pub struct Renderer {
@@ -800,6 +809,55 @@ impl Renderer {
             IconType::ArrowRight => {
                 self.draw_line(x + 4, y + 3, x + 10, y + 8, color);
                 self.draw_line(x + 10, y + 8, x + 4, y + 13, color);
+            }
+            IconType::Plus => {
+                self.draw_hline(x + 3, y + 8, 11, color);
+                self.draw_vline(x + 8, y + 3, 11, color);
+            }
+            IconType::NewFolder => {
+                self.draw_hline(x + 1, y + 3, 6, color);
+                self.draw_rect(x + 1, y + 4, 14, 10, color);
+                self.draw_hline(x + 5, y + 9, 6, color);
+                self.draw_vline(x + 8, y + 6, 6, color);
+            }
+            IconType::Trash => {
+                self.draw_hline(x + 3, y + 4, 11, color);
+                self.draw_hline(x + 6, y + 2, 5, color);
+                self.draw_vline(x + 4, y + 5, 9, color);
+                self.draw_vline(x + 12, y + 5, 9, color);
+                self.draw_hline(x + 4, y + 14, 9, color);
+                self.draw_vline(x + 7, y + 6, 6, color);
+                self.draw_vline(x + 9, y + 6, 6, color);
+            }
+            IconType::Save => {
+                self.draw_rect(x + 2, y + 2, 12, 12, color);
+                self.draw_rect(x + 5, y + 2, 6, 4, color);
+                self.draw_rect(x + 4, y + 9, 8, 5, color);
+            }
+            IconType::Cross => {
+                self.draw_line(x + 3, y + 3, x + 12, y + 12, color);
+                self.draw_line(x + 12, y + 3, x + 3, y + 12, color);
+            }
+            IconType::Download => {
+                self.draw_vline(x + 8, y + 2, 8, color);
+                self.draw_line(x + 4, y + 6, x + 8, y + 10, color);
+                self.draw_line(x + 12, y + 6, x + 8, y + 10, color);
+                self.draw_hline(x + 3, y + 13, 11, color);
+            }
+            IconType::Document => {
+                self.draw_rect(x + 3, y + 1, 10, 14, color);
+                self.draw_hline(x + 5, y + 5, 6, color);
+                self.draw_hline(x + 5, y + 8, 6, color);
+                self.draw_hline(x + 5, y + 11, 4, color);
+            }
+            IconType::Drive => {
+                self.draw_rect(x + 1, y + 5, 14, 7, color);
+                self.draw_hline(x + 3, y + 9, 6, color);
+                self.fill_rect(x + 12, y + 8, 2, 2, color);
+            }
+            IconType::Stop => {
+                self.draw_rect(x + 2, y + 2, 12, 12, color);
+                self.fill_rect(x + 5, y + 5, 6, 6, color);
             }
         }
     }

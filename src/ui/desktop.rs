@@ -1274,7 +1274,7 @@ impl Desktop {
                     }
                 }
 
-                if rel_x >= win.width as i32 - 110
+                if rel_x >= win.width as i32 - 130
                     && rel_x <= win.width as i32 - 10
                     && rel_y >= win.height as i32 - 32
                     && rel_y <= win.height as i32 - 8
@@ -1901,6 +1901,7 @@ impl Desktop {
 
         draw_wallpaper(r, &theme, self, screen_w, screen_h);
         draw_desktop_icons(r, &theme, self.selected_icon);
+        draw_clock_widget(r, screen_w, screen_h);
 
         let is_dragging = self.dragging_window.is_some();
 
@@ -2197,6 +2198,7 @@ impl Desktop {
                 if key != self.last_clock_key {
                     self.last_clock_key = key;
                     self.dirty = true;
+                    r.add_damage(clock_widget_rect(screen_w, screen_h));
                 }
             }
 
@@ -2683,6 +2685,92 @@ fn draw_desktop_icons(r: &mut Renderer, theme: &UiTheme, selected_idx: Option<us
 
         r.draw_text(ix, iy + 40, sc.name, theme.text_primary, None);
     }
+}
+
+const WEEKDAYS: [&str; 7] =
+    ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS: [&str; 12] = [
+    "January", "February", "March", "April", "May", "June", "July", "August", "September",
+    "October", "November", "December",
+];
+
+/// Ширина и высота виджета часов на рабочем столе.
+const CLOCK_W: i32 = 200;
+const CLOCK_H: u32 = 92;
+/// Масштаб цифр и шаг между ними (глиф 8x16 увеличивается в целое число раз).
+const CLOCK_SCALE: i32 = 4;
+const CLOCK_ADVANCE: i32 = 7 * CLOCK_SCALE;
+
+/// Область виджета часов: правый верх рабочей области.
+fn clock_widget_rect(screen_w: i32, screen_h: i32) -> Rect {
+    let wa = work_area(screen_w, screen_h);
+    Rect::new(screen_w - 20 - CLOCK_W, wa.y + 12, CLOCK_W as u32, CLOCK_H)
+}
+
+/// День недели по григорианскому календарю, 0 = воскресенье (Сакамото).
+fn weekday_index(year: i32, month: u8, day: u8) -> usize {
+    const OFFSET: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let m = (month.clamp(1, 12) - 1) as usize;
+    let y = if month < 3 { year - 1 } else { year };
+    ((y + y / 4 - y / 100 + y / 400 + OFFSET[m] + day as i32).rem_euclid(7)) as usize
+}
+
+/// Рисует строку глифами шрифта 8x16, увеличенными в `scale` раз.
+fn draw_scaled_text(r: &mut Renderer, x: i32, y: i32, text: &str, scale: i32, color: Color) {
+    let mut cx = x;
+    for ch in text.chars() {
+        crate::ui::text::glyph_cells(ch, &mut |code| {
+            let glyph = crate::font::read_glyph(code);
+            for (row, bits) in glyph.iter().enumerate() {
+                for col in 0..8 {
+                    if (bits >> (7 - col)) & 1 == 0 {
+                        continue;
+                    }
+                    for dy in 0..scale {
+                        for dx in 0..scale {
+                            r.put_pixel(
+                                cx + col * scale + dx,
+                                y + row as i32 * scale + dy,
+                                color,
+                            );
+                        }
+                    }
+                }
+            }
+            cx += CLOCK_ADVANCE;
+        });
+    }
+}
+
+/// Часы и дата на обоях. Рисуются только когда RTC показывает правдоподобное
+/// время: по аптайму часы не изображаются. Пиксели непрозрачные, поэтому
+/// повторная отрисовка поверх прежней ничего не накапливает.
+fn draw_clock_widget(r: &mut Renderer, screen_w: i32, screen_h: i32) {
+    if !crate::rtc::is_plausible() {
+        return;
+    }
+    let t = crate::rtc::now();
+    let area = clock_widget_rect(screen_w, screen_h);
+    let shadow = Color::rgb(8, 10, 24);
+
+    let time = format!("{:02}:{:02}", t.hour, t.minute);
+    let time_w = time.chars().count() as i32 * CLOCK_ADVANCE;
+    let tx = area.x + area.w as i32 - time_w;
+    draw_scaled_text(r, tx + 2, area.y + 2, &time, CLOCK_SCALE, shadow);
+    draw_scaled_text(r, tx, area.y, &time, CLOCK_SCALE, Color::WHITE);
+
+    let date = format!(
+        "{}, {} {}",
+        WEEKDAYS[weekday_index(t.year as i32, t.month, t.day)],
+        t.day,
+        MONTHS[(t.month.clamp(1, 12) - 1) as usize]
+    );
+    let dx = area.x + area.w as i32 - crate::ui::text::text_cells(&date) as i32 * 8;
+    let dy = area.y + CLOCK_SCALE * 16 + 6;
+    r.draw_text(dx + 1, dy + 1, &date, shadow, None);
+    r.draw_text(dx, dy, &date, Color::WHITE, None);
+
+    r.add_damage(area);
 }
 
 /// Прижимает геометрию окна к доступной области экрана: окно не шире

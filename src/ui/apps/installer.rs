@@ -70,11 +70,19 @@ fn page_title(page: InstallerPage) -> (&'static str, &'static str) {
 
 fn draw_button(r: &mut Renderer, theme: &UiTheme, x: i32, y: i32, rect: Rect, label: &str, primary: bool) {
     let bg = if primary { theme.accent } else { theme.titlebar_inactive };
-    r.fill_rounded_rect(x + rect.x, y + rect.y, rect.w, rect.h, 6, bg);
-    let tx = x + rect.x + (rect.w as i32 - label.len() as i32 * 8) / 2;
-    let ty = y + rect.y + (rect.h as i32 - 16) / 2 + 4;
     let fg = if primary { Color::WHITE } else { theme.text_primary };
-    r.draw_text(tx, ty, label, fg, None);
+    crate::ui::widgets::icon_button(
+        r,
+        x + rect.x,
+        y + rect.y,
+        rect.w,
+        rect.h,
+        6,
+        bg,
+        fg,
+        crate::ui::widgets::icon_for_label(label),
+        label,
+    );
 }
 
 /// Строка списка: выделение + текст (и приглушённый текст для

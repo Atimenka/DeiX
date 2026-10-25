@@ -12,6 +12,7 @@ pub mod taskbar;
 pub mod text;
 pub mod theme;
 pub mod wallpaper;
+pub mod widgets;
 pub mod window;
 
 pub use desktop::run_desktop_session;
