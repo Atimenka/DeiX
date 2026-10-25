@@ -12,13 +12,14 @@
 // Этапы установки:
 //   1. MBR с таблицей разделов (P1 /system EROFS, P2 /userdata ext2 —
 //      размер /userdata ВЫБИРАЕТСЯ при установке);
-//   2. stage2 + ramboot + сырой kernel.bin (копируется с загрузочного
-//      носителя посекторно) + дескриптор DEIXKIMG;
-//   3. образ /system (EROFS) посекторно;
+//   2. служебная область до /system обнуляется, затем копируется карта
+//      загрузки DEIXKIMG (LBA 2047) с загрузочного носителя;
+//   3. образ /system (EROFS) посекторно: в нём лежат stage2, ramboot и
+//      kernel.bin (/system/boot, /system/kernel), на которые указывает карта;
 //   4. форматирование /userdata в ext2 (многогрупповый том под
 //      выбранный размер — см. ext2::plan_format_raw);
 //   5. USERS.DB с учётной записью пользователя;
-//   6. проверка (MBR, магии ФС, SHA-256 ядра);
+//   6. проверка (MBR, магии ФС, SHA-256 ядра по карте загрузки);
 //   7. шифрование (XTS-AES-256) — только если цель = Master.
 
 use crate::ata::{self, Drive};
@@ -29,13 +30,12 @@ use alloc::vec::Vec;
 
 // ==================== КОНСТАНТЫ УСТАНОВКИ ====================
 
-/// Максимум секторов, заполняемых нулями в служебной области
-/// (stage2 + ramboot + kernel + дескриптор + область дампа) до начала
-/// /system (LBA 4096). Дескриптор ядра (LBA 2047) записывается заново
-/// после заполнения.
+/// Максимум секторов, заполняемых нулями в служебной области (MBR gap,
+/// карта загрузки, область дампа) до начала /system (LBA 4096). Карта
+/// загрузки (LBA 2047) записывается заново после заполнения.
 const KERNEL_AREA_SECTORS: u32 = 3500;
 
-/// Сектор дескриптора образа ядра DEIXKIMG (см. src/partition_map.rs).
+/// Сектор карты загрузки DEIXKIMG (см. src/partition_map.rs, src/bootmap.rs).
 const KERNEL_IMAGE_INFO_LBA: u32 = 2047;
 
 /// Карта разделов: P1 /system фиксированный (совпадает с
@@ -59,13 +59,9 @@ pub fn max_userdata_sectors(disk_sectors: u32) -> u32 {
 const COPY_CHUNK_SECTORS: u32 = 128;
 
 /// MBR-загрузчик, включённый в ядро (build.sh собирает boot_sector.bin ДО
-/// компиляции ядра; NUM_SECTORS = размер stage2).
+/// компиляции ядра). stage2 и ramboot в ядро не вшиваются: они приходят с
+/// копией /system.
 const BOOT_SECTOR: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/build/boot_sector.bin"));
-/// Загрузчик второй стадии (stage2.bin) — маленький; грузится boot_sector'ом.
-const STAGE2: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/build/stage2.bin"));
-/// RAM-диск загрузчик (ramboot.bin): дочитывает весь образ в RAM и передаёт
-/// управление stage2. Лежит сразу после stage2 (LBA 1+stage2_sectors).
-const RAMBOOT: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/build/ramboot.bin"));
 
 // Конец образа ядра (linker_kernel.ld: __image_end в конце .data, выровнен до 512).
 extern "C" {
@@ -75,17 +71,8 @@ extern "C" {
 /// База ядра в памяти (linker_kernel.ld): 0x100000 (1 МиБ).
 const KERNEL_BASE: usize = 0x100000;
 
-fn stage2_sectors() -> u32 {
-    ((STAGE2.len() + 511) / 512) as u32
-}
-fn ramboot_sectors() -> u32 {
-    ((RAMBOOT.len() + 511) / 512) as u32
-}
-/// Стартовый LBA kernel.bin на диске: сразу после stage2 + ramboot.
-fn kernel_start_lba() -> u32 {
-    1 + stage2_sectors() + ramboot_sectors()
-}
-/// Размер образа ядра на диске: от базы 0x100000 до __image_end.
+/// Размер образа ядра в памяти: от базы 0x100000 до __image_end (для шкалы
+/// прогресса).
 fn kernel_size() -> usize {
     unsafe { (&__image_end as *const u8 as usize) - KERNEL_BASE }
 }
@@ -213,35 +200,29 @@ fn verify_install(target: Drive, userdata_sectors: u32) -> Vec<String> {
         problems.push(String::from("/userdata: суперблок не читается"));
     }
 
-    // 4. Сырое ядро: SHA-256 по дескриптору DEIXKIMG (если он записан).
-    if ata::read_sectors_from(target, KERNEL_IMAGE_INFO_LBA, 1, &mut sec).is_ok()
-        && &sec[0..8] == b"DEIXKIMG"
-    {
-        let lba = u32::from_le_bytes([sec[8], sec[9], sec[10], sec[11]]);
-        let size = u32::from_le_bytes([sec[12], sec[13], sec[14], sec[15]]);
-        let mut expected = [0u8; 32];
-        expected.copy_from_slice(&sec[16..48]);
-
-        let mut hasher = crate::crypto::sha256::Sha256::new();
-        let mut left = size as usize;
-        let mut cur = lba;
-        let mut ok = true;
-        while left > 0 {
-            if ata::read_sectors_from(target, cur, 1, &mut sec).is_err() {
-                problems.push(String::from("ядро: сектор не читается при проверке"));
-                ok = false;
-                break;
+    // 4. Карта загрузки: разбор, участки внутри /system и SHA-256 ядра,
+    // прочитанного по участкам карты с целевого диска.
+    if ata::read_sectors_from(target, KERNEL_IMAGE_INFO_LBA, 1, &mut sec).is_err() {
+        problems.push(String::from("карта загрузки не читается"));
+        return problems;
+    }
+    match crate::bootmap::parse(&sec) {
+        Ok(Some(map)) => {
+            match crate::bootmap::read_extents(&map.kernel, map.kernel_size as usize, |lba, count, buf| {
+                ata::read_sectors_from(target, lba, count, buf)
+            }) {
+                Ok(kernel) => {
+                    if crate::crypto::sha256::sha256(&kernel) != map.kernel_sha256 {
+                        problems.push(String::from(
+                            "ядро: SHA-256 kernel.bin по карте загрузки не совпадает с записанным в карте",
+                        ));
+                    }
+                }
+                Err(e) => problems.push(format!("ядро: {}", e)),
             }
-            let take = left.min(512);
-            hasher.update(&sec[..take]);
-            left -= take;
-            cur += 1;
         }
-        if ok && hasher.finalize() != expected {
-            problems.push(String::from(
-                "ядро: SHA-256 сырого kernel.bin не совпадает с дескриптором DEIXKIMG",
-            ));
-        }
+        Ok(None) => problems.push(String::from("карта загрузки DEIXKIMG отсутствует")),
+        Err(e) => problems.push(format!("карта загрузки: {}", e)),
     }
 
     problems
@@ -252,10 +233,8 @@ fn verify_install(target: Drive, userdata_sectors: u32) -> Vec<String> {
 /// Текущий этап установки.
 enum Stage {
     Mbr,
-    BootFiles,
-    Kernel { next: u32 },
     ZeroFill { next: u32 },
-    KernelInfo,
+    BootMap,
     System { next: u32 },
     UserdataFormat { g: u32 },
     UserdataFinish,
@@ -303,12 +282,11 @@ impl InstallJob {
             .map_err(|e| format!("ext2 plan failed: {:?}", e))?;
 
         let ks = kernel_sectors();
-        let boot = stage2_sectors() + ramboot_sectors();
-        let zero = KERNEL_AREA_SECTORS.saturating_sub(boot + ks);
+        let zero = KERNEL_AREA_SECTORS - 1;
         // ~524 сектора метаданных на группу ext2 (SB+GDT+карты+таблица
         // инодов) — оценка для шкалы прогресса; точность не критична.
         let userdata_units = plan.groups * 524 + 4;
-        let total_units = 2 + boot + ks + zero + 1 + PART_SYSTEM.1 + userdata_units + 2 + ks + 1;
+        let total_units = 2 + zero + 1 + PART_SYSTEM.1 + userdata_units + 2 + ks + 1;
 
         Ok(InstallJob {
             target,
@@ -351,10 +329,8 @@ impl InstallJob {
     pub fn stage_label(&self) -> &'static str {
         match self.stage {
             Stage::Mbr => "Writing partition table (MBR)",
-            Stage::BootFiles => "Writing bootloader (stage2 + ramboot)",
-            Stage::Kernel { .. } => "Copying kernel image",
             Stage::ZeroFill { .. } => "Clearing reserved boot area",
-            Stage::KernelInfo => "Writing kernel descriptor",
+            Stage::BootMap => "Writing boot map",
             Stage::System { .. } => "Copying /system (EROFS)",
             Stage::UserdataFormat { .. } => "Formatting /userdata (ext2)",
             Stage::UserdataFinish => "Creating /userdata root directory",
@@ -390,39 +366,17 @@ impl InstallJob {
                 ata::write_sectors_to(self.target, 4095, 1, &zero)
                     .map_err(|_| String::from("marker sector write failed"))?;
                 self.done_units += 2;
-                self.stage = Stage::BootFiles;
-            }
-            Stage::BootFiles => {
-                // stage2.bin — секторы 1..; ramboot.bin — сразу после.
-                write_embedded(self.target, 1, STAGE2)?;
-                write_embedded(self.target, 1 + stage2_sectors(), RAMBOOT)?;
-                self.done_units += stage2_sectors() + ramboot_sectors();
-                self.stage = Stage::Kernel { next: 0 };
-            }
-            Stage::Kernel { next } => {
-                // kernel.bin: читаем ФАЙЛОВЫЕ байты с загрузочного
-                // носителя (там точная копия kernel.bin с чистым .data)
-                // и пишем на целевой диск. НЕ из памяти: "живой" .data
-                // содержит указатели на кучу, недействительные на
-                // установленной системе.
-                let ks = kernel_sectors();
-                let kstart = kernel_start_lba();
-                let n = COPY_CHUNK_SECTORS.min(ks - next);
-                copy_sectors(self.target, kstart + next, n)?;
-                self.done_units += n;
-                if next + n >= ks {
-                    self.stage = Stage::ZeroFill { next: stage2_sectors() + ramboot_sectors() + ks };
-                } else {
-                    self.stage = Stage::Kernel { next: next + n };
-                }
+                self.stage = Stage::ZeroFill { next: 0 };
             }
             Stage::ZeroFill { next } => {
-                // Дополняем область загрузчика+ядра нулями до границы
-                // раздела (включая область аварийного дампа).
-                if next >= KERNEL_AREA_SECTORS {
-                    self.stage = Stage::KernelInfo;
+                // Служебная область до /system (кроме MBR) обнуляется: на
+                // диске, где раньше стояла другая версия DeiX, в ней остались
+                // старые stage2, ramboot, ядро и карта.
+                let area = KERNEL_AREA_SECTORS - 1;
+                if next >= area {
+                    self.stage = Stage::BootMap;
                 } else {
-                    let n = COPY_CHUNK_SECTORS.min(KERNEL_AREA_SECTORS - next);
+                    let n = COPY_CHUNK_SECTORS.min(area - next);
                     let zeros = alloc::vec![0u8; n as usize * 512];
                     ata::write_sectors_to(self.target, 1 + next, n as u8, &zeros)
                         .map_err(|_| String::from("zero-fill write failed"))?;
@@ -430,10 +384,10 @@ impl InstallJob {
                     self.stage = Stage::ZeroFill { next: next + n };
                 }
             }
-            Stage::KernelInfo => {
-                // Дескриптор образа ядра (DEIXKIMG, LBA 2047): копируем с
-                // загрузочного носителя — сырое ядро скопировано с тех же
-                // LBA, дескриптор остаётся верным.
+            Stage::BootMap => {
+                // Карта загрузки (DEIXKIMG, LBA 2047) копируется с загрузочного
+                // носителя: /system копируется с теми же LBA, поэтому
+                // участки карты остаются верными.
                 copy_sectors(self.target, KERNEL_IMAGE_INFO_LBA, 1)?;
                 self.done_units += 1;
                 self.stage = Stage::System { next: 0 };
@@ -519,20 +473,6 @@ impl InstallJob {
         }
         Ok(())
     }
-}
-
-/// Пишет встроенный бинарь (stage2/ramboot) на целевой диск по LBA.
-fn write_embedded(target: Drive, lba: u32, data: &[u8]) -> Result<(), String> {
-    let sectors = (data.len() + 511) / 512;
-    for i in 0..sectors {
-        let mut buf = [0u8; 512];
-        let start = i * 512;
-        let end = (start + 512).min(data.len());
-        buf[..end - start].copy_from_slice(&data[start..end]);
-        ata::write_sectors_to(target, lba + i as u32, 1, &buf)
-            .map_err(|_| String::from("bootloader write failed"))?;
-    }
-    Ok(())
 }
 
 /// Копирует n секторов с загрузочного носителя (ata::read_sectors —

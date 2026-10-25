@@ -13,6 +13,7 @@ mod autostart;
 mod bootlogo;
 mod bootprof;
 mod bootchain;
+mod bootmap;
 mod bugreport;
 mod cli;
 mod cp866;

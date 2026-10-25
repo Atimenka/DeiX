@@ -10,12 +10,15 @@
 
 Служебные области до первого раздела:
   LBA 0           — MBR (boot_sector.bin)
-  LBA 1..2046     — stage2 + ramboot + сырой kernel.bin
-  LBA 2047        — дескриптор образа ядра DEIXKIMG (LBA/размер/SHA-256)
+  LBA 1..2046     — свободны (нули)
+  LBA 2047        — карта загрузки DEIXKIMG v2 (docs/BOOTMAP.md)
   LBA 2048..2111  — область аварийного дампа (DEIXPNIC, src/diag/panic.rs)
+
+Загрузчик и ядро лежат файлами в /system, карта загрузки указывает на них.
 
 /system содержит структуру каталогов:
   - kernel/kernel.bin
+  - boot/stage2.bin, boot/ramboot.bin
   - etc/init.deix
   - services/dinit.cfg
   - media/audio/ui/*.dps
@@ -50,8 +53,7 @@ PRIMARY = [
 ]
 
 # Дескриптор образа ядра: сектор LBA 2047 (см. src/partition_map.rs
-# KERNEL_IMAGE_INFO_LBA). Формат: magic(8) + kernel_lba(u32 LE) +
-# kernel_size(u32 LE) + sha256(32).
+# KERNEL_IMAGE_INFO_LBA). Формат — docs/BOOTMAP.md.
 KERNEL_IMAGE_INFO_LBA = 2047
 KERNEL_IMAGE_INFO_MAGIC = b"DEIXKIMG"
 
@@ -88,22 +90,63 @@ def fill_mbr(img):
     img[511] = 0xAA
 
 
-def write_kernel_image_info(img, kernel_lba, kernel_bytes):
-    """Пишет дескриптор DEIXKIMG в сектор LBA 2047.
+BLOCK_4K = 4096
+BOOTMAP_VERSION = 2
+BOOTMAP_EXTENTS = {"stage2": (64, 8), "ramboot": (128, 8), "kernel": (192, 40)}
+SYSTEM_START_LBA = next(start for _, _, start, _, name in PRIMARY if name == "/system")
 
-    Ядро (src/bootchain.rs) сверяет по нему сырой kernel.bin и
-    /system/kernel/kernel.bin (размер + SHA-256, DX-KRN-0013).
+BOOT_FILES = {
+    "stage2": "boot/stage2.bin",
+    "ramboot": "boot/ramboot.bin",
+    "kernel": "kernel/kernel.bin",
+}
+
+
+def pad_block(data):
+    """Дополняет файл нулями до целого числа блоков EROFS (4096 Б).
+
+    Иначе mkfs.erofs кладёт хвост файла inline рядом с inode, и файл
+    перестаёт быть непрерывным участком диска, который читает MBR.
     """
-    sectors = (len(kernel_bytes) + SECTOR - 1) // SECTOR
-    if kernel_lba + sectors > KERNEL_IMAGE_INFO_LBA:
-        print("ОШИБКА: сырой kernel.bin (LBA %d, %d сект) пересекает дескриптор (LBA %d)"
-              % (kernel_lba, sectors, KERNEL_IMAGE_INFO_LBA), file=sys.stderr)
+    return data + b"\x00" * (-len(data) % BLOCK_4K)
+
+
+def locate_in_blob(blob, content, name):
+    """LBA файла внутри собранного EROFS-образа /system.
+
+    Файл не сжат и выровнен по блоку, поэтому лежит непрерывно: ищем его
+    байты в образе и требуем единственное, выровненное по 4096 вхождение.
+    """
+    if blob.count(content) != 1:
+        print("ОШИБКА: %s: в образе /system %d вхождений файла, ожидалось ровно 1"
+              % (name, blob.count(content)), file=sys.stderr)
         sys.exit(1)
+    off = blob.find(content)
+    if off % BLOCK_4K:
+        print("ОШИБКА: %s лежит в /system со смещением %d — не выровнен по %d"
+              % (name, off, BLOCK_4K), file=sys.stderr)
+        sys.exit(1)
+    return SYSTEM_START_LBA + off // SECTOR
+
+
+def write_boot_map(img, boot):
+    """Пишет карту загрузки DEIXKIMG v2 в сектор LBA 2047.
+
+    `boot` — {"stage2"|"ramboot"|"kernel": (lba, байты файла с отступом,
+    размер без отступа)}. Формат — docs/BOOTMAP.md.
+    """
     sec = bytearray(SECTOR)
+    kernel_lba, kernel_bytes, _ = boot["kernel"]
     sec[0:8] = KERNEL_IMAGE_INFO_MAGIC
     sec[8:12] = struct.pack("<I", kernel_lba)
     sec[12:16] = struct.pack("<I", len(kernel_bytes))
     sec[16:48] = hashlib.sha256(kernel_bytes).digest()
+    sec[48:52] = struct.pack("<I", BOOTMAP_VERSION)
+    sec[52:56] = struct.pack("<I", (boot["stage2"][2] + SECTOR - 1) // SECTOR)
+    sec[56:60] = struct.pack("<I", (boot["ramboot"][2] + SECTOR - 1) // SECTOR)
+    for key, (offset, _max) in BOOTMAP_EXTENTS.items():
+        lba, data, _ = boot[key]
+        sec[offset:offset + 8] = struct.pack("<II", lba, len(data) // SECTOR)
     base = KERNEL_IMAGE_INFO_LBA * SECTOR
     img[base:base + SECTOR] = sec
 
@@ -252,6 +295,7 @@ def write_erofs_image(img, start_lba, secs, label, files=None):
             "EROFS-образ %s (%d Б) больше раздела %s (%d Б)"
             % (label, len(blob), label, capacity))
     img[base:base + len(blob)] = blob
+    return blob
 
 
 def format_ext2_at(img, start_lba, total_sectors):
@@ -370,17 +414,25 @@ def format_ext2_at(img, start_lba, total_sectors):
     wi(11, 0o040700, BLOCK, 2, ptrs2, 1)
 
 
-def init_all_partitions(img, kernel_bytes):
-    """Инициализирует ФС во всех разделах: /system (EROFS RO) + /userdata (EXT2 RW)."""
+def init_all_partitions(img, boot_files):
+    """Инициализирует ФС во всех разделах: /system (EROFS RO) + /userdata (EXT2 RW).
+
+    `boot_files` — {"stage2"|"ramboot"|"kernel": байты}. Возвращает
+    {имя: (LBA, байты с отступом, размер без отступа)}.
+    """
+    padded = {k: pad_block(v) for k, v in boot_files.items()}
+    located = {}
     for num, typ, start, secs, name in PRIMARY:
         if name == "/userdata":
             format_ext2_at(img, start, secs)
         elif name == "/system":
             system_files = {
-                "kernel/kernel.bin":   kernel_bytes,
+                BOOT_FILES[k]: padded[k] for k in BOOT_FILES
+            }
+            system_files.update({
                 "etc/init.deix":       b"# DeiX OS init script\nmount /system\nmount /userdata\n",
                 "services/dinit.cfg":  b"# Dinit services config\n",
-            }
+            })
             # UI-звуки лежат ТОЛЬКО в /system/media/audio/ui/ —
             # этот путь читает src/sound.rs.
             snd_dir = os.path.join("build", "sounds")
@@ -405,7 +457,11 @@ def init_all_partitions(img, kernel_bytes):
                     if _f.endswith(".dxic"):
                         with open(os.path.join(ic_dir, _f), "rb") as _fh:
                             system_files[f"media/icons/{_f}"] = _fh.read()
-            write_erofs_image(img, start, secs, name, system_files)
+            blob = write_erofs_image(img, start, secs, name, system_files)
+            for k in BOOT_FILES:
+                located[k] = (locate_in_blob(blob, padded[k], BOOT_FILES[k]),
+                              padded[k], len(boot_files[k]))
+    return located
 
 
 def main():
@@ -421,13 +477,21 @@ def main():
     if parent_dir:
         os.makedirs(parent_dir, exist_ok=True)
 
-    kernel_path = os.path.join(parent_dir if parent_dir else ".", "kernel.bin")
-    if not os.path.exists(kernel_path):
-        print("ОШИБКА: %s не найден — соберите ядро (build.sh) перед разметкой образа"
-              % kernel_path, file=sys.stderr)
+    boot_files = {}
+    for key, fname in (("kernel", "kernel.bin"), ("stage2", "stage2.bin"),
+                       ("ramboot", "ramboot.bin")):
+        path = os.path.join(parent_dir if parent_dir else ".", fname)
+        if not os.path.exists(path):
+            print("ОШИБКА: %s не найден — соберите загрузчик и ядро (build.sh) перед разметкой образа"
+                  % path, file=sys.stderr)
+            sys.exit(1)
+        with open(path, "rb") as f:
+            boot_files[key] = f.read()
+    if len(boot_files["stage2"]) > BLOCK_4K:
+        print("ОШИБКА: stage2.bin (%d Б) не помещается в 4096 Б (0x10000..0x11000)"
+              % len(boot_files["stage2"]), file=sys.stderr)
         sys.exit(1)
-    with open(kernel_path, "rb") as f:
-        kernel_bytes = f.read()
+    boot_files["kernel"] = pad_block(boot_files["kernel"])
 
     need = max(PARTITIONS_END_SECTORS, RAMDISK_WINDOW_SECTORS) * SECTOR
     if not os.path.exists(img_path) or os.path.getsize(img_path) < need:
@@ -438,13 +502,11 @@ def main():
         img = bytearray(f.read())
 
     fill_mbr(img)
-    init_all_partitions(img, kernel_bytes)
-
-    if "kernel-lba" in opts:
-        write_kernel_image_info(img, int(opts["kernel-lba"]), kernel_bytes)
-    else:
-        print("ПРЕДУПРЕЖДЕНИЕ: --kernel-lba не передан — дескриптор DEIXKIMG не записан,"
-              " сверка raw/EROFS ядра будет пропущена", file=sys.stderr)
+    zero_start = SECTOR
+    zero_end = KERNEL_IMAGE_INFO_LBA * SECTOR
+    img[zero_start:zero_end] = bytes(zero_end - zero_start)
+    located = init_all_partitions(img, boot_files)
+    write_boot_map(img, located)
 
     with open(img_path, "wb") as f:
         f.write(img)

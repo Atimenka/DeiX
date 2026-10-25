@@ -1561,6 +1561,30 @@ pub fn mkdir_p_vol(id: VolId, path: &str) -> Result<u32, Ext2Error> {
     mkdir_at(&v, parent, &last)
 }
 
+/// Участки диска `(LBA, секторов)`, занятые данными файла, в порядке байтов
+/// файла; соседние блоки склеены. По ним загрузчик читает файлы (карта
+/// загрузки, src/bootmap.rs), когда /system — ext2.
+pub fn file_extents_vol(id: VolId, path: &str) -> Result<Vec<(u32, u32)>, Ext2Error> {
+    let v = vol(id)?;
+    let (dir_ino, name) = resolve_parent_at(&v, path, false)?;
+    let (_, _, ino) = find_in_dir(&v, dir_ino, &name)?.ok_or(Ext2Error::FileNotFound)?;
+    let inode = read_inode(&v, ino)?;
+    let blocks_used = (inode.size as usize).div_ceil(BLOCK_SIZE);
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    for block in file_block_list(&v, &inode)?.into_iter().take(blocks_used) {
+        let lba = v.start_lba + block * SECTORS_PER_BLOCK;
+        let extends = matches!(runs.last(), Some(&(start, sectors)) if start + sectors == lba);
+        if extends {
+            if let Some(last) = runs.last_mut() {
+                last.1 += SECTORS_PER_BLOCK;
+            }
+        } else {
+            runs.push((lba, SECTORS_PER_BLOCK));
+        }
+    }
+    Ok(runs)
+}
+
 /// Сводка тома: (всего блоков, свободных блоков, групп). Для `sysfs
 /// status` и экрана установщика.
 pub fn volume_stats(id: VolId) -> Result<(u32, u32, u32), Ext2Error> {

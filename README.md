@@ -4,7 +4,7 @@ A modern, fast, and secure 64-bit operating system written from scratch in **Rus
 
 A next-generation OS for `x86_64` with a modular graphical shell, an immutable **EROFS** system partition (`/system`), and an **ext2/4** user space (`/userdata`).
 
-**Kernel:** ~0.9 MB (Rust `#![no_std]` + NASM stage2) · **Raw kernel limit:** LBA 1..2046 (~1 MiB) · **Disk image:** 20 MiB · **Code:** ~32,000 lines of Rust · runs on real hardware and QEMU.
+**Kernel:** ~0.9 MB (Rust `#![no_std]` + NASM stage2) · **Kernel limit:** 1 MiB · **Disk image:** 20 MiB · **Code:** ~32,000 lines of Rust · runs on real hardware and QEMU.
 
 ---
 
@@ -193,8 +193,8 @@ not loaded modules and do not appear in that list.
 | `/system` | 4096 | 20480 | EROFS ro | System partition (kernel `kernel.bin`, libraries, `.kmod` modules, services) |
 | `/userdata` | 24576 | 16384 | ext2 rw | User data, programs, packages |
 
-Service areas outside partitions: LBA 0 — MBR; 1..2046 — stage2 + ramboot + raw kernel;
-2047 — `DEIXKIMG` descriptor (kernel LBA/size/SHA-256, checked against `/system/kernel/kernel.bin`);
+Service areas outside partitions: LBA 0 — MBR; 1..2046 — reserved (stage2, ramboot and the kernel are files in `/system/boot` and `/system/kernel`);
+2047 — `DEIXKIMG` boot map (extents of those files + kernel SHA-256, see `docs/BOOTMAP.md`);
 2048..2111 — crash dump area (`DEIXPNIC`). All geometry sources are cross-checked by
 `tools/check_partition_map.py` (runs in `build.sh` and CI).
 

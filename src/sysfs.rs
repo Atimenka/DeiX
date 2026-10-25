@@ -13,7 +13,11 @@
 //   2. Раздел форматируется в ext2 (ext2::format_system, без
 //      шифрования — загрузчик читает раздел открытым).
 //   3. Файлы из памяти пишутся на новый том напрямую через драйвер ext2.
-//   4. vfs::remount_system() сбрасывает кеш и определение типа ФС —
+//   4. Карта загрузки (LBA 2047) переписывается: форматирование стёрло
+//      участки, на которые она указывала, а stage2, ramboot и ядро теперь
+//      лежат в блоках ext2 (возможно, в нескольких участках) — загрузчик
+//      читает их по карте (src/bootmap.rs).
+//   5. vfs::remount_system() сбрасывает кеш и определение типа ФС —
 //      дальше /system читается драйвером ext2; запись разрешена только
 //      в dev-режиме (vfs::system_writable).
 //
@@ -24,7 +28,11 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::bootmap::{BootMap, Extent};
+use crate::ext2::VolId;
 use crate::println;
+
+const BOOT_FILES: [&str; 3] = ["boot/stage2.bin", "boot/ramboot.bin", "kernel/kernel.bin"];
 
 pub fn cmd_sysfs(arg: &str) {
     match arg.trim() {
@@ -83,6 +91,29 @@ fn collect_paths(dir: &str, out: &mut Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+fn file_extents(key: &str) -> Result<Vec<Extent>, String> {
+    let runs = crate::ext2::file_extents_vol(VolId::System, key)
+        .map_err(|e| format!("{}: {:?}", key, e))?;
+    Ok(runs.into_iter().map(|(lba, sectors)| Extent { lba, sectors }).collect())
+}
+
+/// Переписывает карту загрузки по участкам файлов загрузчика на ext2.
+/// Размер и SHA-256 ядра берутся из прежней карты: файлы перенесены байт в байт.
+fn rewrite_boot_map(old: &BootMap) -> Result<(), String> {
+    let map = BootMap {
+        kernel_size: old.kernel_size,
+        kernel_sha256: old.kernel_sha256,
+        stage2_sectors: old.stage2_sectors,
+        ramboot_sectors: old.ramboot_sectors,
+        stage2: file_extents(BOOT_FILES[0])?,
+        ramboot: file_extents(BOOT_FILES[1])?,
+        kernel: file_extents(BOOT_FILES[2])?,
+    };
+    let sector = map.encode()?;
+    crate::ata::write_sectors(crate::partition_map::KERNEL_IMAGE_INFO_LBA, 1, &sector)
+        .map_err(|_| String::from("карта загрузки не записана на диск"))
+}
+
 fn convert() {
     if !crate::devmode::sudo_allowed() {
         println!("  [sysfs] convert requires dev mode. Run 'dev on' first.");
@@ -93,16 +124,37 @@ fn convert() {
         return;
     }
 
+    // Без читаемой карты загрузки после форматирования система не загрузится,
+    // поэтому проверяем её и файлы загрузчика ДО любых записей.
+    let old_map = match crate::bootmap::read_boot_map() {
+        Ok(Some(map)) => map,
+        Ok(None) => {
+            println!("  [sysfs] ERROR: the boot map (LBA 2047) is missing. /system was not modified.");
+            return;
+        }
+        Err(e) => {
+            println!("  [sysfs] ERROR: the boot map is not usable: {}. /system was not modified.", e);
+            return;
+        }
+    };
+
     println!("  [sysfs] WARNING: /system will be reformatted to ext2 IN PLACE.");
     println!("  [sysfs] Verified-boot style integrity of /system will be VOID.");
 
     // 1. Список файлов и их содержимое: после форматирования читать
     //    EROFS будет неоткуда, поэтому всё нужно держать в памяти.
-    println!("  [sysfs] 1/4 reading EROFS files into memory...");
+    println!("  [sysfs] 1/5 reading EROFS files into memory...");
     let mut paths: Vec<String> = Vec::new();
     if let Err(e) = collect_paths("/system", &mut paths) {
         println!("  [sysfs] ERROR: cannot read /system: {}", e);
         return;
+    }
+    for boot_file in BOOT_FILES {
+        let full = format!("/system/{}", boot_file);
+        if !paths.iter().any(|p| *p == full) {
+            println!("  [sysfs] ERROR: {} is missing. /system was not modified.", full);
+            return;
+        }
     }
     let mut files: Vec<(String, Vec<u8>)> = Vec::with_capacity(paths.len());
     for path in &paths {
@@ -118,7 +170,7 @@ fn convert() {
     println!("  [sysfs]     {} files read", files.len());
 
     // 2. Форматирование раздела в ext2.
-    println!("  [sysfs] 2/4 formatting /system as ext2...");
+    println!("  [sysfs] 2/5 formatting /system as ext2...");
     if crate::ext2::format_system().is_err() {
         println!("  [sysfs] ERROR: ext2 format failed. /system partition state is");
         println!("  [sysfs] undefined on disk; the files are still in memory only");
@@ -127,7 +179,7 @@ fn convert() {
     }
 
     // 3. Перенос файлов: пишем из памяти напрямую драйвером ext2.
-    println!("  [sysfs] 3/4 copying files to the ext2 volume...");
+    println!("  [sysfs] 3/5 copying files to the ext2 volume...");
     let mut copied = 0usize;
     let mut bytes: u64 = 0;
     let mut failed = 0usize;
@@ -146,9 +198,19 @@ fn convert() {
     }
     println!("  [sysfs]     {} files, {} KiB copied, {} failed", copied, bytes / 1024, failed);
 
-    // 4. Перемонтирование: vfs начинает читать /system как ext2,
+    // 4. Карта загрузки по новому расположению файлов загрузчика и ядра.
+    println!("  [sysfs] 4/5 rewriting the boot map...");
+    match rewrite_boot_map(&old_map) {
+        Ok(()) => println!("  [sysfs]     boot map written (LBA 2047)"),
+        Err(e) => {
+            println!("  [sysfs] ERROR: {}", e);
+            println!("  [sysfs] The system will NOT boot after a reboot until /system is reflashed.");
+        }
+    }
+
+    // 5. Перемонтирование: vfs начинает читать /system как ext2,
     //    блочный кеш EROFS сбрасывается.
-    println!("  [sysfs] 4/4 remounting /system...");
+    println!("  [sysfs] 5/5 remounting /system...");
     crate::vfs::remount_system();
 
     match crate::vfs::readdir("/system") {

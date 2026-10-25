@@ -115,6 +115,21 @@ fn system_writable() -> bool {
     system_is_ext2() && crate::devmode::sudo_allowed()
 }
 
+/// Файлы загрузчика и ядра (`/system/boot`, `/system/kernel`): их участки
+/// диска записаны в карте загрузки (src/bootmap.rs), поэтому записать, заменить
+/// или удалить такой файл значит остаться без загрузки.
+fn is_boot_path(rest: &str) -> bool {
+    let p = rest.trim_matches('/');
+    p == "boot" || p == "kernel" || p.starts_with("boot/") || p.starts_with("kernel/")
+}
+
+fn boot_protected(path: &str) -> VfsError {
+    VfsError::Io {
+        path: String::from(path),
+        cause: String::from("файлы загрузчика и ядра защищены (карта загрузки)"),
+    }
+}
+
 /// Можно ли сейчас писать в раздел `/system` или `/userdata`. `/userdata`
 /// всегда записываемый; `/system` — только на ext2 и в dev-режиме.
 pub fn is_writable(mount: &str) -> bool {
@@ -275,6 +290,9 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<(), VfsError> {
             if !system_writable() {
                 return Err(VfsError::ReadOnly { path: String::from(path) });
             }
+            if is_boot_path(&rest) {
+                return Err(boot_protected(path));
+            }
             let key = userdata_key(&rest);
             crate::ext2::write_file_path_vol(crate::ext2::VolId::System, &key, data)
                 .map_err(|e| system_ext2_err(path, e))
@@ -297,6 +315,9 @@ pub fn mkdir(path: &str) -> Result<(), VfsError> {
         MOUNT_SYSTEM => {
             if !system_writable() {
                 return Err(VfsError::ReadOnly { path: String::from(path) });
+            }
+            if is_boot_path(&rest) {
+                return Err(boot_protected(path));
             }
             let key = userdata_key(&rest);
             crate::ext2::mkdir_p_vol(crate::ext2::VolId::System, &key)
@@ -321,6 +342,9 @@ pub fn remove(path: &str) -> Result<(), VfsError> {
         MOUNT_SYSTEM => {
             if !system_writable() {
                 return Err(VfsError::ReadOnly { path: String::from(path) });
+            }
+            if is_boot_path(&rest) {
+                return Err(boot_protected(path));
             }
             let key = userdata_key(&rest);
             crate::ext2::delete_file_path_vol(crate::ext2::VolId::System, &key)
