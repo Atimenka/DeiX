@@ -172,6 +172,7 @@ const EN = {
   'Версия загружена и опубликована.': 'The release was uploaded and published.',
   'Версия загружена как черновик.': 'The release was uploaded as a draft.',
   'Скачать': 'Download',
+  'Конфиденциальность': 'Privacy',
   '{n} МиБ': '{n} MiB',
   '{n} КиБ': '{n} KiB',
   '{n} Б': '{n} B',

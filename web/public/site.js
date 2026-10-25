@@ -228,6 +228,7 @@ function buildLayout() {
         el('a', { href: lp('/download'), text: tr('Скачать') }),
         el('a', { href: lp('/request'), text: tr('Заявки') }),
         el('a', { href: lp('/register'), text: tr('Регистрация') }),
+        el('a', { href: lp('/privacy'), text: tr('Конфиденциальность') }),
         el('a', { href: 'https://github.com/Atimenka/DeiX', rel: 'noopener', text: 'GitHub' }),
       ]),
     ]),
