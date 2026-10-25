@@ -2626,20 +2626,18 @@ fn draw_desktop_icons(r: &mut Renderer, theme: &UiTheme, selected_idx: Option<us
             r.fill_rounded_rect_alpha(ix - 6, iy - 4, 64, 60, 6, theme.accent, 100);
         }
 
-        r.fill_rounded_rect(ix, iy, 48, 36, 8, theme.titlebar_active);
-        r.draw_icon(
-            ix + 16,
-            iy + 10,
-            match sc.icon {
-                IconType::Terminal => IconType::Terminal,
-                IconType::Files => IconType::Files,
-                IconType::Browser => IconType::Browser,
-                IconType::TaskManager => IconType::TaskManager,
-                IconType::Theme => IconType::Theme,
-                _ => IconType::Terminal,
-            },
-            theme.accent,
-        );
+        let glyph = match sc.icon {
+            IconType::Terminal => IconType::Terminal,
+            IconType::Files => IconType::Files,
+            IconType::Browser => IconType::Browser,
+            IconType::TaskManager => IconType::TaskManager,
+            IconType::Theme => IconType::Theme,
+            _ => IconType::Terminal,
+        };
+        if !crate::ui::appicons::draw(r, ix + 8, iy + 2, 32, glyph) {
+            r.fill_rounded_rect(ix, iy, 48, 36, 8, theme.titlebar_active);
+            r.draw_icon(ix + 16, iy + 10, glyph, theme.accent);
+        }
 
         r.draw_text(ix, iy + 40, sc.name, theme.text_primary, None);
     }

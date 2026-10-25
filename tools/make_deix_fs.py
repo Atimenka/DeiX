@@ -397,6 +397,14 @@ def init_all_partitions(img, kernel_bytes):
                     if _f.endswith(".bmp"):
                         with open(os.path.join(wp_dir, _f), "rb") as _fh:
                             system_files[f"media/wallpapers/{_f}"] = _fh.read()
+            # Цветные иконки приложений (DXIC, tools/make_icons.py) читает
+            # ui::appicons из /system/media/icons/.
+            ic_dir = os.path.join("assets", "icons")
+            if os.path.isdir(ic_dir):
+                for _f in sorted(os.listdir(ic_dir)):
+                    if _f.endswith(".dxic"):
+                        with open(os.path.join(ic_dir, _f), "rb") as _fh:
+                            system_files[f"media/icons/{_f}"] = _fh.read()
             write_erofs_image(img, start, secs, name, system_files)
 
 

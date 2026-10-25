@@ -1,5 +1,6 @@
 //! UI-драйвер: композитор окон и графическая оболочка DeiX OS.
 
+pub mod appicons;
 pub mod apps;
 pub mod config;
 pub mod desktop;
