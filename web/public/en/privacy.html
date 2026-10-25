@@ -80,7 +80,7 @@
         <section id="s-who">
           <h2>3. Who processes data</h2>
           <p>3.1. The <b>operator</b> decides which data is needed and why. The operator can see the data that exists in the project database and uses it only to run the Service and to keep it secure.</p>
-          <p>3.2. <b>Infrastructure providers</b> process data on behalf of the operator: Vercel (hosting of the site and functions), Supabase (database, accounts, file storage), Cloudflare (Turnstile captcha). If the operator turns on email sending, the mail service Resend or Brevo is added. Details are in section 10.</p>
+          <p>3.2. <b>Infrastructure providers</b> process data on behalf of the operator: Vercel (hosting of the site and functions), Supabase (database, accounts, file storage), Cloudflare (Turnstile captcha). If the operator turns on email sending, the mail service SMTP2GO, Resend or Brevo is added. Details are in section 10.</p>
           <p>3.3. The <b>Owner role</b> in the website interface is the operator. Other users see only their own data and the public pages.</p>
         </section>
 
@@ -124,7 +124,7 @@
         <section id="s-email">
           <h2>5. Email verification</h2>
           <p>5.1. <b>Domain check at registration (always active).</b> The Service rejects addresses from a list of disposable mail services and checks through DNS that the domain after the “@” has a mail server (an MX record, or an IPv4 address record if there is none). For this the server function sends the public DNS resolver <b>only the domain part</b> of the address; the local part (before the “@”) is not transmitted. If the DNS query itself fails because of an outage, the address is not rejected: a resolver failure does not prove that there is no mail. This check does not prove that the mailbox exists or belongs to you.</p>
-          <p>5.2. <b>Verification link email (active if the operator turned sending on).</b> After registration an email with a link is sent to the address you gave. The token in the link is random (256 bits), valid for 24 hours and works once; only its hash is stored in the database. The mail is sent by the mail service Resend or Brevo in the language of the page you registered on: it receives your address, your username and the text of the message. You can request another email in your account no more than three times per hour.</p>
+          <p>5.2. <b>Verification link email (active if the operator turned sending on).</b> After registration an email with a link is sent to the address you gave. The token in the link is random (256 bits), valid for 24 hours and works once; only its hash is stored in the database. The mail is sent by the mail service SMTP2GO, Resend or Brevo in the language of the page you registered on: it receives your address, your username and the text of the message. You can request another email in your account no more than three times per hour.</p>
           <p>5.3. <b>What verification does.</b> While email sending is not turned on, verification blocks nothing. When it is on, unverified accounts do not receive dev-mode keys and cannot submit requests. Verification does not block signing in.</p>
           <p>5.4. <b>Which emails we send.</b> Only service messages: the verification link. There are no newsletters, news or advertising, and there will be none without your separate consent.</p>
         </section>
@@ -213,7 +213,7 @@
                 <tr><td>Vercel Inc.</td><td>Hosting of the site and server functions</td><td>IP address, User-Agent, address and time of the request, request contents (including the password at sign-in, while it travels over HTTPS)</td><td>Functions — the Vercel default region (US east coast); static pages are served by a delivery network worldwide</td></tr>
                 <tr><td>Supabase</td><td>Database, accounts, file storage</td><td>The data from section 4 and the appendix: email, name, role, password hash, service records, image files</td><td>Region eu-west-1 (Ireland)</td></tr>
                 <tr><td>Cloudflare Inc. (Turnstile)</td><td>“Human or bot” check on registration and sign-in</td><td>IP address, browser information, the result of the check</td><td>Cloudflare network, worldwide</td></tr>
-                <tr><td>Resend or Brevo</td><td>Sending verification link emails — only if the operator turned sending on</td><td>Email address, username, text of the message</td><td>Determined by the chosen service</td></tr>
+                <tr><td>SMTP2GO, Resend or Brevo</td><td>Sending verification link emails — only if the operator turned sending on</td><td>Email address, username, text of the message</td><td>Determined by the chosen service</td></tr>
                 <tr><td>GitHub, Inc.</td><td>Hosting of the source code; links on the site lead to it</td><td>GitHub receives no data from the Service. When you follow a link, GitHub’s rules apply</td><td>United States</td></tr>
               </tbody>
             </table>

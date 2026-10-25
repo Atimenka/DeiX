@@ -131,6 +131,10 @@ globalThis.fetch = async (url, init = {}) => {
     db.mails.push(JSON.parse(init.body));
     return jsonResponse(200, { id: 'm1' });
   }
+  if (u.host === 'api.smtp2go.com') {
+    db.smtp2go = { key: init.headers['X-Smtp2go-Api-Key'], body: JSON.parse(init.body) };
+    return jsonResponse(200, { data: { succeeded: 1, failed: 0 } });
+  }
   if (p === '/auth/v1/logout') {
     db.tokens.delete(bearer(init));
     return jsonResponse(204);
@@ -1046,4 +1050,19 @@ test('public read endpoints are CDN-cacheable, private ones are not', async () =
   assert.match(manifest.headers['cache-control'], /s-maxage=60/);
   const me = await call(authHandler, { action: 'me' });
   assert.equal(me.headers['cache-control'], 'no-store');
+});
+
+test('mail: SMTP2GO is used through its HTTP API with the verified sender', async () => {
+  const { sendMail, mailConfigured } = require('../api/_mail');
+  process.env.SMTP2GO_API_KEY = 'api-test';
+  process.env.MAIL_FROM = 'DeiX OS <me@gmail.test>';
+  try {
+    assert.equal(mailConfigured(), true);
+    await sendMail({ to: 'a@b.test', subject: 'Hi', html: '<p>x</p>', text: 'x' });
+    assert.equal(db.smtp2go.key, 'api-test');
+    assert.deepEqual(db.smtp2go.body, { sender: 'DeiX OS <me@gmail.test>', to: ['a@b.test'], subject: 'Hi', html_body: '<p>x</p>', text_body: 'x' });
+  } finally {
+    delete process.env.SMTP2GO_API_KEY;
+    delete process.env.MAIL_FROM;
+  }
 });
