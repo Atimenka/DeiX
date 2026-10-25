@@ -205,6 +205,47 @@ pub fn read_file(path: &str) -> Result<Vec<u8>, VfsError> {
     }
 }
 
+/// Пошаговое чтение файла с `/system` (EROFS): отдаёт содержимое порциями,
+/// чтобы длинную проверку можно было дробить на паузы между событиями ввода.
+pub struct SystemStream {
+    img: crate::erofs_disk::DiskImage,
+    sb: crate::erofs::Superblock,
+    ino: crate::erofs::Inode,
+    pos: usize,
+}
+
+impl SystemStream {
+    /// Открывает файл. `None` — /system не EROFS (после `sysfs convert`),
+    /// файла нет или образ нечитаем; вызывающий читает файл целиком через
+    /// [`read_file`] и получает точную причину.
+    pub fn open(path: &str) -> Option<SystemStream> {
+        let (mount, rest) = split_mount(path).ok()?;
+        if mount != MOUNT_SYSTEM || system_is_ext2() {
+            return None;
+        }
+        let img = system_image().ok()?;
+        let sb = crate::erofs::parse_superblock(&img).ok()?;
+        let ino = crate::erofs::lookup_path(&img, &rest).ok()?;
+        if ino.is_dir() {
+            return None;
+        }
+        Some(SystemStream { img, sb, ino, pos: 0 })
+    }
+
+    /// Полный размер файла.
+    pub fn size(&self) -> usize {
+        self.ino.size as usize
+    }
+
+    /// Читает следующую порцию (до `max` байт). Пустой результат — конец.
+    pub fn next_chunk(&mut self, max: usize) -> Result<Vec<u8>, String> {
+        let chunk = crate::erofs::read_file_range(&self.img, &self.sb, &self.ino, self.pos, max)
+            .map_err(|e| e.message())?;
+        self.pos += chunk.len();
+        Ok(chunk)
+    }
+}
+
 /// Пишет файл. На `/system` всегда отказывает.
 pub fn write_file(path: &str, data: &[u8]) -> Result<(), VfsError> {
     if crate::diag::passes(crate::diag::Severity::Trace) && !path.starts_with("/userdata/log") {

@@ -365,8 +365,10 @@ pub fn run() -> Option<String> {
                 if moved || m.left_button {
                     last_mouse = (m.x, m.y);
                     redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
-                } else {
-                    // hlt: спим до прерывания, не жжём процессор впустую.
+                } else if !crate::bootchain::pump() {
+                    // Порция отложенной сверки ядра обработана — сразу
+                    // опрашиваем ввод снова. Если делать нечего: hlt, спим
+                    // до прерывания, не жжём процессор впустую.
                     crate::sched::idle_wait();
                 }
                 continue;

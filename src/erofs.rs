@@ -302,6 +302,50 @@ fn inode_data<S: Source + ?Sized>(img: &S, sb: &Superblock, ino: &Inode) -> Resu
     }
 }
 
+/// Читает кусок содержимого файла `[off, off + len)`. `len` обрезается по
+/// размеру файла; за концом файла возвращается пустой вектор. Позволяет
+/// обработать большой файл порциями, не держа его в памяти целиком.
+pub fn read_file_range<S: Source + ?Sized>(
+    img: &S,
+    sb: &Superblock,
+    ino: &Inode,
+    off: usize,
+    len: usize,
+) -> Result<Vec<u8>, ErofsError> {
+    let size = ino.size as usize;
+    if off >= size {
+        return Ok(Vec::new());
+    }
+    let len = len.min(size - off);
+    let bs = sb.block_size();
+    match ino.datalayout {
+        DATALAYOUT_FLAT_PLAIN => {
+            if ino.raw_blkaddr == EROFS_NULL_ADDR {
+                return Err(ErofsError::Corrupt);
+            }
+            read_exact(img, ino.raw_blkaddr as usize * bs + off, len)
+        }
+        DATALAYOUT_FLAT_INLINE => {
+            let head = size - size % bs;
+            let mut out = Vec::with_capacity(len);
+            if off < head {
+                if ino.raw_blkaddr == EROFS_NULL_ADDR {
+                    return Err(ErofsError::Corrupt);
+                }
+                let n = len.min(head - off);
+                out.extend_from_slice(&read_exact(img, ino.raw_blkaddr as usize * bs + off, n)?);
+            }
+            let done = out.len();
+            if done < len {
+                let tail_off = off + done - head;
+                out.extend_from_slice(&read_exact(img, ino.inline_off + tail_off, len - done)?);
+            }
+            Ok(out)
+        }
+        _ => Err(ErofsError::Corrupt),
+    }
+}
+
 /// Читает записи каталога.
 pub fn read_dir<S: Source + ?Sized>(img: &S, sb: &Superblock, nid: u64) -> Result<Vec<DirEntry>, ErofsError> {
     let ino = read_inode(img, sb, nid)?;

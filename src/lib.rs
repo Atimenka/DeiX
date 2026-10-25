@@ -336,6 +336,7 @@ pub extern "C" fn kernel_main() -> ! {
         None => auth::run_login_screen(),
     };
     bootprof::mark("login finished (includes the time the user spent typing)");
+    bootchain::finish();
     update::run_apply_mode();
     cli::set_current_user(&username);
     let uid = if username == "root" { 0 } else { 1000 };
