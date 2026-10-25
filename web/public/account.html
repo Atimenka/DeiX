@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Аккаунт — DeiX OS</title>
+  <meta name="theme-color" content="#0b0b0c">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="preload" href="/vendor/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/vendor/fonts/inter-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-page="account">
+  <main class="page wrap">
+    <div class="account" id="account-view" hidden>
+      <aside class="panel side">
+        <div class="avatar" id="avatar"></div>
+        <h2 id="acc-name"></h2>
+        <div class="mail" id="acc-email"></div>
+        <div class="badges" id="acc-badges"></div>
+        <nav class="menu" id="menu" aria-label="Разделы аккаунта">
+          <button type="button" data-tab="overview"><svg class="icon"><use href="/icons.svg#user"/></svg>Обзор</button>
+          <button type="button" data-tab="devices"><svg class="icon"><use href="/icons.svg#laptop"/></svg>Устройства</button>
+          <button type="button" data-tab="key"><svg class="icon"><use href="/icons.svg#key"/></svg>Dev-ключ</button>
+          <button type="button" data-tab="security"><svg class="icon"><use href="/icons.svg#shield"/></svg>Безопасность</button>
+          <div class="sep"></div>
+          <button type="button" id="logout-btn"><svg class="icon"><use href="/icons.svg#logout"/></svg>Выйти</button>
+        </nav>
+      </aside>
+
+      <div>
+        <div class="panel vault-box" id="vault-box" hidden>
+          <h3 id="vault-title"></h3>
+          <p class="hint" id="vault-text"></p>
+          <form id="vault-form" class="inline-form" autocomplete="off">
+            <input id="vault-password" name="password" type="password" required autocomplete="current-password" placeholder="Пароль" aria-label="Пароль">
+            <button class="btn primary" type="submit">Открыть</button>
+          </form>
+          <div class="row-gap"><button class="btn small bad" id="vault-reset" type="button" hidden>Сбросить локальные данные</button></div>
+          <div class="result" id="vault-result" hidden></div>
+        </div>
+
+        <section class="tabpane" data-pane="overview">
+          <div class="panel">
+            <h3>Профиль</h3>
+            <p class="hint">Так вас видит владелец проекта.</p>
+            <div class="kv">
+              <div><span>Имя пользователя</span><b id="ov-name"></b></div>
+              <div><span>Почта</span><b id="ov-email"></b></div>
+              <div><span>Роль</span><b id="ov-role"></b></div>
+            </div>
+            <div class="row-gap">
+              <a class="btn primary" href="/request">Заявки на токен</a>
+              <a class="btn" id="admin-link" href="/admin" hidden>Панель Owner</a>
+            </div>
+          </div>
+          <div class="panel" id="mail-panel">
+            <div class="sec-row">
+              <div>
+                <h3><svg class="icon"><use href="/icons.svg#mail"/></svg>Подтверждение почты <span class="badge" id="mail-badge"></span></h3>
+                <p class="hint" id="mail-text"></p>
+              </div>
+              <button class="btn" id="mail-resend" type="button" hidden>Отправить письмо</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="tabpane" data-pane="devices" hidden>
+          <div class="panel">
+            <h3>Мои устройства</h3>
+            <p class="hint">В DeiX выполните <code>dev link</code>: система покажет код вида XXXX-XXXX, действует 10 минут. Заявку на токен можно подать только для привязанного устройства.</p>
+            <form id="link-form" class="inline-form" autocomplete="off">
+              <input id="link-code" name="code" required maxlength="9" spellcheck="false" placeholder="XXXX-XXXX" aria-label="Код привязки">
+              <button class="btn primary" type="submit">Привязать</button>
+            </form>
+            <div class="result" id="link-result" hidden></div>
+            <div id="devices"></div>
+          </div>
+        </section>
+
+        <section class="tabpane" data-pane="key" hidden>
+          <div class="panel">
+            <h3>Ключ разблокировки dev-режима</h3>
+            <p class="hint">Одноразовый ключ для конкретного устройства. В DeiX выполните <code>dev id</code>, вставьте Device ID сюда, получите ключ и введите его в DeiX командой <code>dev unlock КЛЮЧ</code>, затем <code>dev on</code>. Сеть в момент ввода не нужна. Ключ показывается один раз и на сайте не хранится.</p>
+            <form id="key-form" class="inline-form" autocomplete="off">
+              <input id="key-device" name="device" required maxlength="32" spellcheck="false" placeholder="Device ID (32 символа)" aria-label="Device ID" list="key-devices">
+              <datalist id="key-devices"></datalist>
+              <button class="btn primary" type="submit">Получить ключ</button>
+            </form>
+            <div class="result" id="key-result" hidden></div>
+            <pre class="keybox mono" id="key-out" hidden></pre>
+            <div class="row-gap"><button class="btn small" id="key-copy" type="button" hidden>Скопировать</button></div>
+            <p class="hint" id="vault-note">История выданных ключей и имена устройств хранятся только в этом браузере и зашифрованы вашим паролем (AES-256-GCM). На сервере их нет.</p>
+            <div id="key-history"></div>
+          </div>
+        </section>
+
+        <section class="tabpane" data-pane="security" hidden>
+          <div class="panel">
+            <div class="sec-row">
+              <div>
+                <h3><svg class="icon"><use href="/icons.svg#qr"/></svg>Двухфакторная аутентификация <span class="badge" id="mfa-badge"></span></h3>
+                <p class="hint" id="mfa-text"></p>
+              </div>
+              <button class="btn primary" id="mfa-start" type="button" hidden>Включить 2FA</button>
+            </div>
+
+            <div id="mfa-setup" hidden>
+              <div class="qr">
+                <div id="mfa-qr" class="qr-box" role="img" aria-label="QR-код для приложения-аутентификатора"></div>
+                <div>
+                  <b>1. Отсканируйте код</b>
+                  <p class="hint">Google Authenticator, Aegis, 1Password, Authy или любое TOTP-приложение. Если сканировать нечем, введите ключ вручную:</p>
+                  <code class="secret mono" id="mfa-secret"></code>
+                  <b>2. Введите шесть цифр из приложения</b>
+                  <form id="mfa-finish" class="inline-form" autocomplete="off">
+                    <input id="mfa-code" inputmode="numeric" maxlength="6" placeholder="123456" aria-label="Код из приложения" required>
+                    <button class="btn primary" type="submit">Подтвердить</button>
+                    <button class="btn" id="mfa-cancel" type="button">Отмена</button>
+                  </form>
+                </div>
+              </div>
+            </div>
+
+            <div id="mfa-codes" hidden>
+              <b>Резервные коды</b>
+              <p class="hint">Сохраните их сейчас: повторно коды не показываются. Каждый работает один раз и при входе отключает 2FA — на случай потери телефона.</p>
+              <div class="codes" id="mfa-codes-list"></div>
+              <div class="row-gap">
+                <button class="btn small" id="codes-copy" type="button">Скопировать</button>
+                <button class="btn small" id="codes-save" type="button">Скачать .txt</button>
+                <button class="btn small primary" id="codes-done" type="button">Я сохранил коды</button>
+              </div>
+            </div>
+
+            <div id="mfa-manage" hidden>
+              <div class="row-gap">
+                <button class="btn" id="mfa-regen" type="button">Новые резервные коды</button>
+                <button class="btn bad" id="mfa-off" type="button">Отключить 2FA</button>
+              </div>
+              <form id="mfa-confirm" class="inline-form" autocomplete="off" hidden>
+                <input id="mfa-confirm-code" inputmode="numeric" maxlength="6" placeholder="Код из приложения" aria-label="Код из приложения" required>
+                <button class="btn primary" id="mfa-confirm-btn" type="submit">Подтвердить</button>
+                <button class="btn" id="mfa-confirm-cancel" type="button">Отмена</button>
+              </form>
+            </div>
+            <div class="result" id="mfa-result" hidden></div>
+          </div>
+
+          <div class="panel">
+            <h3><svg class="icon"><use href="/icons.svg#lock"/></svg>Смена пароля</h3>
+            <form id="password-form" class="stack">
+              <label>Текущий пароль <input id="pw-current" type="password" autocomplete="current-password" required></label>
+              <label>Новый пароль (от 8 символов) <input id="pw-next" type="password" autocomplete="new-password" minlength="8" maxlength="72" required></label>
+              <label>Повторите новый пароль <input id="pw-next2" type="password" autocomplete="new-password" minlength="8" maxlength="72" required></label>
+              <div><button class="btn primary" type="submit">Сменить пароль</button></div>
+            </form>
+            <div class="result" id="pw-result" hidden></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+  <script src="/i18n.js"></script>
+  <script src="/site.js"></script>
+  <script src="/motion.js" defer></script>
+  <script src="/vault.js"></script>
+  <script src="/qr.js"></script>
+  <script src="/account.js"></script>
+</body>
+</html>

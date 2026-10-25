@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy Policy — DeiX OS</title>
+  <meta name="description" content="What data DeiX OS keeps on the server, what stays in your browser, who receives it and how to have it deleted.">
+  <meta name="theme-color" content="#0b0b0c">
+  <link rel="alternate" hreflang="ru" href="/privacy">
+  <link rel="alternate" hreflang="en" href="/en/privacy">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="preload" href="/vendor/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/vendor/fonts/inter-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-page="privacy">
+  <main class="page wrap legal">
+    <div class="page-head">
+      <h1>Privacy <span class="grad">Policy</span></h1>
+      <p>What DeiX OS keeps on the server, what stays in your browser and on your computer, who receives data and how to have it deleted.</p>
+      <p class="legal-meta">Version 1.0 · effective 25 October 2026 · <a href="/privacy">RU version</a></p>
+    </div>
+
+    <div class="legal-grid">
+      <aside class="legal-toc" id="toc">
+        <nav aria-label="Contents">
+          <a href="#s-intro">1. General provisions</a>
+          <a href="#s-summary">2. In short</a>
+          <a href="#s-who">3. Who processes data</a>
+          <a href="#s-data">4. What data we process</a>
+          <a href="#s-email">5. Email verification</a>
+          <a href="#s-cookies">6. Cookies and browser storage</a>
+          <a href="#s-vault">7. Encrypted browser vault</a>
+          <a href="#s-purposes">8. Purposes and legal bases</a>
+          <a href="#s-security">9. How we protect data</a>
+          <a href="#s-processors">10. Recipients of data</a>
+          <a href="#s-transfers">11. International transfers</a>
+          <a href="#s-retention">12. Retention periods</a>
+          <a href="#s-rights">13. Your rights</a>
+          <a href="#s-delete">14. Deleting your account and data</a>
+          <a href="#s-os">15. DeiX OS and the network</a>
+          <a href="#s-children">16. Children</a>
+          <a href="#s-auto">17. Automated decisions</a>
+          <a href="#s-breach">18. Security incidents</a>
+          <a href="#s-changes">19. Changes to this policy</a>
+          <a href="#s-contact">20. Contact</a>
+          <a href="#s-terms">21. Terms</a>
+          <a href="#s-faq">22. Questions and answers</a>
+          <a href="#s-appendix">Appendix. Field inventory</a>
+        </nav>
+      </aside>
+
+      <article class="legal-body">
+        <p class="legal-lead">This document describes how the website and the OS actually work. The lists of data, cookies and tables were checked against the source code and the database migrations in the project repository; when the code changes, the policy is updated together with it.</p>
+
+        <section id="s-intro">
+          <h2>1. General provisions</h2>
+          <p>1.1. This policy applies to the website <b>deix-sepia.vercel.app</b> and its mirror <b>deix-atimenkas-projects.vercel.app</b> (the one the OS itself talks to), to the English version under <code>/en</code>, to the programming interface <code>/api/*</code> and to the online features of the DeiX OS operating system: dev-mode key requests, linking a device to an account, the update center and image downloads. All of this is called the “Service” below.</p>
+          <p>1.2. The operator of the Service is the project owner, a private individual who runs the project under the name <b>Atimenka</b> (GitHub profile: github.com/Atimenka). DeiX OS is an independent open-source project, not a company: we sell nothing, show no advertising and do not make money from data.</p>
+          <p>1.3. By registering on the website and entering data into its forms you confirm that you have read this policy. If you disagree, do not create an account: browsing the pages, downloading published images and running the OS itself do not require an account. An account is needed for dev-mode key requests and for linking a device.</p>
+          <p>1.4. The main principle: <b>the server keeps only what the Service needs to protect itself</b> (email, name, role, password hash, service records). Everything else that concerns you personally and is not needed by the server is kept on your side, encrypted (section 7).</p>
+          <p>1.5. The policy is written with the general principles of the EU General Data Protection Regulation (GDPR) and of the Russian Federal Law No. 152-FZ “On Personal Data” in mind: lawfulness, purpose limitation, data minimisation, accuracy, storage limitation, integrity and confidentiality. You may exercise the rights in section 13 regardless of your country of residence.</p>
+        </section>
+
+        <section id="s-summary">
+          <h2>2. In short</h2>
+          <ul class="legal-list">
+            <li><b>Your password</b> is stored only as an irreversible hash. Nobody can read it, including the operator.</li>
+            <li><b>The server</b> holds your email, username, role, password hash and service records needed for security (section 4 and the appendix).</li>
+            <li><b>The names of your devices and the history of issued keys</b> are stored only in your browser, encrypted with your password. They never reach the server.</li>
+            <li><b>No advertising, trackers, analytics or third-party scripts.</b> The single exception is the Cloudflare Turnstile captcha on registration and sign-in.</li>
+            <li><b>Cookies</b> are only those needed to sign in. There is no consent banner for them, because refusing them would make signing in impossible.</li>
+            <li><b>Data is not sold</b> and is not passed to advertising networks or data brokers.</li>
+            <li><b>The OS sends no telemetry.</b> It contacts the project servers only on your commands and to poll the status of your request (section 15).</li>
+            <li><b>You can have data deleted</b> on request (section 14). Some data you delete yourself: clearing browser storage, resetting the vault on the Account page, turning off 2FA.</li>
+          </ul>
+        </section>
+
+        <section id="s-who">
+          <h2>3. Who processes data</h2>
+          <p>3.1. The <b>operator</b> decides which data is needed and why. The operator can see the data that exists in the project database and uses it only to run the Service and to keep it secure.</p>
+          <p>3.2. <b>Infrastructure providers</b> process data on behalf of the operator: Vercel (hosting of the site and functions), Supabase (database, accounts, file storage), Cloudflare (Turnstile captcha). If the operator turns on email sending, the mail service SMTP2GO, Resend or Brevo is added. Details are in section 10.</p>
+          <p>3.3. The <b>Owner role</b> in the website interface is the operator. Other users see only their own data and the public pages.</p>
+        </section>
+
+        <section id="s-data">
+          <h2>4. What data we process</h2>
+
+          <h3>4.1. Account</h3>
+          <p>When you register you provide a username (3–24 characters: Latin letters, digits, underscore), an email address and a password (8–72 characters). The Service stores: the email address, the username, the role (<code>user</code> or <code>owner</code>), the creation date, the “email verified” flag and the <b>password hash</b> (created and stored by Supabase Auth; the password itself is never saved). The password confirmation field exists only to catch typos and is not saved.</p>
+          <p>The username is unique and is visible to the operator in the request list. The email is not shown to the operator in the request list, but is available to the operator as the database administrator.</p>
+
+          <h3>4.2. Two-factor authentication</h3>
+          <p>If you turn on TOTP, Supabase Auth stores the one-time code secret (the factor). The Service also creates 8 backup codes; the database holds <b>only their SHA-256 hashes</b> and a used marker. The codes themselves are shown to you once, when they are created. Two-factor authentication is mandatory for the Owner.</p>
+
+          <h3>4.3. Email verification</h3>
+          <p>For the verification link the Service creates a random token. The database holds its SHA-256 hash, the expiry (24 hours) and the time of use; the token itself exists only in the email. See section 5.</p>
+
+          <h3>4.4. Device linking</h3>
+          <p>To link a device to an account the OS creates a device identifier (32 random hexadecimal characters; it is not derived from serial numbers or other hardware traits) and receives a short code. You enter that code on the Account page. The Service stores the device identifier, before linking the code and its expiry (10 minutes), and after linking the account and the time of linking.</p>
+
+          <h3>4.5. Dev-mode key requests</h3>
+          <p>A request stores: the device identifier, the device name (hostname), a note (up to 280 characters), the source (<code>os</code> or website), the status, the times of submission and decision, the name of the Owner who decided, the time the key was used and your account. These fields are addressed to the operator who makes the decision, so they stay on the server. <b>Do not put personal or sensitive data into the note or the device name:</b> the operator will read it.</p>
+
+          <h3>4.6. Key issuance counter</h3>
+          <p>To limit key issuance (no more than 5 per hour per account) the Service stores the account identifier and the time of issuance. Which device and which one-time number went into a key is not stored by the server: the key is signed and is verified in the OS without a network, and the issuance history is kept in your encrypted vault (section 7).</p>
+
+          <h3>4.7. Published images and updates</h3>
+          <p>OS images and update packages are published by the Owner. The database stores the version, description, size, checksums, file path, download counter and the name of the Owner who created the record. The download counter is a total and is not tied to a person.</p>
+
+          <h3>4.8. Technical connection data</h3>
+          <p>With every request to the site your browser or the OS transmits an IP address, a User-Agent string and the time of the request. This data inevitably passes through the Vercel infrastructure (and Cloudflare when the captcha is shown). The Service uses the IP address to protect against abuse: it limits the number of registrations, failed sign-ins, email verifications, downloads and update requests. These counters live <b>in the memory of the function instance</b> and disappear when it stops; the IP address is not written to the database. The operator keeps no logs of IP addresses of his own and no “profiles” of visitors. The logs of Vercel itself are governed by its policy and plan (section 10).</p>
+
+          <h3>4.9. What we do not collect</h3>
+          <ul class="legal-list">
+            <li>Payment data, passports and other documents, phone numbers, precise location.</li>
+            <li>The contents of your files and any information about how you use the OS on your computer.</li>
+            <li>Data for advertising and profiling, browser fingerprints, information about other sites you visit.</li>
+            <li>Data about children: the Service is not intended for them (section 16).</li>
+          </ul>
+        </section>
+
+        <section id="s-email">
+          <h2>5. Email verification</h2>
+          <p>5.1. <b>Domain check at registration (always active).</b> The Service rejects addresses from a list of disposable mail services and checks through DNS that the domain after the “@” has a mail server (an MX record, or an IPv4 address record if there is none). For this the server function sends the public DNS resolver <b>only the domain part</b> of the address; the local part (before the “@”) is not transmitted. If the DNS query itself fails because of an outage, the address is not rejected: a resolver failure does not prove that there is no mail. This check does not prove that the mailbox exists or belongs to you.</p>
+          <p>5.2. <b>Verification link email (active if the operator turned sending on).</b> After registration an email with a link is sent to the address you gave. The token in the link is random (256 bits), valid for 24 hours and works once; only its hash is stored in the database. The mail is sent by the mail service SMTP2GO, Resend or Brevo in the language of the page you registered on: it receives your address, your username and the text of the message. You can request another email in your account no more than three times per hour.</p>
+          <p>5.3. <b>What verification does.</b> While email sending is not turned on, verification blocks nothing. When it is on, unverified accounts do not receive dev-mode keys and cannot submit requests. Verification does not block signing in.</p>
+          <p>5.4. <b>Which emails we send.</b> Only service messages: the verification link. There are no newsletters, news or advertising, and there will be none without your separate consent.</p>
+        </section>
+
+        <section id="s-cookies">
+          <h2>6. Cookies and browser storage</h2>
+          <p>6.1. The Service uses only technical records in the browser without which signing in is impossible. There are no advertising or analytics cookies.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Cookie</th><th>Purpose</th><th>Lifetime</th><th>Protection</th></tr></thead>
+              <tbody>
+                <tr><td><code>deix_at</code></td><td>Session access token: proves that a request comes from your account.</td><td>up to 30 days or until sign-out</td><td>HttpOnly, Secure, SameSite=Strict</td></tr>
+                <tr><td><code>deix_rt</code></td><td>Session refresh token: lets you avoid entering the password on every navigation.</td><td>up to 30 days or until sign-out</td><td>HttpOnly, Secure, SameSite=Strict</td></tr>
+                <tr><td><code>deix_mfa</code></td><td>Intermediate state between entering the password and entering the 2FA code. Appears only for those who turned on 2FA.</td><td>5 minutes, only for <code>/api</code></td><td>HttpOnly, Secure, SameSite=Strict</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>6.2. Cookies with the HttpOnly flag cannot be read by page scripts. Signing out deletes the session cookies.</p>
+          <p>6.3. Besides cookies the site uses browser memory (kept only on your side and never sent to the server):</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Key</th><th>Where</th><th>What it holds</th></tr></thead>
+              <tbody>
+                <tr><td><code>deix-theme</code></td><td>localStorage</td><td>Light or dark theme.</td></tr>
+                <tr><td><code>deix-mode</code></td><td>localStorage</td><td>Site appearance mode (beauty, femboy or plain).</td></tr>
+                <tr><td><code>deix-lang</code></td><td>localStorage</td><td>Chosen language (RU or EN).</td></tr>
+                <tr><td><code>deix.vault.&lt;account id&gt;</code></td><td>localStorage</td><td>The encrypted vault: device names and key history (section 7).</td></tr>
+                <tr><td><code>deix-vault</code></td><td>IndexedDB</td><td>A non-extractable vault encryption key for the duration of the session.</td></tr>
+                <tr><td><code>deix-boot</code>, <code>deix-wipe</code>, <code>deix-flash</code></td><td>sessionStorage</td><td>Tab flags: whether the boot screen was shown, whether a transition animation is running, a one-time message after an action. They disappear when the tab is closed.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>6.4. The Cloudflare Turnstile captcha on the registration and sign-in pages may create technical records of its own in the browser and receives information about your browser in order to tell a human from a bot. Cloudflare sets the rules for that processing (section 10).</p>
+          <p>6.5. You can clear all of this in your browser settings (“Site data”). Consequences: you will be signed out, appearance settings will reset, and the encrypted device vault will be gone (there is deliberately no server backup).</p>
+        </section>
+
+        <section id="s-vault">
+          <h2>7. Encrypted browser vault</h2>
+          <p>7.1. Data that concerns you personally and is not needed by the server for security (the names of your devices and the history of the dev keys issued to you) is stored as one block in your browser’s <code>localStorage</code>. The block is encrypted with AES-256-GCM; the key is derived from your password with PBKDF2-SHA256 (600,000 iterations, random salt) and is never sent to the server.</p>
+          <p>7.2. The key is created at sign-in or registration and until sign-out is kept in IndexedDB as a <b>non-extractable</b> key: the site pages reload on every navigation, and asking for the password on each of them would be impractical. Signing out or losing the session deletes the key; the data stays encrypted.</p>
+          <p>7.3. The block is bound to the account identifier, so substitution or corruption of the data can be detected. When you change your password on the site, the block is re-encrypted with the new password. If the password was changed in another browser, the data here stays under the old password: you can open it with the old password or reset it on the Account page.</p>
+          <p>7.4. The operator cannot read this vault and cannot recover it. If you cleared the site data or moved to another computer, the vault will be empty.</p>
+          <p>7.5. Limitation: while you are signed in, a script of this same site can use the key. The protection is a strict content security policy (CSP: <code>script-src 'self'</code>) and the absence of external scripts other than the captcha.</p>
+        </section>
+
+        <section id="s-purposes">
+          <h2>8. Purposes and legal bases</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Purpose</th><th>Data</th><th>Basis</th></tr></thead>
+              <tbody>
+                <tr><td>Creating an account and signing in</td><td>email, username, password hash, role, session cookies</td><td>Performance of the service you requested (Art. 6(1)(b) GDPR); in Russia, your consent given by entering data at registration.</td></tr>
+                <tr><td>Protection against abuse (captcha, IP limits, 2FA)</td><td>IP address in function memory, 2FA tokens, backup code hashes</td><td>Legitimate interest in the security of the Service (Art. 6(1)(f) GDPR).</td></tr>
+                <tr><td>Email verification</td><td>domain part of the address, token hash, verified flag</td><td>Performance of the service and legitimate interest in protecting against mass registration (Art. 6(1)(b), (f)).</td></tr>
+                <tr><td>Device linking and dev-mode key requests</td><td>device identifier, device name, note, status, issuance counter</td><td>Performance of the service you requested (Art. 6(1)(b)).</td></tr>
+                <tr><td>Delivering images and updates</td><td>IP address (in the infrastructure and in memory for limits), total download counter</td><td>Legitimate interest in delivering and protecting the Service (Art. 6(1)(f)).</td></tr>
+                <tr><td>Answering requests about your rights, complying with the law</td><td>data needed to verify identity and respond</td><td>Legal obligation and legitimate interest (Art. 6(1)(c), (f)).</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>8.2. Data is not used for advertising, sale, profiling or training models. A new purpose would require changing this policy and, where the law requires it, your consent.</p>
+        </section>
+
+        <section id="s-security">
+          <h2>9. How we protect data</h2>
+          <ul class="legal-list">
+            <li><b>Passwords:</b> stored only as hashes (Supabase Auth); a wrong password at sign-in gets the same answer and an artificial pause, so as not to reveal whether an account exists.</li>
+            <li><b>Connection:</b> all traffic uses HTTPS; cookies carry the Secure, HttpOnly and SameSite=Strict flags.</li>
+            <li><b>Strict CSP:</b> only the site’s own scripts and styles and the captcha script are allowed; embedding the site in frames is forbidden.</li>
+            <li><b>Brute-force protection:</b> a captcha on registration and sign-in, limits on registrations, failed sign-ins, 2FA codes, emails and downloads, and a hidden trap field for bots.</li>
+            <li><b>2FA:</b> TOTP optional for everyone and mandatory for the Owner; backup codes are stored as hashes and work once.</li>
+            <li><b>Database:</b> row-level security (RLS) of Supabase is enabled for the tables; the full-access server key is kept only in the function settings and never reaches the browser.</li>
+            <li><b>Files:</b> images and updates are in private storage; a download link is signed and valid for 5 minutes.</li>
+            <li><b>Signed updates and keys:</b> the OS accepts an update and a dev-mode key only with a digital signature (ECDSA P-256); verification happens on your computer.</li>
+            <li><b>Minimisation:</b> what the server does not need to know is not sent to it (section 7).</li>
+          </ul>
+          <p>No system is absolutely secure. We do not promise the impossible, but we apply the measures above and fix vulnerabilities we find.</p>
+        </section>
+
+        <section id="s-processors">
+          <h2>10. Recipients of data</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Who</th><th>Role</th><th>Data received</th><th>Where</th></tr></thead>
+              <tbody>
+                <tr><td>Vercel Inc.</td><td>Hosting of the site and server functions</td><td>IP address, User-Agent, address and time of the request, request contents (including the password at sign-in, while it travels over HTTPS)</td><td>Functions — the Vercel default region (US east coast); static pages are served by a delivery network worldwide</td></tr>
+                <tr><td>Supabase</td><td>Database, accounts, file storage</td><td>The data from section 4 and the appendix: email, name, role, password hash, service records, image files</td><td>Region eu-west-1 (Ireland)</td></tr>
+                <tr><td>Cloudflare Inc. (Turnstile)</td><td>“Human or bot” check on registration and sign-in</td><td>IP address, browser information, the result of the check</td><td>Cloudflare network, worldwide</td></tr>
+                <tr><td>SMTP2GO, Resend or Brevo</td><td>Sending verification link emails — only if the operator turned sending on</td><td>Email address, username, text of the message</td><td>Determined by the chosen service</td></tr>
+                <tr><td>GitHub, Inc.</td><td>Hosting of the source code; links on the site lead to it</td><td>GitHub receives no data from the Service. When you follow a link, GitHub’s rules apply</td><td>United States</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>10.1. Providers process data on behalf of the operator and under their own terms. Their privacy policies are published on their websites.</p>
+          <p>10.2. We do not sell data and do not pass it to advertising networks or data brokers. Data may be disclosed on a reasoned demand of an authorised state body if the operator or a provider has such an obligation under applicable law.</p>
+          <p>10.3. If the project continues under another owner, data will pass to that owner only together with an obligation to comply with this policy, and you will be notified.</p>
+        </section>
+
+        <section id="s-transfers">
+          <h2>11. International transfers</h2>
+          <p>11.1. The Service runs on international infrastructure: the database is in Ireland (EU), server functions run in the United States by default, and the captcha and the delivery network operate worldwide. Your data may therefore be processed outside your country, including in countries with a different level of data protection.</p>
+          <p>11.2. Safeguards for transfers (including standard contractual clauses and other mechanisms) are set by the providers’ terms and published by them on their websites. The data is minimised, and personal records that the server does not need are kept only on your side and encrypted.</p>
+          <p>11.3. If the law of your country requires certain data to be kept inside the country or requires a separate consent to a transfer abroad, do not register in the Service, or contact us before registering (section 20).</p>
+          <p>11.4. In some countries provider domains may be unreachable (for example because of blocking). That is a limitation of the network, not a choice of the operator.</p>
+        </section>
+
+        <section id="s-retention">
+          <h2>12. Retention periods</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Data</th><th>Period</th></tr></thead>
+              <tbody>
+                <tr><td>Account: email, name, role, password hash, 2FA factor</td><td>As long as the account exists; deleted together with it.</td></tr>
+                <tr><td>Hashes of 2FA backup codes</td><td>Until the codes are regenerated, 2FA is turned off or the account is deleted.</td></tr>
+                <tr><td>Email verification tokens (hash)</td><td>Valid for 24 hours; records are not deleted automatically and are deleted together with the account.</td></tr>
+                <tr><td>Device links</td><td>As long as the account exists; deleted with it. An unused link code is valid for a limited time.</td></tr>
+                <tr><td>Key issuance counter</td><td>As long as the account exists; for the limit only the last hour matters.</td></tr>
+                <tr><td>Dev-mode key requests</td><td>As long as the account exists. After the account is deleted the request is detached from it; we delete the device identifier, name and note on request (section 14).</td></tr>
+                <tr><td>Images, updates and their descriptions</td><td>Until the Owner deletes them; they contain no personal data except the Owner’s name.</td></tr>
+                <tr><td>IP-based limit counters</td><td>In function memory, from a minute to an hour; lost when the instance stops.</td></tr>
+                <tr><td>Infrastructure logs (Vercel, Supabase, Cloudflare)</td><td>Under the providers’ rules and plans. The operator does not export them or keep them separately.</td></tr>
+                <tr><td>Data in your browser</td><td>Until you clear it yourself; session flags — until the tab is closed.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Database backups made by Supabase may contain deleted records for some time under the provider’s rules; the operator does not use them to restore data you deleted.</p>
+        </section>
+
+        <section id="s-rights">
+          <h2>13. Your rights</h2>
+          <p>13.1. Depending on the law of your country you may:</p>
+          <ul class="legal-list">
+            <li>learn whether we process your data and obtain a copy of it (access);</li>
+            <li>correct inaccurate data (the username and the password can be changed; the email on request);</li>
+            <li>demand deletion of your data (the “right to be forgotten”);</li>
+            <li>restrict processing or object to it where it is based on legitimate interest;</li>
+            <li>receive your data in a structured form (portability);</li>
+            <li>withdraw consent at any time; this does not affect the lawfulness of processing before the withdrawal;</li>
+            <li>lodge a complaint with a data protection authority: in the EU, the supervisory authority of your country; in Russia, Roskomnadzor; elsewhere, the competent authority.</li>
+          </ul>
+          <p>13.2. <b>What you do yourself:</b> change the password, turn 2FA on and off and regenerate backup codes on the Account page under “Security”; reset the encrypted vault on the Account page (the button appears when the vault is locked); clear the site data in your browser.</p>
+          <p>13.3. <b>How to contact the operator:</b> the ways are given in section 20. We must make sure the request comes from the account owner: we will answer to the account email or ask you to confirm the request from your session. We do not give out other people’s data.</p>
+          <p>13.4. <b>Deadlines:</b> we respond within the deadlines set by the applicable law (in the EU, one month, extendable; in Russia, ten working days, extendable), and in any case aim to do so within 30 days. Requests are free unless they are manifestly unfounded or excessive.</p>
+        </section>
+
+        <section id="s-delete">
+          <h2>14. Deleting your account and data</h2>
+          <p>14.1. There is no “Delete account” button in the website interface yet: deletion is done on a request to the operator (section 20). The request must arrive in a way that lets us confirm you own the account.</p>
+          <p>14.2. When an account is deleted, the profile, device links, key issuance counter, email verification tokens and 2FA backup code hashes are deleted with it, together with the Supabase Auth record containing the password hash and the 2FA factor.</p>
+          <p>14.3. Dev-mode key requests are detached from the account when it is deleted, but the row (device identifier, device name, note, status) may remain in the database. If you want it deleted as well, include the device identifier in your request: we will delete the record.</p>
+          <p>14.4. The operator cannot delete data in your browser: clear it yourself (section 6.5). Deleting the account does not revoke a dev-mode key already issued to you: it is signed and verified in the OS without a network.</p>
+          <p>14.5. We may retain a minimum of data if the law obliges us to keep it longer or it is needed to protect against abuse and to settle disputes, and only for as long as necessary.</p>
+        </section>
+
+        <section id="s-os">
+          <h2>15. DeiX OS and the network</h2>
+          <p>15.1. <b>No telemetry.</b> The OS does not send the project servers information about how you use it, your files or your list of programs, and does not collect diagnostics without your knowledge.</p>
+          <p>15.2. Requests to the project servers happen only in connection with features you invoke yourself:</p>
+          <ul class="legal-list">
+            <li><code>dev request</code> sends the device identifier, the device name (hostname) and a source marker. After that the OS periodically polls the server for the status of the request (this is needed to show you a notification of approval) and stops when the status is final or after several failures.</li>
+            <li><code>dev link</code> and linking by code send the device identifier in order to obtain a short code for linking to an account.</li>
+            <li><code>update check</code>, <code>update download</code> and the “Updates” window request a signed manifest and chunks of the package. The server sees the IP address, the channel and the number of the requested build; nothing from the contents of your disk is transmitted.</li>
+            <li><code>dev unlock</code> verifies the signature of the key locally, without a network.</li>
+          </ul>
+          <p>15.3. All requests use an encrypted connection (TLS) through the <code>/api/os</code> gateway, so the OS does not contact Supabase directly.</p>
+          <p>15.4. Everything you keep in the OS (including the <code>/userdata</code> partition) stays on your computer and is encrypted with a key derived from your password. The project servers do not receive this data.</p>
+          <p>15.5. Other network features of the OS (for example the built-in browser and the <code>curl</code> command) contact directly the sites that you open; we do not know the privacy policies of those sites and are not responsible for them.</p>
+        </section>
+
+        <section id="s-children">
+          <h2>16. Children</h2>
+          <p>The Service is not intended for persons under 16 and we knowingly do not collect their data. If you are a parent or guardian and believe a child created an account, write to us (section 20): we will delete the data. If the law of your country sets a different age of digital consent, that age applies.</p>
+        </section>
+
+        <section id="s-auto">
+          <h2>17. Automated decisions</h2>
+          <p>The Service makes no decisions that have legal effects for you solely by automated means and does no profiling. Only security measures act automatically: the captcha, request rate limits and the rejection of disposable email addresses. If the protection rejected you by mistake, write to us. Dev-mode key requests are reviewed by a human, the Owner.</p>
+        </section>
+
+        <section id="s-breach">
+          <h2>18. Security incidents</h2>
+          <p>If a breach affecting your data occurs, we will remove the cause, assess its scope and notify affected users and, where the law requires, the supervisory authority within the required time: by a notice on the site and by email to the account address. The notice will say which data is affected and what we recommend you do (for example, change your password, regenerate backup codes).</p>
+        </section>
+
+        <section id="s-changes">
+          <h2>19. Changes to this policy</h2>
+          <p>19.1. We update the policy when the code, the providers or the law change. The date and version are shown at the top of the page; earlier versions are available in the history of the project repository on GitHub.</p>
+          <p>19.2. For material changes (new categories of data, new purposes, new recipients) we will give a prominent notice on the site before the changes take effect; if the law requires your consent, we will ask for it.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Version</th><th>Date</th><th>What changed</th></tr></thead>
+              <tbody>
+                <tr><td>1.0</td><td>25 October 2026</td><td>First edition.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="s-contact">
+          <h2>20. Contact</h2>
+          <p>20.1. For questions about data, for the requests in section 13 and for vulnerability reports, write to the operator through GitHub: <a href="https://github.com/Atimenka/DeiX/issues" rel="noopener">github.com/Atimenka/DeiX/issues</a> or the profile <a href="https://github.com/Atimenka" rel="noopener">github.com/Atimenka</a>.</p>
+          <p>20.2. <b>Do not publish personal data, passwords or codes in public reports.</b> Say only that you need a private channel about a data question: we will contact you and confirm your identity without disclosing details in public.</p>
+          <p>20.3. If you are signed in, we may send the reply to the account email.</p>
+        </section>
+
+        <section id="s-terms">
+          <h2>21. Terms</h2>
+          <dl class="legal-terms">
+            <dt>Personal data</dt><dd>any information by which a person can be identified directly or indirectly: email, username, an IP address combined with an account.</dd>
+            <dt>Hash</dt><dd>an irreversible “fingerprint” of data: it lets you check a match but not recover the original value.</dd>
+            <dt>Token</dt><dd>a random string that confirms an action or a session.</dd>
+            <dt>2FA / TOTP</dt><dd>signing in with a password and a one-time code from an authenticator app.</dd>
+            <dt>CSP</dt><dd>content security policy: the browser may run only the listed scripts.</dd>
+            <dt>RLS</dt><dd>row-level security in the database: a query sees only the rows it is allowed to.</dd>
+            <dt>Cookie</dt><dd>a small file that a site saves in the browser.</dd>
+            <dt>Device id</dt><dd>a random identifier of a DeiX OS installation; not related to hardware serial numbers.</dd>
+          </dl>
+        </section>
+
+        <section id="s-faq">
+          <h2>22. Questions and answers</h2>
+          <div class="faq">
+            <details><summary>Can you see my password?</summary><p>No. The password is sent over a protected connection at sign-in or registration and is then stored only as a hash. It cannot be read or recovered; a forgotten password can only be replaced with a new one.</p></details>
+            <details><summary>Can you read the names of my devices and my key history?</summary><p>No. They live in your browser, encrypted with a key derived from your password, and are not sent to the server. The exception: a device name that you yourself sent in a dev-mode key request is visible to the operator.</p></details>
+            <details><summary>What does the Owner see?</summary><p>In the request list: the username, the device identifier and name, the note, the source, the status and the times. The list does not show your email, your password or the contents of your vault.</p></details>
+            <details><summary>Why is there a captcha and what does Cloudflare receive?</summary><p>So that bots cannot register en masse and guess passwords. Cloudflare receives the IP address and browser information, as described in section 10.</p></details>
+            <details><summary>Why is there no “Accept cookies” banner?</summary><p>We use only the cookies necessary for signing in. The account cannot work without them, and we have no advertising or analytics records.</p></details>
+            <details><summary>I forgot my password. Will the vault data be lost?</summary><p>The vault is encrypted with the password and cannot be recovered. Reset it on the Account page: you will lose the device names and key history, but the keys already in the OS will keep working.</p></details>
+            <details><summary>Does the OS send anything without my command?</summary><p>No. The only background network activity relates to your key request: the OS polls the status until you get a decision. See section 15.</p></details>
+            <details><summary>How do I delete my account?</summary><p>Write to the operator (section 20). The profile, device links, code hashes and the record with the password hash are deleted together with the account. See section 14.</p></details>
+            <details><summary>Do you pass data to third parties?</summary><p>Only to the infrastructure providers in section 10 and only to the extent needed to run the Service. We sell nothing.</p></details>
+          </div>
+        </section>
+
+        <section id="s-appendix">
+          <h2>Appendix. Field inventory</h2>
+          <p>Tables in the project database (Supabase, schema <code>public</code>) and what they store. The Supabase Auth tables (<code>auth.*</code>) contain the email, the password hash and the 2FA factors.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Table</th><th>Fields</th><th>Purpose</th></tr></thead>
+              <tbody>
+                <tr><td><code>profiles</code></td><td>account id, username, role, creation date, email verified flag</td><td>Profile and access rights</td></tr>
+                <tr><td><code>email_verifications</code></td><td>account id, token hash, expiry, time of use, creation date</td><td>Email verification</td></tr>
+                <tr><td><code>mfa_backup_codes</code></td><td>account id, code hash, time of use, creation date</td><td>2FA backup codes</td></tr>
+                <tr><td><code>device_links</code></td><td>device identifier, account id, link code and its expiry, creation and linking dates</td><td>Connecting a device to an account</td></tr>
+                <tr><td><code>dev_unlocks</code></td><td>device identifier and name, note, source, status, account id, times of submission, decision and use, who decided</td><td>Dev-mode key requests</td></tr>
+                <tr><td><code>dev_keys</code></td><td>record id, account id, time</td><td>Key issuance limit</td></tr>
+                <tr><td><code>dev_settings</code></td><td>service settings, for example whether requests are open</td><td>Service settings; no personal data</td></tr>
+                <tr><td><code>os_releases</code></td><td>version, title, description, file, size, checksum, publication status, download counter, who created it</td><td>Images for download</td></tr>
+                <tr><td><code>os_updates</code></td><td>build, version, channel, manifest, signature, payload path and size, publication status, download counter, who created it</td><td>The OS update center</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </article>
+    </div>
+  </main>
+  <script src="/i18n.js"></script>
+  <script src="/site.js"></script>
+  <script src="/motion.js" defer></script>
+</body>
+</html>

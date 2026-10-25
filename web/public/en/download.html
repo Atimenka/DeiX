@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Download — DeiX OS</title>
+  <meta name="theme-color" content="#0b0b0c">
+  <link rel="alternate" hreflang="ru" href="/download">
+  <link rel="alternate" hreflang="en" href="/en/download">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="preload" href="/vendor/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-page="download">
+  <main class="page wrap">
+    <div class="page-head">
+      <h1>Download <span class="grad">DeiX OS</span></h1>
+      <p>Ready-made disk images of the OS. Download an image, check its checksum and run it in QEMU.</p>
+    </div>
+
+    <div class="stack" id="releases"></div>
+    <div class="panel" id="releases-empty" hidden>
+      <h3>No releases yet</h3>
+      <p class="hint">The project owner has not published any images yet. Check back later.</p>
+    </div>
+
+    <div class="panel run-panel">
+      <h3>How to run</h3>
+      <p class="hint">Unpack the file if it is archived (.gz, .xz or .zip) and run the image as a virtual machine disk:</p>
+      <pre class="codeblock"><code>qemu-system-x86_64 -m 512M \
+  -drive format=raw,file=deix.img \
+  -netdev user,id=n0 -device rtl8139,netdev=n0</code></pre>
+      <p class="hint">Compare the SHA-256 of the downloaded file with the checksum on the release card: on Linux use sha256sum file, on Windows certutil -hashfile file SHA256.</p>
+    </div>
+  </main>
+  <script src="/i18n.js"></script>
+  <script src="/site.js"></script>
+  <script src="/motion.js" defer></script>
+  <script src="/download.js"></script>
+</body>
+</html>

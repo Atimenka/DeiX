@@ -10,11 +10,9 @@ A next-generation OS for `x86_64` with a modular graphical shell, an immutable *
 
 ## 🌐 Website and database
 
-This public repository holds the OS only. The website (Vercel) and the Supabase
-SQL migrations were removed from it at the owner's decision and are kept in the
-owner's private repository; the live site keeps running from its last deployment.
-To erase them from this repository's history as well, run
-`tools/purge_site_history.sh` in a fresh mirror clone (see the script's header).
+The website deployed to Vercel lives in `web/` (production builds from this
+directory), the Supabase schema migrations live in `supabase/`. API tests:
+`cd web && npm test`.
 
 ---
 
