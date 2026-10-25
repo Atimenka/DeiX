@@ -49,6 +49,14 @@ KERNEL_LBA equ 3
 KERNEL_SRC equ 0x800000   ; см. пояснение в boot/stage2.asm
 %endif
 
+; Сколько секторов реально читаем: от начала диска до конца ядра. Образ
+; целиком (RAMDISK_SECTORS, 20 МиБ) читать незачем: stage2 кладёт свои
+; таблицы страниц и стек ровно на RAMDISK_DST (linker_stage2.ld, .bss
+; 0x2000000), обнуляет их и затирает первый сектор RAM-диска — ядро по
+; сигнатуре 0xAA55 видит «RAM-диск неактивен» и читает разделы через ATA
+; PIO (замер: «[ramdisk] inactive»). Остальные 19 МиБ int13 уходили впустую.
+LOAD_SECTORS equ KERNEL_LBA + KERNEL_SECTORS
+
 ; 120 секторов за вызов int13 (вместо прежних 64): для 20-МиБ образа это
 ; 342 чтения вместо 640 — каждое чтение сопровождается переходом
 ; RM→PM→RM, так что загрузка заметно быстрее. Буфер 0x11000..0x20000
@@ -84,7 +92,7 @@ start:
     out 0x92, al
 
     mov dword [ram_dst_phys], RAMDISK_DST
-    mov word [sectors_left], RAMDISK_SECTORS
+    mov word [sectors_left], LOAD_SECTORS
     mov word [cur_lba_lo], 0
     mov word [cur_lba_hi], 0
 

@@ -57,7 +57,7 @@ RAMBOOT_SECTORS=1
 KERNEL_LBA=$(( 1 + STAGE2_SECTORS + RAMBOOT_SECTORS ))
 echo "    kernel.bin LBA: $KERNEL_LBA"
 
-echo "==> [1c/8] Собираем ramboot (RAM-диск: дочитывает весь образ в 0x2000000)"
+echo "==> [1c/8] Собираем ramboot (читает диск до конца ядра и копирует ядро в 0x100000)"
 nasm -f bin -D RAMDISK_SECTORS=40960 -D RAMDISK_DST=0x2000000 \
     -D KERNEL_SECTORS=2048 -D KERNEL_LBA=$KERNEL_LBA \
     boot/ramboot.asm -o "$BUILD/ramboot.bin"
