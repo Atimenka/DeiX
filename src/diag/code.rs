@@ -299,7 +299,7 @@ pub static TABLE: &[CodeInfo] = &[
         action: "Проверьте права доступа и мандаты процесса." },
     CodeInfo { code: ErrorCode::new(Subsystem::Vfs, 5), summary: "Файловая система только для чтения",
         detail: "Том смонтирован read-only (системный раздел).",
-        action: "Пишите в /userdata вместо /system." },
+        action: "Пишите в /userdata; запись в /system возможна только на ext2 и в dev-режиме." },
     CodeInfo { code: ErrorCode::new(Subsystem::Vfs, 6), summary: "Каталог не пуст",
         detail: "Удаление каталога невозможно, пока в нём есть записи.",
         action: "Сначала удалите содержимое каталога." },
