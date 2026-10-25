@@ -992,7 +992,7 @@ test('OS updates: owner publishes, the OS fetches the manifest and the payload i
   assert.equal((await prepare(made.file.replace(made.signature, '0'.repeat(128)))).status, 400);
   assert.equal((await prepare(updateManifestFile({}, nodeCrypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey).file)).status, 400);
   assert.equal((await prepare(updateManifestFile({ doc: { channel: 'nightly' } }).file)).status, 400);
-  assert.equal((await prepare(updateManifestFile({ doc: { payload_size: 7 * 1024 * 1024 } }).file)).status, 400);
+  assert.equal((await prepare(updateManifestFile({ doc: { payload_size: 9 * 1024 * 1024 } }).file)).status, 400);
   assert.equal(db.updates.length, 0);
 
   const prepared = await prepare(made.file);

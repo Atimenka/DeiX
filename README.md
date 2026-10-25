@@ -190,8 +190,8 @@ not loaded modules and do not appear in that list.
 
 | Partition | LBA | Sectors | FS | Purpose |
 |---|---|---|---|---|
-| `/system` | 4096 | 20480 | EROFS ro | System partition (kernel `kernel.bin`, libraries, `.kmod` modules, services) |
-| `/userdata` | 24576 | 16384 | ext2 rw | User data, programs, packages |
+| `/system` | 4096 | 32768 | EROFS ro | System partition (kernel `kernel.bin`, libraries, `.kmod` modules, services) |
+| `/userdata` | 36864 | 32768 | ext2 rw | User data, programs, packages |
 
 Service areas outside partitions: LBA 0 — MBR; 1..2046 — reserved (stage2, ramboot and the kernel are files in `/system/boot` and `/system/kernel`);
 2047 — `DEIXKIMG` boot map (extents of those files + kernel SHA-256, see `docs/BOOTMAP.md`);

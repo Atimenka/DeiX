@@ -41,11 +41,11 @@ const KERNEL_IMAGE_INFO_LBA: u32 = 2047;
 /// Карта разделов: P1 /system фиксированный (совпадает с
 /// tools/make_deix_fs.py), P2 /userdata начинается сразу после него,
 /// а его РАЗМЕР выбирается при установке.
-const PART_SYSTEM: (u32, u32) = (4096, 20480);
+const PART_SYSTEM: (u32, u32) = (4096, 32768);
 /// Начало /userdata (ext2::FS_START_LBA).
-pub const USERDATA_START_LBA: u32 = 24576;
+pub const USERDATA_START_LBA: u32 = 36864;
 /// Минимальный размер /userdata: 8 МиБ (штатный образ).
-pub const USERDATA_MIN_SECTORS: u32 = 16384;
+pub const USERDATA_MIN_SECTORS: u32 = 32768;
 /// Варианты размера /userdata для установщика, МиБ.
 pub const USERDATA_PRESETS_MIB: [u32; 6] = [8, 16, 32, 64, 128, 256];
 

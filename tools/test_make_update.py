@@ -72,7 +72,7 @@ class Packaging(unittest.TestCase):
         _, body = mu.load_manifest(manifest)
         doc = json.loads(body)
         self.assertEqual(doc["userdata_ops"][1], {"hex": "0102", "op": "write", "path": "/userdata/new/a"})
-        self.assertEqual(sum(s["sectors"] for s in doc["segments"]), 1 + 2047 + 20480)
+        self.assertEqual(sum(s["sectors"] for s in doc["segments"]), 1 + 2047 + 32768)
 
     def test_payload_decodes_to_image_segments(self):
         manifest, payload = self.pack()

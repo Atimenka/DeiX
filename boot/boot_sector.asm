@@ -260,8 +260,8 @@ BOOTMAP     equ 0x7000      ; карта загрузки в памяти (чи�
 ; та же таблица пишется tools/make_deix_fs.py в собранный образ и
 ; src/install.rs::build_mbr на целевой диск):
 ;
-;   P1 0x83 bootable  LBA 4096  + 20480 сект (4096..24575)   /system  (EROFS RO)
-;   P2 0x83           LBA 24576 + 16384 сект (24576..40959)  /userdata (EXT2 RW)
+;   P1 0x83 bootable  LBA 4096  + 32768 сект (4096..36863)   /system  (EROFS RO)
+;   P2 0x83           LBA 36864 + 32768 сект (36864..69631)  /userdata (EXT2 RW)
 ;
 ; Сам загрузчик и ядро НЕ читают эту таблицу в рантайме — она нужна,
 ; чтобы внешние инструменты (fdisk, parted, GParted) видели диск как
@@ -276,16 +276,16 @@ times (446-($-$$)) db 0
 db 0x80                     ; boot indicator: активный раздел
 db 0x41, 0x02, 0x00          ; CHS start (LBA 4096)
 db 0x83                     ; тип раздела: Linux native
-db 0x87, 0x06, 0x01          ; CHS end (LBA 24575)
+db 0x4B, 0x09, 0x02          ; CHS end (LBA 36863)
 dd 4096                     ; LBA start (= partition_map.rs /system)
-dd 20480                    ; секторов   (= partition_map.rs /system)
+dd 32768                    ; секторов   (= partition_map.rs /system)
 ; --- P2: /userdata (EXT2 RW) ---
 db 0x00                     ; не загрузочный
-db 0x87, 0x07, 0x01          ; CHS start (LBA 24576)
+db 0x4B, 0x0A, 0x02          ; CHS start (LBA 36864)
 db 0x83                     ; тип раздела: Linux native
-db 0x8C, 0x0A, 0x02          ; CHS end (LBA 40959)
-dd 24576                    ; LBA start (= partition_map.rs /userdata)
-dd 16384                    ; секторов   (= partition_map.rs /userdata)
+db 0x55, 0x11, 0x04          ; CHS end (LBA 69631)
+dd 36864                    ; LBA start (= partition_map.rs /userdata)
+dd 32768                    ; секторов   (= partition_map.rs /userdata)
 times 16 db 0                ; запись 3 (не используется)
 times 16 db 0                ; запись 4 (не используется)
 

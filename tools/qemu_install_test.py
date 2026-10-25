@@ -34,9 +34,9 @@ def main():
         print('  [FAIL] make_deix_fs'); return 1
     if os.path.exists(TARGET):
         os.remove(TARGET)
-    # пустой целевой диск 20 МиБ (минимум — 40960 секторов, конец /userdata)
+    # пустой целевой диск 40 МиБ (минимум — 69632 сектора, конец /userdata)
     with open(TARGET, 'wb') as f:
-        f.write(b'\x00' * (20 * 1024 * 1024))
+        f.write(b'\x00' * (40 * 1024 * 1024))
 
     p, m = start_qemu(['qemu-system-x86_64', '-m', '512',
                  '-drive', f'file={IMG},format=raw,if=ide',
@@ -118,7 +118,7 @@ def main():
         'kernel by map': by_map(192, 40, len(kb)) == kb,
         'reserved area is zero': not any(d[512:2047 * 512]),
         'EROFS magic (/system)': d[4096 * 512 + 1024:4096 * 512 + 1028].hex() == 'e2e1f5e0',
-        'ext2 magic (/userdata)': d[24576 * 512 + 1024 + 56:24576 * 512 + 1024 + 58].hex() == '53ef',
+        'ext2 magic (/userdata)': d[36864 * 512 + 1024 + 56:36864 * 512 + 1024 + 58].hex() == '53ef',
     }
     for k, v in checks.items():
         print(f'  [{"OK" if v else "FAIL"}] target: {k}')

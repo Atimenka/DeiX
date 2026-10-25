@@ -46,8 +46,8 @@ Kernel only, no image: `cargo build --release`.
 | reserved | 1..2046 | 2046 | zeros (stage2, ramboot and the kernel live in `/system`) |
 | `DEIXKIMG` | 2047 | 1 | boot map: extents of stage2, ramboot and kernel.bin, kernel SHA-256 |
 | panic dump | 2048 | 64 | crash dump (`DEIXPNIC`), outside any FS |
-| `/system` | 4096 | 20480 | EROFS, read-only |
-| `/userdata` | 24576 | 16384 | ext2, read/write |
+| `/system` | 4096 | 32768 | EROFS, read-only |
+| `/userdata` | 36864 | 32768 | ext2, read/write |
 
 Booting reads the files inside `/system` through the boot map (MBR reads
 `stage2.bin` and `ramboot.bin`, ramboot reads `kernel.bin`; see
@@ -95,7 +95,7 @@ python3 tools/qemu_install_test.py      # install onto a second disk + boot from
 Verifying EROFS with a third-party tool:
 
 ```bash
-dd if=build/deix_disk.img of=/tmp/system.img bs=512 skip=4096 count=20480
+dd if=build/deix_disk.img of=/tmp/system.img bs=512 skip=4096 count=32768
 dump.erofs /tmp/system.img | head -5     # -> Filesystem magic number: 0xE0F5E1E2
 fsck.erofs --extract=/tmp/out /tmp/system.img && ls -R /tmp/out
 ```

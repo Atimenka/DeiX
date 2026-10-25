@@ -76,11 +76,11 @@ const MAX_FILE_BLOCKS: usize =
     MAX_DIRECT_BLOCKS + PTRS_PER_INDIRECT_BLOCK + PTRS_PER_INDIRECT_BLOCK * PTRS_PER_INDIRECT_BLOCK;
 
 /// Начало тома ext2 /userdata на диске (раздел P2).
-pub const FS_START_LBA: u32 = 24576;
-/// Размер тома /userdata по умолчанию (штатный образ: 16384 секторов =
-/// 8 МиБ). Реальный размер читается из таблицы разделов MBR; эта
+pub const FS_START_LBA: u32 = 36864;
+/// Размер тома /userdata по умолчанию (штатный образ: 32768 секторов =
+/// 16 МиБ). Реальный размер читается из таблицы разделов MBR; эта
 /// константа — запасной вариант, когда MBR не читается.
-const TOTAL_SECTORS_DEFAULT: u32 = 16384;
+const TOTAL_SECTORS_DEFAULT: u32 = 32768;
 
 /// Номер блока суперблока (при блоке 1024 суперблок лежит в блоке 1).
 const SB_BLOCK: u32 = 1;

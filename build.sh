@@ -14,8 +14,8 @@
 #   LBA 2047        — карта загрузки DEIXKIMG v2 (участки stage2/ramboot/ядра)
 #   LBA 2048..2111  — область аварийного дампа (DEIXPNIC, src/diag/panic.rs)
 #   LBA 4000        — управляющий сектор обновления (DEIXUPDC, src/update.rs)
-#   LBA 4096..24575 — /system   (EROFS RO, 20480 сект): boot/, kernel/, etc/, ...
-#   LBA 24576..40959 — /userdata (EXT2 RW, 16384 сект)
+#   LBA 4096..36863 — /system   (EROFS RO, 32768 сект): boot/, kernel/, etc/, ...
+#   LBA 36864..69631 — /userdata (EXT2 RW, 32768 сект)
 set -euo pipefail
 
 source "$HOME/.cargo/env" 2>/dev/null || true
@@ -227,7 +227,7 @@ open('$BUILD/stage2.pad.bin','wb').write(data + b'\\x00' * pad)
 cp "$BUILD/boot_sector.bin" "$DISK_IMG"
 
 # Дополняем образ нулями до размера, кратного 512, а затем до большего из:
-#   - конца последнего раздела (/userdata: LBA 24576 + 16384 = 40960 сект);
+#   - конца последнего раздела (/userdata: LBA 36864 + 32768 = 69632 сект);
 #   - окна RAM-диска ISO-стаба (boot_sector_iso читает 40960 сект = 20 МиБ).
 python3 - "$DISK_IMG" <<'PYEOF'
 import sys, os
@@ -238,7 +238,7 @@ if pad:
     with open(path, "ab") as f:
         f.write(b"\x00" * pad)
 
-PARTITIONS_END = 24576 + 16384  # сверяется tools/check_partition_map.py
+PARTITIONS_END = 36864 + 32768  # сверяется tools/check_partition_map.py
 RAMDISK_WINDOW = 40960          # окно RAM-диска boot_sector_iso.asm
 min_size = max(PARTITIONS_END, RAMDISK_WINDOW) * 512
 size = os.path.getsize(path)
