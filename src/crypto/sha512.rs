@@ -43,6 +43,23 @@ const K: [u64; 80] = [
     0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817,
 ];
 
+/// Один раунд сжатия без пересылки регистров: вместо сдвига a..h на каждом
+/// раунде имена переменных вращаются между восемью раундами подряд.
+/// Результат побитово тот же, что у «классической» записи со сдвигом.
+macro_rules! round {
+    ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $k:expr, $w:expr) => {
+        let t1 = $h
+            .wrapping_add($e.rotate_right(14) ^ $e.rotate_right(18) ^ $e.rotate_right(41))
+            .wrapping_add($g ^ ($e & ($f ^ $g)))
+            .wrapping_add($k)
+            .wrapping_add($w);
+        let t2 = ($a.rotate_right(28) ^ $a.rotate_right(34) ^ $a.rotate_right(39))
+            .wrapping_add(($a & $b) | ($c & ($a | $b)));
+        $d = $d.wrapping_add(t1);
+        $h = t1.wrapping_add(t2);
+    };
+}
+
 #[derive(Clone)]
 pub struct Sha512 {
     state: [u64; 8],
@@ -153,26 +170,16 @@ impl Sha512 {
         let mut g = self.state[6];
         let mut h = self.state[7];
 
-        for i in 0..80 {
-            let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
-            let ch = (e & f) ^ ((!e) & g);
-            let temp1 = h
-                .wrapping_add(s1)
-                .wrapping_add(ch)
-                .wrapping_add(K[i])
-                .wrapping_add(w[i]);
-            let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let temp2 = s0.wrapping_add(maj);
-
-            h = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(temp1);
-            d = c;
-            c = b;
-            b = a;
-            a = temp1.wrapping_add(temp2);
+        for chunk in 0..10 {
+            let i = chunk * 8;
+            round!(a, b, c, d, e, f, g, h, K[i], w[i]);
+            round!(h, a, b, c, d, e, f, g, K[i + 1], w[i + 1]);
+            round!(g, h, a, b, c, d, e, f, K[i + 2], w[i + 2]);
+            round!(f, g, h, a, b, c, d, e, K[i + 3], w[i + 3]);
+            round!(e, f, g, h, a, b, c, d, K[i + 4], w[i + 4]);
+            round!(d, e, f, g, h, a, b, c, K[i + 5], w[i + 5]);
+            round!(c, d, e, f, g, h, a, b, K[i + 6], w[i + 6]);
+            round!(b, c, d, e, f, g, h, a, K[i + 7], w[i + 7]);
         }
 
         self.state[0] = self.state[0].wrapping_add(a);

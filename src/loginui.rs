@@ -406,6 +406,7 @@ pub fn run() -> Option<String> {
                     } else {
                         match crate::auth::create_user(user.as_str(), pass.as_str()) {
                             Ok(()) => {
+                                crate::bootprof::mark("login: account record created");
                                 // ПЕРВАЯ НАСТРОЙКА: включаем шифрование тома
                                 // паролем аккаунта. Без этого вызова том
                                 // оставался ОТКРЫТЫМ — USERS.DB и все файлы
@@ -421,6 +422,7 @@ pub fn run() -> Option<String> {
                                     Err(_) => crate::serial_println!(
                                         "[loginui] ВНИМАНИЕ: шифрование НЕ включено (ошибка диска)"),
                                 }
+                                crate::bootprof::mark("login: volume encryption enabled");
                                 status = String::from("account created, signing in...");
                                 status_color = OK_C;
                                 redraw(
@@ -459,8 +461,10 @@ pub fn run() -> Option<String> {
                         redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
                         continue;
                     }
+                    crate::bootprof::mark("login: volume unlocked");
                     match crate::auth::verify_login(user.as_str(), pass.as_str()) {
                         Ok(()) => {
+                            crate::bootprof::mark("login: password verified");
                             status = String::from("welcome!");
                             status_color = OK_C;
                             redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
