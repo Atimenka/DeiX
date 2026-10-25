@@ -46,7 +46,7 @@ Root Directory проекта Vercel — `web`.
   Отправитель в Resend должен принадлежать подтверждённому домену, в Brevo —
   подтверждённому адресу отправителя.
 * **Как включить письма** (Vercel → проект → Settings → Environment Variables, затем Redeploy):
-  * SMTP2GO (свой домен и адрес компании не нужны): зарегистрируйтесь на smtp2go.com, в Sending → Verified Senders → Single sender emails подтвердите свой адрес, создайте ключ в Sending → API Keys и задайте `SMTP2GO_API_KEY` и `MAIL_FROM="DeiX OS <тот-же@адрес>"`. Бесплатно: 1000 писем в месяц, 200 в день.
+  * SMTP2GO (нужен адрес на собственном домене: Gmail, Yahoo и другие публичные адреса он не принимает ни при регистрации, ни как отправителя): зарегистрируйтесь на smtp2go.com, подтвердите домен (Sending → Verified Senders → Sender domains) или адрес на нём, создайте ключ в Sending → API Keys и задайте `SMTP2GO_API_KEY` и `MAIL_FROM="DeiX OS <noreply@ваш-домен>"`. Бесплатно: 1000 писем в месяц, 200 в день.
   * Brevo (не нужен свой домен, но просит почтовый адрес): подтвердите адрес отправителя в Brevo → Senders, создайте API-ключ (SMTP & API → API Keys) и задайте `BREVO_API_KEY` и `MAIL_FROM="DeiX OS <ваш@подтверждённый.адрес>"`.
   * Resend (нужен свой домен): подтвердите домен в Resend → Domains, создайте ключ, задайте `RESEND_API_KEY` и `MAIL_FROM="DeiX OS <noreply@ваш-домен>"`.
   * Необязательно: `SITE_URL=https://deix-sepia.vercel.app`.
