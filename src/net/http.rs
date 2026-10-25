@@ -165,7 +165,15 @@ fn request_once(
     max_body: usize,
     idle_ms: u64,
 ) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
-    let _net_guard = NET_LOCK.lock();
+    // Сетевой замок ждём кооперативно: пока его держит фоновая задача
+    // (медиапак, центр обновлений), уступаем процессор вместо пустого
+    // спиннинга — так владелец замка и остальные задачи работают быстрее.
+    let _net_guard = loop {
+        match NET_LOCK.try_lock() {
+            Some(guard) => break guard,
+            None => crate::sched::yield_now(),
+        }
+    };
     let mut last_err = String::new();
     for attempt in 1..=3u32 {
         match attempt_once(method, url, extra_headers, body, max_body, idle_ms) {
