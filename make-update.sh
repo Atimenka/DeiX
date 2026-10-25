@@ -30,6 +30,7 @@ usage() {
   --profile P       release (по умолчанию) или fast — профиль ./build.sh
   --out-dir DIR     куда класть пакет (по умолчанию build/update)
   --no-build        не пересобирать: упаковать готовый build/deix_disk.img
+                    (или файл из DEIX_IMAGE)
   -h, --help        эта справка
 
 Идентификатор сборки обязан расти от выпуска к выпуску: ОС ставит только
@@ -99,7 +100,7 @@ if [ "$DO_BUILD" -eq 1 ]; then
     ./build.sh
 fi
 
-IMAGE="$ROOT/build/deix_disk.img"
+IMAGE="${DEIX_IMAGE:-$ROOT/build/deix_disk.img}"
 for f in "$IMAGE" "$ROOT/build/build_id" "$ROOT/build/version" "$ROOT/build/update_pubkey.bin"; do
     if [ ! -f "$f" ]; then
         echo "ошибка: нет $f — запустите без --no-build" >&2

@@ -247,7 +247,9 @@ python3 tools/check_partition_map.py
 
 echo "==> [7/8] Склеиваем итоговый образ диска"
 
-DISK_IMG="$BUILD/deix_disk.img"
+# DEIX_DISK_IMG — собрать образ диска в ДРУГОЙ файл, не трогая build/deix_disk.img
+# (так build-update-image.sh готовит образ для обновления).
+DISK_IMG="${DEIX_DISK_IMG:-$BUILD/deix_disk.img}"
 # Выравниваем stage2 до целого числа секторов (иначе kernel.bin в склейке
 # смещается на невыровненный байт, и stage2 читает его со сдвигом -> мусор).
 STAGE2_SIZE=$(stat -c%s "$BUILD/stage2.bin")
@@ -309,7 +311,9 @@ nasm -f bin -D STAGE2_SIZE_DWORDS=$STAGE2_DWORDS -D KERNEL_SIZE_DWORDS=$KERNEL_D
     boot/boot_sector_iso.asm -o "$BUILD/boot_sector_iso.bin"
 
 echo "==> [8b] Релизные артефакты (DeiX $DEIX_VERSION x86_64)"
-cp "$DISK_IMG" "$BUILD/deix-$DEIX_VERSION-x86_64.img"
+if [ -z "${DEIX_DISK_IMG:-}" ]; then
+    cp "$DISK_IMG" "$BUILD/deix-$DEIX_VERSION-x86_64.img"
+fi
 if [ -f "$BUILD/deix.iso" ]; then
     cp "$BUILD/deix.iso" "$BUILD/deix-$DEIX_VERSION-x86_64.iso"
 fi
