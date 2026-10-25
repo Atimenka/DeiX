@@ -334,6 +334,28 @@ pub enum WindowContent {
     Updates {
         center: crate::update::center::Center,
     },
+    /// Просмотрщик фото: библиотека (path пуст) или один файл.
+    ImageViewer {
+        path: String,
+        library: Vec<String>,
+        selected: usize,
+        /// Декодированные пиксели 0xRRGGBB + размеры.
+        img: Option<(Vec<u32>, usize, usize)>,
+        error: Option<String>,
+    },
+    /// Видеоплеер: список файлов (list_mode) или воспроизведение.
+    VideoPlayer {
+        list: Vec<String>,
+        idx: Option<usize>,
+        list_mode: bool,
+        status: Option<String>,
+    },
+    /// Плеер музыки: плейлист + транспорт.
+    MusicPlayer {
+        list: Vec<String>,
+        idx: Option<usize>,
+        status: Option<String>,
+    },
 }
 
 impl WindowContent {
@@ -352,6 +374,9 @@ impl WindowContent {
             WindowContent::DisplaySettings { .. } => IconType::Display,
             WindowContent::Installer { .. } => IconType::Install,
             WindowContent::Updates { .. } => IconType::Reload,
+            WindowContent::ImageViewer { .. } => IconType::Image,
+            WindowContent::VideoPlayer { .. } => IconType::Video,
+            WindowContent::MusicPlayer { .. } => IconType::Music,
         }
     }
 }
@@ -609,6 +634,157 @@ impl Window {
             maximized: false,
             restore_geometry: (x, y, 480, 340),
             content: WindowContent::Updates { center: crate::update::center::Center::new() },
+        }
+    }
+
+    /// Просмотрщик фото в режиме библиотеки (список + превью).
+    pub fn new_image_viewer(x: i32, y: i32) -> Self {
+        Window {
+            id: 0,
+            title: String::from("Photos"),
+            x,
+            y,
+            width: 560,
+            height: 400,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 560, 400),
+            content: WindowContent::ImageViewer {
+                path: String::new(),
+                library: crate::ui::apps::media::collect_images(),
+                selected: 0,
+                img: None,
+                error: None,
+            },
+        }
+    }
+
+    /// Просмотрщик фото с открытым файлом: декодирует сразу; ошибка
+    /// декодирования показывается в окне честно.
+    pub fn new_image_viewer_file(x: i32, y: i32, path: &str) -> Self {
+        let name = crate::media::file_name(path);
+        let (img, error) = match crate::ui::apps::media::decode_image_file(path) {
+            Ok(v) => (Some(v), None),
+            Err(e) => (None, Some(e)),
+        };
+        Window {
+            id: 0,
+            title: format!("Photo - {}", name),
+            x,
+            y,
+            width: 520,
+            height: 400,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 520, 400),
+            content: WindowContent::ImageViewer {
+                path: String::from(path),
+                library: Vec::new(),
+                selected: 0,
+                img,
+                error,
+            },
+        }
+    }
+
+    /// Видеоплеер в режиме списка файлов.
+    pub fn new_video_player(x: i32, y: i32) -> Self {
+        Window {
+            id: 0,
+            title: String::from("Video"),
+            x,
+            y,
+            width: 520,
+            height: 380,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 520, 380),
+            content: WindowContent::VideoPlayer {
+                list: crate::ui::apps::media::collect_videos(),
+                idx: None,
+                list_mode: true,
+                status: None,
+            },
+        }
+    }
+
+    /// Видеоплеер с немедленным запуском файла.
+    pub fn new_video_player_file(x: i32, y: i32, path: &str) -> Self {
+        let name = crate::media::file_name(path);
+        let status = match crate::media::play(path) {
+            Ok(()) => None,
+            Err(e) => Some(e),
+        };
+        Window {
+            id: 0,
+            title: format!("Video - {}", name),
+            x,
+            y,
+            width: 520,
+            height: 380,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 520, 380),
+            content: WindowContent::VideoPlayer {
+                list: alloc::vec![String::from(path)],
+                idx: Some(0),
+                list_mode: false,
+                status,
+            },
+        }
+    }
+
+    /// Плеер музыки: плейлист из медиапака и загрузок.
+    pub fn new_music_player(x: i32, y: i32) -> Self {
+        Window {
+            id: 0,
+            title: String::from("Music"),
+            x,
+            y,
+            width: 430,
+            height: 380,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 430, 380),
+            content: WindowContent::MusicPlayer {
+                list: crate::ui::apps::media::collect_audio(),
+                idx: None,
+                status: None,
+            },
+        }
+    }
+
+    /// Плеер музыки с немедленным запуском файла: файл добавляется в
+    /// плейлист первым, если его там нет.
+    pub fn new_music_player_file(x: i32, y: i32, path: &str) -> Self {
+        let name = crate::media::file_name(path);
+        let mut list = crate::ui::apps::media::collect_audio();
+        let idx = match list.iter().position(|p| p == path) {
+            Some(i) => i,
+            None => {
+                list.insert(0, String::from(path));
+                0
+            }
+        };
+        let status = match crate::media::play(path) {
+            Ok(()) => None,
+            Err(e) => Some(e),
+        };
+        Window {
+            id: 0,
+            title: format!("Music - {}", name),
+            x,
+            y,
+            width: 430,
+            height: 380,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 430, 380),
+            content: WindowContent::MusicPlayer {
+                list,
+                idx: Some(idx),
+                status,
+            },
         }
     }
 
@@ -1448,6 +1624,19 @@ pub fn draw_window(
         }
         WindowContent::Updates { center } => {
             apps::draw_updates(r, theme, w, center, content_y);
+        }
+        WindowContent::ImageViewer { path, library, selected, img, error } => {
+            apps::media::draw_image_viewer(
+                r, theme, w, path, library, *selected, img, error.as_ref(), content_y,
+            );
+        }
+        WindowContent::VideoPlayer { list, idx, list_mode, status } => {
+            apps::media::draw_video_player(
+                r, theme, w, list, *idx, *list_mode, status.as_ref(), content_y,
+            );
+        }
+        WindowContent::MusicPlayer { list, idx, status } => {
+            apps::media::draw_music_player(r, theme, w, list, *idx, status.as_ref(), content_y);
         }
     }
 }

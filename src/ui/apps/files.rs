@@ -95,13 +95,21 @@ pub fn sidebar_item_rect(i: usize) -> Rect {
 /// Имя файла похоже на картинку, которую умеет показывать превью.
 fn is_image_name(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    n.ends_with(".png") || n.ends_with(".bmp")
+    n.ends_with(".png") || n.ends_with(".bmp") || n.ends_with(".jpg") || n.ends_with(".jpeg")
 }
 
-/// Декодирует PNG (src/png.rs) или несжатый BMP 24/32 бит в пиксели RGB.
+/// Декодирует PNG (src/png.rs), baseline JPEG (src/jpeg.rs) или
+/// несжатый BMP 24/32 бит в пиксели RGB.
 fn decode_preview(data: &[u8]) -> Option<(Vec<u32>, usize, usize)> {
     if crate::png::is_png(data) {
         let img = crate::png::decode(data).ok()?;
+        if img.w == 0 || img.h == 0 || img.pixels.len() < img.w * img.h {
+            return None;
+        }
+        return Some((img.pixels, img.w, img.h));
+    }
+    if crate::jpeg::is_jpeg(data) {
+        let img = crate::jpeg::decode(data).ok()?;
         if img.w == 0 || img.h == 0 || img.pixels.len() < img.w * img.h {
             return None;
         }

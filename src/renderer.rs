@@ -244,6 +244,16 @@ pub enum IconType {
     Document,
     Drive,
     Stop,
+    /// Просмотр фото: рамка с «горой» и солнцем.
+    Image,
+    /// Видеоплеер: экран с треугольником воспроизведения.
+    Video,
+    /// Аудиоплеер: восьмая нота.
+    Music,
+    Play,
+    Pause,
+    SkipNext,
+    SkipPrev,
 }
 
 pub struct Renderer {
@@ -858,6 +868,50 @@ impl Renderer {
             IconType::Stop => {
                 self.draw_rect(x + 2, y + 2, 12, 12, color);
                 self.fill_rect(x + 5, y + 5, 6, 6, color);
+            }
+            IconType::Image => {
+                self.draw_rect(x + 1, y + 3, 14, 10, color);
+                self.fill_circle(x + 5, y + 6, 1, color);
+                self.draw_line(x + 2, y + 12, x + 6, y + 8, color);
+                self.draw_line(x + 6, y + 8, x + 9, y + 11, color);
+                self.draw_line(x + 9, y + 11, x + 11, y + 9, color);
+                self.draw_line(x + 11, y + 9, x + 14, y + 12, color);
+            }
+            IconType::Video => {
+                self.draw_rect(x + 1, y + 3, 14, 10, color);
+                self.draw_line(x + 6, y + 5, x + 11, y + 8, color);
+                self.draw_line(x + 11, y + 8, x + 6, y + 11, color);
+                self.draw_vline(x + 6, y + 5, 7, color);
+            }
+            IconType::Music => {
+                self.fill_circle(x + 5, y + 11, 2, color);
+                self.draw_vline(x + 7, y + 3, 9, color);
+                self.draw_line(x + 7, y + 3, x + 12, y + 4, color);
+                self.draw_vline(x + 12, y + 4, 4, color);
+            }
+            IconType::Play => {
+                self.draw_line(x + 4, y + 2, x + 12, y + 8, color);
+                self.draw_line(x + 12, y + 8, x + 4, y + 14, color);
+                self.draw_vline(x + 4, y + 2, 13, color);
+                self.draw_line(x + 6, y + 4, x + 10, y + 8, color);
+                self.draw_line(x + 10, y + 8, x + 6, y + 12, color);
+                self.draw_vline(x + 6, y + 4, 9, color);
+            }
+            IconType::Pause => {
+                self.draw_rect(x + 3, y + 2, 4, 12, color);
+                self.draw_rect(x + 9, y + 2, 4, 12, color);
+            }
+            IconType::SkipNext => {
+                self.draw_line(x + 3, y + 3, x + 10, y + 8, color);
+                self.draw_line(x + 10, y + 8, x + 3, y + 13, color);
+                self.draw_vline(x + 3, y + 3, 11, color);
+                self.draw_vline(x + 12, y + 3, 11, color);
+            }
+            IconType::SkipPrev => {
+                self.draw_line(x + 13, y + 3, x + 6, y + 8, color);
+                self.draw_line(x + 6, y + 8, x + 13, y + 13, color);
+                self.draw_vline(x + 13, y + 3, 11, color);
+                self.draw_vline(x + 4, y + 3, 11, color);
             }
         }
     }

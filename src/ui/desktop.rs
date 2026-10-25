@@ -145,6 +145,12 @@ pub struct Desktop {
     /// Последнее увиденное поколение обоев (theme::wallpaper_epoch):
     /// при смене — кеш обоев сброшен (обои скачаны браузером/CLI).
     wallpaper_epoch_seen: u32,
+    /// Последний увиденный seq видеокадра (pump_media: перерисовка
+    /// окна видеоплеера только когда движок реально выдал новый кадр).
+    last_frame_seq: u32,
+    /// Прогресс воспроизведения, квантованный до 250 мс — для перерисовки
+    /// транспортных панелей без сплошного рендера каждый тик.
+    last_progress_quant: u32,
 }
 
 /// Запас вокруг окна под мягкую тень (4 px), blur-ореол (4 px) и
@@ -201,6 +207,8 @@ impl Desktop {
             last_clock_key: u32::MAX,
             next_clock_check_ms: 0,
             wallpaper_epoch_seen: crate::ui::theme::wallpaper_epoch(),
+            last_frame_seq: 0,
+            last_progress_quant: u32::MAX,
         }
     }
 
@@ -326,6 +334,48 @@ impl Desktop {
             return;
         }
         self.open_placed(480, 340, screen_w, screen_h, Window::new_updates);
+    }
+
+    pub fn open_photos(&mut self, screen_w: i32, screen_h: i32) {
+        if let Some(i) = self
+            .windows
+            .iter()
+            .position(|w| matches!(w.content, WindowContent::ImageViewer { .. }))
+        {
+            self.windows[i].minimized = false;
+            self.focus_window(i);
+            self.start_menu_open = false;
+            return;
+        }
+        self.open_placed(560, 400, screen_w, screen_h, Window::new_image_viewer);
+    }
+
+    pub fn open_video(&mut self, screen_w: i32, screen_h: i32) {
+        if let Some(i) = self
+            .windows
+            .iter()
+            .position(|w| matches!(w.content, WindowContent::VideoPlayer { .. }))
+        {
+            self.windows[i].minimized = false;
+            self.focus_window(i);
+            self.start_menu_open = false;
+            return;
+        }
+        self.open_placed(520, 380, screen_w, screen_h, Window::new_video_player);
+    }
+
+    pub fn open_music(&mut self, screen_w: i32, screen_h: i32) {
+        if let Some(i) = self
+            .windows
+            .iter()
+            .position(|w| matches!(w.content, WindowContent::MusicPlayer { .. }))
+        {
+            self.windows[i].minimized = false;
+            self.focus_window(i);
+            self.start_menu_open = false;
+            return;
+        }
+        self.open_placed(430, 380, screen_w, screen_h, Window::new_music_player);
     }
 
     pub fn open_display_settings(&mut self, screen_w: i32, screen_h: i32) {
@@ -978,6 +1028,98 @@ impl Desktop {
                             }
                         }
                     }
+                    WindowContent::VideoPlayer { list, idx, .. } => {
+                        // Пробел — пауза/повтор, S — стоп.
+                        while let Some(byte) = keyboard::try_read_char() {
+                            self.dirty = true;
+                            match byte {
+                                b' ' => {
+                                    let st = crate::media::state();
+                                    if st == crate::media::ST_PLAYING
+                                        || st == crate::media::ST_PAUSED
+                                    {
+                                        crate::media::toggle_pause();
+                                    } else if let Some(i) = *idx {
+                                        if let Some(p) = list.get(i) {
+                                            let p = p.clone();
+                                            let _ = crate::media::play(&p);
+                                        }
+                                    }
+                                }
+                                b's' => crate::media::stop(),
+                                _ => {}
+                            }
+                        }
+                    }
+                    WindowContent::MusicPlayer { list, idx, .. } => {
+                        // Пробел — пауза/повтор, S — стоп, стрелки — треки.
+                        while let Some(byte) = keyboard::try_read_char() {
+                            self.dirty = true;
+                            match byte {
+                                b' ' => {
+                                    let st = crate::media::state();
+                                    if st == crate::media::ST_PLAYING
+                                        || st == crate::media::ST_PAUSED
+                                    {
+                                        crate::media::toggle_pause();
+                                    } else if let Some(i) = *idx {
+                                        if let Some(p) = list.get(i) {
+                                            let p = p.clone();
+                                            let _ = crate::media::play(&p);
+                                        }
+                                    }
+                                }
+                                b's' => crate::media::stop(),
+                                keyboard::ARROW_RIGHT | keyboard::ARROW_LEFT => {
+                                    if !list.is_empty() {
+                                        let cur = idx.unwrap_or(0);
+                                        let n = if byte == keyboard::ARROW_RIGHT {
+                                            (cur + 1) % list.len()
+                                        } else if cur == 0 {
+                                            list.len() - 1
+                                        } else {
+                                            cur - 1
+                                        };
+                                        let p = list[n].clone();
+                                        *idx = Some(n);
+                                        let _ = crate::media::play(&p);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    WindowContent::ImageViewer { library, selected, img, error, .. } => {
+                        // Стрелки листают библиотеку (когда она открыта).
+                        while let Some(byte) = keyboard::try_read_char() {
+                            if byte != keyboard::ARROW_UP && byte != keyboard::ARROW_DOWN {
+                                continue;
+                            }
+                            if library.is_empty() {
+                                continue;
+                            }
+                            let n = if byte == keyboard::ARROW_DOWN {
+                                (*selected + 1) % library.len()
+                            } else if *selected == 0 {
+                                library.len() - 1
+                            } else {
+                                *selected - 1
+                            };
+                            *selected = n;
+                            let p = library[n].clone();
+                            match crate::ui::apps::media::decode_image_file(&p) {
+                                Ok(v) => {
+                                    *img = Some(v);
+                                    *error = None;
+                                }
+                                Err(e) => {
+                                    *img = None;
+                                    *error = Some(e);
+                                }
+                            }
+                            self.dirty = true;
+                        }
+                    }
                     WindowContent::Installer { st } => {
                         while let Some(byte) = keyboard::try_read_char() {
                             self.dirty = true;
@@ -1011,6 +1153,26 @@ impl Desktop {
             }
         } else {
             while keyboard::try_read_char().is_some() {}
+        }
+    }
+
+    /// Перерисовка открытых плееров: кадр видео или квант прогресса
+    /// сменились — окно помечается грязным. Без открытых окон плееров
+    /// не делается ничего (движок может играть музыку и без окна).
+    fn pump_media(&mut self) {
+        if !self
+            .windows
+            .iter()
+            .any(|w| matches!(w.content, WindowContent::VideoPlayer { .. } | WindowContent::MusicPlayer { .. }))
+        {
+            return;
+        }
+        let seq = crate::media::with_frame(|f| f.seq);
+        let quant = crate::media::progress_ms() / 250;
+        if seq != self.last_frame_seq || quant != self.last_progress_quant {
+            self.last_frame_seq = seq;
+            self.last_progress_quant = quant;
+            self.dirty = true;
         }
     }
 
@@ -1086,6 +1248,9 @@ impl Desktop {
             StartMenuAction::OpenDisplaySettings => self.open_display_settings(screen_w, screen_h),
             StartMenuAction::OpenInstaller => self.open_installer(screen_w, screen_h),
             StartMenuAction::OpenUpdates => self.open_updates(screen_w, screen_h),
+            StartMenuAction::OpenPhotos => self.open_photos(screen_w, screen_h),
+            StartMenuAction::OpenVideo => self.open_video(screen_w, screen_h),
+            StartMenuAction::OpenMusic => self.open_music(screen_w, screen_h),
         }
         self.menu_search.clear();
     }
@@ -1253,6 +1418,12 @@ impl Desktop {
         // `win` держит заём на список окон, поэтому арм кладёт параметры
         // сюда, а push происходит после match.
         let mut open_editor: Option<(i32, i32, String, String, bool)> = None;
+        // То же для медиа-окон: (x, y, полный путь файла).
+        let mut open_image: Option<(i32, i32, String)> = None;
+        let mut open_video: Option<(i32, i32, String)> = None;
+        let mut open_music: Option<(i32, i32, String)> = None;
+        // Новый заголовок окна плеера (применяется после match).
+        let mut new_title: Option<String> = None;
         // Аналогично для закрытия текущего окна из диалога редактора.
         let mut close_after = false;
 
@@ -1563,9 +1734,6 @@ impl Desktop {
                                         *status_msg = None;
                                     }
                                 }
-                            } else if entries[idx].size as usize > EDITOR_MAX_BYTES {
-                                *status_msg = None;
-                                *error = Some(format!("{}: too large for the editor (max {} KiB)", name, EDITOR_MAX_BYTES / 1024));
                             } else {
                                 let base = current_partition.trim_end_matches('/');
                                 let dir = current_path.trim_matches('/');
@@ -1574,8 +1742,23 @@ impl Desktop {
                                 } else {
                                     format!("{}/{}/{}", base, dir, name)
                                 };
-                                let read_only = !crate::vfs::is_writable(current_partition.as_str());
-                                open_editor = Some((win.x + 28, win.y + 28, name, full, read_only));
+                                // Медиа-файлы открываются своими приложениями
+                                // (лимит редактора на них не действует: видео
+                                // и фото бывают больше текстовых документов).
+                                let lower = name.to_ascii_lowercase();
+                                if crate::media::is_image_file(&lower) {
+                                    open_image = Some((win.x + 28, win.y + 28, full));
+                                } else if crate::media::is_video_file(&lower) {
+                                    open_video = Some((win.x + 28, win.y + 28, full));
+                                } else if crate::media::is_audio_file(&lower) {
+                                    open_music = Some((win.x + 28, win.y + 28, full));
+                                } else if entries[idx].size as usize > EDITOR_MAX_BYTES {
+                                    *status_msg = None;
+                                    *error = Some(format!("{}: too large for the editor (max {} KiB)", name, EDITOR_MAX_BYTES / 1024));
+                                } else {
+                                    let read_only = !crate::vfs::is_writable(current_partition.as_str());
+                                    open_editor = Some((win.x + 28, win.y + 28, name, full, read_only));
+                                }
                             }
                         } else {
                             *selected_idx = Some(idx);
@@ -1869,15 +2052,153 @@ impl Desktop {
                     }
                 }
             }
+            WindowContent::ImageViewer { library, selected, img, error, .. } => {
+                // Библиотечный режим: строки списка в левой колонке
+                // (геометрия — draw_list в apps/media.rs).
+                if rel_x < crate::ui::apps::media::LIB_W {
+                    if let Some(i) = crate::ui::apps::media::row_at(
+                        rel_y,
+                        library.len(),
+                        win.height as i32,
+                    ) {
+                        *selected = i;
+                        let p = library[i].clone();
+                        match crate::ui::apps::media::decode_image_file(&p) {
+                            Ok(v) => {
+                                *img = Some(v);
+                                *error = None;
+                            }
+                            Err(e) => {
+                                *img = None;
+                                *error = Some(e);
+                            }
+                        }
+                        self.dirty = true;
+                    }
+                }
+            }
+            WindowContent::VideoPlayer { list, idx, list_mode, status } => {
+                use crate::ui::apps::media as media_ui;
+                if *list_mode {
+                    if let Some(i) = media_ui::row_at(rel_y, list.len(), win.height as i32) {
+                        let p = list[i].clone();
+                        *status = crate::media::play(&p).err();
+                        *idx = Some(i);
+                        *list_mode = false;
+                        new_title =
+                            Some(format!("Video - {}", crate::media::file_name(&p)));
+                        self.dirty = true;
+                    }
+                    return;
+                }
+                if media_ui::list_btn_rect(win.width).contains(rel_x, rel_y) {
+                    *list_mode = true;
+                    self.dirty = true;
+                    return;
+                }
+                if let Some(b) = media_ui::transport_button_at(
+                    rel_x,
+                    rel_y,
+                    win.width,
+                    win.height,
+                    false,
+                ) {
+                    use media_ui::TransportButton as TB;
+                    match b {
+                        TB::PlayPause => {
+                            let st = crate::media::state();
+                            if st == crate::media::ST_PLAYING || st == crate::media::ST_PAUSED {
+                                crate::media::toggle_pause();
+                            } else if let Some(i) = *idx {
+                                if let Some(p) = list.get(i) {
+                                    let p = p.clone();
+                                    *status = crate::media::play(&p).err();
+                                }
+                            }
+                        }
+                        TB::Stop => crate::media::stop(),
+                        TB::VolDown => crate::media::volume_down(),
+                        TB::VolUp => crate::media::volume_up(),
+                        TB::Prev | TB::Next => {}
+                    }
+                    self.dirty = true;
+                }
+            }
+            WindowContent::MusicPlayer { list, idx, status } => {
+                use crate::ui::apps::media as media_ui;
+                if let Some(i) = media_ui::row_at(
+                    rel_y,
+                    list.len(),
+                    win.height as i32 - media_ui::TRANSPORT_H,
+                ) {
+                    let p = list[i].clone();
+                    *idx = Some(i);
+                    *status = crate::media::play(&p).err();
+                    new_title = Some(format!("Music - {}", crate::media::file_name(&p)));
+                    self.dirty = true;
+                    return;
+                }
+                if let Some(b) =
+                    media_ui::transport_button_at(rel_x, rel_y, win.width, win.height, true)
+                {
+                    use media_ui::TransportButton as TB;
+                    match b {
+                        TB::Prev | TB::Next => {
+                            if !list.is_empty() {
+                                let cur = idx.unwrap_or(0);
+                                let n = if matches!(b, TB::Next) {
+                                    (cur + 1) % list.len()
+                                } else if cur == 0 {
+                                    list.len() - 1
+                                } else {
+                                    cur - 1
+                                };
+                                let p = list[n].clone();
+                                *idx = Some(n);
+                                *status = crate::media::play(&p).err();
+                            }
+                        }
+                        TB::PlayPause => {
+                            let st = crate::media::state();
+                            if st == crate::media::ST_PLAYING || st == crate::media::ST_PAUSED {
+                                crate::media::toggle_pause();
+                            } else if let Some(i) = *idx {
+                                if let Some(p) = list.get(i) {
+                                    let p = p.clone();
+                                    *status = crate::media::play(&p).err();
+                                }
+                            }
+                        }
+                        TB::Stop => crate::media::stop(),
+                        TB::VolDown => crate::media::volume_down(),
+                        TB::VolUp => crate::media::volume_up(),
+                    }
+                    self.dirty = true;
+                }
+            }
             _ => {}
         }
 
+        // Новый заголовок окна плеера — до закрытия/открытия других окон
+        // (после match заём содержимого окна уже отпущен).
+        if let Some(t) = new_title {
+            win.title = t;
+        }
         if close_after {
             self.close_window(win_idx);
             return;
         }
         if let Some((x, y, name, full, read_only)) = open_editor {
             self.push_focused(Window::new_file_editor(x, y, &name, &full, read_only));
+        }
+        if let Some((x, y, path)) = open_image {
+            self.push_focused(Window::new_image_viewer_file(x, y, &path));
+        }
+        if let Some((x, y, path)) = open_video {
+            self.push_focused(Window::new_video_player_file(x, y, &path));
+        }
+        if let Some((x, y, path)) = open_music {
+            self.push_focused(Window::new_music_player_file(x, y, &path));
         }
     }
 
@@ -2102,6 +2423,12 @@ impl Desktop {
         // /userdata/config/desktop.cfg — один раз за загрузку.
         crate::ui::config::load_once();
 
+        // Автоустановка некритичного на /userdata: демо-пакеты (.mex)
+        // пишутся синхронно (они крошечные), медиапак (обои, демо-видео,
+        // музыка, голоса) — фоновой задачей, чтобы не держать вход.
+        crate::pkg::auto_install_bundled();
+        crate::mediapack::auto_once();
+
         if !preserve_windows {
             self.push_focused(Window::new_browser(40, 40, "deix://home"));
             self.push_focused(Window::new_files(380, 50));
@@ -2180,6 +2507,7 @@ impl Desktop {
             // работы за кадр, прогресс перерисовывается честно.
             self.pump_installer_jobs();
             self.pump_update_centers();
+            self.pump_media();
 
             // Уведомления: шаг анимации раз в ~33 мс, пока есть карточки.
             {
@@ -2408,9 +2736,10 @@ fn load_bmp_wallpaper(pixels: &mut [u32], w: i32, h: i32) -> bool {
     }
 }
 
-/// Встроенные обои стилей `SYSTEM_WALLPAPER_FIRST..` лежат в
-/// /system/media/wallpapers (BMP 24 бит или PNG с палитрой): в ядро они
-/// не вшиваются.
+/// Встроенные обои стилей `SYSTEM_WALLPAPER_FIRST..`: медиапак хранит их
+/// в /userdata/media/wallpapers (автоустановка, см. src/mediapack.rs);
+/// старые образы ОС несли их в /system/media/wallpapers — этот путь
+/// остаётся запасным. Форматы: JPEG (baseline), PNG с палитрой, BMP 24.
 fn load_system_wallpaper(pixels: &mut [u32], w: i32, h: i32, style: u8) -> bool {
     let Some(index) = usize::from(style).checked_sub(crate::ui::theme::SYSTEM_WALLPAPER_FIRST) else {
         return false;
@@ -2418,11 +2747,20 @@ fn load_system_wallpaper(pixels: &mut [u32], w: i32, h: i32, style: u8) -> bool 
     let Some(file) = crate::ui::theme::SYSTEM_WALLPAPER_FILES.get(index) else {
         return false;
     };
-    let Ok(data) = crate::vfs::read_file(&format!("/system/media/wallpapers/{}", file)) else {
-        return false;
+    let data = match crate::vfs::read_file(&format!("/userdata/media/wallpapers/{}", file)) {
+        Ok(d) => d,
+        Err(_) => match crate::vfs::read_file(&format!("/system/media/wallpapers/{}", file)) {
+            Ok(d) => d,
+            Err(_) => return false,
+        },
     };
     if crate::png::is_png(&data) {
         match crate::png::decode(&data) {
+            Ok(img) => draw_image_cover(pixels, w, h, &img),
+            Err(_) => false,
+        }
+    } else if crate::jpeg::is_jpeg(&data) {
+        match crate::jpeg::decode(&data) {
             Ok(img) => draw_image_cover(pixels, w, h, &img),
             Err(_) => false,
         }

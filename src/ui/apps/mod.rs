@@ -5,6 +5,9 @@ pub mod browser;
 pub mod error_center;
 pub mod files;
 pub mod installer;
+/// Медиа-приложения (фото/видео/музыка). Осознанно без `pub use media::*`:
+/// имена констант геометрии (ROW_H и т.п.) пересеклись бы с files::ROW_H.
+pub mod media;
 pub mod settings;
 pub mod task_manager;
 pub mod terminal;

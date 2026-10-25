@@ -29,16 +29,22 @@ pub enum StartMenuAction {
     OpenDisplaySettings,
     OpenInstaller,
     OpenUpdates,
+    OpenPhotos,
+    OpenVideo,
+    OpenMusic,
 }
 
 /// Сторона цветной иконки приложения в плитке Dock.
 const DOCK_APP_ICON: i32 = 32;
 
 /// Приложения меню Пуск и закреплённая часть Dock.
-pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 10] = [
+pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 13] = [
     ("Terminal", StartMenuAction::OpenTerminal, IconType::Terminal),
     ("Files", StartMenuAction::OpenFiles, IconType::Files),
     ("Browser", StartMenuAction::OpenBrowser, IconType::Browser),
+    ("Photos", StartMenuAction::OpenPhotos, IconType::Image),
+    ("Music", StartMenuAction::OpenMusic, IconType::Music),
+    ("Video", StartMenuAction::OpenVideo, IconType::Video),
     ("Task Mgr", StartMenuAction::OpenTaskManager, IconType::TaskManager),
     ("Errors", StartMenuAction::OpenErrorCenter, IconType::Settings),
     ("Personalize", StartMenuAction::OpenThemeSettings, IconType::Theme),
@@ -61,6 +67,9 @@ pub fn launch_matches(action: StartMenuAction, content: &WindowContent) -> bool 
         (StartMenuAction::OpenDisplaySettings, WindowContent::DisplaySettings { .. }) => true,
         (StartMenuAction::OpenInstaller, WindowContent::Installer { .. }) => true,
         (StartMenuAction::OpenUpdates, WindowContent::Updates { .. }) => true,
+        (StartMenuAction::OpenPhotos, WindowContent::ImageViewer { .. }) => true,
+        (StartMenuAction::OpenVideo, WindowContent::VideoPlayer { .. }) => true,
+        (StartMenuAction::OpenMusic, WindowContent::MusicPlayer { .. }) => true,
         _ => false,
     }
 }
@@ -315,7 +324,9 @@ pub fn start_menu_layout(screen_h: i32) -> StartMenuLayout {
     // 640x480. На больших экранах шаг — штатные 34 px.
     let n = START_MENU_APPS.len() as i32;
     let avail = screen_h - m.dock_height - m.dock_margin - 2 - my;
-    let step = ((avail - 66 - 44) / n).clamp(26, 34);
+    // Нижний порог 20 (не 26): при 13 пунктах меню и экране 640x480
+    // строки ужмутся, но не вылезут за нижний край панели.
+    let step = ((avail - 66 - 44) / n).clamp(20, 34);
     let menu_h = 66 + step * n + 44;
 
     let mut app_items = [Rect::new(0, 0, 0, 0); START_MENU_APPS.len()];

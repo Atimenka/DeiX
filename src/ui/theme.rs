@@ -179,13 +179,14 @@ pub const WALLPAPER_STYLES: [&str; 18] = [
 ];
 
 /// Первый стиль со встроенной картинкой; остальные идут подряд по
-/// `SYSTEM_WALLPAPER_FILES` (файлы в /system/media/wallpapers: BMP 24 бит
-/// или PNG с палитрой, 640x480). Если файла нет, рисуется процедурная Aurora.
+/// `SYSTEM_WALLPAPER_FILES` — это обои медиапака
+/// (/userdata/media/wallpapers, JPEG 1280x720, см. src/mediapack.rs).
+/// Если файла нет (пак ещё не установлен), рисуется процедурная Aurora.
 pub const SYSTEM_WALLPAPER_FIRST: usize = 5;
 pub const SYSTEM_WALLPAPER_FILES: [&str; 13] = [
-    "nebula.bmp", "horizon.bmp", "crystal.bmp", "forest.bmp", "dunes.bmp", "neon.bmp",
-    "savanna.png", "glacier.png", "canyon.png", "reef.png", "galaxy.png", "mono.png",
-    "lavender.png",
+    "nebula.jpg", "horizon.jpg", "crystal.jpg", "forest.jpg", "dunes.jpg", "neon.jpg",
+    "savanna.jpg", "glacier.jpg", "canyon.jpg", "reef.jpg", "galaxy.jpg", "mono.jpg",
+    "lavender.jpg",
 ];
 
 static mut CURRENT_THEME: Option<UiTheme> = None;
