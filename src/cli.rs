@@ -671,8 +671,18 @@ fn cmd_wallpaper(arg: &str) {
             .get(t.wallpaper_style as usize)
             .copied()
             .unwrap_or("?");
-        println!("  {}", t!(en: "Usage: wallpaper <http(s)://url | /userdata/path.png|.bmp>", ru: "Использование: wallpaper <http(s)://url | /userdata/путь.png|.bmp>"));
+        println!("  {}", t!(en: "Usage: wallpaper <style | http(s)://url | /userdata/path.png|.bmp>", ru: "Использование: wallpaper <стиль | http(s)://url | /userdata/путь.png|.bmp>"));
+        println!("  {} {}", t!(en: "Styles:", ru: "Стили:"), crate::ui::theme::WALLPAPER_STYLES.join(", "));
         println!("  {} {}", t!(en: "Current style:", ru: "Текущий стиль:"), style);
+        return;
+    }
+    if let Some(i) = crate::ui::theme::WALLPAPER_STYLES.iter().position(|n| n.eq_ignore_ascii_case(a)) {
+        let mut t = crate::ui::theme::get_theme();
+        t.wallpaper_style = i as u8;
+        crate::ui::theme::set_theme(t);
+        crate::ui::theme::bump_wallpaper_epoch();
+        crate::ui::config::save();
+        println!("  [wallpaper] {} {}", t!(en: "style set:", ru: "стиль выбран:"), crate::ui::theme::WALLPAPER_STYLES[i]);
         return;
     }
     let result = if a.starts_with("http://") || a.starts_with("https://") {
