@@ -146,51 +146,74 @@ impl Sha512 {
     }
 
     fn process_block(&mut self, block: &[u8; 128]) {
-        let mut w = [0u64; 80];
-        for i in 0..16 {
+        let mut w = [0u64; 16];
+        for (i, word) in w.iter_mut().enumerate() {
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&block[i * 8..i * 8 + 8]);
-            w[i] = u64::from_be_bytes(bytes);
+            *word = u64::from_be_bytes(bytes);
         }
-        for i in 16..80 {
-            let s0 = w[i - 15].rotate_right(1) ^ w[i - 15].rotate_right(8) ^ (w[i - 15] >> 7);
-            let s1 = w[i - 2].rotate_right(19) ^ w[i - 2].rotate_right(61) ^ (w[i - 2] >> 6);
-            w[i] = w[i - 16]
-                .wrapping_add(s0)
-                .wrapping_add(w[i - 7])
-                .wrapping_add(s1);
-        }
-
-        let mut a = self.state[0];
-        let mut b = self.state[1];
-        let mut c = self.state[2];
-        let mut d = self.state[3];
-        let mut e = self.state[4];
-        let mut f = self.state[5];
-        let mut g = self.state[6];
-        let mut h = self.state[7];
-
-        for chunk in 0..10 {
-            let i = chunk * 8;
-            round!(a, b, c, d, e, f, g, h, K[i], w[i]);
-            round!(h, a, b, c, d, e, f, g, K[i + 1], w[i + 1]);
-            round!(g, h, a, b, c, d, e, f, K[i + 2], w[i + 2]);
-            round!(f, g, h, a, b, c, d, e, K[i + 3], w[i + 3]);
-            round!(e, f, g, h, a, b, c, d, K[i + 4], w[i + 4]);
-            round!(d, e, f, g, h, a, b, c, K[i + 5], w[i + 5]);
-            round!(c, d, e, f, g, h, a, b, K[i + 6], w[i + 6]);
-            round!(b, c, d, e, f, g, h, a, K[i + 7], w[i + 7]);
-        }
-
-        self.state[0] = self.state[0].wrapping_add(a);
-        self.state[1] = self.state[1].wrapping_add(b);
-        self.state[2] = self.state[2].wrapping_add(c);
-        self.state[3] = self.state[3].wrapping_add(d);
-        self.state[4] = self.state[4].wrapping_add(e);
-        self.state[5] = self.state[5].wrapping_add(f);
-        self.state[6] = self.state[6].wrapping_add(g);
-        self.state[7] = self.state[7].wrapping_add(h);
+        compress(&mut self.state, &w);
     }
+
+    /// Состояние после этого хеша и ещё одного сообщения ровно в 64 байта,
+    /// заданного восемью словами: то же, что `clone` + `update` + `finalize`,
+    /// но без буфера и перевода слов в байты. Нужен PBKDF2, где так хешируется
+    /// каждая из сотен тысяч итераций. Состояние должно стоять на границе
+    /// блока (после целого числа блоков).
+    pub(crate) fn digest_of_words(&self, message: &[u64; 8]) -> [u64; 8] {
+        debug_assert_eq!(self.buffer_len, 0);
+        let mut w = [0u64; 16];
+        w[..8].copy_from_slice(message);
+        w[8] = 0x8000_0000_0000_0000;
+        w[15] = (self.total_len as u64 + 64) * 8;
+        let mut state = self.state;
+        compress(&mut state, &w);
+        state
+    }
+}
+
+/// Сжатие одного блока, заданного первыми 16 словами расписания.
+fn compress(state: &mut [u64; 8], block: &[u64; 16]) {
+    let mut w = [0u64; 80];
+    w[..16].copy_from_slice(block);
+    for i in 16..80 {
+        let s0 = w[i - 15].rotate_right(1) ^ w[i - 15].rotate_right(8) ^ (w[i - 15] >> 7);
+        let s1 = w[i - 2].rotate_right(19) ^ w[i - 2].rotate_right(61) ^ (w[i - 2] >> 6);
+        w[i] = w[i - 16]
+            .wrapping_add(s0)
+            .wrapping_add(w[i - 7])
+            .wrapping_add(s1);
+    }
+
+    let mut a = state[0];
+    let mut b = state[1];
+    let mut c = state[2];
+    let mut d = state[3];
+    let mut e = state[4];
+    let mut f = state[5];
+    let mut g = state[6];
+    let mut h = state[7];
+
+    for chunk in 0..10 {
+        let i = chunk * 8;
+        round!(a, b, c, d, e, f, g, h, K[i], w[i]);
+        round!(h, a, b, c, d, e, f, g, K[i + 1], w[i + 1]);
+        round!(g, h, a, b, c, d, e, f, K[i + 2], w[i + 2]);
+        round!(f, g, h, a, b, c, d, e, K[i + 3], w[i + 3]);
+        round!(e, f, g, h, a, b, c, d, K[i + 4], w[i + 4]);
+        round!(d, e, f, g, h, a, b, c, K[i + 5], w[i + 5]);
+        round!(c, d, e, f, g, h, a, b, K[i + 6], w[i + 6]);
+        round!(b, c, d, e, f, g, h, a, K[i + 7], w[i + 7]);
+    }
+
+    state[0] = state[0].wrapping_add(a);
+    state[1] = state[1].wrapping_add(b);
+    state[2] = state[2].wrapping_add(c);
+    state[3] = state[3].wrapping_add(d);
+    state[4] = state[4].wrapping_add(e);
+    state[5] = state[5].wrapping_add(f);
+    state[6] = state[6].wrapping_add(g);
+    state[7] = state[7].wrapping_add(h);
 }
 
 pub fn sha512(data: &[u8]) -> [u8; DIGEST_LEN] {
@@ -230,6 +253,24 @@ mod tests {
             write!(s, "{:02x}", b).unwrap();
         }
         s
+    }
+
+    #[test]
+    fn test_digest_of_words_matches_update() {
+        let mut base = Sha512::new();
+        base.update(&[0x36u8; 128]);
+        let words = [1u64, 2, 3, 4, 5, 6, 7, 0xffff_ffff_ffff_fffe];
+        let mut bytes = [0u8; 64];
+        for (i, word) in words.iter().enumerate() {
+            bytes[i * 8..i * 8 + 8].copy_from_slice(&word.to_be_bytes());
+        }
+        let mut full = base.clone();
+        full.update(&bytes);
+        let expected = full.finalize();
+        let got = base.digest_of_words(&words);
+        for (i, word) in got.iter().enumerate() {
+            assert_eq!(word.to_be_bytes(), expected[i * 8..i * 8 + 8]);
+        }
     }
 
     #[test]

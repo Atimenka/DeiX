@@ -89,6 +89,13 @@ impl HmacSha512 {
         outer.update(&inner_digest);
         outer.finalize()
     }
+
+    /// То же для сообщения ровно в один выход SHA-512, заданного словами:
+    /// две компрессии без буферов и преобразований байтов.
+    fn mac_words(&self, message: &[u64; 8]) -> [u64; 8] {
+        let inner_digest = self.inner.digest_of_words(message);
+        self.outer.digest_of_words(&inner_digest)
+    }
 }
 
 impl Drop for HmacSha512 {
@@ -110,19 +117,29 @@ pub fn pbkdf2_sha512(password: &[u8], salt: &[u8], iterations: u32) -> [u8; DIGE
     salt_block.extend_from_slice(&1u32.to_be_bytes());
 
     let hmac = HmacSha512::new(password);
-    let mut u = hmac.mac(&salt_block);
+    let first = hmac.mac(&salt_block);
+    let mut u = [0u64; 8];
+    for (word, chunk) in u.iter_mut().zip(first.chunks_exact(8)) {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(chunk);
+        *word = u64::from_be_bytes(bytes);
+    }
     let mut result = u;
 
     // T = U1 ^ U2 ^ ... ^ Uc, где Ui = HMAC(password, U(i-1))
     for _ in 1..iterations.max(1) {
-        u = hmac.mac(&u);
-        for i in 0..DIGEST_LEN {
+        u = hmac.mac_words(&u);
+        for i in 0..8 {
             result[i] ^= u[i];
         }
     }
 
-    for b in u.iter_mut() {
-        *b = 0;
+    let mut out = [0u8; DIGEST_LEN];
+    for (chunk, word) in out.chunks_exact_mut(8).zip(result.iter()) {
+        chunk.copy_from_slice(&word.to_be_bytes());
     }
-    result
+    for word in u.iter_mut() {
+        *word = 0;
+    }
+    out
 }
