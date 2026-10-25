@@ -20,6 +20,7 @@ const EN = {
   'Такой сборки нет или она не опубликована': 'No such build, or it is not published',
   'Такой части нет': 'No such part',
   'Не удалось прочитать файл из хранилища': 'Could not read the file from storage',
+  'Некорректный номер сборки': 'Invalid build number',
   'Укажите корректную почту': 'Enter a valid email address',
   'Одноразовые адреса почты не принимаются': 'Disposable email addresses are not accepted',
   'У этого домена нет почтового сервера. Проверьте адрес.': 'This domain has no mail server. Check the address.',

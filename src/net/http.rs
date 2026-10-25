@@ -19,6 +19,8 @@ use crate::net::{dns, inflate, tcp, tls};
 
 const MAX_REDIRECTS: u32 = 3;
 const MAX_BODY: usize = 1024 * 1024;
+/// Пауза данных, после которой ответ считается полным (обычные страницы).
+const IDLE_MS: u64 = 1500;
 /// Сколько ждать ответ на один запрос целиком.
 const RESPONSE_TIMEOUT_MS: u64 = 10_000;
 
@@ -132,7 +134,16 @@ impl Conn {
 
 /// Один HTTP GET без redirect: (status, reason, location, тело-байты, content-type).
 fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
-    request_once("GET", url, &[], &[])
+    request_once("GET", url, &[], &[], MAX_BODY, IDLE_MS)
+}
+
+/// Ошибки, при которых запрос честно повторяют новым соединением: обрыв
+/// рукопожатия или отказ TCP — то, что лечится повтором, а не молчанием.
+fn retryable(e: &str) -> bool {
+    e.contains("ждём ServerHello")
+        || e.contains("таймаут чтения record")
+        || e.starts_with("Не удалось установить TCP")
+        || e.contains("Сервер не прислал ответа")
 }
 
 /// Один HTTP-запрос произвольным методом без redirect.
@@ -143,6 +154,33 @@ fn request_once(
     url: &str,
     extra_headers: &[(&str, &str)],
     body: &[u8],
+    max_body: usize,
+    idle_ms: u64,
+) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
+    let mut last_err = String::new();
+    for attempt in 1..=3u32 {
+        match attempt_once(method, url, extra_headers, body, max_body, idle_ms) {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                if attempt < 3 && retryable(&e) {
+                    last_err = e;
+                    crate::timer::sleep_ms(400);
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+    Err(last_err)
+}
+
+fn attempt_once(
+    method: &str,
+    url: &str,
+    extra_headers: &[(&str, &str)],
+    body: &[u8],
+    max_body: usize,
+    idle_ms: u64,
 ) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
     let (host, port, path, https) = parse_url(url)
         .ok_or_else(|| "Некорректный URL адрес".to_string())?;
@@ -183,16 +221,21 @@ fn request_once(
 
     let mut raw: Vec<u8> = Vec::new();
     let t0 = crate::timer::uptime_ms();
+    let mut last = t0;
+    // Крупным телам (payload обновлений) даём больше времени: суммарный
+    // потолок растёт с лимитом, простой оцениваем по последним данным.
+    let total_ms = if max_body > MAX_BODY { 120_000 } else { RESPONSE_TIMEOUT_MS };
     loop {
         let chunk = conn.recv(1000);
         if !chunk.is_empty() {
             raw.extend_from_slice(&chunk);
-            if raw.len() > MAX_BODY {
+            last = crate::timer::uptime_ms();
+            if raw.len() > max_body {
                 break;
             }
         } else if !raw.is_empty() {
-            // Если получили данные и новые не поступают более 1500мс
-            if crate::timer::uptime_ms() - t0 > 1500 {
+            // Данные пришли, но новых нет дольше idle_ms — конец ответа.
+            if crate::timer::uptime_ms().saturating_sub(last) > idle_ms {
                 break;
             }
         }
@@ -209,7 +252,7 @@ fn request_once(
                 }
             }
         }
-        if crate::timer::uptime_ms() - t0 > RESPONSE_TIMEOUT_MS {
+        if crate::timer::uptime_ms() - t0 > total_ms {
             break;
         }
     }
@@ -237,7 +280,7 @@ fn request_once(
                 "{} — ответ сжат gzip, но повреждён или обрезан (принято {} байт, лимит {} КиБ)",
                 e,
                 raw.len(),
-                MAX_BODY / 1024
+                max_body / 1024
             )
         })?;
         body_bytes = data;
@@ -322,8 +365,20 @@ pub fn request_bytes(
     headers: &[(&str, &str)],
     body: &[u8],
 ) -> Result<HttpBytes, String> {
+    request_bytes_max(method, url, headers, body, MAX_BODY)
+}
+
+/// То же с повышенным пределом тела и терпеливым idle: payload обновлений.
+pub fn request_bytes_max(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+    max_body: usize,
+) -> Result<HttpBytes, String> {
+    let idle = if max_body > MAX_BODY { 5000 } else { IDLE_MS };
     let (status, reason, _location, resp_body, content_type) =
-        request_once(method, url, headers, body)?;
+        request_once(method, url, headers, body, max_body, idle)?;
     Ok(HttpBytes {
         status,
         reason,

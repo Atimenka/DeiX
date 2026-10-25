@@ -6,6 +6,7 @@ const { requestLang } = require('./_i18n');
 
 const MANIFESTS_PER_HOUR = 120;
 const PARTS_PER_HOUR = 600;
+const WHOLE_PER_HOUR = 30;
 const HOUR_MS = 60 * 60 * 1000;
 
 function limit(req, kind, max) {
@@ -30,6 +31,25 @@ async function manifest(req, res, channel) {
   const row = rows[0];
   const parts = Math.ceil(Number(row.payload_size) / PART_SIZE);
   return res.end(`{"manifest":${row.manifest},"parts":${parts},"part_size":${PART_SIZE},"signature":"${row.signature}"}`);
+}
+
+/** Весь payload одним ответом: ОС делает одно рукопожатие вместо многих. */
+async function whole(req, res, params) {
+  const build = Number(params.get('build'));
+  if (!Number.isSafeInteger(build) || build < 1) {
+    throw new HttpError(400, 'Некорректный номер сборки');
+  }
+  limit(req, 'upw', WHOLE_PER_HOUR);
+  const rows = await sb(`os_updates?build=eq.${build}&published=eq.true&ready=eq.true&select=payload_path,payload_size`);
+  if (!rows[0]) throw new HttpError(404, 'Такой сборки нет или она не опубликована');
+  const size = Number(rows[0].payload_size);
+  const bytes = await storageBytes(`object/authenticated/os-images/${rows[0].payload_path}`, 0, size - 1);
+  if (!bytes || bytes.length !== size) throw new HttpError(502, 'Не удалось прочитать файл из хранилища');
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Length', String(bytes.length));
+  res.setHeader('Cache-Control', 'no-store');
+  return res.end(bytes);
 }
 
 async function part(req, res, params) {
@@ -69,6 +89,7 @@ module.exports = async function handler(req, res) {
       throw new HttpError(405, 'Метод не поддерживается');
     }
     const params = new URL(req.url, 'http://x').searchParams;
+    if (params.get('whole') !== null) return await whole(req, res, params);
     if (params.get('part') !== null) return await part(req, res, params);
     return await manifest(req, res, params.get('channel') || 'stable');
   } catch (err) {

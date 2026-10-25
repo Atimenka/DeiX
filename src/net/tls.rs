@@ -320,8 +320,9 @@ fn build_client_hello(
     // supported_versions: только 1.3
     push_ext(&mut ext, 0x002b, &[2, 0x03, 0x04]);
 
-    // psk_key_exchange_modes: psk_dhe_ke
-    push_ext(&mut ext, 0x002d, &[1, 1]);
+    // ALPN: http/1.1. Без ALPN некоторые TLS-терминаторы облаков не выбирают
+    // протокол и молча рвут рукопожатие.
+    push_ext(&mut ext, 0x0010, &[0, 8, 8, b'h', b't', b't', b'p', b'/', b'1', b'.', b'1']);
 
     // key_share: X25519
     let mut ks = Vec::with_capacity(38);

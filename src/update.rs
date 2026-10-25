@@ -710,8 +710,34 @@ impl Download {
         self.next >= offer.parts
     }
 
+    /// Весь payload одним HTTPS-запросом: одно рукопожатие вместо рукопожатия
+    /// на каждый кусок. Любая неудача — Err, вызывающий уходит на куски.
+    fn try_whole(&mut self, offer: &Offer) -> Result<(), String> {
+        let m = &offer.signed.manifest;
+        let url = format!("{}?whole=1&build={}", GATEWAY_URL, m.build);
+        let resp = crate::net::http::request_bytes_max("GET", &url, &[LANG_HEADER], &[], MAX_PAYLOAD)?;
+        if resp.status != 200 {
+            return Err(format!("HTTP {}", resp.status));
+        }
+        if resp.body.len() != m.payload_size {
+            return Err(format!("{} bytes, expected {}", resp.body.len(), m.payload_size));
+        }
+        self.payload = resp.body;
+        self.next = offer.parts;
+        Ok(())
+    }
+
     fn step(&mut self, offer: &Offer) -> Result<(), String> {
         let m = &offer.signed.manifest;
+        if self.next == 0 {
+            match self.try_whole(offer) {
+                Ok(()) => {
+                    println!("  [update] whole payload received in one request");
+                    return Ok(());
+                }
+                Err(e) => println!("  [update] whole payload unavailable, falling back to parts: {}", e),
+            }
+        }
         let expected = core::cmp::min(offer.part_size, m.payload_size - self.next * offer.part_size);
         let part = download_part(m.build, self.next, expected)?;
         self.payload.extend_from_slice(&part);
