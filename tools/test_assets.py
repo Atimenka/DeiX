@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""Проверка встроенных обоев: список в src/ui/theme.rs совпадает с файлами в
-assets/wallpapers, каждый файл — BMP 24 бит 640x480 или PNG 640x480 с палитрой,
-а обои оставляют запас в пакете обновления (tools/make_update.py: 8 МиБ)."""
+"""Проверка медиа-ассетов после переноса тяжёлой среды в медиапак.
 
-import gzip
+Обои и картинки БОЛЬШЕ не кладутся в /system (EROFS 16 МиБ) и не вшиваются
+в пакет обновления: assets/wallpapers и assets/pictures — только ИСХОЧНИКИ
+для tools/make_media_pack.py, который собирает web/public/media (его
+форматы проверяет tools/test_media_pack.py). Здесь проверяется, что:
+  * имена обоев в src/ui/theme.rs (.jpg) совпадают с исходниками
+    assets/wallpapers (по основе имени, .bmp/.png);
+  * исходники картинок и голосов на месте;
+  * tools/make_deix_fs.py больше не копирует wallpapers/pictures в /system.
+"""
+
 import os
 import re
-import struct
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WALLPAPERS = os.path.join(ROOT, "assets", "wallpapers")
-PAYLOAD_LIMIT = 8 * 1024 * 1024
-WALLPAPER_BUDGET = 6 * 1024 * 1024
+PICTURES = os.path.join(ROOT, "assets", "pictures")
+VOICE = os.path.join(ROOT, "assets", "voice")
 
 
 def theme_source():
@@ -20,53 +26,69 @@ def theme_source():
         return f.read()
 
 
-class WallpaperAssets(unittest.TestCase):
-    def test_files_match_theme_list(self):
-        src = theme_source()
-        m = re.search(r"SYSTEM_WALLPAPER_FILES: \[&str; (\d+)\]\s*=\s*\[(.*?)\];", src, re.S)
-        self.assertIsNotNone(m)
-        names = re.findall(r'"([^"]+\.(?:bmp|png))"', m.group(2))
-        self.assertEqual(len(names), int(m.group(1)))
-        self.assertEqual(sorted(names), sorted(os.listdir(WALLPAPERS)))
+def wallpaper_names():
+    m = re.search(r"SYSTEM_WALLPAPER_FILES: \[&str; (\d+)\]\s*=\s*\[(.*?)\];", theme_source(), re.S)
+    assert m, "theme.rs: SYSTEM_WALLPAPER_FILES не найден"
+    names = re.findall(r'"([^"]+)"', m.group(2))
+    assert len(names) == int(m.group(1)), "theme.rs: размер массива не сходится"
+    return names
+
+
+class WallpaperSources(unittest.TestCase):
+    def test_names_are_jpeg_media_pack(self):
+        for name in wallpaper_names():
+            self.assertTrue(name.endswith(".jpg"), f"{name}: обои медиапака — .jpg")
+
+    def test_sources_match_theme_list(self):
+        stems_theme = {os.path.splitext(n)[0] for n in wallpaper_names()}
+        stems_assets = {
+            os.path.splitext(f)[0]
+            for f in os.listdir(WALLPAPERS)
+            if f.endswith((".bmp", ".png"))
+        }
+        self.assertEqual(stems_theme, stems_assets)
+
+    def test_sources_are_images(self):
+        for f in sorted(os.listdir(WALLPAPERS)):
+            p = os.path.join(WALLPAPERS, f)
+            with open(p, "rb") as fh:
+                head = fh.read(8)
+            if f.endswith(".bmp"):
+                self.assertEqual(head[:2], b"BM", f)
+            elif f.endswith(".png"):
+                self.assertEqual(head, b"\x89PNG\r\n\x1a\n", f)
+            else:
+                self.fail(f"assets/wallpapers/{f}: не BMP и не PNG")
 
     def test_style_count_matches(self):
         src = theme_source()
         styles = re.search(r"WALLPAPER_STYLES: \[&str; (\d+)\]\s*=\s*\[(.*?)\];", src, re.S)
-        files = re.search(r"SYSTEM_WALLPAPER_FILES: \[&str; (\d+)\]", src)
         first = re.search(r"SYSTEM_WALLPAPER_FIRST: usize = (\d+);", src)
         listed = re.findall(r'"([^"]+)"', styles.group(2))
         self.assertEqual(len(listed), int(styles.group(1)))
-        self.assertEqual(int(first.group(1)) + int(files.group(1)), len(listed))
-        self.assertTrue(all(len(n) <= 8 for n in listed))
+        self.assertEqual(int(first.group(1)) + len(wallpaper_names()), len(listed))
 
-    def test_image_format(self):
-        for name in os.listdir(WALLPAPERS):
-            with open(os.path.join(WALLPAPERS, name), "rb") as f:
-                data = f.read()
-            if name.endswith(".bmp"):
-                offset, = struct.unpack_from("<I", data, 10)
-                width, height = struct.unpack_from("<ii", data, 18)
-                bpp, = struct.unpack_from("<H", data, 28)
-                compression, = struct.unpack_from("<I", data, 30)
-                self.assertEqual(data[:2], b"BM", name)
-                self.assertEqual((width, abs(height), bpp, compression), (640, 480, 24, 0), name)
-                self.assertGreaterEqual(len(data), offset + 640 * 3 * 480, name)
-            else:
-                # PNG с палитрой: ровно то, что декодирует src/png.rs.
-                self.assertEqual(name.endswith(".png"), True, name)
-                self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n", name)
-                width, height = struct.unpack_from(">II", data, 16)
-                depth, ctype = data[24], data[25]
-                self.assertEqual((width, height, depth, ctype), (640, 480, 8, 3), name)
 
-    def test_payload_budget(self):
-        total = 0
-        for name in os.listdir(WALLPAPERS):
-            with open(os.path.join(WALLPAPERS, name), "rb") as f:
-                total += len(gzip.compress(f.read(), 6))
-        self.assertLess(total, WALLPAPER_BUDGET, "обои съедают пакет обновления")
-        self.assertLess(total, PAYLOAD_LIMIT)
+class OtherAssets(unittest.TestCase):
+    def test_pictures_present(self):
+        files = [f for f in os.listdir(PICTURES) if f.endswith((".png", ".jpg"))]
+        self.assertGreaterEqual(len(files), 1)
+
+    def test_voice_present(self):
+        files = [f for f in os.listdir(VOICE) if f.endswith(".wav")]
+        self.assertGreaterEqual(len(files), 1)
+
+
+class SystemImageSlim(unittest.TestCase):
+    def test_make_deix_fs_has_no_wallpapers(self):
+        """/system несёт только критичное: загрузчик, etc/, UI-звуки, иконки."""
+        with open(os.path.join(ROOT, "tools", "make_deix_fs.py"), encoding="utf-8") as f:
+            src = f.read()
+        self.assertNotIn("media/wallpapers", src)
+        self.assertNotIn("media/pictures", src)
+        self.assertIn("media/audio/ui", src)
+        self.assertIn("media/icons", src)
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)

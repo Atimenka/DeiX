@@ -484,21 +484,12 @@ def init_all_partitions(img, boot_files):
                     if _f.endswith(".dps"):
                         with open(os.path.join(snd_dir, _f), "rb") as _fh:
                             system_files[f"media/audio/ui/{_f}"] = _fh.read()
-            # Встроенные обои читает ui::desktop из /system/media/wallpapers/:
-            # BMP 24 бит и PNG с палитрой, 640x480; в ядро они не вшиваются.
-            wp_dir = os.path.join("assets", "wallpapers")
-            if os.path.isdir(wp_dir):
-                for _f in sorted(os.listdir(wp_dir)):
-                    if _f.endswith(".bmp") or _f.endswith(".png"):
-                        with open(os.path.join(wp_dir, _f), "rb") as _fh:
-                            system_files[f"media/wallpapers/{_f}"] = _fh.read()
-            # Картинки-иллюстрации (Files, /system/media/pictures).
-            pic_dir = os.path.join("assets", "pictures")
-            if os.path.isdir(pic_dir):
-                for _f in sorted(os.listdir(pic_dir)):
-                    if _f.endswith(".png"):
-                        with open(os.path.join(pic_dir, _f), "rb") as _fh:
-                            system_files[f"media/pictures/{_f}"] = _fh.read()
+            # Обои и картинки-иллюстрации в /system БОЛЬШЕ не кладутся:
+            # это некритичная тяжёлая среда, она живёт в медиапаке на
+            # /userdata/media (tools/make_media_pack.py, src/mediapack.rs).
+            # /system (EROFS 16 МиБ) несёт только критичное: загрузчик,
+            # etc/, UI-звуки и иконки приложений.
+            #
             # Цветные иконки приложений (DXIC, tools/make_icons.py) читает
             # ui::appicons из /system/media/icons/.
             ic_dir = os.path.join("assets", "icons")
