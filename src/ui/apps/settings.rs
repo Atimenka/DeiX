@@ -45,7 +45,12 @@ pub fn accent_rect(i: usize) -> Rect {
     Rect::new(12 + i as i32 * 34, 180, 26, 26)
 }
 
-/// Свотч-превью стиля обоев `i`: 6 в ряд, 2 ряда (до 12 стилей).
+/// Верх области «EFFECTS»: сразу под последним рядом свотчей обоев.
+fn effects_y() -> i32 {
+    232 + (WALLPAPER_STYLES.len().div_ceil(6)) as i32 * 46 + 4
+}
+
+/// Свотч-превью стиля обоев `i`: 6 в ряд, ряды по числу стилей.
 pub fn wallpaper_rect(i: usize) -> Rect {
     Rect::new(
         12 + (i % 6) as i32 * 76,
@@ -64,7 +69,7 @@ pub const PROFILE_CHOICES: [(&str, PerfProfile); 3] = [
 
 /// Прямоугольник кнопки профиля производительности `i`.
 pub fn profile_rect(i: usize) -> Rect {
-    Rect::new(12 + i as i32 * 152, 346, 144, 26)
+    Rect::new(12 + i as i32 * 152, effects_y() + 18, 144, 26)
 }
 
 /// Тема по пресету — для построения карточек-превью.
@@ -133,7 +138,7 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
 
     // Профиль производительности: каждый пункт реально меняет путь
     // отрисовки (blur/тени/прозрачность — см. ui::effects).
-    r.draw_text(w.x + 12, content_y + 328, "EFFECTS", theme.text_secondary, None);
+    r.draw_text(w.x + 12, content_y + effects_y(), "EFFECTS", theme.text_secondary, None);
     let current_profile = crate::ui::effects::current();
     for (i, (name, profile)) in PROFILE_CHOICES.iter().enumerate() {
         let rect = profile_rect(i);
@@ -149,11 +154,11 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
         PerfProfile::Balanced => "Blur disabled; shadows and translucency kept.",
         PerfProfile::Performance => "Blur and shadows off, surfaces opaque.",
     };
-    r.draw_text(w.x + 12, content_y + 380, hint, theme.text_secondary, None);
+    r.draw_text(w.x + 12, content_y + effects_y() + 52, hint, theme.text_secondary, None);
 
     r.draw_text(
         w.x + 12,
-        content_y + 398,
+        content_y + effects_y() + 70,
         "Custom wallpaper: /userdata/wallpaper.bmp (24/32-bit, <= 268 KB)",
         theme.text_secondary,
         None,
@@ -166,10 +171,10 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
     } else {
         "Sound: PC speaker (no volume control)"
     };
-    r.draw_text(w.x + 12, content_y + 416, audio, theme.text_secondary, None);
+    r.draw_text(w.x + 12, content_y + effects_y() + 88, audio, theme.text_secondary, None);
     r.draw_text(
         w.x + 12,
-        content_y + 434,
+        content_y + effects_y() + 106,
         "Display resolution: Start menu > Display Settings",
         theme.text_secondary,
         None,
@@ -287,6 +292,87 @@ fn draw_wallpaper_swatch(
             for (i, (bx, bh)) in [(16, 6), (32, 8), (48, 7)].iter().enumerate() {
                 r.fill_rect(x + bx, y + 30, 6, *bh as u32, tops[(i + 1) % 3].lerp(Color::BLACK, 150));
             }
+        }
+        // Savanna: закатное небо, солнце и силуэт акации.
+        11 => {
+            r.fill_rounded_rect(x, y, w, h, 8, Color::rgb(214, 116, 60));
+            r.fill_rect(x + 3, y + 3, w - 6, 10, Color::rgb(238, 156, 92));
+            r.fill_circle(x + 20, y + 24, 6, Color::rgb(255, 214, 130));
+            r.fill_rect(x + 3, y + 30, w - 6, 7, Color::rgb(96, 58, 34));
+            let trunk = Color::rgb(40, 24, 16);
+            r.draw_vline(x + wi - 22, y + 16, 15, trunk);
+            r.draw_hline(x + wi - 30, y + 16, 17, trunk);
+            r.draw_line(x + wi - 22, y + 20, x + wi - 30, y + 16, trunk);
+            r.draw_line(x + wi - 22, y + 20, x + wi - 14, y + 16, trunk);
+        }
+        // Glacier: снежные пики и бирюзовая река.
+        12 => {
+            r.fill_rounded_rect(x, y, w, h, 8, Color::rgb(214, 226, 236));
+            let rock = Color::rgb(96, 108, 124);
+            for (px, ph) in [(12, 14), (30, 18), (50, 12)] {
+                r.draw_line(x + px, y + 20 - ph, x + px - 9, y + 20, rock);
+                r.draw_line(x + px, y + 20 - ph, x + px + 9, y + 20, rock);
+            }
+            r.fill_rect(x + 3, y + 20, w - 6, 17, Color::rgb(226, 234, 242));
+            let ice = Color::rgb(72, 186, 196);
+            r.draw_line(x + 30, y + 21, x + 38, y + 27, ice);
+            r.draw_line(x + 38, y + 27, x + 26, y + 36, ice);
+            r.draw_line(x + 31, y + 21, x + 39, y + 27, ice);
+            r.draw_line(x + 39, y + 27, x + 27, y + 36, ice);
+        }
+        // Canyon: терракотовые стены и луч света.
+        13 => {
+            r.fill_rounded_rect(x, y, w, h, 8, Color::rgb(150, 74, 52));
+            r.fill_rect(x + 8, y + 3, 10, h - 6, Color::rgb(178, 96, 66));
+            r.fill_rect(x + wi - 20, y + 3, 12, h - 6, Color::rgb(122, 58, 42));
+            r.fill_rect(x + 30, y + 3, 8, h - 6, Color::rgb(250, 214, 150));
+            r.fill_rect(x + 32, y + 3, 3, h - 6, Color::rgb(255, 240, 200));
+        }
+        // Reef: бирюзовая вода, лучи сверху и коралл.
+        14 => {
+            r.fill_rounded_rect(x, y, w, h, 8, Color::rgb(28, 142, 168));
+            r.fill_rect(x + 3, y + 3, w - 6, 8, Color::rgb(96, 206, 216));
+            let ray = Color::rgb(190, 240, 240);
+            r.draw_line(x + 18, y + 4, x + 12, y + 24, ray);
+            r.draw_line(x + 34, y + 4, x + 32, y + 26, ray);
+            r.draw_line(x + 50, y + 4, x + 54, y + 24, ray);
+            r.fill_circle(x + 24, y + 30, 6, Color::rgb(236, 130, 90));
+            r.fill_circle(x + 40, y + 32, 5, Color::rgb(240, 180, 90));
+            r.fill_circle(x + 52, y + 30, 4, Color::rgb(160, 90, 170));
+        }
+        // Galaxy: тёмный космос и спираль с ядром.
+        15 => {
+            r.fill_rounded_rect(x, y, w, h, 8, Color::rgb(8, 8, 18));
+            let space = Color::rgb(8, 8, 18);
+            r.fill_circle(x + wi / 2 - 2, y + hi / 2 - 1, 14, Color::rgb(190, 120, 190));
+            r.fill_circle(x + wi / 2 - 2, y + hi / 2 - 1, 12, space);
+            r.fill_circle(x + wi / 2, y + hi / 2, 10, Color::rgb(120, 140, 220));
+            r.fill_circle(x + wi / 2, y + hi / 2, 8, space);
+            r.fill_circle(x + wi / 2, y + hi / 2, 5, Color::rgb(250, 226, 180));
+            for (sx, sy) in [(8, 6), (60, 10), (16, 32), (64, 30), (36, 4)] {
+                r.put_pixel(x + sx, y + sy, Color::WHITE);
+            }
+        }
+        // Mono: графит и светящиеся полупрозрачные фигуры.
+        16 => {
+            r.fill_rounded_rect(x, y, w, h, 8, Color::rgb(16, 17, 20));
+            let graphite = Color::rgb(16, 17, 20);
+            r.fill_circle(x + 34, y + 16, 12, Color::rgb(90, 200, 190));
+            r.fill_circle(x + 34, y + 16, 10, graphite);
+            r.fill_circle(x + 26, y + 20, 9, Color::rgb(70, 180, 170));
+            r.fill_circle(x + 40, y + 24, 7, Color::rgb(130, 110, 210));
+            r.draw_line(x + 12, y + 32, x + wi - 12, y + 10, Color::rgb(60, 62, 70));
+        }
+        // Lavender: розовое небо и фиолетовые ряды поля.
+        17 => {
+            r.fill_rounded_rect(x, y, w, h, 8, Color::rgb(232, 168, 190));
+            r.fill_rect(x + 3, y + 3, w - 6, 12, Color::rgb(240, 190, 200));
+            r.fill_rect(x + 3, y + 15, w - 6, 22, Color::rgb(122, 92, 178));
+            let row = Color::rgb(96, 68, 150);
+            for ry in [19, 24, 29, 34] {
+                r.draw_hline(x + 5, y + ry, w - 10, row);
+            }
+            r.fill_rect(x + wi - 20, y + 10, 8, 6, Color::rgb(214, 190, 160));
         }
         // Aurora: графит и две ленты сияния.
         _ => {

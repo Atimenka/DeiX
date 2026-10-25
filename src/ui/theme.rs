@@ -173,17 +173,20 @@ impl UiTheme {
 /// "Custom" читает /userdata/wallpaper.bmp (BMP 24/32 бит, до 268 КБ —
 /// предел файла ext2-тома); без валидного файла рисуется Aurora.
 /// Имена не длиннее 8 символов: они подписываются на миниатюре в Personalization.
-pub const WALLPAPER_STYLES: [&str; 11] = [
+pub const WALLPAPER_STYLES: [&str; 18] = [
     "Aurora", "Midnight", "Plasma", "Minimal", "Custom", "Nebula", "Horizon", "Crystal", "Forest",
-    "Dunes", "Neon",
+    "Dunes", "Neon", "Savanna", "Glacier", "Canyon", "Reef", "Galaxy", "Mono", "Lavender",
 ];
 
 /// Первый стиль со встроенной картинкой; остальные идут подряд по
-/// `SYSTEM_WALLPAPER_FILES` (файлы в /system/media/wallpapers, BMP 640x480).
-/// Если файла нет, рисуется процедурная Aurora.
+/// `SYSTEM_WALLPAPER_FILES` (файлы в /system/media/wallpapers: BMP 24 бит
+/// или PNG с палитрой, 640x480). Если файла нет, рисуется процедурная Aurora.
 pub const SYSTEM_WALLPAPER_FIRST: usize = 5;
-pub const SYSTEM_WALLPAPER_FILES: [&str; 6] =
-    ["nebula.bmp", "horizon.bmp", "crystal.bmp", "forest.bmp", "dunes.bmp", "neon.bmp"];
+pub const SYSTEM_WALLPAPER_FILES: [&str; 13] = [
+    "nebula.bmp", "horizon.bmp", "crystal.bmp", "forest.bmp", "dunes.bmp", "neon.bmp",
+    "savanna.png", "glacier.png", "canyon.png", "reef.png", "galaxy.png", "mono.png",
+    "lavender.png",
+];
 
 static mut CURRENT_THEME: Option<UiTheme> = None;
 

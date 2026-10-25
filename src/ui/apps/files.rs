@@ -10,9 +10,14 @@ use crate::ui::widgets::icon_button;
 use crate::ui::window::{FileViewEntry, Window};
 use alloc::format;
 use alloc::string::String;
+use alloc::vec::Vec;
 
 /// Ширина боковой панели разделов.
 pub const SIDEBAR_W: i32 = 110;
+
+/// Колонка превью выбранной картинки (.png/.bmp) справа от списка.
+pub const PREVIEW_W: i32 = 180;
+pub const PREVIEW_H: i32 = 140;
 /// Первая строка списка файлов (от верха содержимого):
 /// панель инструментов (36) + строка хлебных крошек (24) + зазор.
 pub const LIST_START_Y: i32 = 68;
@@ -85,6 +90,52 @@ pub fn delete_btn_rect(win_w: u32) -> Rect {
 /// Кнопка раздела в боковой панели.
 pub fn sidebar_item_rect(i: usize) -> Rect {
     Rect::new(4, 8 + i as i32 * 36, 102, 28)
+}
+
+/// Имя файла похоже на картинку, которую умеет показывать превью.
+fn is_image_name(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.ends_with(".png") || n.ends_with(".bmp")
+}
+
+/// Декодирует PNG (src/png.rs) или несжатый BMP 24/32 бит в пиксели RGB.
+fn decode_preview(data: &[u8]) -> Option<(Vec<u32>, usize, usize)> {
+    if crate::png::is_png(data) {
+        let img = crate::png::decode(data).ok()?;
+        if img.w == 0 || img.h == 0 || img.pixels.len() < img.w * img.h {
+            return None;
+        }
+        return Some((img.pixels, img.w, img.h));
+    }
+    if data.len() < 54 || &data[0..2] != b"BM" {
+        return None;
+    }
+    let off = u32::from_le_bytes([data[10], data[11], data[12], data[13]]) as usize;
+    let bw = i32::from_le_bytes([data[18], data[19], data[20], data[21]]);
+    let bh_raw = i32::from_le_bytes([data[22], data[23], data[24], data[25]]);
+    let bpp = u16::from_le_bytes([data[28], data[29]]);
+    let compression = u32::from_le_bytes([data[30], data[31], data[32], data[33]]);
+    if compression != 0 || (bpp != 24 && bpp != 32) || bw <= 0 || bh_raw == 0 {
+        return None;
+    }
+    let top_down = bh_raw < 0;
+    let bh = bh_raw.unsigned_abs() as usize;
+    let bw = bw as usize;
+    let bytes_pp = (bpp / 8) as usize;
+    let stride = (bw * bytes_pp).div_ceil(4) * 4;
+    if off + stride * bh > data.len() {
+        return None;
+    }
+    let mut pixels = Vec::with_capacity(bw * bh);
+    for y in 0..bh {
+        let srow = if top_down { y } else { bh - 1 - y };
+        let row = off + srow * stride;
+        for x in 0..bw {
+            let p = row + x * bytes_pp;
+            pixels.push(((data[p + 2] as u32) << 16) | ((data[p + 1] as u32) << 8) | data[p] as u32);
+        }
+    }
+    Some((pixels, bw, bh))
 }
 
 pub fn draw_files(
@@ -167,6 +218,25 @@ pub fn draw_files(
         }
     }
 
+    // Превью выбранной картинки: список сужается на ширину колонки.
+    let mut preview: Option<(Vec<u32>, usize, usize)> = None;
+    if let Some(idx) = selected_idx {
+        if let Some(entry) = entries.get(idx) {
+            if !entry.is_dir && entry.size <= 400_000 && is_image_name(&entry.name) {
+                let full = if current_path == "/" {
+                    format!("/{}/{}", current_partition, entry.name)
+                } else {
+                    format!("{}{}/{}", current_partition, current_path, entry.name)
+                };
+                if let Ok(data) = crate::vfs::read_file(&full) {
+                    preview = decode_preview(&data);
+                }
+            }
+        }
+    }
+    let list_w = w.width as i32 - SIDEBAR_W - 10
+        - if preview.is_some() { PREVIEW_W + 10 } else { 0 };
+
     let list_start_y = content_y + LIST_START_Y;
     let mut ey = list_start_y;
     for (idx, entry) in entries.iter().enumerate() {
@@ -175,7 +245,7 @@ pub fn draw_files(
         }
         let is_selected = selected_idx == Some(idx);
         let bg = if is_selected { theme.titlebar_active } else { theme.window_bg };
-        r.fill_rect(w.x + SIDEBAR_W + 4, ey - 2, w.width - (SIDEBAR_W as u32 + 10), 20, bg);
+        r.fill_rect(w.x + SIDEBAR_W + 4, ey - 2, list_w.max(80) as u32, 20, bg);
 
         let (glyph, icon_color) = if entry.is_dir {
             (IconType::Files, Color::YELLOW)
@@ -192,6 +262,31 @@ pub fn draw_files(
         let text_color = if is_selected { theme.accent } else { theme.text_primary };
         r.draw_text(w.x + SIDEBAR_W + 28, ey + 2, &entry_str, text_color, None);
         ey += ROW_H;
+    }
+
+    if let Some((pixels, iw, ih)) = preview {
+        let px = w.x + w.width as i32 - PREVIEW_W - 8;
+        let py = list_start_y;
+        r.fill_rect(px - 2, py - 2, PREVIEW_W as u32 + 4, PREVIEW_H as u32 + 4, theme.titlebar_inactive);
+        // cover: заполняем колонку с обрезкой по центру, без искажений.
+        let (vx, vy, vw, vh) = if iw * PREVIEW_H as usize > ih * PREVIEW_W as usize {
+            let vw = (ih * PREVIEW_W as usize / PREVIEW_H as usize).max(1);
+            ((iw - vw) / 2, 0, vw, ih)
+        } else {
+            let vh = (iw * PREVIEW_H as usize / PREVIEW_W as usize).max(1);
+            (0, (ih - vh) / 2, iw, vh)
+        };
+        for y in 0..PREVIEW_H as usize {
+            let sy = vy + y * vh / PREVIEW_H as usize;
+            for x in 0..PREVIEW_W as usize {
+                let sx = vx + x * vw / PREVIEW_W as usize;
+                let p = pixels[sy * iw + sx];
+                r.put_pixel(px + x as i32, py + y as i32, Color::from_u32(p));
+            }
+        }
+        r.draw_rect(px - 2, py - 2, PREVIEW_W as u32 + 4, PREVIEW_H as u32 + 4, theme.accent);
+        let caption = format!("{}x{}", iw, ih);
+        r.draw_text(px, py + PREVIEW_H + 6, &caption, theme.text_secondary, None);
     }
 
     // Нижняя строка: сообщение об операции, ошибка или текущий путь.

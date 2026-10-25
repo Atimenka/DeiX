@@ -39,17 +39,14 @@ SPB = BLOCK // SECTOR        # секторов на блок ext2
 # --- геометрия ext2-тома /userdata (та же, что в src/ext2.rs) ---
 SB_BLOCK = 1
 GDT_BLOCK = 2
-BLOCK_BITMAP = 3
-INODE_BITMAP = 4
-INODE_TABLE_START = 5
 INODE_SIZE = 128
 EXT2_MAGIC = 0xEF53
 
 # --- КАРТА РАЗДЕЛОВ DeiX (должна совпадать с src/partition_map.rs) ---
 # Два первичных раздела в MBR, логических разделов нет.
 PRIMARY = [
-    (1, 0x83, 4096,  20480, "/system"),    # bootable, системный EROFS
-    (2, 0x83, 24576, 16384, "/userdata"),  # ext2, пользовательские данные
+    (1, 0x83, 4096,  32768, "/system"),    # bootable, системный EROFS
+    (2, 0x83, 36864, 32768, "/userdata"),  # ext2, пользовательские данные
 ]
 
 # Дескриптор образа ядра: сектор LBA 2047 (см. src/partition_map.rs
@@ -298,32 +295,52 @@ def write_erofs_image(img, start_lba, secs, label, files=None):
     return blob
 
 
+BLOCKS_PER_GROUP = 8192  # как в ядре: src/ext2.rs BLOCKS_PER_GROUP
+
+
 def format_ext2_at(img, start_lba, total_sectors):
-    """Форматирует ext2-том начиная с произвольного LBA (для /userdata)."""
+    """Форматирует ext2-том начиная с произвольного LBA (для /userdata).
+
+    Раскладка повторяет драйвер ядра (src/ext2.rs): группа — 8192 блоков,
+    в каждой группе копия суперблока, копия GDT, карты блоков и инодов и
+    таблица инодов; том может состоять из нескольких групп.
+    """
     total_blocks = total_sectors // SPB
+    bpg = BLOCKS_PER_GROUP
+    groups = (total_blocks - 1 + bpg - 1) // bpg
+    gdt_blocks = (groups * 32 + BLOCK - 1) // BLOCK
     inodes = ((max(32, total_blocks * BLOCK // 4096) + 7) // 8) * 8
-    itb = (inodes * INODE_SIZE + BLOCK - 1) // BLOCK
-    dstart = INODE_TABLE_START + itb
-    reserved = dstart + 1
-    valid_blocks = total_blocks - 1
-    free_blocks = valid_blocks - reserved
-    free_inodes = inodes - 10 - 1
+    ipg = inodes // groups
+    assert groups * ipg == inodes and 8 <= ipg <= BLOCK * 8
+    itb = (ipg * INODE_SIZE + BLOCK - 1) // BLOCK
     now = 0x60000000
+
+    def gmeta(g):
+        base = 1 + g * bpg
+        bbm = base + 1 + gdt_blocks
+        return base, bbm, bbm + 1, bbm + 2
+
+    def gcount(g):
+        base = 1 + g * bpg
+        return min(bpg, total_blocks - base)
+
+    def data_start(g):
+        return gmeta(g)[3] + itb
 
     def blk_lba(b):
         return start_lba + b * SPB
-
-    def rb(b):
-        lb = blk_lba(b) * SECTOR
-        return bytearray(img[lb:lb + BLOCK])
 
     def wb(b, data):
         lb = blk_lba(b) * SECTOR
         img[lb:lb + BLOCK] = data
 
+    zeros = bytes(BLOCK)
+    wi_table = {}
+
     def wi(ino, mode, size, links, ptrs, used):
-        idx = ino - 1
-        block = INODE_TABLE_START + (idx * INODE_SIZE) // BLOCK
+        g = (ino - 1) // ipg
+        idx = (ino - 1) % ipg
+        block = gmeta(g)[3] + (idx * INODE_SIZE) // BLOCK
         off = (idx * INODE_SIZE) % BLOCK
         raw = bytearray(INODE_SIZE)
         raw[0:2] = struct.pack("<H", mode)
@@ -332,9 +349,19 @@ def format_ext2_at(img, start_lba, total_sectors):
         raw[28:32] = struct.pack("<I", used * SPB)
         for i in range(15):
             raw[40 + i * 4:44 + i * 4] = struct.pack("<I", ptrs[i])
-        buf = rb(block)
+        buf = bytearray(wi_table.get(block, zeros))
         buf[off:off + INODE_SIZE] = raw
-        wb(block, buf)
+        wi_table[block] = bytes(buf)
+
+    dstart = data_start(0)
+    reserved0 = dstart - 1 + 2          # метаданные группы 0 + корень + lost+found
+    free_per_group = []
+    for g in range(groups):
+        overhead = data_start(g) - (1 + g * bpg)
+        used = overhead + (2 if g == 0 else 0)
+        free_per_group.append(gcount(g) - used)
+    free_blocks = sum(free_per_group)
+    free_inodes = inodes - 10 - 1
 
     # Суперблок.
     sb = bytearray(BLOCK)
@@ -343,9 +370,9 @@ def format_ext2_at(img, start_lba, total_sectors):
     sb[12:16] = struct.pack("<I", free_blocks)
     sb[16:20] = struct.pack("<I", free_inodes)
     sb[20:24] = struct.pack("<I", 1)
-    sb[32:36] = struct.pack("<I", total_blocks)
+    sb[32:36] = struct.pack("<I", bpg)
     sb[36:40] = struct.pack("<I", total_blocks)
-    sb[40:44] = struct.pack("<I", inodes)
+    sb[40:44] = struct.pack("<I", ipg)
     sb[48:52] = struct.pack("<I", now)
     sb[54:56] = struct.pack("<H", 0xFFFF)
     sb[56:58] = struct.pack("<H", EXT2_MAGIC)
@@ -353,32 +380,45 @@ def format_ext2_at(img, start_lba, total_sectors):
     sb[64:68] = struct.pack("<I", now)
     wb(SB_BLOCK, sb)
 
-    # GDT.
+    # GDT: по дескриптору на группу.
     gdt = bytearray(BLOCK)
-    gdt[0:4] = struct.pack("<I", BLOCK_BITMAP)
-    gdt[4:8] = struct.pack("<I", INODE_BITMAP)
-    gdt[8:12] = struct.pack("<I", INODE_TABLE_START)
-    gdt[12:14] = struct.pack("<H", free_blocks)
-    gdt[14:16] = struct.pack("<H", free_inodes)
-    gdt[16:18] = struct.pack("<H", 2)
-    wb(GDT_BLOCK, gdt)
+    for g in range(groups):
+        _, bbm, ibm, it = gmeta(g)
+        o = g * 32
+        gdt[o:o + 4] = struct.pack("<I", bbm)
+        gdt[o + 4:o + 8] = struct.pack("<I", ibm)
+        gdt[o + 8:o + 12] = struct.pack("<I", it)
+        gdt[o + 12:o + 14] = struct.pack("<H", free_per_group[g])
+        gdt[o + 14:o + 16] = struct.pack("<H", ipg - (11 if g == 0 else 0))
+        gdt[o + 16:o + 18] = struct.pack("<H", 2 if g == 0 else 0)
+    for b in range(GDT_BLOCK, GDT_BLOCK + gdt_blocks):
+        wb(b, gdt if b == GDT_BLOCK else zeros)
 
-    # Bitmap блоков.
-    bm = bytearray(BLOCK)
-    for b in range(reserved):
-        bm[b // 8] |= 1 << (b % 8)
-    for b in range(valid_blocks, BLOCK * 8):
-        bm[b // 8] |= 1 << (b % 8)
-    wb(BLOCK_BITMAP, bm)
+    # Карты блоков и инодов, таблицы инодов — по группам.
+    for g in range(groups):
+        base, bbm, ibm, it = gmeta(g)
+        n = gcount(g)
+        bm = bytearray(BLOCK)
+        for i in range(data_start(g) - base):
+            bm[i // 8] |= 1 << (i % 8)
+        if g == 0:
+            for blk in (dstart, dstart + 1):
+                i = blk - base
+                bm[i // 8] |= 1 << (i % 8)
+        for i in range(n, BLOCK * 8):
+            bm[i // 8] |= 1 << (i % 8)
+        wb(bbm, bm)
 
-    # Bitmap инодов.
-    ibm = bytearray(BLOCK)
-    for i in range(10):
-        ibm[i // 8] |= 1 << (i % 8)
-    ibm[(11 - 1) // 8] |= 1 << ((11 - 1) % 8)
-    for i in range(inodes, BLOCK * 8):
-        ibm[i // 8] |= 1 << (i % 8)
-    wb(INODE_BITMAP, ibm)
+        ib = bytearray(BLOCK)
+        if g == 0:
+            for i in range(11):
+                ib[i // 8] |= 1 << (i % 8)
+        for i in range(ipg, BLOCK * 8):
+            ib[i // 8] |= 1 << (i % 8)
+        wb(ibm, ib)
+
+        for b in range(it, it + itb):
+            wb(b, zeros)
 
     # Корневой каталог.
     root = bytearray(BLOCK)
@@ -395,9 +435,6 @@ def format_ext2_at(img, start_lba, total_sectors):
     root[30] = 10
     root[32:42] = b"lost+found"
     wb(dstart, root)
-    ptrs = [0] * 15
-    ptrs[0] = dstart
-    wi(2, 0o040755, BLOCK, 3, ptrs, 1)
 
     lf = bytearray(BLOCK)
     lf[0:4] = struct.pack("<I", 11)
@@ -409,9 +446,15 @@ def format_ext2_at(img, start_lba, total_sectors):
     lf[18] = 2
     lf[20:22] = b".."
     wb(dstart + 1, lf)
+
+    ptrs = [0] * 15
+    ptrs[0] = dstart
+    wi(2, 0o040755, BLOCK, 3, ptrs, 1)
     ptrs2 = [0] * 15
     ptrs2[0] = dstart + 1
     wi(11, 0o040700, BLOCK, 2, ptrs2, 1)
+    for block, data in sorted(wi_table.items()):
+        wb(block, data)
 
 
 def init_all_partitions(img, boot_files):
@@ -441,14 +484,21 @@ def init_all_partitions(img, boot_files):
                     if _f.endswith(".dps"):
                         with open(os.path.join(snd_dir, _f), "rb") as _fh:
                             system_files[f"media/audio/ui/{_f}"] = _fh.read()
-            # Встроенные обои (BMP 24 бит, 640x480) читает ui::desktop из
-            # /system/media/wallpapers/; в ядро они не вшиваются.
+            # Встроенные обои читает ui::desktop из /system/media/wallpapers/:
+            # BMP 24 бит и PNG с палитрой, 640x480; в ядро они не вшиваются.
             wp_dir = os.path.join("assets", "wallpapers")
             if os.path.isdir(wp_dir):
                 for _f in sorted(os.listdir(wp_dir)):
-                    if _f.endswith(".bmp"):
+                    if _f.endswith(".bmp") or _f.endswith(".png"):
                         with open(os.path.join(wp_dir, _f), "rb") as _fh:
                             system_files[f"media/wallpapers/{_f}"] = _fh.read()
+            # Картинки-иллюстрации (Files, /system/media/pictures).
+            pic_dir = os.path.join("assets", "pictures")
+            if os.path.isdir(pic_dir):
+                for _f in sorted(os.listdir(pic_dir)):
+                    if _f.endswith(".png"):
+                        with open(os.path.join(pic_dir, _f), "rb") as _fh:
+                            system_files[f"media/pictures/{_f}"] = _fh.read()
             # Цветные иконки приложений (DXIC, tools/make_icons.py) читает
             # ui::appicons из /system/media/icons/.
             ic_dir = os.path.join("assets", "icons")
