@@ -87,10 +87,6 @@ pub fn state() -> u8 {
     STATE.load(Ordering::Relaxed)
 }
 
-pub fn kind() -> u8 {
-    KIND.load(Ordering::Relaxed)
-}
-
 pub fn progress_ms() -> u32 {
     PROGRESS_MS.load(Ordering::Relaxed)
 }

@@ -32,10 +32,6 @@ pub const LIST_CAP: usize = 64;
 
 // --------------------------------------------------------------- геометрия
 
-pub fn row_rect(win_w: u32, i: usize) -> Rect {
-    Rect::new(6, LIST_START_Y + i as i32 * ROW_H, (win_w as i32 - 12).max(20) as u32, ROW_H as u32 - 2)
-}
-
 /// Кнопка Play/Pause (общая у видео и музыки, но со своим x).
 pub fn play_rect(win_h: u32, music: bool) -> Rect {
     let x = if music { 44 } else { 10 };
@@ -73,11 +69,6 @@ pub fn vol_dn_rect(win_w: u32, win_h: u32) -> Rect {
 
 pub fn vol_up_rect(win_w: u32, win_h: u32) -> Rect {
     Rect::new(win_w as i32 - 48, win_h as i32 - TRANSPORT_H + 8, 32, 28)
-}
-
-/// Строка сведений просмотрщика фото (низ окна).
-pub fn info_rect(win_w: u32, win_h: u32) -> Rect {
-    Rect::new(0, win_h as i32 - 22, win_w, 22)
 }
 
 // --------------------------------------------------------------- библиотеки

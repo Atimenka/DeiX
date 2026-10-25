@@ -120,12 +120,6 @@ fn fetch_text(url: &str) -> Result<String, String> {
     String::from_utf8(resp.body).map_err(|_| String::from("ответ не текст UTF-8"))
 }
 
-/// Скачивает манифест с сайта.
-pub fn fetch_manifest() -> Result<(String, Vec<Entry>), String> {
-    let text = fetch_text(&format!("{}/manifest.txt", BASE_URL))?;
-    parse_manifest(&text)
-}
-
 /// Версия установленного пака (None — не установлен).
 pub fn installed_version() -> Option<String> {
     let data = crate::vfs::read_file(REG_PATH).ok()?;
