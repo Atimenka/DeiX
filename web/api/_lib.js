@@ -97,7 +97,9 @@ async function storage(path, { method = 'GET', body, headers = {} } = {}) {
         'Content-Type': 'application/json',
         ...headers,
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      // Storage (Fastify) отвечает 400 на POST с Content-Type: application/json
+      // и пустым телом, поэтому у POST без данных уходит пустой объект.
+      body: body === undefined ? (method === 'POST' ? '{}' : undefined) : JSON.stringify(body),
     });
     return { status: resp.status, data: await parseResponse(resp) };
   } catch (e) {

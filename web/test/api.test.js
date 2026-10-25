@@ -155,6 +155,10 @@ globalThis.fetch = async (url, init = {}) => {
     assert.equal(init.headers.apikey, 'service-key');
     const rel = p.slice('/storage/v1'.length);
     const upload = /^\/object\/upload\/sign\/os-images\/(.+)$/.exec(rel);
+    if (upload) {
+      // Реальный Storage отвечает 400 на POST с application/json и пустым телом.
+      assert.equal(init.body, '{}');
+    }
     if (upload) return jsonResponse(200, { url: `/object/upload/sign/os-images/${upload[1]}?token=up` });
     const sign = /^\/object\/sign\/os-images\/(.+)$/.exec(rel);
     if (sign) {
