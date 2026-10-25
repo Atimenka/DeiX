@@ -146,6 +146,14 @@ fn retryable(e: &str) -> bool {
         || e.contains("Сервер не прислал ответа")
 }
 
+/// Глобальный сетевой замок для HTTP: стек однопоточный по соединениям
+/// (tcp.rs/tls.rs держат ОДНО соединение в статике), а фоновые задачи
+/// (автоустановка медиапака) и UI (браузер, центр обновлений) живут в
+/// разных задачах планировщика. Без замка второй запрос разобрал бы
+/// чужое соединение на середине. Замок держится на весь запрос с
+/// ретраями; redirect-цепочка захватывает его заново на каждый скачок.
+static NET_LOCK: crate::spinlock::SpinLock<()> = crate::spinlock::SpinLock::new(());
+
 /// Один HTTP-запрос произвольным методом без redirect.
 /// `extra_headers` добавляются к базовым; `body` отправляется как есть
 /// (Content-Length ставится для любого метода, кроме GET без тела).
@@ -157,6 +165,7 @@ fn request_once(
     max_body: usize,
     idle_ms: u64,
 ) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
+    let _net_guard = NET_LOCK.lock();
     let mut last_err = String::new();
     for attempt in 1..=3u32 {
         match attempt_once(method, url, extra_headers, body, max_body, idle_ms) {
