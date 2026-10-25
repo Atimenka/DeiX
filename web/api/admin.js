@@ -13,6 +13,18 @@ function deviceId(body) {
   return id;
 }
 
+/**
+ * Ошибка подготовки загрузки с причиной от Storage (статус и текст). Эндпоинт
+ * только для Owner, поэтому техническая причина показывается как есть.
+ */
+function uploadSignFailure(signed) {
+  const data = signed.data && typeof signed.data === 'object' ? signed.data : {};
+  const raw = String(data.message || data.error || '').replace(/[^\x20-\x7e]/g, ' ').trim().slice(0, 160);
+  const reason = raw ? `HTTP ${signed.status}: ${raw}` : `HTTP ${signed.status}`;
+  console.error('storage upload sign failed:', signed.status, raw);
+  return new HttpError(502, `Не удалось подготовить загрузку в хранилище (Storage ${reason})`);
+}
+
 async function list(res) {
   const [rows, settings, users] = await Promise.all([
     sb(`dev_unlocks?select=${LIST_COLUMNS}&order=created_at.desc&limit=500`),
@@ -108,7 +120,7 @@ async function releasePrepare(res, owner, body) {
 
   const signed = await storage(`object/upload/sign/${BUCKET}/${path}`, { method: 'POST', headers: { 'x-upsert': 'true' } });
   if (signed.status !== 200 || !signed.data || typeof signed.data.url !== 'string') {
-    throw new HttpError(502, 'Не удалось подготовить загрузку в хранилище');
+    throw uploadSignFailure(signed);
   }
   return send(res, 200, { ok: true, id, upload_url: storageUrl(signed.data.url) });
 }
@@ -196,7 +208,7 @@ async function updatePrepare(res, owner, body) {
   }
   const signed = await storage(`object/upload/sign/${BUCKET}/${path}`, { method: 'POST', headers: { 'x-upsert': 'true' } });
   if (signed.status !== 200 || !signed.data || typeof signed.data.url !== 'string') {
-    throw new HttpError(502, 'Не удалось подготовить загрузку в хранилище');
+    throw uploadSignFailure(signed);
   }
   return send(res, 200, { ok: true, id, payload_size: doc.payload_size, upload_url: storageUrl(signed.data.url) });
 }

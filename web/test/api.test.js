@@ -155,6 +155,7 @@ globalThis.fetch = async (url, init = {}) => {
     assert.equal(init.headers.apikey, 'service-key');
     const rel = p.slice('/storage/v1'.length);
     const upload = /^\/object\/upload\/sign\/os-images\/(.+)$/.exec(rel);
+    if (upload && db.signFailure) return jsonResponse(400, { statusCode: '400', error: 'Bad Request', message: 'Body cannot be empty' });
     if (upload) {
       // Реальный Storage отвечает 400 на POST с application/json и пустым телом.
       assert.equal(init.body, '{}');
@@ -962,6 +963,22 @@ function updateManifestFile(overrides = {}, signer = updateKeys.privateKey) {
   const signature = nodeCrypto.sign('sha256', message, { key: signer, dsaEncoding: 'ieee-p1363' }).toString('hex');
   return { file: `DEIXMANIFEST1\n${signature}\n${text}\n`, text, signature, payload, doc };
 }
+
+test('OS updates: an upload-sign failure shows the Storage status and reason', async () => {
+  const owner = await loginOwner();
+  const made = updateManifestFile();
+  db.signFailure = true;
+  try {
+    const ru = await call(adminHandler, { action: 'update_prepare', manifest_file: made.file }, { cookies: owner });
+    assert.equal(ru.status, 502);
+    assert.equal(ru.json.error, 'Не удалось подготовить загрузку в хранилище (Storage HTTP 400: Body cannot be empty)');
+    const en = await call(adminHandler, { action: 'update_prepare', manifest_file: made.file }, { cookies: owner, headers: { 'x-deix-lang': 'en' } });
+    assert.equal(en.json.error, 'Could not prepare the upload to storage (Storage HTTP 400: Body cannot be empty)');
+  } finally {
+    db.signFailure = false;
+    db.updates.length = 0;
+  }
+});
 
 test('OS updates: owner publishes, the OS fetches the manifest and the payload in parts', async () => {
   const pub = updateKeys.publicKey.export({ type: 'spki', format: 'der' }).subarray(-65).toString('hex');

@@ -119,6 +119,7 @@ const EN = {
 };
 
 const PATTERNS = [
+  [/^Не удалось подготовить загрузку в хранилище \(Storage (.+)\)$/, 'Could not prepare the upload to storage (Storage $1)'],
   [/^Пароль должен быть не короче (\d+) символов$/, 'The password must be at least $1 characters long'],
   [/^Не больше (\d+) ключей в час\. Попробуйте позже\.$/, 'No more than $1 keys per hour. Try again later.'],
 ];
