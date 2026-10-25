@@ -324,7 +324,7 @@ extern "C" fn auto_task() {
 /// CLI `media`: состояние пака, установка/удаление, управление
 /// воспроизведением (движок src/media.rs работает и без графики).
 pub fn cmd_media(rest: &str) {
-    use crate::println_t;
+    use crate::println;
     let trimmed = rest.trim();
     let (sub, arg) = match trimmed.find(char::is_whitespace) {
         Some(i) => (&trimmed[..i], trimmed[i..].trim()),
@@ -333,54 +333,54 @@ pub fn cmd_media(rest: &str) {
     match sub {
         "" | "status" => {
             for line in status_lines() {
-                println_t!("{}", line);
+                println!("{}", line);
             }
         }
         "install" => match install(true) {
-            Ok(s) => println_t!("{}", s),
-            Err(e) => println_t!("Ошибка: {}", e),
+            Ok(s) => println!("{}", s),
+            Err(e) => println!("Ошибка: {}", e),
         },
         "remove" => match remove() {
-            Ok(s) => println_t!("{}", s),
-            Err(e) => println_t!("Ошибка: {}", e),
+            Ok(s) => println!("{}", s),
+            Err(e) => println!("Ошибка: {}", e),
         },
         "play" => {
             if arg.is_empty() {
-                println_t!("Использование: media play <файл>");
+                println!("Использование: media play <файл>");
                 return;
             }
             match crate::media::play(arg) {
-                Ok(()) => println_t!("Воспроизведение: {}", arg),
-                Err(e) => println_t!("Ошибка: {}", e),
+                Ok(()) => println!("Воспроизведение: {}", arg),
+                Err(e) => println!("Ошибка: {}", e),
             }
         }
         "pause" => {
             crate::media::toggle_pause();
             let st = crate::media::state();
             if st == crate::media::ST_PAUSED {
-                println_t!("Пауза");
+                println!("Пауза");
             } else if st == crate::media::ST_PLAYING {
-                println_t!("Продолжено");
+                println!("Продолжено");
             } else {
-                println_t!("Ничего не воспроизводится");
+                println!("Ничего не воспроизводится");
             }
         }
         "stop" => {
             crate::media::stop();
-            println_t!("Остановлено");
+            println!("Остановлено");
         }
         "vol" => match arg {
             "up" => {
                 crate::media::volume_up();
-                println_t!("Громкость: {}%", crate::media::volume());
+                println!("Громкость: {}%", crate::media::volume());
             }
             "down" => {
                 crate::media::volume_down();
-                println_t!("Громкость: {}%", crate::media::volume());
+                println!("Громкость: {}%", crate::media::volume());
             }
-            _ => println_t!("Использование: media vol up|down"),
+            _ => println!("Использование: media vol up|down"),
         },
-        _ => println_t!(
+        _ => println!(
             "Использование: media [status|install|remove|play <файл>|pause|stop|vol up|vol down]"
         ),
     }
