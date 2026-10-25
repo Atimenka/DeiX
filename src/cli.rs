@@ -276,6 +276,7 @@ pub fn execute(line: &str) {
         "mkdir" => cmd_mkdir(rest),
         "rm" => cmd_rm(rest),
         "pkg" => cmd_pkg(rest),
+        "media" => crate::mediapack::cmd_media(rest),
         "run" => cmd_run(rest),
         "install" => crate::install::cmd_install(rest),
         "useradd" => cmd_useradd(rest),
@@ -527,6 +528,7 @@ fn cmd_help() {
     println!("  write <file> <text>     - {}", t!(en: "create/overwrite a text file", ru: "создать/перезаписать текстовый файл"));
     println!("  rm <file>               - {}", t!(en: "delete a file", ru: "удалить файл"));
     println!("  pkg <list|install|remove|info> - {}", t!(en: "local package manager (see 'pkg list')", ru: "локальный пакетный менеджер (см. 'pkg list')"));
+    println!("  media <status|install|remove|play|pause|stop|vol> - {}", t!(en: "media pack on /userdata and playback control", ru: "медиапак на /userdata и управление воспроизведением"));
     println!("  run <program.mex>       - {}", t!(en: "run a .mex program", ru: "запустить .mex программу"));
     println!("  install                 - {}", t!(en: "clone this disk onto a second physical disk (real HDD install)", ru: "клонировать этот диск на второй физический диск (установка на реальный HDD)"));
     println!("  sysfs [status|convert]  - {}", t!(en: "convert /system from EROFS to ext2 (dev mode only)", ru: "конвертировать /system из EROFS в ext2 (только dev-режим)"));
