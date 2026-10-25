@@ -1420,6 +1420,48 @@ impl Desktop {
                 }
 
                 let writable = crate::vfs::is_writable(current_partition.as_str());
+                if writable
+                    && selected_idx.is_some()
+                    && files_ui::delete_btn_rect(win.width).contains(rel_x, rel_y)
+                {
+                    if let Some(entry) = (*selected_idx).and_then(|i| entries.get(i)) {
+                        let name = entry.name.clone();
+                        let is_dir = entry.is_dir;
+                        let prompt = format!("Delete {}? Click Delete again", name);
+                        if name == "." || name == ".." {
+                            *status_msg = None;
+                            *error = Some(String::from("Delete failed: not a regular entry"));
+                        } else if status_msg.as_deref() != Some(prompt.as_str()) {
+                            *error = None;
+                            *status_msg = Some(prompt);
+                        } else {
+                            let path = format!("{}{}", current_partition, join_fs_path(current_path, &name));
+                            let result = if is_dir && dir_has_children(&path) {
+                                Err(String::from("folder is not empty"))
+                            } else {
+                                crate::vfs::remove(&path).map_err(|e| e.message())
+                            };
+                            match result {
+                                Ok(()) => {
+                                    *error = None;
+                                    *status_msg = Some(format!("Deleted {}", name));
+                                    *selected_idx = None;
+                                }
+                                Err(e) => {
+                                    *status_msg = None;
+                                    *error = Some(format!("Delete failed: {}", e));
+                                }
+                            }
+                            let (new_entries, err) = load_partition_entries(current_partition, current_path);
+                            *entries = new_entries;
+                            if err.is_some() {
+                                *error = err;
+                            }
+                        }
+                    }
+                    self.dirty = true;
+                    return;
+                }
                 if writable && files_ui::new_file_btn_rect(win.width).contains(rel_x, rel_y) {
                     // Свободное имя вместо повторяющихся по modulo uptime:
                     // существующий файл не перезаписывается.
@@ -2674,6 +2716,15 @@ fn clamp_window_geometry(
 /// каталога. Существующие файлы не перезаписываются.
 /// Файлы больше этого размера редактор не открывает (текст строится в куче целиком).
 const EDITOR_MAX_BYTES: usize = 256 * 1024;
+
+/// В каталоге есть содержимое (или его не удалось прочитать — тогда
+/// удалять нельзя): `delete_file_path` у ext2 не рекурсивен.
+fn dir_has_children(path: &str) -> bool {
+    match crate::vfs::readdir(path) {
+        Ok(list) => list.iter().any(|e| e.name != "." && e.name != ".."),
+        Err(_) => true,
+    }
+}
 
 fn free_name(
     entries: &[crate::ui::window::FileViewEntry],

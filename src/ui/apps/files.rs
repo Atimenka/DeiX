@@ -72,6 +72,11 @@ pub fn new_folder_btn_rect(win_w: u32) -> Rect {
     Rect::new(win_w as i32 - 64, 6, 55, 24)
 }
 
+/// Кнопка «Delete» (видна, когда на записываемом разделе выбран элемент).
+pub fn delete_btn_rect(win_w: u32) -> Rect {
+    Rect::new(win_w as i32 - 182, 6, 54, 24)
+}
+
 /// Кнопка раздела в боковой панели.
 pub fn sidebar_item_rect(i: usize) -> Rect {
     Rect::new(4, 8 + i as i32 * 36, 102, 28)
@@ -124,6 +129,12 @@ pub fn draw_files(
         let db = new_folder_btn_rect(w.width);
         r.fill_rounded_rect(w.x + db.x, content_y + db.y, db.w, db.h, 4, theme.accent);
         r.draw_text(w.x + db.x + 4, content_y + db.y + 4, "+Folder", Color::WHITE, None);
+
+        if selected_idx.is_some() {
+            let xb = delete_btn_rect(w.width);
+            r.fill_rounded_rect(w.x + xb.x, content_y + xb.y, xb.w, xb.h, 4, Color::RED);
+            r.draw_text(w.x + xb.x + 5, content_y + xb.y + 4, "Delete", Color::WHITE, None);
+        }
     }
 
     // Хлебные крошки: раздел и каждый каталог пути — кликабельные
