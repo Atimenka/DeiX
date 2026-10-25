@@ -45,12 +45,12 @@ pub fn accent_rect(i: usize) -> Rect {
     Rect::new(12 + i as i32 * 34, 180, 26, 26)
 }
 
-/// Свотч-превью стиля обоев `i`: 3 в ряд, 2 ряда (5 стилей).
+/// Свотч-превью стиля обоев `i`: 4 в ряд, 2 ряда (8 стилей).
 pub fn wallpaper_rect(i: usize) -> Rect {
     Rect::new(
-        12 + (i % 3) as i32 * 152,
-        232 + (i / 3) as i32 * 46,
-        144,
+        12 + (i % 4) as i32 * 114,
+        232 + (i / 4) as i32 * 46,
+        108,
         40,
     )
 }
@@ -213,15 +213,43 @@ fn draw_wallpaper_swatch(
             r.fill_rounded_rect(x, y, w, h, 8, theme.surface_alt);
             r.draw_icon(x + wi - 24, y + 5, IconType::Files, theme.accent);
         }
+        // Nebula: тёмный космос с фиолетово-голубым кольцом газа.
+        5 => {
+            let space = Color::rgb(14, 16, 44);
+            r.fill_rounded_rect(x, y, w, h, 8, space);
+            r.fill_circle(x + wi / 2, y + hi / 2, 15, Color::rgb(96, 70, 190));
+            r.fill_circle(x + wi / 2 + 3, y + hi / 2 + 2, 13, Color::rgb(52, 150, 190));
+            r.fill_circle(x + wi / 2, y + hi / 2, 10, space);
+            for (sx, sy) in [(12, 8), (30, 30), (88, 10), (96, 28)] {
+                r.put_pixel(x + sx, y + sy, Color::WHITE);
+            }
+        }
+        // Horizon: сумеречное небо и отражение в воде.
+        6 => {
+            r.fill_rounded_rect(x, y, w, h, 8, Color::rgb(52, 44, 104));
+            r.fill_rect(x + 3, y + 17, w - 6, 5, Color::rgb(214, 126, 118));
+            r.fill_rect(x + 3, y + 22, w - 6, 2, Color::rgb(250, 170, 110));
+            r.fill_rect(x + 8, y + 26, w - 16, 5, Color::rgb(120, 76, 118));
+            r.fill_rect(x + 12, y + 31, w - 24, 4, Color::rgb(34, 30, 72));
+        }
+        // Crystal: стеклянные грани на тёмно-синем фоне.
+        7 => {
+            r.fill_rounded_rect(x, y, w, h, 8, Color::rgb(8, 16, 34));
+            r.fill_circle(x + wi - 30, y + 17, 8, Color::rgb(46, 150, 160));
+            r.fill_circle(x + wi - 30, y + 17, 4, Color::rgb(140, 230, 230));
+            r.fill_circle(x + 28, y + 26, 5, Color::rgb(60, 170, 180));
+            r.draw_line(x + 18, y + 33, x + 50, y + 12, Color::rgb(120, 210, 220));
+            r.draw_line(x + 19, y + 33, x + 51, y + 12, Color::rgb(70, 160, 180));
+        }
         // Aurora: графит и две ленты сияния.
         _ => {
             r.fill_rounded_rect(x, y, w, h, 8, theme.bg_top);
             let violet = Color::rgb(138, 123, 240);
             r.draw_line(x + 16, y + hi - 4, x + 44, y + 4, theme.bg_top.lerp(theme.accent, 120));
             r.draw_line(x + 17, y + hi - 4, x + 45, y + 4, theme.bg_top.lerp(theme.accent, 90));
-            r.draw_line(x + 78, y + 3, x + 108, y + hi - 5, theme.bg_top.lerp(violet, 110));
-            r.draw_line(x + 79, y + 3, x + 109, y + hi - 5, theme.bg_top.lerp(violet, 80));
-            for (sx, sy) in [(60, 8), (124, 12), (10, 6)] {
+            r.draw_line(x + 62, y + 3, x + 90, y + hi - 5, theme.bg_top.lerp(violet, 110));
+            r.draw_line(x + 63, y + 3, x + 91, y + hi - 5, theme.bg_top.lerp(violet, 80));
+            for (sx, sy) in [(50, 8), (98, 12), (10, 6)] {
                 r.put_pixel(x + sx, y + sy, theme.text_primary);
             }
         }

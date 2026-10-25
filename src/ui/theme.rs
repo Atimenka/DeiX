@@ -172,8 +172,14 @@ impl UiTheme {
 /// в `desktop::generate_wallpaper` — декоративных пунктов здесь нет.
 /// "Custom" читает /userdata/wallpaper.bmp (BMP 24/32 бит, до 268 КБ —
 /// предел файла ext2-тома); без валидного файла рисуется Aurora.
-pub const WALLPAPER_STYLES: [&str; 5] =
-    ["Aurora", "Midnight", "Plasma Flow", "Minimal", "Custom"];
+pub const WALLPAPER_STYLES: [&str; 8] =
+    ["Aurora", "Midnight", "Plasma Flow", "Minimal", "Custom", "Nebula", "Horizon", "Crystal"];
+
+/// Первый стиль со встроенной картинкой; остальные идут подряд по
+/// `SYSTEM_WALLPAPER_FILES` (файлы в /system/media/wallpapers, BMP 640x480).
+/// Если файла нет, рисуется процедурная Aurora.
+pub const SYSTEM_WALLPAPER_FIRST: usize = 5;
+pub const SYSTEM_WALLPAPER_FILES: [&str; 3] = ["nebula.bmp", "horizon.bmp", "crystal.bmp"];
 
 static mut CURRENT_THEME: Option<UiTheme> = None;
 

@@ -389,6 +389,14 @@ def init_all_partitions(img, kernel_bytes):
                     if _f.endswith(".dps"):
                         with open(os.path.join(snd_dir, _f), "rb") as _fh:
                             system_files[f"media/audio/ui/{_f}"] = _fh.read()
+            # Встроенные обои (BMP 24 бит, 640x480) читает ui::desktop из
+            # /system/media/wallpapers/; в ядро они не вшиваются.
+            wp_dir = os.path.join("assets", "wallpapers")
+            if os.path.isdir(wp_dir):
+                for _f in sorted(os.listdir(wp_dir)):
+                    if _f.endswith(".bmp"):
+                        with open(os.path.join(wp_dir, _f), "rb") as _fh:
+                            system_files[f"media/wallpapers/{_f}"] = _fh.read()
             write_erofs_image(img, start, secs, name, system_files)
 
 

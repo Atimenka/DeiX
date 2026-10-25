@@ -2355,17 +2355,35 @@ fn blend_into(pixels: &mut [u32], idx: usize, fg: Color, alpha: u8) {
     }
 }
 
-/// Генерация обоев выбранного стиля в пиксели кеша. Четыре стиля дают
-/// действительно разные картины; все цвета берутся из активной темы.
 /// Пытается загрузить пользовательские обои из /userdata/wallpaper.bmp:
 /// несжатый BMP 24/32 бит (BI_RGB), любой размер в пределах лимита файла
 /// ext2 (268 КБ, например 320x240x24); картинка растягивается на экран
 /// ближайшим соседом. false — файла нет или формат не поддержан.
 fn load_bmp_wallpaper(pixels: &mut [u32], w: i32, h: i32) -> bool {
-    let data = match ext2::read_file_path("/wallpaper.bmp") {
-        Ok(d) => d,
-        Err(_) => return false,
+    match ext2::read_file_path("/wallpaper.bmp") {
+        Ok(data) => draw_bmp(pixels, w, h, &data, false),
+        Err(_) => false,
+    }
+}
+
+/// Встроенные обои стилей `SYSTEM_WALLPAPER_FIRST..` лежат в
+/// /system/media/wallpapers (BMP 24 бит): в ядро они не вшиты.
+fn load_system_wallpaper(pixels: &mut [u32], w: i32, h: i32, style: u8) -> bool {
+    let Some(index) = usize::from(style).checked_sub(crate::ui::theme::SYSTEM_WALLPAPER_FIRST) else {
+        return false;
     };
+    let Some(file) = crate::ui::theme::SYSTEM_WALLPAPER_FILES.get(index) else {
+        return false;
+    };
+    match crate::vfs::read_file(&format!("/system/media/wallpapers/{}", file)) {
+        Ok(data) => draw_bmp(pixels, w, h, &data, true),
+        Err(_) => false,
+    }
+}
+
+/// Рисует несжатый BMP 24/32 бит в кеш обоев. `cover` — заполнить экран с
+/// обрезкой по центру без искажения пропорций, иначе картинка растягивается.
+fn draw_bmp(pixels: &mut [u32], w: i32, h: i32, data: &[u8], cover: bool) -> bool {
     if data.len() < 54 || &data[0..2] != b"BM" {
         return false;
     }
@@ -2392,22 +2410,34 @@ fn load_bmp_wallpaper(pixels: &mut [u32], w: i32, h: i32) -> bool {
     }
 
     let (w, h) = (w.max(1) as usize, h.max(1) as usize);
+    let (vx, vy, vw, vh) = if !cover {
+        (0, 0, bw, bh)
+    } else if bw * h > bh * w {
+        let vw = (bh * w / h).max(1);
+        ((bw - vw) / 2, 0, vw, bh)
+    } else {
+        let vh = (bw * h / w).max(1);
+        (0, (bh - vh) / 2, bw, vh)
+    };
+    // Столбцы источника считаются один раз, а не делением на каждый пиксель.
+    let columns: Vec<usize> = (0..w).map(|x| (vx + x * vw / w) * bytes_pp).collect();
     for y in 0..h {
-        let sy = y * bh / h;
+        let sy = vy + y * vh / h;
         let srow = if top_down { sy } else { bh - 1 - sy };
         let row_off = off + srow * stride;
-        for x in 0..w {
-            let sx = x * bw / w;
-            let p = row_off + sx * bytes_pp;
-            let (b, g, r) = (data[p], data[p + 1], data[p + 2]);
-            if let Some(dst) = pixels.get_mut(y * w + x) {
-                *dst = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
+        if let Some(dst_row) = pixels.get_mut(y * w..(y + 1) * w) {
+            for (dst, col) in dst_row.iter_mut().zip(columns.iter()) {
+                let p = row_off + col;
+                *dst = ((data[p + 2] as u32) << 16) | ((data[p + 1] as u32) << 8) | data[p] as u32;
             }
         }
     }
     true
 }
 
+/// Генерация обоев выбранного стиля в пиксели кеша. Процедурные стили
+/// берут цвета из активной темы, стили Custom и со встроенной картинкой
+/// читают BMP; без файла рисуется Aurora.
 fn generate_wallpaper(pixels: &mut [u32], w: i32, h: i32, theme: &UiTheme) {
     let (w, h) = (w.max(1), h.max(1));
     let wu = w as usize;
@@ -2415,6 +2445,11 @@ fn generate_wallpaper(pixels: &mut [u32], w: i32, h: i32, theme: &UiTheme) {
     // Стиль Custom: картинка пользователя; если её нет или формат не
     // поддержан — ниже рисуется процедурная Aurora (ветки `_`).
     if theme.wallpaper_style == 4 && load_bmp_wallpaper(pixels, w, h) {
+        return;
+    }
+    if usize::from(theme.wallpaper_style) >= crate::ui::theme::SYSTEM_WALLPAPER_FIRST
+        && load_system_wallpaper(pixels, w, h, theme.wallpaper_style)
+    {
         return;
     }
 
