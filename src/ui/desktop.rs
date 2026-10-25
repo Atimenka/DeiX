@@ -2079,6 +2079,7 @@ impl Desktop {
             }
             WindowContent::VideoPlayer { list, idx, list_mode, status } => {
                 use crate::ui::apps::media as media_ui;
+                // Без return: новый заголовок применяется после match.
                 if *list_mode {
                     if let Some(i) = media_ui::row_at(rel_y, list.len(), win.height as i32) {
                         let p = list[i].clone();
@@ -2089,14 +2090,10 @@ impl Desktop {
                             Some(format!("Video - {}", crate::media::file_name(&p)));
                         self.dirty = true;
                     }
-                    return;
-                }
-                if media_ui::list_btn_rect(win.width).contains(rel_x, rel_y) {
+                } else if media_ui::list_btn_rect(win.width).contains(rel_x, rel_y) {
                     *list_mode = true;
                     self.dirty = true;
-                    return;
-                }
-                if let Some(b) = media_ui::transport_button_at(
+                } else if let Some(b) = media_ui::transport_button_at(
                     rel_x,
                     rel_y,
                     win.width,
@@ -2126,6 +2123,7 @@ impl Desktop {
             }
             WindowContent::MusicPlayer { list, idx, status } => {
                 use crate::ui::apps::media as media_ui;
+                // Без return: новый заголовок применяется после match.
                 if let Some(i) = media_ui::row_at(
                     rel_y,
                     list.len(),
@@ -2136,9 +2134,7 @@ impl Desktop {
                     *status = crate::media::play(&p).err();
                     new_title = Some(format!("Music - {}", crate::media::file_name(&p)));
                     self.dirty = true;
-                    return;
-                }
-                if let Some(b) =
+                } else if let Some(b) =
                     media_ui::transport_button_at(rel_x, rel_y, win.width, win.height, true)
                 {
                     use media_ui::TransportButton as TB;

@@ -241,7 +241,7 @@ fn draw_transport(
     content_y: i32,
     music: bool,
 ) {
-    let (ww, wh) = (w.width as i32, w.height as i32);
+    let wh = w.height as i32;
     let ty = content_y + wh - TRANSPORT_H;
     r.fill_rect(w.x, ty, w.width, TRANSPORT_H as u32, theme.surface);
     r.draw_hline(w.x, ty, w.width, theme.text_secondary.lerp(Color::BLACK, 60));

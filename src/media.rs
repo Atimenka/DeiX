@@ -580,7 +580,7 @@ fn play_dxv(data: &[u8]) -> Result<(), String> {
     // Звук: куски 'A' склеиваются в один поток (контейнер пишет их по
     // порядку). Для склейки нужен непрерывный срез — собираем во временный
     // буфер только если кусков больше одного.
-    let audio_holder: Option<Vec<u8>>;
+    let mut audio_holder: Option<Vec<u8>> = None;
     let pcm: Option<Pcm> = match afmt {
         0 => None,
         1 | 2 => {
@@ -592,7 +592,6 @@ fn play_dxv(data: &[u8]) -> Result<(), String> {
                 None
             } else if audio_parts.len() == 1 {
                 let (off, len) = audio_parts[0];
-                audio_holder = None;
                 Some(Pcm {
                     data: &data[off as usize..(off + len) as usize],
                     rate: arate,
@@ -661,9 +660,9 @@ struct AviStream {
 }
 
 fn play_avi(data: &[u8]) -> Result<(), String> {
-    let mut streams: Vec<AviStream> = Vec::new();
-    let mut video_frames: Vec<(u32, u32)> = Vec::new();
-    let mut audio_parts: Vec<(u32, u32)> = Vec::new();
+    // Заполняются после обхода чанков (однократное присваивание).
+    let streams: Vec<AviStream>;
+    let video_frames: Vec<(u32, u32)>;
     let mut video_stream = usize::MAX;
     let mut audio_stream = usize::MAX;
 

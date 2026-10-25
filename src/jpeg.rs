@@ -362,7 +362,7 @@ pub fn decode(data: &[u8]) -> Result<Image, String> {
 }
 
 /// Читает содержимое сегмента (длина u16 BE включает саму длину).
-fn segment(data: &[u8], pos: &mut usize) -> Result<(&[u8], usize), String> {
+fn segment<'a>(data: &'a [u8], pos: &mut usize) -> Result<(&'a [u8], usize), String> {
     if *pos + 2 > data.len() {
         return Err(String::from("JPEG: сегмент обрезан"));
     }
@@ -647,13 +647,15 @@ fn parse_and_decode_scan(
             // EOI или конец данных: изображение действительно оборвано.
             // Недодекодированные блоки остаются серыми (128) — верхняя
             // часть показывается, это честнее общей ошибки.
-            Some(0xD9) | None => crate::diag::notice(
-                crate::diag::NONE,
-                &format!(
-                    "JPEG: энтропийные данные оборваны на блоке {}/{} — хвост кадра останется серым",
-                    done, total_units
-                ),
-            ),
+            Some(0xD9) | None => {
+                crate::diag::notice(
+                    crate::diag::NONE,
+                    &format!(
+                        "JPEG: энтропийные данные оборваны на блоке {}/{} — хвост кадра останется серым",
+                        done, total_units
+                    ),
+                );
+            }
             // Другой маркер — штатный конец скана многосканового файла.
             Some(_) => {}
         }
