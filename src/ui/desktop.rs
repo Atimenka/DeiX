@@ -2434,8 +2434,8 @@ fn load_system_wallpaper(pixels: &mut [u32], w: i32, h: i32, style: u8) -> bool 
 /// Рисует декодированный PNG в кеш обоев с обрезкой по центру (cover),
 /// без искажения пропорций.
 fn draw_image_cover(pixels: &mut [u32], w: i32, h: i32, img: &crate::png::Image) -> bool {
-    let (bw, bh) = (img.w as i32, img.h as i32);
-    if bw <= 0 || bh <= 0 || img.pixels.len() < img.w.saturating_mul(img.h) {
+    let (bw, bh) = (img.w, img.h);
+    if bw == 0 || bh == 0 || img.pixels.len() < bw.saturating_mul(bh) {
         return false;
     }
     let (w, h) = (w.max(1) as usize, h.max(1) as usize);
@@ -2446,12 +2446,12 @@ fn draw_image_cover(pixels: &mut [u32], w: i32, h: i32, img: &crate::png::Image)
         let vh = (bw * h / w).max(1);
         (0, (bh - vh) / 2, bw, vh)
     };
-    let columns: Vec<usize> = (0..w).map(|x| (vx + x * vw / w) as usize).collect();
+    let columns: Vec<usize> = (0..w).map(|x| vx + x * vw / w).collect();
     for y in 0..h {
-        let sy = (vy + y * vh / h) as usize;
+        let sy = vy + y * vh / h;
         if let Some(dst_row) = pixels.get_mut(y * w..(y + 1) * w) {
             for (dst, sx) in dst_row.iter_mut().zip(columns.iter()) {
-                *dst = img.pixels[sy * img.w + *sx];
+                *dst = img.pixels[sy * bw + *sx];
             }
         }
     }
