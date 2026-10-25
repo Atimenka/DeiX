@@ -102,15 +102,17 @@ else
     : > "$BUILD/linux_hello.elf"
 fi
 
-echo "==> [2d/8] Готовим загрузочное лого (assets/logo.png -> DXLG+RLE)"
-# Декодера PNG в ядре нет, а сырой RGB не влезает в 572 КиБ лимита
-# kernel.bin, поэтому лого конвертируется в палитру + RLE (~2.3 КиБ).
-if [ -f assets/logo.png ]; then
-    python3 tools/make_logo.py assets/logo.png "$BUILD/logo.dxlg" 128
-elif [ -f assets/logo.dxlg ]; then
+echo "==> [2d/8] Готовим загрузочное лого (assets/logo.dxlg или assets/logo.png -> DXLG+RLE)"
+# Декодера PNG в ядре нет, а сырой RGB не влезает в лимит kernel.bin,
+# поэтому лого хранится как палитра + RLE. Готовый сглаженный assets/logo.dxlg
+# собирается tools/make_logo_aa.py (нужен Pillow); без него PNG
+# конвертируется грубо, в 5 цветов (tools/make_logo.py).
+if [ -f assets/logo.dxlg ]; then
     cp assets/logo.dxlg "$BUILD/logo.dxlg"
+elif [ -f assets/logo.png ]; then
+    python3 tools/make_logo.py assets/logo.png "$BUILD/logo.dxlg" 128
 else
-    echo "    ОШИБКА: assets/logo.png и assets/logo.dxlg не найдены"
+    echo "    ОШИБКА: assets/logo.dxlg и assets/logo.png не найдены"
     exit 1
 fi
 

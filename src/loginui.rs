@@ -152,10 +152,10 @@ fn redraw(
 
         // Рисуем эмблему/логотип DeiX над панелью входа
         let logo_scale = 1;
-        let logo_dim = 128 * logo_scale;
+        let logo_dim = (crate::bootlogo::size() / 2) as i32 * logo_scale;
         let logo_y = py - logo_dim - 16;
         if logo_y >= 10 {
-            crate::bootlogo::draw_logo_at(r, (w - logo_dim) / 2, logo_y, logo_scale);
+            crate::bootlogo::draw_logo_div(r, (w - logo_dim) / 2, logo_y, logo_scale, 2);
         }
 
         r.fill_rect(px, py, pw, ph, PANEL);
