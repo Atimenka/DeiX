@@ -23,6 +23,7 @@
   python3 tools/deix_storage.py disk.img put wall.bmp /wallpaper.bmp -p secret
   python3 tools/deix_storage.py disk.img get /config/desktop.cfg cfg.txt -p secret
   python3 tools/deix_storage.py disk.img sys-ls /etc
+  python3 tools/deix_storage.py disk.img sys-ls -r /media
   python3 tools/deix_storage.py disk.img sys-get /etc/os-release os-release
 """
 
@@ -660,6 +661,18 @@ def cmd_mkdir(args):
     print("каталог готов: %s" % args.path)
 
 
+def _sys_walk(fs, ino, prefix):
+    for name, child, _ in fs.dirents(ino):
+        if name in (".", ".."):
+            continue
+        ci = fs.inode(child)
+        path = prefix.rstrip("/") + "/" + name
+        is_dir = ci["mode"] & 0xF000 == 0x4000
+        yield path, is_dir, ci["size"]
+        if is_dir:
+            yield from _sys_walk(fs, ci, path)
+
+
 def cmd_sys_ls(args):
     fs = Erofs(Image(args.image))
     nid = fs.lookup(args.path)
@@ -668,6 +681,15 @@ def cmd_sys_ls(args):
     ino = fs.inode(nid)
     if ino["mode"] & 0xF000 != 0x4000:
         print(_fmt_entry(args.path.rstrip("/").split("/")[-1], False, ino["size"]))
+        return
+    if args.recursive:
+        files = total = 0
+        for path, is_dir, size in _sys_walk(fs, ino, args.path):
+            print(_fmt_entry(path, is_dir, size))
+            if not is_dir:
+                files += 1
+                total += size
+        print("files: %d, total %.1f KiB" % (files, total / 1024))
         return
     for name, child, _ in fs.dirents(ino):
         if name in (".", ".."):
@@ -719,6 +741,7 @@ def main():
     add("mkdir", cmd_mkdir, "path", password=True, help="создать каталог в /userdata")
     p_sls = add("sys-ls", cmd_sys_ls, help="список /system (EROFS)")
     p_sls.add_argument("path", nargs="?", default="/")
+    p_sls.add_argument("-r", "--recursive", action="store_true", help="со всеми вложенными каталогами")
     add("sys-cat", cmd_sys_cat, "path", help="файл /system в stdout")
     add("sys-get", cmd_sys_get, "path", "local", help="скачать из /system")
 
