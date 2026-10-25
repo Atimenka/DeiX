@@ -325,6 +325,7 @@ impl Center {
                     "Update downloaded",
                     &format!("DeiX {} is ready to install.", version),
                 );
+                crate::sound::play_ui_background(crate::sound::UiSound::UpdateReady);
                 self.staged = Some((version, build));
                 self.stage = Stage::Ready;
                 self.confirm = false;

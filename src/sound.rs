@@ -141,6 +141,12 @@ pub enum UiSound {
     /// USB-носитель отключён (usbdisc.dps). USB-стека нет — событие появится
     /// вместе с ним; API готово (доступно вручную: `sound usbdisc`).
     UsbDisconnect,
+    /// Голосовое приветствие после входа (welcome.dps).
+    Welcome,
+    /// Голосовое сообщение: обновление скачано и ждёт перезагрузки (update.dps).
+    UpdateReady,
+    /// Голосовое прощание при выключении (bye.dps).
+    Goodbye,
 }
 
 impl UiSound {
@@ -153,6 +159,9 @@ impl UiSound {
             UiSound::BatteryFull => "fullbat.dps",
             UiSound::UsbConnect => "usbcon.dps",
             UiSound::UsbDisconnect => "usbdisc.dps",
+            UiSound::Welcome => "welcome.dps",
+            UiSound::UpdateReady => "update.dps",
+            UiSound::Goodbye => "bye.dps",
         }
     }
 
@@ -165,6 +174,9 @@ impl UiSound {
             UiSound::BatteryFull => "батарея заряжена (API, события пока нет)",
             UiSound::UsbConnect => "USB-носитель обнаружен (загрузка с флешки)",
             UiSound::UsbDisconnect => "USB-носитель отключён (API вручную)",
+            UiSound::Welcome => "голос: приветствие после входа",
+            UiSound::UpdateReady => "голос: обновление готово к установке",
+            UiSound::Goodbye => "голос: прощание при выключении",
         }
     }
 
@@ -177,18 +189,24 @@ impl UiSound {
             UiSound::BatteryFull => "battery full (API ready, no event source yet)",
             UiSound::UsbConnect => "USB drive detected (USB flash boot)",
             UiSound::UsbDisconnect => "USB drive removed (manual API for now)",
+            UiSound::Welcome => "voice: greeting after login",
+            UiSound::UpdateReady => "voice: update ready to install",
+            UiSound::Goodbye => "voice: goodbye on shutdown",
         }
     }
 }
 
 /// Все эффекты реестра (для перечисления в CLI).
-pub const UI_SOUNDS: [UiSound; 6] = [
+pub const UI_SOUNDS: [UiSound; 9] = [
     UiSound::Startup,
     UiSound::Error,
     UiSound::BatteryLow,
     UiSound::BatteryFull,
     UiSound::UsbConnect,
     UiSound::UsbDisconnect,
+    UiSound::Welcome,
+    UiSound::UpdateReady,
+    UiSound::Goodbye,
 ];
 
 /// Псевдонимы для CLI: "start" -> "start.dps" и т.д.; неизвестное имя
@@ -201,6 +219,9 @@ fn resolve_alias<'a>(name: &'a str) -> &'a str {
         "fullbat" => UiSound::BatteryFull.dps_name(),
         "usbcon" => UiSound::UsbConnect.dps_name(),
         "usbdisc" => UiSound::UsbDisconnect.dps_name(),
+        "welcome" => UiSound::Welcome.dps_name(),
+        "update" => UiSound::UpdateReady.dps_name(),
+        "bye" => UiSound::Goodbye.dps_name(),
         other => other,
     }
 }
@@ -314,6 +335,30 @@ pub fn play_ui(sound: UiSound) -> Result<(), &'static str> {
     let (rate, samples) = parse_dps(&raw)?;
     play_pcm8(samples, rate);
     Ok(())
+}
+
+static BACKGROUND_PENDING: AtomicU8 = AtomicU8::new(0);
+
+extern "C" fn background_task() {
+    let pending = BACKGROUND_PENDING.swap(0, Ordering::AcqRel);
+    if let Some(sound) = (pending as usize).checked_sub(1).and_then(|i| UI_SOUNDS.get(i)) {
+        let _ = play_ui(*sound);
+    }
+}
+
+/// Играет эффект в отдельной задаче планировщика, не блокируя вызывающего
+/// (GUI). Если предыдущий фоновый эффект ещё не стартовал или свободных
+/// слотов задач нет — звук пропускается.
+pub fn play_ui_background(sound: UiSound) {
+    if BACKGROUND_PENDING
+        .compare_exchange(0, sound as u8 + 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    if crate::sched::spawn("ui-voice", background_task).is_none() {
+        BACKGROUND_PENDING.store(0, Ordering::Release);
+    }
 }
 
 /// Играет эффект по имени/псевдониму (для CLI `sound play <имя>`).

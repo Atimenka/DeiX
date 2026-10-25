@@ -125,6 +125,17 @@ conv_snd "assets/low battery.wav"     lowbat.dps
 conv_snd "assets/full battery.wav"    fullbat.dps
 conv_snd "assets/usb connect.wav"     usbcon.dps
 conv_snd "assets/usb unconnected.wav" usbdisc.dps
+conv_voice() {  # $1 = входной wav, $2 = имя dps
+    if [ -f "$1" ]; then
+        python3 tools/wav2dps.py "$1" "$SND/$2" 8000 --voice \
+            || echo "    warn: не удалось сконвертировать $1 — голоса не будет"
+    else
+        echo "    warn: $1 не найден — голос '$2' будет недоступен"
+    fi
+}
+conv_voice "assets/voice/welcome.wav" welcome.dps
+conv_voice "assets/voice/update.wav"  update.dps
+conv_voice "assets/voice/bye.wav"     bye.dps
 
 # Публичный ключ обновлений вшивается в ядро. Без приватного ключа
 # (tools/make_update.py keygen) вшивается нулевой — обновления выключены.

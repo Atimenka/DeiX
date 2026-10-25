@@ -385,7 +385,7 @@ fn cmd_sound(rest: &str) {
             if media.is_empty() {
                 println!("{}", t!(en: "  (image has no sounds: rebuild with build.sh step [2e/8])", ru: "  (в образе звуков нет: пересоберите — шаг build.sh [2e/8])"));
             }
-            println!("{}", t!(en: "play: sound play <start|error|lowbat|fullbat|usbcon|usbdisc>", ru: "играть: sound play <start|error|lowbat|fullbat|usbcon|usbdisc>"));
+            println!("{}", t!(en: "play: sound play <start|error|lowbat|fullbat|usbcon|usbdisc|welcome|update|bye>", ru: "играть: sound play <start|error|lowbat|fullbat|usbcon|usbdisc|welcome|update|bye>"));
             println!("{}", t!(en: "mode: sound mode [auto|hda|speaker] - select sound output device", ru: "режим: sound mode [auto|hda|speaker] - выбор устройства вывода звука"));
             println!("{}", t!(en: "HDA:  sound hda [test|play <name>] - Intel High Definition Audio status & test", ru: "HDA:  sound hda [test|play <имя>] - статус и тест Intel High Definition Audio"));
             println!("{}", t!(en: "PC:   sound speaker [beep|play <name>] - direct PC speaker (PWM port 0x61)", ru: "PC:   sound speaker [beep|play <имя>] - прямой вывод на PC speaker (ШИМ порт 0x61)"));
@@ -1829,6 +1829,7 @@ pub fn cmd_reboot() {
 
 pub fn cmd_poweroff() {
     println!("{}", t!(en: "Powering off system...", ru: "Выключение системы..."));
+    let _ = crate::sound::play_ui(crate::sound::UiSound::Goodbye);
     crate::crypto_storage::lock();
     unsafe {
         crate::port::outw(0x604, 0x2000);

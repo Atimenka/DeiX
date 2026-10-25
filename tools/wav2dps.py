@@ -13,7 +13,9 @@ DPS1 — мини-формат под проигрыватель в src/sound.rs
 чистый Python stdlib (wave + struct), без внешних зависимостей.
 
 Использование:
-    python3 tools/wav2dps.py <in.wav> <out.dps> [rate=8000]
+    python3 tools/wav2dps.py <in.wav> <out.dps> [rate=8000] [--voice]
+
+--voice обрезает тишину по краям и нормализует пик до ~90 % шкалы (для речи).
 """
 
 import struct
@@ -49,7 +51,7 @@ def load_wav(path):
 
 
 def resample_linear(samples, src_rate, dst_rate):
-    """Линейный ресемплинг: простой и достаточный для 2-4 секундных сигналов."""
+    """Ресемплинг: при понижении частоты усредняет окно (без алиасинга), иначе линейная интерполяция."""
     if src_rate == dst_rate:
         return samples
     if not samples:
@@ -57,6 +59,12 @@ def resample_linear(samples, src_rate, dst_rate):
     step = src_rate / float(dst_rate)
     out_len = int(len(samples) / step)
     out = []
+    if step > 1.0:
+        for i in range(out_len):
+            a = int(i * step)
+            b = max(a + 1, min(len(samples), int((i + 1) * step)))
+            out.append(sum(samples[a:b]) // (b - a))
+        return out
     for i in range(out_len):
         pos = i * step
         i0 = int(pos)
@@ -64,6 +72,20 @@ def resample_linear(samples, src_rate, dst_rate):
         i1 = min(i0 + 1, len(samples) - 1)
         out.append(int(samples[i0] * (1.0 - frac) + samples[i1] * frac))
     return out
+
+
+def trim_and_normalize(samples, rate):
+    """Обрезает тишину по краям (с запасом 40 мс) и поднимает пик до ~90 % шкалы."""
+    peak = max((abs(x) for x in samples), default=0)
+    if peak == 0:
+        return samples
+    gate = peak // 40
+    first = next(i for i, x in enumerate(samples) if abs(x) > gate)
+    last = len(samples) - 1 - next(i for i, x in enumerate(reversed(samples)) if abs(x) > gate)
+    pad = rate * 40 // 1000
+    samples = samples[max(0, first - pad) : last + 1 + pad]
+    gain = 29490.0 / peak
+    return [int(x * gain) for x in samples]
 
 
 def to_u8(samples):
@@ -80,14 +102,18 @@ def to_u8(samples):
 
 
 def main():
-    if len(sys.argv) < 3:
+    if len([a for a in sys.argv[1:] if a != "--voice"]) < 2:
         print("usage: wav2dps.py <in.wav> <out.dps> [rate=8000]", file=sys.stderr)
         raise SystemExit(2)
-    src, dst = sys.argv[1], sys.argv[2]
-    rate = int(sys.argv[3]) if len(sys.argv) > 3 else 8000
+    voice = "--voice" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--voice"]
+    src, dst = args[0], args[1]
+    rate = int(args[2]) if len(args) > 2 else 8000
 
     samples, src_rate = load_wav(src)
     samples = resample_linear(samples, src_rate, rate)
+    if voice:
+        samples = trim_and_normalize(samples, rate)
     data = to_u8(samples)
 
     # Лимит на всякий случай: 10 секунд на эффект больше чем достаточно.

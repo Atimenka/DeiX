@@ -404,6 +404,7 @@ extern "C" fn boot_sound_task() {
         let _ = sound::play_ui(sound::UiSound::UsbConnect);
     }
     let _ = sound::play_ui(sound::UiSound::Startup);
+    let _ = sound::play_ui(sound::UiSound::Welcome);
     crate::serial_println!("[deix] M: startup sound done ({} ms)", timer::uptime_ms());
 }
 
