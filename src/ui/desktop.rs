@@ -2028,6 +2028,15 @@ impl Desktop {
                             }
                         }
                     }
+                    InstallerPage::Confirm => {
+                        // Строка этапа 2: клик переключает перенос
+                        // аккаунтов и обоев с загрузочного диска.
+                        if installer_ui::migrate_row_rect(ww).contains(rel_x, rel_y) {
+                            st.migrate = !st.migrate;
+                            st.note = None;
+                            self.dirty = true;
+                        }
+                    }
                     _ => {}
                 }
             }

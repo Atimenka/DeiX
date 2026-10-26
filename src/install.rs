@@ -10,17 +10,24 @@
 //     прогресс по реально выполненной работе.
 //
 // Этапы установки:
-//   1. MBR с таблицей разделов (P1 /system EROFS, P2 /userdata ext2 —
+//   1. ЭТАП 2 — перенос данных с загрузочного диска (если включён):
+//      ДО любых записей в память читаются аккаунты (USERS.DB), обои
+//      (wallpaper.bmp, media/wallpapers) и настройки рабочего стола
+//      (config/desktop.cfg). При установке на Master источник и цель —
+//      один диск: чтение обязано пройти до перезаписи MBR (она сбрасывает
+//      маркер шифрования) и до форматирования;
+//   2. MBR с таблицей разделов (P1 /system EROFS, P2 /userdata ext2 —
 //      размер /userdata ВЫБИРАЕТСЯ при установке);
-//   2. служебная область до /system обнуляется, затем копируется карта
+//   3. служебная область до /system обнуляется, затем копируется карта
 //      загрузки DEIXKIMG (LBA 2047) с загрузочного носителя;
-//   3. образ /system (EROFS) посекторно: в нём лежат stage2, ramboot и
+//   4. образ /system (EROFS) посекторно: в нём лежат stage2, ramboot и
 //      kernel.bin (/system/boot, /system/kernel), на которые указывает карта;
-//   4. форматирование /userdata в ext2 (многогрупповый том под
+//   5. форматирование /userdata в ext2 (многогрупповый том под
 //      выбранный размер — см. ext2::plan_format_raw);
-//   5. USERS.DB с учётной записью пользователя;
-//   6. проверка (MBR, магии ФС, SHA-256 ядра по карте загрузки);
-//   7. шифрование (XTS-AES-256) — только если цель = Master.
+//   6. USERS.DB: новый аккаунт + перенесённые (без дублей имён), затем
+//      перенесённые файлы записываются на новый том;
+//   7. проверка (MBR, магии ФС, SHA-256 ядра по карте загрузки);
+//   8. шифрование (XTS-AES-256) — только если цель = Master.
 
 use crate::ata::{self, Drive};
 use alloc::format;
@@ -44,10 +51,10 @@ const KERNEL_IMAGE_INFO_LBA: u32 = 2047;
 const PART_SYSTEM: (u32, u32) = (4096, 32768);
 /// Начало /userdata (ext2::FS_START_LBA).
 pub const USERDATA_START_LBA: u32 = 36864;
-/// Минимальный размер /userdata: 8 МиБ (штатный образ).
+/// Минимальный размер /userdata: 16 МиБ (штатный образ).
 pub const USERDATA_MIN_SECTORS: u32 = 32768;
 /// Варианты размера /userdata для установщика, МиБ.
-pub const USERDATA_PRESETS_MIB: [u32; 6] = [8, 16, 32, 64, 128, 256];
+pub const USERDATA_PRESETS_MIB: [u32; 6] = [16, 32, 64, 128, 256, 512];
 
 /// Максимальный размер /userdata на диске данной ёмкости.
 pub fn max_userdata_sectors(disk_sectors: u32) -> u32 {
@@ -57,6 +64,13 @@ pub fn max_userdata_sectors(disk_sectors: u32) -> u32 {
 /// Секторов, копируемых/пишущихся за один шаг InstallJob (64 КиБ) —
 /// достаточно мелко, чтобы графический установщик оставался отзывчивым.
 const COPY_CHUNK_SECTORS: u32 = 128;
+
+/// Предел размера одного переносимого файла (обои и настройки заметно
+/// меньше; всё крупнее честно пропускается с заметкой).
+const MIGRATE_FILE_MAX_BYTES: usize = 1024 * 1024;
+/// Общий предел данных, удерживаемых в памяти при переносе (куча
+/// 16 МиБ — оставляем запас системе).
+const MIGRATE_TOTAL_MAX_BYTES: usize = 6 * 1024 * 1024;
 
 /// MBR-загрузчик, включённый в ядро (build.sh собирает boot_sector.bin ДО
 /// компиляции ядра). stage2 и ramboot в ядро не вшиваются: они приходят с
@@ -236,9 +250,15 @@ enum Stage {
     ZeroFill { next: u32 },
     BootMap,
     System { next: u32 },
+    /// Этап 2: список файлов для переноса ещё только собирается.
+    MigrateScan,
+    /// Этап 2: чтение файлов источника в память (до форматирования).
+    MigrateRead { idx: usize },
     UserdataFormat { g: u32 },
     UserdataFinish,
     UserDb,
+    /// Этап 2: запись перенесённых файлов на новый том.
+    MigrateWrite { idx: usize },
     Verify,
     Encrypt,
     Done,
@@ -253,6 +273,14 @@ pub struct InstallJob {
     userdata_sectors: u32,
     username: String,
     password: String,
+    /// Этап 2: переносить ли аккаунты и обои с загрузочного диска.
+    migrate: bool,
+    /// Найденные на источнике файлы для переноса: (путь, размер).
+    migrate_list: Vec<(String, u32)>,
+    /// Прочитанные в память файлы источника: (путь, данные).
+    migrate_buf: Vec<(String, Vec<u8>)>,
+    /// Сколько файлов уже записано на целевой диск (без USERS.DB).
+    migrated_files: usize,
     stage: Stage,
     plan: crate::ext2::FormatPlan,
     /// Прогресс: выполнено/всего условных единиц (сектора записи).
@@ -264,13 +292,16 @@ pub struct InstallJob {
 }
 
 impl InstallJob {
-    /// Готовит установку. `userdata_sectors` — размер P2 (>= 16384).
-    /// Ошибка — если размер не проходит планирование ext2.
+    /// Готовит установку. `userdata_sectors` — размер P2 (>= 32768,
+    /// то есть 16 МиБ). `migrate` — этап 2: перенести аккаунты и обои
+    /// с загрузочного диска. Ошибка — если размер не проходит
+    /// планирование ext2.
     pub fn new(
         target: Drive,
         userdata_sectors: u32,
         username: String,
         password: String,
+        migrate: bool,
     ) -> Result<InstallJob, String> {
         if userdata_sectors < USERDATA_MIN_SECTORS {
             return Err(format!(
@@ -293,7 +324,13 @@ impl InstallJob {
             userdata_sectors,
             username,
             password,
-            stage: Stage::Mbr,
+            migrate,
+            migrate_list: Vec::new(),
+            migrate_buf: Vec::new(),
+            migrated_files: 0,
+            // Этап 2 идёт ПЕРВЫМ: чтение данных источника должно
+            // завершиться до перезаписи MBR/маркера шифрования.
+            stage: if migrate { Stage::MigrateScan } else { Stage::Mbr },
             plan,
             done_units: 0,
             total_units,
@@ -332,9 +369,12 @@ impl InstallJob {
             Stage::ZeroFill { .. } => "Clearing reserved boot area",
             Stage::BootMap => "Writing boot map",
             Stage::System { .. } => "Copying /system (EROFS)",
+            Stage::MigrateScan => "Scanning this disk for accounts and wallpapers",
+            Stage::MigrateRead { .. } => "Reading your data from the boot disk",
             Stage::UserdataFormat { .. } => "Formatting /userdata (ext2)",
             Stage::UserdataFinish => "Creating /userdata root directory",
             Stage::UserDb => "Creating user account",
+            Stage::MigrateWrite { .. } => "Restoring your data on the new disk",
             Stage::Verify => "Verifying installed system",
             Stage::Encrypt => "Enabling disk encryption",
             Stage::Done => "Install complete",
@@ -403,6 +443,39 @@ impl InstallJob {
                     self.stage = Stage::System { next: next + n };
                 }
             }
+            Stage::MigrateScan => {
+                self.migrate_list = scan_migrate_files();
+                // Чтение и запись каждого файла — единицы прогресса.
+                self.total_units += 1 + 2 * self.migrate_list.len() as u32;
+                self.done_units += 1;
+                if self.migrate_list.is_empty() {
+                    self.notes.push(String::from(
+                        "nothing to migrate: no accounts or wallpapers on the boot disk",
+                    ));
+                }
+                self.stage = Stage::MigrateRead { idx: 0 };
+            }
+            Stage::MigrateRead { idx } => {
+                if idx >= self.migrate_list.len() {
+                    // Данные в памяти — можно перезаписывать диск.
+                    self.stage = Stage::Mbr;
+                    return Ok(());
+                }
+                let (path, size) = self.migrate_list[idx].clone();
+                let used: usize = self.migrate_buf.iter().map(|(_, d)| d.len()).sum();
+                if size as usize > MIGRATE_FILE_MAX_BYTES {
+                    self.notes.push(format!("not migrated (file larger than 1 MiB): {}", path));
+                } else if used.saturating_add(size as usize) > MIGRATE_TOTAL_MAX_BYTES {
+                    self.notes.push(format!("not migrated (memory limit reached): {}", path));
+                } else {
+                    match crate::ext2::read_file_path(&path) {
+                        Ok(data) => self.migrate_buf.push((path, data)),
+                        Err(_) => self.notes.push(format!("not migrated (unreadable): {}", path)),
+                    }
+                }
+                self.done_units += 1;
+                self.stage = Stage::MigrateRead { idx: idx + 1 };
+            }
             Stage::UserdataFormat { g } => {
                 crate::ext2::format_group(&self.plan, g)
                     .map_err(|e| format!("ext2 format (group {}): {:?}", g, e))?;
@@ -416,14 +489,44 @@ impl InstallJob {
             Stage::UserdataFinish => {
                 crate::ext2::format_finish(&self.plan)
                     .map_err(|e| format!("ext2 format (root dir): {:?}", e))?;
+                // Новый /userdata создан записью мимо кеша тома: сбрасываем
+                // кеш, чтобы следующие этапы (шифрование при цели = Master)
+                // видели свежую ФС, а не блоки прежнего тома.
+                crate::ext2::invalidate_cache(crate::ext2::VolId::Userdata);
                 self.done_units += 4;
                 self.stage = Stage::UserDb;
             }
             Stage::UserDb => {
                 // USERS.DB тем же форматом, что auth.rs (username:salt:hash),
                 // ПРЯМО на целевой диск — create_user() писал бы на
-                // ТЕКУЩИЙ (загрузочный) диск.
-                let text = build_users_db(&self.username, &self.password);
+                // ТЕКУЩИЙ (загрузочный) диск. Этап 2: к новому аккаунту
+                // добавляются перенесённые с загрузочного диска; при
+                // совпадении имён побеждает новый (его пароль только что
+                // ввели в мастере).
+                let mut text = build_users_db(&self.username, &self.password);
+                let mut accounts = 0usize;
+                if self.migrate {
+                    let old = self
+                        .migrate_buf
+                        .iter()
+                        .find(|(p, _)| p == crate::auth::USERS_DB_FILE)
+                        .and_then(|(_, d)| core::str::from_utf8(d).ok());
+                    if let Some(db) = old {
+                        for line in db.lines() {
+                            let name = line.split(':').next().unwrap_or("");
+                            if name.is_empty() || name == self.username {
+                                continue;
+                            }
+                            text.push_str(line);
+                            text.push('\n');
+                            accounts += 1;
+                        }
+                    }
+                }
+                if accounts > 0 {
+                    self.notes
+                        .push(format!("migrated {} account(s) from the boot disk", accounts));
+                }
                 crate::ext2::write_file_raw(
                     self.target,
                     USERDATA_START_LBA,
@@ -433,7 +536,40 @@ impl InstallJob {
                 )
                 .map_err(|e| format!("USERS.DB write failed: {:?}", e))?;
                 self.done_units += 2;
-                self.stage = Stage::Verify;
+                self.stage = if self.migrate {
+                    Stage::MigrateWrite { idx: 0 }
+                } else {
+                    Stage::Verify
+                };
+            }
+            Stage::MigrateWrite { idx } => {
+                if idx >= self.migrate_buf.len() {
+                    if self.migrated_files > 0 {
+                        self.notes.push(format!(
+                            "migrated {} file(s): wallpapers and desktop settings",
+                            self.migrated_files
+                        ));
+                    }
+                    self.stage = Stage::Verify;
+                    return Ok(());
+                }
+                if self.migrate_buf[idx].0 == crate::auth::USERS_DB_FILE {
+                    // Аккаунты уже записаны объединённой USERS.DB на шаге UserDb.
+                    self.stage = Stage::MigrateWrite { idx: idx + 1 };
+                    return Ok(());
+                }
+                let (path, data) = core::mem::take(&mut self.migrate_buf[idx]);
+                crate::ext2::write_file_path_raw(
+                    self.target,
+                    USERDATA_START_LBA,
+                    self.userdata_sectors,
+                    &path,
+                    &data,
+                )
+                .map_err(|e| format!("migrate write {} failed: {:?}", path, e))?;
+                self.migrated_files += 1;
+                self.done_units += 1;
+                self.stage = Stage::MigrateWrite { idx: idx + 1 };
             }
             Stage::Verify => {
                 let problems = verify_install(self.target, self.userdata_sectors);
@@ -484,6 +620,42 @@ fn copy_sectors(target: Drive, lba: u32, n: u32) -> Result<(), String> {
     ata::write_sectors_to(target, lba, n as u8, &buf)
         .map_err(|_| format!("target write failed at LBA {}", lba))?;
     Ok(())
+}
+
+/// Этап 2: собирает список файлов для переноса с ТЕКУЩЕГО /userdata
+/// (аккаунты, обои, настройки рабочего стола): (путь в томе, размер).
+/// Читаемый источник — том текущей загрузки; каталог media/wallpapers
+/// берётся целиком (галерея обоев медиапака).
+fn scan_migrate_files() -> Vec<(String, u32)> {
+    let mut out: Vec<(String, u32)> = Vec::new();
+    // Корень тома: USERS.DB (аккаунты) и wallpaper.bmp (текущие обои).
+    if let Ok(entries) = crate::ext2::list_root() {
+        for e in entries {
+            if e.is_directory {
+                continue;
+            }
+            if e.name == crate::auth::USERS_DB_FILE || e.name == "wallpaper.bmp" {
+                out.push((e.name, e.size));
+            }
+        }
+    }
+    // Настройки рабочего стола (выбранные обои/тема).
+    if let Ok(entries) = crate::ext2::list_dir_path("config") {
+        for e in entries {
+            if !e.is_directory && e.name == "desktop.cfg" {
+                out.push((String::from("config/desktop.cfg"), e.size));
+            }
+        }
+    }
+    // Галерея обоев медиапака.
+    if let Ok(entries) = crate::ext2::list_dir_path("media/wallpapers") {
+        for e in entries {
+            if !e.is_directory {
+                out.push((format!("media/wallpapers/{}", e.name), e.size));
+            }
+        }
+    }
+    out
 }
 
 /// Строит USERS.DB в формате auth.rs: `username:salt:sha256(salt+pass)`.
@@ -597,19 +769,19 @@ pub fn cmd_install(arg: &str) {
     let userdata_sectors: u32;
     if test_mode {
         userdata_sectors = USERDATA_MIN_SECTORS;
-        crate::println!("  Step 2/6 - /userdata size: 8 MiB (test default)");
+        crate::println!("  Step 2/6 - /userdata size: 16 MiB (test default)");
     } else {
         match max_mib {
-            Some(m) => crate::println!("  Step 2/6 - /userdata size in MiB (8..{}), Enter = 8:", m),
-            None => crate::println!("  Step 2/6 - /userdata size in MiB (>= 8), Enter = 8:"),
+            Some(m) => crate::println!("  Step 2/6 - /userdata size in MiB (16..{}), Enter = 16:", m),
+            None => crate::println!("  Step 2/6 - /userdata size in MiB (>= 16), Enter = 16:"),
         }
         loop {
             crate::print!("  Size [MiB]: ");
             let line = read_input_line();
             let trimmed = line.trim();
-            let mib = if trimmed.is_empty() { 8 } else { trimmed.parse::<u32>().unwrap_or(0) };
-            if mib < 8 || mib > 2048 {
-                crate::println!("  Invalid size. Enter a number from 8 to 2048.");
+            let mib = if trimmed.is_empty() { 16 } else { trimmed.parse::<u32>().unwrap_or(0) };
+            if mib < 16 || mib > 2048 {
+                crate::println!("  Invalid size. Enter a number from 16 to 2048.");
                 continue;
             }
             if let Some(m) = max_mib {
@@ -683,9 +855,20 @@ pub fn cmd_install(arg: &str) {
     }
     crate::println!();
 
+    // ---- Этап 2: перенос аккаунтов и обоев с загрузочного диска ----
+    let migrate = if test_mode {
+        crate::println!("  Migrate data: skipped (test mode).");
+        false
+    } else {
+        crate::print!("  Migrate accounts and wallpapers from this disk? [Y/n]: ");
+        let ans = read_input_line();
+        !matches!(ans.trim(), "n" | "N" | "no" | "No" | "NO")
+    };
+    crate::println!();
+
     // ---- Шаг 6: установка (пошаговый job) ----
     crate::println!("  Step 6/6 - installing DeiX to disk...");
-    let mut job = match InstallJob::new(target, userdata_sectors, username.clone(), password) {
+    let mut job = match InstallJob::new(target, userdata_sectors, username.clone(), password, migrate) {
         Ok(j) => j,
         Err(e) => {
             crate::println!("  ERROR: {}", e);

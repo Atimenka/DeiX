@@ -1123,6 +1123,15 @@ pub fn write_file_raw(drive: Drive, start_lba: u32, max_sectors: u32, name: &str
     write_file_at(&v, ROOT_INO, name, data)
 }
 
+/// Записывает файл по пути на том произвольного диска, создавая
+/// недостающие каталоги (mkdir -p) — установщик переносит на новый
+/// /userdata обои и настройки, лежащие в подкаталогах.
+pub fn write_file_path_raw(drive: Drive, start_lba: u32, max_sectors: u32, path: &str, data: &[u8]) -> Result<(), Ext2Error> {
+    let v = load_vol(VolIo::Raw(drive), false, start_lba, max_sectors)?;
+    let _batch = ata::FlushBatch::begin();
+    write_file_path_at(&v, path, data)
+}
+
 // ---------------- имена файлов ----------------
 
 /// ext2 не требует формата 8.3 — имена произвольной длины (до 55

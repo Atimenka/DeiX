@@ -36,6 +36,12 @@ pub fn field_rect(win_w: u32, i: usize) -> Rect {
     Rect::new(16, BODY_Y + 40 + i as i32 * 54, win_w.saturating_sub(32), 26)
 }
 
+/// Строка-переключатель «Migrate accounts and wallpapers» (страница
+/// Confirm, этап 2 переноса данных).
+pub fn migrate_row_rect(win_w: u32) -> Rect {
+    Rect::new(16, BODY_Y + 116, win_w.saturating_sub(32), 22)
+}
+
 /// Есть ли у страницы кнопка Back.
 fn has_back(page: InstallerPage) -> bool {
     matches!(
@@ -162,9 +168,10 @@ pub fn draw_installer(r: &mut Renderer, theme: &UiTheme, w: &Window, st: &Instal
         }
         InstallerPage::Size => {
             let options = st.size_options_mib();
+            let min_mib = crate::install::USERDATA_MIN_SECTORS / 2048;
             for (i, mib) in options.iter().enumerate() {
-                let line = if *mib == 8 {
-                    String::from("8 MiB (minimum, stock layout)")
+                let line = if *mib == min_mib {
+                    format!("{} MiB (minimum, stock layout)", mib)
                 } else {
                     format!("{} MiB", mib)
                 };
@@ -214,10 +221,22 @@ pub fn draw_installer(r: &mut Renderer, theme: &UiTheme, w: &Window, st: &Instal
             r.draw_text(x + 16, ly, &format!("/userdata size: {} MiB (ext2)", mib), theme.text_primary, None);
             ly += 20;
             r.draw_text(x + 16, ly, &format!("User:           {}", st.username.trim()), theme.text_primary, None);
-            ly += 28;
+            // Этап 2: строка-переключатель переноса аккаунтов и обоев.
+            let mrect = migrate_row_rect(ww);
+            r.draw_rect(x + mrect.x, y + mrect.y + 3, 14, 14, theme.titlebar_inactive);
+            if st.migrate {
+                r.fill_rect(x + mrect.x + 3, y + mrect.y + 6, 8, 8, theme.accent);
+            }
+            r.draw_text(
+                x + mrect.x + 24,
+                y + mrect.y + 4,
+                "Migrate accounts and wallpapers from this disk",
+                theme.text_primary,
+                None,
+            );
             r.draw_text(
                 x + 16,
-                ly,
+                y + mrect.y + mrect.h + 10,
                 "WARNING: ALL DATA ON THE TARGET DISK WILL BE ERASED!",
                 Color::rgb(220, 60, 60),
                 None,
@@ -245,7 +264,7 @@ pub fn draw_installer(r: &mut Renderer, theme: &UiTheme, w: &Window, st: &Instal
             r.draw_icon(x + 16, y + BODY_Y + 24, IconType::Check, Color::rgb(80, 200, 120));
             r.draw_text(x + 40, y + BODY_Y + 26, "Install complete.", theme.text_primary, None);
             let mut ly = y + BODY_Y + 50;
-            for note in st.result_notes.iter().take(3) {
+            for note in st.result_notes.iter().take(5) {
                 r.draw_text(x + 16, ly, note, theme.text_secondary, None);
                 ly += 18;
             }

@@ -50,6 +50,9 @@ pub struct InstallerState {
     pub username: String,
     pub password: String,
     pub confirm: String,
+    /// Этап 2: перенести аккаунты и обои с загрузочного диска
+    /// (переключается на странице Confirm).
+    pub migrate: bool,
     /// Активное поле страницы Account: 0 = username, 1 = password,
     /// 2 = confirm.
     pub field: usize,
@@ -71,6 +74,7 @@ impl InstallerState {
             username: String::new(),
             password: String::new(),
             confirm: String::new(),
+            migrate: true,
             field: 0,
             note: None,
             job: None,
@@ -180,7 +184,7 @@ impl InstallerState {
 
     fn start_install(&mut self) {
         let options = self.size_options_mib();
-        let mib = options.get(self.size_idx).copied().unwrap_or(8);
+        let mib = options.get(self.size_idx).copied().unwrap_or(16);
         let drive = match self.disks.get(self.disk_idx) {
             Some(d) => d.drive,
             None => {
@@ -193,6 +197,7 @@ impl InstallerState {
             mib * 2048,
             String::from(self.username.trim()),
             self.password.clone(),
+            self.migrate,
         ) {
             Ok(job) => {
                 self.job = Some(job);
