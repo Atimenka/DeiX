@@ -2,6 +2,7 @@
 
 use crate::ext2;
 use crate::renderer::{Color, Rect, Renderer};
+use crate::spinlock::SpinLock;
 use crate::ui::apps;
 use crate::ui::metrics::UiMetrics;
 use crate::ui::theme::UiTheme;
@@ -218,9 +219,16 @@ pub struct BrowserTab {
 }
 
 impl BrowserTab {
-    /// Новая вкладка, сразу загружающая URL.
+    /// Новая вкладка: внутренние страницы рисуются сразу, сетевые
+    /// загружает фоновая задача browser-net (на это время вкладка
+    /// показывает заглушку «Loading...», рабочий стол не блокируется).
     pub fn open(url: &str) -> Self {
-        let (content, links, title) = fetch_and_render_web_page(url);
+        let (content, links, title) = if needs_network(url) {
+            submit_nav(url);
+            loading_page(url)
+        } else {
+            fetch_and_render_web_page(url)
+        };
         BrowserTab {
             title,
             url: String::from(url),
@@ -234,9 +242,17 @@ impl BrowserTab {
 
     /// Переход по URL: загрузка страницы + запись в историю.
     /// `push_history=false` — для Back/Forward/Reload (позиция в истории
-    /// не меняется или уже изменена вызывающим).
+    /// не меняется или уже изменена вызывающим). Сетевые страницы
+    /// загружаются в фоновой задаче: вкладка сразу показывает
+    /// «Loading...», готовую страницу подставляет цикл событий рабочего
+    /// стола (take_nav_results).
     pub fn navigate(&mut self, url: &str, push_history: bool) {
-        let (content, links, title) = fetch_and_render_web_page(url);
+        let (content, links, title) = if needs_network(url) {
+            submit_nav(url);
+            loading_page(url)
+        } else {
+            fetch_and_render_web_page(url)
+        };
         self.url = String::from(url);
         self.title = title;
         self.content = content;
@@ -850,6 +866,83 @@ impl Window {
             content: WindowContent::DisplaySettings { status: None },
         }
     }
+}
+
+// ==================== Фоновая загрузка страниц ====================
+
+/// Готовая страница от фоновой задачи: подставляется во вкладку,
+/// чей URL совпал.
+pub struct NavPage {
+    pub url: String,
+    pub content: Vec<String>,
+    pub links: Vec<String>,
+    pub title: String,
+}
+
+/// Очередь URL, которые должна загрузить задача `browser-net`.
+static NAV_JOBS: SpinLock<alloc::collections::VecDeque<String>> =
+    SpinLock::new(alloc::collections::VecDeque::new());
+/// Готовые страницы, которые забирает цикл событий рабочего стола.
+static NAV_RESULTS: SpinLock<alloc::collections::VecDeque<NavPage>> =
+    SpinLock::new(alloc::collections::VecDeque::new());
+/// Создана ли уже задача `browser-net` планировщиком.
+static NAV_TASK_STARTED: SpinLock<bool> = SpinLock::new(false);
+
+/// true, если URL ведёт в сеть: внутренние страницы (deix://… и
+/// http://deix.os) рисуются мгновенно и фоновая задача им не нужна.
+fn needs_network(url: &str) -> bool {
+    let clean = url.trim();
+    !clean.is_empty() && !clean.starts_with("deix://") && clean != "http://deix.os"
+}
+
+/// Задача `browser-net`: по очереди забирает URL, выполняет сетевую
+/// навигацию (DNS + TCP + TLS + HTTP + разбор ответа) и кладёт готовую
+/// страницу в результаты. Пока она работает, рабочий стол остаётся
+/// отзывчивым — сеть больше не блокирует ввод и отрисовку.
+extern "C" fn browser_net_task() {
+    loop {
+        match NAV_JOBS.lock().pop_front() {
+            Some(url) => {
+                let (content, links, title) = fetch_and_render_web_page(&url);
+                let mut results = NAV_RESULTS.lock();
+                if results.len() >= 16 {
+                    results.pop_front();
+                }
+                results.push_back(NavPage { url, content, links, title });
+            }
+            None => crate::timer::sleep_ms(50),
+        }
+    }
+}
+
+/// Ставит URL в очередь фоновой загрузки; при первом вызове создаёт
+/// задачу `browser-net` (видна в Task Manager под этим именем).
+fn submit_nav(url: &str) {
+    NAV_JOBS.lock().push_back(String::from(url));
+    let mut started = NAV_TASK_STARTED.lock();
+    if !*started && crate::sched::spawn("browser-net", browser_net_task).is_some() {
+        *started = true;
+    }
+}
+
+/// Содержимое вкладки, пока страница грузится в фоне.
+fn loading_page(url: &str) -> (Vec<String>, Vec<String>, String) {
+    (
+        alloc::vec![
+            String::from("# Loading..."),
+            String::new(),
+            format!("Fetching {} in a background task.", url),
+            String::from("The desktop stays responsive; this page is replaced when the download finishes."),
+        ],
+        Vec::new(),
+        String::from("Loading..."),
+    )
+}
+
+/// Забирает все готовые страницы с прошлого вызова (цикл событий
+/// рабочего стола подставляет их во вкладки с совпавшим URL).
+pub fn take_nav_results() -> alloc::collections::VecDeque<NavPage> {
+    core::mem::take(&mut *NAV_RESULTS.lock())
 }
 
 /// Загружает URL и возвращает (строки страницы, ссылки, заголовок вкладки).

@@ -841,7 +841,7 @@ impl Desktop {
                                         tab.navigate(&new_url, true);
                                         *address_input = tab.url.clone();
                                     }
-                                    *status_msg = Some(format!("Loaded {}", new_url));
+                                    *status_msg = Some(format!("Opening {}", new_url));
                                 }
                                 0x08 => {
                                     address_input.pop();
@@ -1173,6 +1173,40 @@ impl Desktop {
             self.last_frame_seq = seq;
             self.last_progress_quant = quant;
             self.dirty = true;
+        }
+    }
+
+    /// Подставляет страницы, загруженные фоновой задачей browser-net,
+    /// во вкладки браузера с совпавшим URL. Результаты, которым некуда
+    /// встать (вкладку успели увести на другой адрес или закрыть),
+    /// отбрасываются.
+    fn pump_browser_nav(&mut self) {
+        for page in crate::ui::window::take_nav_results() {
+            let mut applied = false;
+            for w in self.windows.iter_mut() {
+                let WindowContent::WebBrowser { tabs, active_tab, address_input, status_msg, .. } =
+                    &mut w.content
+                else {
+                    continue;
+                };
+                for (i, tab) in tabs.iter_mut().enumerate() {
+                    if tab.url != page.url {
+                        continue;
+                    }
+                    tab.title = page.title.clone();
+                    tab.content = page.content.clone();
+                    tab.links = page.links.clone();
+                    tab.scroll = 0;
+                    if i == *active_tab {
+                        *address_input = page.url.clone();
+                        *status_msg = Some(format!("Loaded {}", page.url));
+                    }
+                    applied = true;
+                }
+            }
+            if applied {
+                self.dirty = true;
+            }
         }
     }
 
@@ -1835,7 +1869,7 @@ impl Desktop {
                         Some(browser_ui::NavButton::Reload) => {
                             if let Some(tab) = tabs.get_mut(*active_tab) {
                                 tab.navigate(&cur_url, false);
-                                *status_msg = Some(String::from("Reloaded"));
+                                *status_msg = Some(String::from("Reloading"));
                             }
                         }
                         Some(browser_ui::NavButton::Home) => {
@@ -1877,7 +1911,7 @@ impl Desktop {
                         if let Some(tab) = tabs.get_mut(*active_tab) {
                             tab.navigate(&target_url, true);
                         }
-                        *status_msg = Some(format!("Loaded {}", target_url));
+                        *status_msg = Some(format!("Opening {}", target_url));
                         self.dirty = true;
                     }
                     return;
@@ -1901,7 +1935,7 @@ impl Desktop {
                         if let Some(tab) = tabs.get_mut(*active_tab) {
                             tab.navigate(&url, true);
                             *address_input = tab.url.clone();
-                            *status_msg = Some(format!("Loaded {}", url));
+                            *status_msg = Some(format!("Opening {}", url));
                             self.dirty = true;
                         }
                     }
@@ -2502,6 +2536,10 @@ impl Desktop {
             // Активная установка (окно Install DeiX): несколько шагов
             // работы за кадр, прогресс перерисовывается честно.
             self.pump_installer_jobs();
+
+            // Фоновая загрузка браузера: подставляем готовые страницы
+            // во вкладки, пока остальной рабочий стол не блокируется.
+            self.pump_browser_nav();
             self.pump_update_centers();
             self.pump_media();
 
