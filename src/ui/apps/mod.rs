@@ -4,6 +4,7 @@ pub mod about;
 pub mod browser;
 pub mod error_center;
 pub mod files;
+pub mod game2048;
 pub mod installer;
 /// Медиа-приложения (фото/видео/музыка). Осознанно без `pub use media::*`:
 /// имена констант геометрии (ROW_H и т.п.) пересеклись бы с files::ROW_H.

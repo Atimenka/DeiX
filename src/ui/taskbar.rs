@@ -32,6 +32,7 @@ pub enum StartMenuAction {
     OpenPhotos,
     OpenVideo,
     OpenMusic,
+    OpenGame2048,
 }
 
 /// Сторона цветной иконки приложения в плитке Dock.
@@ -51,6 +52,7 @@ pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 13] = [
     ("Display", StartMenuAction::OpenDisplaySettings, IconType::Display),
     ("Install DeiX", StartMenuAction::OpenInstaller, IconType::Install),
     ("Updates", StartMenuAction::OpenUpdates, IconType::Reload),
+    ("2048", StartMenuAction::OpenGame2048, IconType::Settings),
     ("About", StartMenuAction::OpenAbout, IconType::About),
 ];
 
@@ -66,7 +68,8 @@ pub fn launch_matches(action: StartMenuAction, content: &WindowContent) -> bool 
         (StartMenuAction::OpenAbout, WindowContent::About) => true,
         (StartMenuAction::OpenDisplaySettings, WindowContent::DisplaySettings { .. }) => true,
         (StartMenuAction::OpenInstaller, WindowContent::Installer { .. }) => true,
-        (StartMenuAction::OpenUpdates, WindowContent::Updates { .. }) => true,
+        (StartMenuAction::OpenUpdates, WindowContent::Updates) => true,
+        (StartMenuAction::OpenGame2048, WindowContent::Game2048 { .. }) => true,
         (StartMenuAction::OpenPhotos, WindowContent::ImageViewer { .. }) => true,
         (StartMenuAction::OpenVideo, WindowContent::VideoPlayer { .. }) => true,
         (StartMenuAction::OpenMusic, WindowContent::MusicPlayer { .. }) => true,
@@ -271,6 +274,21 @@ pub fn draw_dock(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen_w:
                     .any(|w| launch_matches(START_MENU_APPS[i].1, &w.content));
                 if running {
                     r.fill_circle(rc.x + rc.w as i32 / 2, dot_y, 2, theme.accent);
+                }
+                // Badge «есть обновление» на иконке Updates: красный круг
+                // с цифрой, когда центр обновлений на стадии Available.
+                if START_MENU_APPS[i].1 == StartMenuAction::OpenUpdates {
+                    let badge_stage = desktop
+                        .updates_center
+                        .as_ref()
+                        .map(|c| c.stage())
+                        .unwrap_or(crate::update::center::Stage::Idle);
+                    if badge_stage == crate::update::center::Stage::Available {
+                        let bx = rc.x + rc.w as i32 - 7;
+                        let by = rc.y - 2;
+                        r.fill_circle(bx, by, 7, Color::RED);
+                        r.draw_text(bx - 3, by - 5, "1", Color::WHITE, None);
+                    }
                 }
             }
             DockAction::Window(id) => {

@@ -40,6 +40,7 @@ pub enum DesktopAction {
     OpenBrowser,
     OpenTaskManager,
     OpenThemeSettings,
+    OpenGame2048,
 }
 
 pub fn desktop_shortcuts() -> Vec<DesktopShortcut> {
@@ -68,6 +69,11 @@ pub fn desktop_shortcuts() -> Vec<DesktopShortcut> {
             name: "Personalize",
             icon: IconType::Theme,
             action: DesktopAction::OpenThemeSettings,
+        },
+        DesktopShortcut {
+            name: "2048",
+            icon: IconType::Settings,
+            action: DesktopAction::OpenGame2048,
         },
     ]
 }
@@ -151,6 +157,10 @@ pub struct Desktop {
     /// Прогресс воспроизведения, квантованный до 250 мс — для перерисовки
     /// транспортных панелей без сплошного рендера каждый тик.
     last_progress_quant: u32,
+    /// Центр обновлений, общим для badge в Dock и окна Updates.
+    /// Окно Updates — view: рисует из этого центра, клики переключают
+    /// его stage. Автопроверка запускается при создании Desktop.
+    pub updates_center: Option<alloc::boxed::Box<crate::update::center::Center>>,
 }
 
 /// Запас вокруг окна под мягкую тень (4 px), blur-ореол (4 px) и
@@ -209,7 +219,16 @@ impl Desktop {
             wallpaper_epoch_seen: crate::ui::theme::wallpaper_epoch(),
             last_frame_seq: 0,
             last_progress_quant: u32::MAX,
+            updates_center: Some(alloc::boxed::Box::new(crate::update::center::Center::new())),
         }
+        // Автопроверка обновлений при загрузке desktop: badge в Dock
+        // появляется сам, когда сервер предлагает новый билд. Если нет
+        // ключа или запрос упирается в сеть — state остаётся Idle/Failed,
+        // badge не показывается.
+        if let Some(c) = &mut self.updates_center {
+            c.primary();
+        }
+        self
     }
 
     /// Размещение нового окна: каскадное смещение от числа открытых окон,
@@ -302,6 +321,20 @@ impl Desktop {
         self.open_placed(480, 506, screen_w, screen_h, Window::new_theme_settings);
     }
 
+    pub fn open_game2048(&mut self, screen_w: i32, screen_h: i32) {
+        if let Some(i) = self
+            .windows
+            .iter()
+            .position(|w| matches!(w.content, WindowContent::Game2048 { .. }))
+        {
+            self.windows[i].minimized = false;
+            self.focus_window(i);
+            self.start_menu_open = false;
+            return;
+        }
+        self.open_placed(360, 380, screen_w, screen_h, Window::new_game2048);
+    }
+
     pub fn open_about(&mut self, screen_w: i32, screen_h: i32) {
         self.open_placed(380, 220, screen_w, screen_h, Window::new_about);
     }
@@ -326,7 +359,7 @@ impl Desktop {
         if let Some(i) = self
             .windows
             .iter()
-            .position(|w| matches!(w.content, WindowContent::Updates { .. }))
+            .position(|w| matches!(w.content, WindowContent::Updates))
         {
             self.windows[i].minimized = false;
             self.focus_window(i);
@@ -1146,6 +1179,26 @@ impl Desktop {
                             }
                         }
                     }
+                    WindowContent::Game2048 { game } => {
+                        // Стрелки/WASD — ход, R — новая игра.
+                        while let Some(byte) = keyboard::try_read_char() {
+                            self.dirty = true;
+                            let dir = match byte {
+                                keyboard::ARROW_UP | b'w' | b'W' => Some(crate::ui::apps::game2048::MoveDir::Up),
+                                keyboard::ARROW_DOWN | b's' | b'S' => Some(crate::ui::apps::game2048::MoveDir::Down),
+                                keyboard::ARROW_LEFT | b'a' | b'A' => Some(crate::ui::apps::game2048::MoveDir::Left),
+                                keyboard::ARROW_RIGHT | b'd' | b'D' => Some(crate::ui::apps::game2048::MoveDir::Right),
+                                b'r' | b'R' => {
+                                    game.new_game();
+                                    continue;
+                                }
+                                _ => None,
+                            };
+                            if let Some(d) = dir {
+                                game.handle_move(d);
+                            }
+                        }
+                    }
                     _ => {
                         while keyboard::try_read_char().is_some() {}
                     }
@@ -1241,14 +1294,14 @@ impl Desktop {
         }
     }
 
-    /// Шаг фоновой работы окна Updates: проверка сервера и загрузка пакета
-    /// идут по одному блокирующему вызову за кадр.
+    /// Шаг фоновой работы центра обновлений: проверка сервера и
+    /// загрузка пакета идут по одному блокирующему вызову за кадр.
+    /// Центр живёт в Desktop — badge в Dock и окно Updates видят одно
+    /// состояние.
     fn pump_update_centers(&mut self) {
-        for w in self.windows.iter_mut() {
-            if let WindowContent::Updates { center } = &mut w.content {
-                if center.step() {
-                    self.dirty = true;
-                }
+        if let Some(c) = self.updates_center.as_mut() {
+            if c.step() {
+                self.dirty = true;
             }
         }
     }
@@ -1282,6 +1335,7 @@ impl Desktop {
             StartMenuAction::OpenDisplaySettings => self.open_display_settings(screen_w, screen_h),
             StartMenuAction::OpenInstaller => self.open_installer(screen_w, screen_h),
             StartMenuAction::OpenUpdates => self.open_updates(screen_w, screen_h),
+            StartMenuAction::OpenGame2048 => self.open_game2048(screen_w, screen_h),
             StartMenuAction::OpenPhotos => self.open_photos(screen_w, screen_h),
             StartMenuAction::OpenVideo => self.open_video(screen_w, screen_h),
             StartMenuAction::OpenMusic => self.open_music(screen_w, screen_h),
@@ -1408,6 +1462,14 @@ impl Desktop {
 
 
     fn handle_desktop_click(&mut self, x: i32, y: i32, screen_w: i32, screen_h: i32) {
+        // Виджет обновлений: клик → открыть Updates (та же область,
+        // что рисует draw_updates_widget).
+        let uw = updates_widget_rect(screen_w, screen_h);
+        if uw.contains(x, y) {
+            self.open_updates(screen_w, screen_h);
+            return;
+        }
+
         let shortcuts = desktop_shortcuts();
         for (idx, _) in shortcuts.iter().enumerate() {
             // Та же область, что подсветка в draw_desktop_icons:
@@ -1423,6 +1485,7 @@ impl Desktop {
                     DesktopAction::OpenBrowser => self.open_browser(screen_w, screen_h),
                     DesktopAction::OpenTaskManager => self.open_task_manager(screen_w, screen_h),
                     DesktopAction::OpenThemeSettings => self.open_theme_settings(screen_w, screen_h),
+                    DesktopAction::OpenGame2048 => self.open_game2048(screen_w, screen_h),
                 }
                 return;
             }
@@ -2047,18 +2110,20 @@ impl Desktop {
                     _ => {}
                 }
             }
-            WindowContent::Updates { center } => {
+            WindowContent::Updates => {
                 let (ww, wh) = (win.width, win.height);
-                if center.primary_label().is_some()
-                    && updates_ui::primary_btn_rect(ww, wh).contains(rel_x, rel_y)
-                {
-                    center.primary();
-                    self.dirty = true;
-                } else if center.secondary_label().is_some()
-                    && updates_ui::secondary_btn_rect(ww, wh).contains(rel_x, rel_y)
-                {
-                    center.secondary();
-                    self.dirty = true;
+                if let Some(center) = self.updates_center.as_mut() {
+                    if center.primary_label().is_some()
+                        && updates_ui::primary_btn_rect(ww, wh).contains(rel_x, rel_y)
+                    {
+                        center.primary();
+                        self.dirty = true;
+                    } else if center.secondary_label().is_some()
+                        && updates_ui::secondary_btn_rect(ww, wh).contains(rel_x, rel_y)
+                    {
+                        center.secondary();
+                        self.dirty = true;
+                    }
                 }
             }
             WindowContent::FileEditor {
@@ -2269,6 +2334,11 @@ impl Desktop {
         draw_wallpaper(r, &theme, self, screen_w, screen_h);
         draw_desktop_icons(r, &theme, self.selected_icon);
         draw_clock_widget(r, screen_w, screen_h);
+        draw_metrics_widget(r, &theme, screen_w, screen_h);
+        let uw = updates_widget_rect(screen_w, screen_h);
+        let hover = (uw.x <= mouse::snapshot().x && mouse::snapshot().x < uw.x + uw.w as i32
+            && uw.y <= mouse::snapshot().y && mouse::snapshot().y < uw.y + uw.h as i32);
+        draw_updates_widget(r, &theme, screen_w, screen_h, self, hover);
 
         let is_dragging = self.dragging_window.is_some();
 
@@ -2276,6 +2346,20 @@ impl Desktop {
             if !self.windows[i].minimized {
                 let is_focused = self.is_focused(i);
                 draw_window(r, &theme, &self.windows[i], is_focused, is_dragging);
+            }
+        }
+
+        // Содержимое окна Updates: рисует desktop из общего центра
+        // обновлений (badge в Dock и окно видят одно состояние).
+        if let Some(center) = self.updates_center.as_ref() {
+            for w in self.windows.iter() {
+                if let WindowContent::Updates = w.content {
+                    if !w.minimized {
+                        let ui_m = crate::ui::metrics::UiMetrics::fluent();
+                        let content_y = w.y + ui_m.titlebar_height;
+                        updates_ui::draw_updates(r, &theme, w, center, content_y);
+                    }
+                }
             }
         }
 
@@ -3112,6 +3196,7 @@ fn draw_desktop_icons(r: &mut Renderer, theme: &UiTheme, selected_idx: Option<us
             IconType::Browser => IconType::Browser,
             IconType::TaskManager => IconType::TaskManager,
             IconType::Theme => IconType::Theme,
+            IconType::Settings => IconType::Settings,
             _ => IconType::Terminal,
         };
         if !crate::ui::appicons::draw(r, ix + 8, iy + 2, 32, glyph) {
@@ -3133,6 +3218,14 @@ const MONTHS: [&str; 12] = [
 /// Ширина и высота виджета часов на рабочем столе.
 const CLOCK_W: i32 = 200;
 const CLOCK_H: u32 = 92;
+
+/// Виджет системных метрик: CPU (топ-задача, idle) + RAM с полосой.
+const METRICS_W: i32 = 200;
+const METRICS_H: u32 = 96;
+
+/// Виджет обновлений: статус центра + клик → открыть Updates.
+const UPDATES_W: i32 = 200;
+const UPDATES_H: u32 = 72;
 /// Масштаб цифр и шаг между ними (глиф 8x16 увеличивается в целое число раз).
 const CLOCK_SCALE: i32 = 4;
 const CLOCK_ADVANCE: i32 = 7 * CLOCK_SCALE;
@@ -3141,6 +3234,22 @@ const CLOCK_ADVANCE: i32 = 7 * CLOCK_SCALE;
 fn clock_widget_rect(screen_w: i32, screen_h: i32) -> Rect {
     let wa = work_area(screen_w, screen_h);
     Rect::new(screen_w - 20 - CLOCK_W, wa.y + 12, CLOCK_W as u32, CLOCK_H)
+}
+
+/// Область виджета метрик: под часами, справа.
+fn metrics_widget_rect(screen_w: i32, screen_h: i32) -> Rect {
+    let cw = clock_widget_rect(screen_w, screen_h);
+    let x = cw.x;
+    let y = cw.y + cw.h as i32 + 12;
+    Rect::new(x, y, METRICS_W as u32, METRICS_H)
+}
+
+/// Область виджета обновлений: под метриками, справа.
+fn updates_widget_rect(screen_w: i32, screen_h: i32) -> Rect {
+    let mw = metrics_widget_rect(screen_w, screen_h);
+    let x = mw.x;
+    let y = mw.y + mw.h as i32 + 12;
+    Rect::new(x, y, UPDATES_W as u32, UPDATES_H)
 }
 
 /// День недели по григорианскому календарю, 0 = воскресенье (Сакамото).
@@ -3205,6 +3314,127 @@ fn draw_clock_widget(r: &mut Renderer, screen_w: i32, screen_h: i32) {
     let dy = area.y + CLOCK_SCALE * 16 + 6;
     r.draw_text(dx + 1, dy + 1, &date, shadow, None);
     r.draw_text(dx, dy, &date, Color::WHITE, None);
+
+    r.add_damage(area);
+}
+
+/// Системные метрики: CPU (топ-задача, idle) + RAM с полосой.
+/// Реальные данные из планировщика, альлокатора и ATA- counters.
+fn draw_metrics_widget(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_h: i32) {
+    let area = metrics_widget_rect(screen_w, screen_h);
+    let (x, y) = (area.x, area.y);
+    let w = area.w as i32;
+
+    r.fill_rounded_rect_alpha(x, y, area.w, area.h, 10, theme.window_bg, 225);
+    r.draw_rounded_rect_outline(x, y, area.w, area.h, 10, Color::BLACK, 80);
+
+    r.draw_text(x + 12, y + 8, "METRICS", theme.accent, None);
+
+    // CPU: доля самой загруженной задачи + idle.
+    let tasks = crate::sched::list();
+    let ticks_total = crate::sched::ticks_total();
+    let busiest = tasks.iter().max_by_key(|t| t.runtime_ticks);
+    let idle_ticks = crate::sched::idle_ticks();
+    let (busy_name, busy_pct) = match busiest {
+        Some(t) if ticks_total > 0 => {
+            let pct = ((t.runtime_ticks * 100) / ticks_total as u64) as i32;
+            (short_name(&t.name), pct.min(100))
+        }
+        _ => ("-", 0),
+    };
+    let idle_pct = if ticks_total > 0 {
+        ((idle_ticks * 100) / ticks_total) as i32
+    } else {
+        0
+    };
+    r.draw_text(
+        x + 12, y + 26,
+        &format!("CPU top: {:>2}% ({})  idle {}%", busy_pct, busy_name, idle_pct),
+        theme.text_primary, None,
+    );
+
+    // Полоса загрузки CPU.
+    let bar_w = 120i32;
+    r.fill_rounded_rect(x + 12, y + 42, bar_w, 8, 2, theme.titlebar_inactive);
+    r.fill_rounded_rect(x + 12, y + 42, busy_pct as u32 * bar_w / 100, 8, 2, theme.accent);
+
+    // RAM: использовано / общее + процент.
+    let allocated = crate::allocator::allocated_heap_bytes();
+    let total = crate::allocator::total_heap_bytes();
+    let ram_pct = if total > 0 { (allocated * 100) / total } else { 0 };
+    r.draw_text(
+        x + 12, y + 58,
+        &format!("RAM: {} KB / {} KB ({}%)", allocated / 1024, total / 1024, ram_pct),
+        theme.text_secondary, None,
+    );
+    r.fill_rounded_rect(x + 12, y + 72, bar_w, 6, 2, theme.titlebar_inactive);
+    r.fill_rounded_rect(x + 12, y + 72, ram_pct as u32 * bar_w / 100, 6, 2, theme.accent);
+
+    r.add_damage(area);
+}
+
+/// Краткое имя задачи: первые 8 символов.
+fn short_name(name: &str) -> String {
+    let mut s = String::new();
+    for c in name.chars().take(8) {
+        s.push(c);
+    }
+    s
+}
+
+/// Виджет обновлений: статус центра + клик → открыть Updates.
+/// Hover — подсветка области, клик — open_updates.
+fn draw_updates_widget(
+    r: &mut Renderer,
+    theme: &UiTheme,
+    screen_w: i32,
+    screen_h: i32,
+    desktop: &Desktop,
+    hover: bool,
+) {
+    let area = updates_widget_rect(screen_w, screen_h);
+    let (x, y) = (area.x, area.y);
+
+    if hover {
+        r.fill_rounded_rect_alpha(x, y, area.w, area.h, 10, theme.surface_alt, 230);
+    }
+    r.fill_rounded_rect_alpha(x, y, area.w, area.h, 10, theme.window_bg, 225);
+    r.draw_rounded_rect_outline(x, y, area.w, area.h, 10, Color::BLACK, 80);
+
+    r.draw_icon(x + 12, y + 8, IconType::Reload, theme.accent);
+    r.draw_text(x + 34, y + 8, "UPDATES", theme.accent, None);
+
+    // Статус из общего центра обновлений.
+    let status_line = match desktop.updates_center.as_ref() {
+        Some(c) if c.blocked().is_some() => "unavailable",
+        Some(c) => match c.stage() {
+            crate::update::center::Stage::Idle => "ready to check",
+            crate::update::center::Stage::Checking => "checking…",
+            crate::update::center::Stage::UpToDate => "up to date",
+            crate::update::center::Stage::Available => "update available",
+            crate::update::center::Stage::Downloading => "downloading…",
+            crate::update::center::Stage::Ready => "ready to install",
+            crate::update::center::Stage::Scheduled => "scheduled",
+            crate::update::center::Stage::Failed => "check failed",
+        },
+        None => "no center",
+    };
+    let color = match desktop.updates_center.as_ref().map(|c| c.stage()) {
+        Some(crate::update::center::Stage::Available)
+        | Some(crate::update::center::Stage::Ready)
+        | Some(crate::update::center::Stage::Downloading) => Color::rgb(230, 160, 60),
+        Some(crate::update::center::Stage::Failed) => Color::rgb(220, 60, 60),
+        Some(crate::update::center::Stage::UpToDate)
+        | Some(crate::update::center::Stage::Scheduled) => Color::rgb(80, 200, 120),
+        _ => theme.text_secondary,
+    };
+    r.draw_text(x + 12, y + 28, status_line, color, None);
+    r.draw_text(
+        x + 12, y + 44,
+        &format!("{}  |  {}", crate::OS_RELEASE, desktop.updates_center.as_ref().map(|c| c.installed_line()).unwrap_or_default()),
+        theme.text_secondary, None,
+    );
+    r.draw_text(x + 12, y + 56, "click to open", theme.text_secondary, None);
 
     r.add_damage(area);
 }

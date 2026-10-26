@@ -351,10 +351,12 @@ pub enum WindowContent {
     Installer {
         st: InstallerState,
     },
-    /// Центр обновлений ОС (Updates).
-    Updates {
-        center: crate::update::center::Center,
-    },
+    /// Центр обновлений ОС (Updates). Содержимое рисует desktop из
+    /// общего `updates_center` (см. desktop.rs), чтобы badge в Dock и
+    /// окно Updates видели одно и то же состояние.
+    Updates,
+    /// Пасхалка 2048: логика в `apps::game2048`, ввод стрелками/WASD.
+    Game2048 { game: crate::ui::apps::game2048::Game2048 },
     /// Просмотрщик фото: библиотека (path пуст) или один файл.
     ImageViewer {
         path: String,
@@ -394,7 +396,8 @@ impl WindowContent {
             WindowContent::About => IconType::About,
             WindowContent::DisplaySettings { .. } => IconType::Display,
             WindowContent::Installer { .. } => IconType::Install,
-            WindowContent::Updates { .. } => IconType::Reload,
+            WindowContent::Updates => IconType::Reload,
+            WindowContent::Game2048 { .. } => IconType::Settings,
             WindowContent::ImageViewer { .. } => IconType::Image,
             WindowContent::VideoPlayer { .. } => IconType::Video,
             WindowContent::MusicPlayer { .. } => IconType::Music,
@@ -654,7 +657,24 @@ impl Window {
             minimized: false,
             maximized: false,
             restore_geometry: (x, y, 480, 340),
-            content: WindowContent::Updates { center: crate::update::center::Center::new() },
+            content: WindowContent::Updates,
+        }
+    }
+
+    pub fn new_game2048(x: i32, y: i32) -> Self {
+        Window {
+            id: 0,
+            title: String::from("2048"),
+            x,
+            y,
+            width: 360,
+            height: 380,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 360, 380),
+            content: WindowContent::Game2048 {
+                game: crate::ui::apps::game2048::Game2048::new(),
+            },
         }
     }
 
@@ -1720,8 +1740,13 @@ pub fn draw_window(
         WindowContent::Installer { st } => {
             apps::draw_installer(r, theme, w, st, content_y);
         }
-        WindowContent::Updates { center } => {
-            apps::draw_updates(r, theme, w, center, content_y);
+        WindowContent::Updates => {
+            // Содержимое рисует desktop из общего центра обновлений
+            // (см. desktop.rs::render), чтобы badge и окно видели одно
+            // состояние. Здесь — только рамка и заголовок.
+        }
+        WindowContent::Game2048 { game } => {
+            apps::game2048::draw_game2048(r, theme, w, game, content_y);
         }
         WindowContent::ImageViewer { path, library, selected, img, error } => {
             apps::media::draw_image_viewer(
