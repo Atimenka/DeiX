@@ -572,6 +572,70 @@ test('OS gateway forwards only whitelisted functions and reports refusals as Pos
   db.links.delete(dev);
 });
 
+test('OS gateway: cloud login without MFA returns the profile username', async () => {
+  const dev = 'd'.repeat(32);
+  const alice = [...db.profiles.values()].find((r) => r.username === 'Alice_1');
+  const r = await callOs('cloud_login', { p_email: 'alice@example.com', p_password: 'secret-pass', p_device_id: dev });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.status, 'ok');
+  assert.equal(r.json.username, 'Alice_1');
+  assert.equal(r.json.user_id, alice.id);
+});
+
+test('OS gateway: cloud login with 2FA asks for a code', async () => {
+  const dev = 'e'.repeat(32);
+  const r = await callOs('cloud_login', { p_email: 'owner@example.com', p_password: 'owner-pass', p_device_id: dev });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.status, 'totp_required');
+  assert.equal(r.json.factor_id, 'owner-factor');
+  assert.ok(r.json.access_token);
+});
+
+test('OS gateway: cloud login rejects wrong credentials', async () => {
+  const dev = 'f'.repeat(32);
+  const r = await callOs('cloud_login', { p_email: 'alice@example.com', p_password: 'wrong', p_device_id: dev });
+  assert.equal(r.status, 400);
+  assert.match(r.json.message, /invalid email or password/);
+});
+
+test('OS gateway: cloud verify accepts a correct TOTP code and returns the profile', async () => {
+  const dev = 'b'.repeat(32);
+  const login = await callOs('cloud_login', { p_email: 'owner@example.com', p_password: 'owner-pass', p_device_id: dev });
+  const r = await callOs('cloud_verify', {
+    p_access_token: login.json.access_token,
+    p_factor_id: login.json.factor_id,
+    p_code: '123456',
+    p_device_id: dev,
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.status, 'ok');
+  assert.equal(r.json.username, 'Atimenka');
+  assert.equal(r.json.user_id, ownerId);
+});
+
+test('OS gateway: cloud verify rejects a wrong code', async () => {
+  const dev = 'c'.repeat(32);
+  const login = await callOs('cloud_login', { p_email: 'owner@example.com', p_password: 'owner-pass', p_device_id: dev });
+  const r = await callOs('cloud_verify', {
+    p_access_token: login.json.access_token,
+    p_factor_id: login.json.factor_id,
+    p_code: '000000',
+    p_device_id: dev,
+  });
+  assert.equal(r.status, 401);
+});
+
+test('OS gateway: cloud verify rejects a malformed code', async () => {
+  const dev = 'a'.repeat(32);
+  const r = await callOs('cloud_verify', {
+    p_access_token: 'x',
+    p_factor_id: 'y',
+    p_code: 'abc',
+    p_device_id: dev,
+  });
+  assert.equal(r.status, 400);
+});
+
 test('csrf header and origin are enforced', async () => {
   assert.equal((await call(authHandler, { action: 'me' }, { headers: { 'x-deix-csrf': '0' } })).status, 403);
   assert.equal((await call(authHandler, { action: 'me' }, { headers: { origin: 'https://evil.test' } })).status, 403);

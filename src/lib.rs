@@ -16,6 +16,7 @@ mod bootchain;
 mod bootmap;
 mod bugreport;
 mod cli;
+mod cloudauth;
 mod cp866;
 mod cpuid;
 mod crypto;

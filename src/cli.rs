@@ -334,6 +334,11 @@ pub fn execute(line: &str) {
         "nvidia" => crate::drivers::nvidia::cmd_nvidia(rest),
         "microcode" => crate::microcode::cmd_microcode(rest),
         "hal" => crate::drivers::hal_selftest(),
+        "cloud" => match rest.trim() {
+            "status" => crate::cloudauth::cmd_status(),
+            "unlink" => crate::cloudauth::cmd_unlink(),
+            _ => crate::cloudauth::cmd_status(),
+        },
         "crypt" => crate::luks::cmd_crypt(rest),
         "dinit" => crate::dinit::cmd_dinit(rest),
         "logo" => crate::bootlogo::cmd_logo(rest),
