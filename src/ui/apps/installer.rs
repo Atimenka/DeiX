@@ -236,7 +236,7 @@ pub fn draw_installer(r: &mut Renderer, theme: &UiTheme, w: &Window, st: &Instal
             );
             r.draw_text(
                 x + 16,
-                y + mrect.y + mrect.h + 10,
+                y + mrect.y + mrect.h as i32 + 10,
                 "WARNING: ALL DATA ON THE TARGET DISK WILL BE ERASED!",
                 Color::rgb(220, 60, 60),
                 None,
