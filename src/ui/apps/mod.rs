@@ -22,4 +22,3 @@ pub use files::*;
 pub use settings::*;
 pub use task_manager::*;
 pub use terminal::*;
-pub use updates::draw_updates;

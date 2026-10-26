@@ -27,7 +27,6 @@
 
 use alloc::format;
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 
 use crate::println;
 
@@ -175,7 +174,12 @@ fn sanitize_username(raw: &str) -> String {
 fn resolve_username(cloud_username: &str, email: &str) -> Result<String, String> {
     let mut name = sanitize_username(cloud_username);
     if name.is_empty() {
-        return Err(String::from("cloud username is empty"));
+        // Ник не пришёл — derive from email local part as fallback.
+        let local = email.split('@').next().unwrap_or("");
+        name = sanitize_username(local);
+        if name.is_empty() {
+            return Err(String::from("cloud username and email are empty"));
+        }
     }
 
     let users = crate::auth::list_usernames().map_err(|e| format!("{:?}", e))?;

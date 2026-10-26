@@ -13,6 +13,7 @@ use crate::renderer::{Color, Renderer};
 use crate::ui::theme::UiTheme;
 use crate::ui::window::Window;
 use alloc::format;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 
 pub const SIZE: usize = 4;
@@ -121,7 +122,7 @@ impl Game2048 {
             for c in 0..SIZE {
                 line[c] = self.grid[r * SIZE + c];
             }
-            let (rchanged, gained) = self.apply_left(&mut line);
+            let (rchanged, gained) = Game2048::apply_left(&mut line);
             if rchanged {
                 changed = true;
                 self.score += gained;
@@ -150,7 +151,7 @@ impl Game2048 {
             for c in 0..SIZE / 2 {
                 line.swap(c, SIZE - 1 - c);
             }
-            let (rchanged, gained) = self.apply_left(&mut line);
+            let (rchanged, gained) = Game2048::apply_left(&mut line);
             if rchanged {
                 changed = true;
                 self.score += gained;
@@ -179,7 +180,7 @@ impl Game2048 {
                 col[r] = self.grid[r * SIZE + c];
             }
             // Сливаем вверх: как строка влево.
-            let (rchanged, gained) = self.apply_left(&mut col);
+            let (rchanged, gained) = Game2048::apply_left(&mut col);
             if rchanged {
                 changed = true;
                 self.score += gained;
@@ -208,7 +209,7 @@ impl Game2048 {
             for r in 0..SIZE / 2 {
                 col.swap(r, SIZE - 1 - r);
             }
-            let (rchanged, gained) = self.apply_left(&mut col);
+            let (rchanged, gained) = Game2048::apply_left(&mut col);
             if rchanged {
                 changed = true;
                 self.score += gained;
@@ -326,7 +327,7 @@ pub fn draw_game2048(
 
     r.draw_text(w.x + 12, content_y + 8, "2048", theme.accent, None);
     r.draw_text(
-        w.x + w.width - 120, content_y + 8,
+        w.x + w.width as i32 - 120, content_y + 8,
         &format!("SCORE: {}", game.score()),
         theme.text_primary, None,
     );
@@ -341,9 +342,10 @@ pub fn draw_game2048(
     // Сетка.
     let grid_x = w.x + 16;
     let grid_y = content_y + 52;
-    let cell = 64u32;
-    let gap = 8u32;
-    let grid_w = (cell + gap) * SIZE as u32 - gap;
+    let cell: i32 = 64;
+    let gap: i32 = 8;
+    let step = cell + gap;
+    let grid_w = (step * SIZE as i32 - gap) as u32;
 
     // Подложка.
     r.fill_rounded_rect(grid_x, grid_y, grid_w, grid_w, 8, theme.titlebar_inactive);
@@ -351,13 +353,13 @@ pub fn draw_game2048(
     for i in 0..SIZE * SIZE {
         let row = i / SIZE;
         let col = i % SIZE;
-        let cx = grid_x + 4 + (col as u32) * (cell + gap);
-        let cy = grid_y + 4 + (row as u32) * (cell + gap);
+        let cx = grid_x + 4 + col as i32 * step;
+        let cy = grid_y + 4 + row as i32 * step;
         let val = game.grid()[i];
-        r.fill_rounded_rect(cx, cy, cell, cell, 6, tile_color(val));
+        r.fill_rounded_rect(cx, cy, cell as u32, cell as u32, 6, tile_color(val));
         if val > 0 {
             let txt = val.to_string();
-            let tw = txt.chars().count() as u32 * 7;
+            let tw = txt.chars().count() as i32 * 7;
             r.draw_text(
                 cx + (cell - tw) / 2,
                 cy + cell / 2 - 8,

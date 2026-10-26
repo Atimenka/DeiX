@@ -221,14 +221,6 @@ impl Desktop {
             last_progress_quant: u32::MAX,
             updates_center: Some(alloc::boxed::Box::new(crate::update::center::Center::new())),
         }
-        // Автопроверка обновлений при загрузке desktop: badge в Dock
-        // появляется сам, когда сервер предлагает новый билд. Если нет
-        // ключа или запрос упирается в сеть — state остаётся Idle/Failed,
-        // badge не показывается.
-        if let Some(c) = &mut self.updates_center {
-            c.primary();
-        }
-        self
     }
 
     /// Размещение нового окна: каскадное смещение от числа открытых окон,
@@ -2336,8 +2328,8 @@ impl Desktop {
         draw_clock_widget(r, screen_w, screen_h);
         draw_metrics_widget(r, &theme, screen_w, screen_h);
         let uw = updates_widget_rect(screen_w, screen_h);
-        let hover = (uw.x <= mouse::snapshot().x && mouse::snapshot().x < uw.x + uw.w as i32
-            && uw.y <= mouse::snapshot().y && mouse::snapshot().y < uw.y + uw.h as i32);
+        let hover = uw.x <= mouse::snapshot().x && mouse::snapshot().x < uw.x + uw.w as i32
+            && uw.y <= mouse::snapshot().y && mouse::snapshot().y < uw.y + uw.h as i32;
         draw_updates_widget(r, &theme, screen_w, screen_h, self, hover);
 
         let is_dragging = self.dragging_window.is_some();
@@ -2707,6 +2699,14 @@ pub fn run_desktop_session(mut on_resolution_change: impl FnMut(u32, u32) -> boo
 
     let mut desktop = Desktop::new();
     let mut preserve_windows = false;
+
+    // Автопроверка обновлений при загрузке desktop: badge в Dock
+    // появляется сам, когда сервер предлагает новый билд. Если нет
+    // ключа или запрос упирается в сеть — state остаётся Idle/Failed,
+    // badge не показывается.
+    if let Some(c) = desktop.updates_center.as_mut() {
+        c.primary();
+    }
 
     // Если прошлая сессия завершилась отказом ядра, Error Center
     // открывается сразу: пользователь должен узнать о сбое, даже если
@@ -3340,7 +3340,7 @@ fn draw_metrics_widget(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_
             let pct = ((t.runtime_ticks * 100) / ticks_total as u64) as i32;
             (short_name(&t.name), pct.min(100))
         }
-        _ => ("-", 0),
+        _ => (String::from("-"), 0),
     };
     let idle_pct = if ticks_total > 0 {
         ((idle_ticks * 100) / ticks_total) as i32
@@ -3354,9 +3354,9 @@ fn draw_metrics_widget(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_
     );
 
     // Полоса загрузки CPU.
-    let bar_w = 120i32;
+    let bar_w: u32 = 120;
     r.fill_rounded_rect(x + 12, y + 42, bar_w, 8, 2, theme.titlebar_inactive);
-    r.fill_rounded_rect(x + 12, y + 42, busy_pct as u32 * bar_w / 100, 8, 2, theme.accent);
+    r.fill_rounded_rect(x + 12, y + 42, (busy_pct as u32 * bar_w / 100).max(1), 8, 2, theme.accent);
 
     // RAM: использовано / общее + процент.
     let allocated = crate::allocator::allocated_heap_bytes();
@@ -3368,7 +3368,7 @@ fn draw_metrics_widget(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_
         theme.text_secondary, None,
     );
     r.fill_rounded_rect(x + 12, y + 72, bar_w, 6, 2, theme.titlebar_inactive);
-    r.fill_rounded_rect(x + 12, y + 72, ram_pct as u32 * bar_w / 100, 6, 2, theme.accent);
+    r.fill_rounded_rect(x + 12, y + 72, (ram_pct as u32 * bar_w / 100).max(1), 6, 2, theme.accent);
 
     r.add_damage(area);
 }

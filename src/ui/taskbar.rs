@@ -39,7 +39,7 @@ pub enum StartMenuAction {
 const DOCK_APP_ICON: i32 = 32;
 
 /// Приложения меню Пуск и закреплённая часть Dock.
-pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 13] = [
+pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 14] = [
     ("Terminal", StartMenuAction::OpenTerminal, IconType::Terminal),
     ("Files", StartMenuAction::OpenFiles, IconType::Files),
     ("Browser", StartMenuAction::OpenBrowser, IconType::Browser),
