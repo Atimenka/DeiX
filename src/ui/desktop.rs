@@ -3323,7 +3323,6 @@ fn draw_clock_widget(r: &mut Renderer, screen_w: i32, screen_h: i32) {
 fn draw_metrics_widget(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_h: i32) {
     let area = metrics_widget_rect(screen_w, screen_h);
     let (x, y) = (area.x, area.y);
-    let w = area.w as i32;
 
     r.fill_rounded_rect_alpha(x, y, area.w, area.h, 10, theme.window_bg, 225);
     r.draw_rounded_rect_outline(x, y, area.w, area.h, 10, Color::BLACK, 80);
