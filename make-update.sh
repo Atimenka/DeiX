@@ -91,13 +91,18 @@ if [ "$DO_BUILD" -eq 1 ]; then
     echo "==> Сборка ОС (ключ $KEY)"
     export DEIX_UPDATE_KEY="$KEY"
     export DEIX_SKIP_PACK=1
-    if [ -n "$BUILD_ID_ARG" ]; then
-        export DEIX_BUILD_ID="$BUILD_ID_ARG"
-    fi
     if [ -n "$PROFILE" ]; then
         export DEIX_PROFILE="$PROFILE"
     fi
-    ./build.sh
+    # DEIX_BUILD_ID не экспортируем в глобальную среду — он leaks в
+    # следующую сессию и следующая сборка reuse тот же id. Передаём
+    # inline в build.sh (option_env! в ядре видит переменную окружения
+    # cargo, не shell).
+    if [ -n "$BUILD_ID_ARG" ]; then
+        DEIX_BUILD_ID="$BUILD_ID_ARG" ./build.sh
+    else
+        ./build.sh
+    fi
 fi
 
 IMAGE="${DEIX_IMAGE:-$ROOT/build/deix_disk.img}"

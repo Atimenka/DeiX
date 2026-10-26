@@ -37,7 +37,9 @@ if [ -n "${DEIX_BUILD_ID:-}" ]; then
 else
     DEIX_BUILD_ID="$(python3 tools/next_build_id.py)"
 fi
-export DEIX_BUILD_ID
+# Не экспортируем в глобальную среду: иначе DEIX_BUILD_ID leaks в
+# следующую сессию shell и следующая сборка reuse тот же id ( OS думает,
+# что она последняя). Передаём в cargo inline — option_env! видит.
 printf '%s\n' "$DEIX_BUILD_ID" > "$BUILD/build_id"
 printf '%s\n' "$DEIX_VERSION" > "$BUILD/version"
 
@@ -165,7 +167,7 @@ case "$PROFILE" in
     *) echo "DEIX_PROFILE: допустимо release или fast, получено '$PROFILE'"; exit 1 ;;
 esac
 echo "    профиль cargo: $PROFILE"
-cargo +nightly build --profile "$PROFILE"
+DEIX_BUILD_ID="$DEIX_BUILD_ID" cargo +nightly build --profile "$PROFILE"
 
 KERNEL_LIB="$ROOT/target/x86_64-unknown-none/$PROFILE/libdeix_kernel.a"
 if [ ! -f "$KERNEL_LIB" ]; then
