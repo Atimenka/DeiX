@@ -128,6 +128,14 @@ if [ -n "$BUILD_ID_ARG" ] && [ "$BUILD_ID" != "$BUILD_ID_ARG" ]; then
     echo "        Запустите без --no-build." >&2
     exit 1
 fi
+if [ "$DO_BUILD" -eq 0 ] && [ -z "$BUILD_ID_ARG" ]; then
+    # --no-build без --build-id: образ уже собран, но build id в манифесте
+    # обязан быть новее installed. Генерируем новый id через next_build_id.py,
+    # чтобы ОС точно увидела обновление. build/build_id не трогаем —
+    # он представляет build id ОБРАЗА, а не пакета.
+    BUILD_ID="$(python3 tools/next_build_id.py)"
+    echo "==> --no-build: новый build id для пакета — $BUILD_ID (образ остаётся $ROOT/build/build_id)"
+fi
 if [ -z "$VERSION" ]; then
     VERSION="$(tr -d '[:space:]' < "$ROOT/build/version")"
 fi
