@@ -1132,6 +1132,13 @@ pub fn write_file_path_raw(drive: Drive, start_lba: u32, max_sectors: u32, path:
     write_file_path_at(&v, path, data)
 }
 
+/// Читает файл по пути с тома произвольного диска — установщик
+/// перечитывает записанное для финальной проверки (этап 3).
+pub fn read_file_path_raw(drive: Drive, start_lba: u32, max_sectors: u32, path: &str) -> Result<Vec<u8>, Ext2Error> {
+    let v = load_vol(VolIo::Raw(drive), false, start_lba, max_sectors)?;
+    read_file_path_at(&v, path)
+}
+
 // ---------------- имена файлов ----------------
 
 /// ext2 не требует формата 8.3 — имена произвольной длины (до 55

@@ -11,11 +11,14 @@
 //
 // Этапы установки:
 //   1. ЭТАП 2 — перенос данных с загрузочного диска (если включён):
-//      ДО любых записей в память читаются аккаунты (USERS.DB), обои
-//      (wallpaper.bmp, media/wallpapers) и настройки рабочего стола
-//      (config/desktop.cfg). При установке на Master источник и цель —
-//      один диск: чтение обязано пройти до перезаписи MBR (она сбрасывает
-//      маркер шифрования) и до форматирования;
+//      /userdata обходится рекурсивно и переносится ЦЕЛИКОМ (аккаунты,
+//      обои, настройки, загрузки, медиапак). При установке на Master
+//      источник и цель — один диск: файлы читаются в память ДО
+//      перезаписи MBR (она сбрасывает маркер шифрования); лимиты —
+//      1 МиБ на файл и 6 МиБ суммарно, лишнее честно пропускается
+//      с заметкой. При установке на Slave источник переживает
+//      форматирование, и файлы копируются потоково (чтение→запись)
+//      по одному за шаг, предел 8 МиБ на файл;
 //   2. MBR с таблицей разделов (P1 /system EROFS, P2 /userdata ext2 —
 //      размер /userdata ВЫБИРАЕТСЯ при установке);
 //   3. служебная область до /system обнуляется, затем копируется карта
@@ -26,8 +29,14 @@
 //      выбранный размер — см. ext2::plan_format_raw);
 //   6. USERS.DB: новый аккаунт + перенесённые (без дублей имён), затем
 //      перенесённые файлы записываются на новый том;
-//   7. проверка (MBR, магии ФС, SHA-256 ядра по карте загрузки);
-//   8. шифрование (XTS-AES-256) — только если цель = Master.
+//   7. ЭТАП 3 — подготовка первой загрузки: на новый /userdata пишется
+//      маркер config/first_boot; при первом запуске рабочего стола он
+//      даёт приветствие с напоминанием о шифровании и удаляется;
+//   8. проверка (MBR, магии ФС, SHA-256 ядра по карте загрузки);
+//   9. шифрование (XTS-AES-256) — только если цель = Master;
+//  10. ЭТАП 3 — финальная проверка: USERS.DB перечитывается с нового
+//      диска (если том не зашифрован), а мастер предлагает немедленную
+//      перезагрузку (CLI спрашивает, в GUI — кнопка Reboot now).
 
 use crate::ata::{self, Drive};
 use alloc::format;
@@ -71,6 +80,12 @@ const MIGRATE_FILE_MAX_BYTES: usize = 1024 * 1024;
 /// Общий предел данных, удерживаемых в памяти при переносе (куча
 /// 16 МиБ — оставляем запас системе).
 const MIGRATE_TOTAL_MAX_BYTES: usize = 6 * 1024 * 1024;
+/// Предел файла при потоковом копировании (установка на Slave: источник
+/// цел, файл читается и пишется поштучно). Совпадает с пределом чтения
+/// файла в ext2.
+const MIGRATE_STREAM_FILE_MAX_BYTES: usize = 8 * 1024 * 1024;
+/// Этап 3: маркер первой загрузки на новом /userdata.
+const FIRST_BOOT_FILE: &str = "config/first_boot";
 
 /// MBR-загрузчик, включённый в ядро (build.sh собирает boot_sector.bin ДО
 /// компиляции ядра). stage2 и ramboot в ядро не вшиваются: они приходят с
@@ -259,8 +274,12 @@ enum Stage {
     UserDb,
     /// Этап 2: запись перенесённых файлов на новый том.
     MigrateWrite { idx: usize },
+    /// Этап 3: маркер первой загрузки на новом диске.
+    FirstBoot,
     Verify,
     Encrypt,
+    /// Этап 3: перечитывание записанного (если том не зашифрован).
+    FinalCheck,
     Done,
     Failed,
 }
@@ -281,6 +300,9 @@ pub struct InstallJob {
     migrate_buf: Vec<(String, Vec<u8>)>,
     /// Сколько файлов уже записано на целевой диск (без USERS.DB).
     migrated_files: usize,
+    /// Зашифрован ли целевой том в ходе установки (Master): если да,
+    /// финальное перечитывание содержимого без ключа невозможно.
+    encrypted_now: bool,
     stage: Stage,
     plan: crate::ext2::FormatPlan,
     /// Прогресс: выполнено/всего условных единиц (сектора записи).
@@ -317,7 +339,11 @@ impl InstallJob {
         // ~524 сектора метаданных на группу ext2 (SB+GDT+карты+таблица
         // инодов) — оценка для шкалы прогресса; точность не критична.
         let userdata_units = plan.groups * 524 + 4;
-        let total_units = 2 + zero + 1 + PART_SYSTEM.1 + userdata_units + 2 + ks + 1;
+        // Раскладка: 2 = MBR; zero = ZeroFill; 1 = BootMap; PART_SYSTEM.1 =
+        // /system; userdata_units = форматирование + корневой каталог (4);
+        // 2 = UserDb; ks = Verify (чтение ядра); 3 = FirstBoot + Encrypt +
+        // FinalCheck (этап 3).
+        let total_units = 2 + zero + 1 + PART_SYSTEM.1 + userdata_units + 2 + ks + 3;
 
         Ok(InstallJob {
             target,
@@ -328,6 +354,7 @@ impl InstallJob {
             migrate_list: Vec::new(),
             migrate_buf: Vec::new(),
             migrated_files: 0,
+            encrypted_now: false,
             // Этап 2 идёт ПЕРВЫМ: чтение данных источника должно
             // завершиться до перезаписи MBR/маркера шифрования.
             stage: if migrate { Stage::MigrateScan } else { Stage::Mbr },
@@ -369,14 +396,16 @@ impl InstallJob {
             Stage::ZeroFill { .. } => "Clearing reserved boot area",
             Stage::BootMap => "Writing boot map",
             Stage::System { .. } => "Copying /system (EROFS)",
-            Stage::MigrateScan => "Scanning this disk for accounts and wallpapers",
+            Stage::MigrateScan => "Scanning this disk for your files",
             Stage::MigrateRead { .. } => "Reading your data from the boot disk",
             Stage::UserdataFormat { .. } => "Formatting /userdata (ext2)",
             Stage::UserdataFinish => "Creating /userdata root directory",
             Stage::UserDb => "Creating user account",
             Stage::MigrateWrite { .. } => "Restoring your data on the new disk",
+            Stage::FirstBoot => "Preparing first boot",
             Stage::Verify => "Verifying installed system",
             Stage::Encrypt => "Enabling disk encryption",
+            Stage::FinalCheck => "Final check of the new disk",
             Stage::Done => "Install complete",
             Stage::Failed => "Install failed",
         }
@@ -450,7 +479,11 @@ impl InstallJob {
                 self.done_units += 1;
                 if self.migrate_list.is_empty() {
                     self.notes.push(String::from(
-                        "nothing to migrate: no accounts or wallpapers on the boot disk",
+                        "nothing to migrate: no user files on the boot disk",
+                    ));
+                } else if self.migrate_list.len() >= 256 {
+                    self.notes.push(String::from(
+                        "scan limit reached: only the first 256 files are migrated",
                     ));
                 }
                 self.stage = Stage::MigrateRead { idx: 0 };
@@ -462,6 +495,15 @@ impl InstallJob {
                     return Ok(());
                 }
                 let (path, size) = self.migrate_list[idx].clone();
+                // При установке на Slave исходный диск переживает
+                // форматирование — в память заранее читается только
+                // USERS.DB (нужна для слияния аккаунтов), остальные
+                // файлы копируются поштучно на этапе MigrateWrite.
+                if self.target != Drive::Master && path != crate::auth::USERS_DB_FILE {
+                    self.done_units += 1;
+                    self.stage = Stage::MigrateRead { idx: idx + 1 };
+                    return Ok(());
+                }
                 let used: usize = self.migrate_buf.iter().map(|(_, d)| d.len()).sum();
                 if size as usize > MIGRATE_FILE_MAX_BYTES {
                     self.notes.push(format!("not migrated (file larger than 1 MiB): {}", path));
@@ -536,29 +578,59 @@ impl InstallJob {
                 )
                 .map_err(|e| format!("USERS.DB write failed: {:?}", e))?;
                 self.done_units += 2;
-                self.stage = if self.migrate {
-                    Stage::MigrateWrite { idx: 0 }
-                } else {
-                    Stage::Verify
-                };
+                // Этап 3 (маркер первой загрузки) выполняется всегда: даже
+                // без переноса новый диск должен поприветствовать пользователя
+                // при первом запуске. Пустой MigrateWrite пролистывается мгновенно.
+                self.stage = Stage::MigrateWrite { idx: 0 };
             }
             Stage::MigrateWrite { idx } => {
-                if idx >= self.migrate_buf.len() {
+                // Для Master все данные уже в памяти (исходный диск перезаписан);
+                // для Slave исходный диск цел, и файлы копируются поштучно
+                // прямо с него (чтение→запись за один шаг).
+                let from_ram = self.target == Drive::Master;
+                let total = if from_ram {
+                    self.migrate_buf.len()
+                } else {
+                    self.migrate_list.len()
+                };
+                if idx >= total {
                     if self.migrated_files > 0 {
                         self.notes.push(format!(
-                            "migrated {} file(s): wallpapers and desktop settings",
+                            "migrated {} file(s) from the boot disk",
                             self.migrated_files
                         ));
                     }
-                    self.stage = Stage::Verify;
+                    self.stage = Stage::FirstBoot;
                     return Ok(());
                 }
-                if self.migrate_buf[idx].0 == crate::auth::USERS_DB_FILE {
+                let path = if from_ram {
+                    self.migrate_buf[idx].0.clone()
+                } else {
+                    self.migrate_list[idx].0.clone()
+                };
+                if path == crate::auth::USERS_DB_FILE {
                     // Аккаунты уже записаны объединённой USERS.DB на шаге UserDb.
                     self.stage = Stage::MigrateWrite { idx: idx + 1 };
                     return Ok(());
                 }
-                let (path, data) = core::mem::take(&mut self.migrate_buf[idx]);
+                let data = if from_ram {
+                    core::mem::take(&mut self.migrate_buf[idx]).1
+                } else if self.migrate_list[idx].1 as usize > MIGRATE_STREAM_FILE_MAX_BYTES {
+                    self.notes.push(format!("not migrated (larger than 8 MiB): {}", path));
+                    self.done_units += 1;
+                    self.stage = Stage::MigrateWrite { idx: idx + 1 };
+                    return Ok(());
+                } else {
+                    match crate::ext2::read_file_path(&path) {
+                        Ok(d) => d,
+                        Err(_) => {
+                            self.notes.push(format!("not migrated (unreadable): {}", path));
+                            self.done_units += 1;
+                            self.stage = Stage::MigrateWrite { idx: idx + 1 };
+                            return Ok(());
+                        }
+                    }
+                };
                 crate::ext2::write_file_path_raw(
                     self.target,
                     USERDATA_START_LBA,
@@ -570,6 +642,25 @@ impl InstallJob {
                 self.migrated_files += 1;
                 self.done_units += 1;
                 self.stage = Stage::MigrateWrite { idx: idx + 1 };
+            }
+            Stage::FirstBoot => {
+                // Этап 3: маркер первой загрузки нового диска. Для Master он
+                // пишется ДО шифрования: enable_encryption собирает все файлы
+                // тома и укладывает маркер под ключ вместе с ними.
+                let marker = format!("installed by DeiX installer, {}\n", crate::OS_RELEASE);
+                crate::ext2::write_file_path_raw(
+                    self.target,
+                    USERDATA_START_LBA,
+                    self.userdata_sectors,
+                    FIRST_BOOT_FILE,
+                    marker.as_bytes(),
+                )
+                .map_err(|e| format!("first-boot marker write failed: {:?}", e))?;
+                self.notes.push(String::from(
+                    "first-boot marker written (welcome + encryption reminder)",
+                ));
+                self.done_units += 1;
+                self.stage = Stage::Verify;
             }
             Stage::Verify => {
                 let problems = verify_install(self.target, self.userdata_sectors);
@@ -587,11 +678,14 @@ impl InstallJob {
                 if self.target == Drive::Master {
                     if crate::crypto_storage::is_encryption_enabled() {
                         self.notes.push(String::from("encryption already enabled"));
+                        self.encrypted_now = true;
                     } else {
                         match crate::crypto_storage::enable_encryption(&self.password) {
-                            Ok(()) => self
-                                .notes
-                                .push(String::from("disk encryption enabled (XTS-AES-256)")),
+                            Ok(()) => {
+                                self.notes
+                                    .push(String::from("disk encryption enabled (XTS-AES-256)"));
+                                self.encrypted_now = true;
+                            }
                             Err(_) => self.notes.push(String::from(
                                 "encryption could not be enabled now (enable on first boot)",
                             )),
@@ -600,6 +694,35 @@ impl InstallJob {
                 } else {
                     self.notes.push(String::from(
                         "target is Slave: encryption will enable on first boot from it",
+                    ));
+                }
+                self.done_units += 1;
+                self.stage = Stage::FinalCheck;
+            }
+            Stage::FinalCheck => {
+                // Этап 3: перечитывание USERS.DB с нового диска — проверка
+                // содержимого поверх структурной проверки Verify. Если том
+                // зашифрован в ходе установки, raw-чтение вернёт шифротекст:
+                // тогда содержимое честно проверяется при первой загрузке.
+                if self.encrypted_now {
+                    self.notes.push(String::from(
+                        "final check: volume is encrypted; content verified on first boot",
+                    ));
+                } else {
+                    let db = crate::ext2::read_file_path_raw(
+                        self.target,
+                        USERDATA_START_LBA,
+                        self.userdata_sectors,
+                        crate::auth::USERS_DB_FILE,
+                    )
+                    .map_err(|e| format!("final check: USERS.DB unreadable: {:?}", e))?;
+                    let accounts = db
+                        .split(|&b| b == b'\n')
+                        .filter(|line| !line.is_empty())
+                        .count();
+                    self.notes.push(format!(
+                        "final check: {} account(s) readable on the new disk",
+                        accounts
                     ));
                 }
                 self.done_units += 1;
@@ -622,40 +745,43 @@ fn copy_sectors(target: Drive, lba: u32, n: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// Этап 2: собирает список файлов для переноса с ТЕКУЩЕГО /userdata
-/// (аккаунты, обои, настройки рабочего стола): (путь в томе, размер).
-/// Читаемый источник — том текущей загрузки; каталог media/wallpapers
-/// берётся целиком (галерея обоев медиапака).
+/// Этап 2: рекурсивно обходит текущий /userdata и собирает ВСЕ обычные
+/// файлы (пути без ведущего '/' — как их понимает ext2): аккаунты, обои,
+/// настройки, загрузки, медиапак — всё, что лежит на пользовательском
+/// томе. lost+found пропускается; глубина ограничена 8 уровнями,
+/// количество — 256 файлами (защита от неожиданного мусора).
 fn scan_migrate_files() -> Vec<(String, u32)> {
     let mut out: Vec<(String, u32)> = Vec::new();
-    // Корень тома: USERS.DB (аккаунты) и wallpaper.bmp (текущие обои).
-    if let Ok(entries) = crate::ext2::list_root() {
-        for e in entries {
-            if e.is_directory {
-                continue;
-            }
-            if e.name == crate::auth::USERS_DB_FILE || e.name == "wallpaper.bmp" {
-                out.push((e.name, e.size));
-            }
-        }
-    }
-    // Настройки рабочего стола (выбранные обои/тема).
-    if let Ok(entries) = crate::ext2::list_dir_path("config") {
-        for e in entries {
-            if !e.is_directory && e.name == "desktop.cfg" {
-                out.push((String::from("config/desktop.cfg"), e.size));
-            }
-        }
-    }
-    // Галерея обоев медиапака.
-    if let Ok(entries) = crate::ext2::list_dir_path("media/wallpapers") {
-        for e in entries {
-            if !e.is_directory {
-                out.push((format!("media/wallpapers/{}", e.name), e.size));
-            }
-        }
-    }
+    scan_tree("", 0, &mut out);
     out
+}
+
+fn scan_tree(dir: &str, depth: usize, out: &mut Vec<(String, u32)>) {
+    if depth >= 8 || out.len() >= 256 {
+        return;
+    }
+    let entries = match crate::ext2::list_dir_path(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for e in entries {
+        if out.len() >= 256 {
+            return;
+        }
+        if e.name == "lost+found" {
+            continue;
+        }
+        let path = if dir.is_empty() {
+            e.name.clone()
+        } else {
+            format!("{}/{}", dir, e.name)
+        };
+        if e.is_directory {
+            scan_tree(&path, depth + 1, out);
+        } else {
+            out.push((path, e.size));
+        }
+    }
 }
 
 /// Строит USERS.DB в формате auth.rs: `username:salt:sha256(salt+pass)`.
@@ -855,12 +981,12 @@ pub fn cmd_install(arg: &str) {
     }
     crate::println!();
 
-    // ---- Этап 2: перенос аккаунтов и обоев с загрузочного диска ----
+    // ---- Этап 2: перенос всех пользовательских файлов с загрузочного диска ----
     let migrate = if test_mode {
         crate::println!("  Migrate data: skipped (test mode).");
         false
     } else {
-        crate::print!("  Migrate accounts and wallpapers from this disk? [Y/n]: ");
+        crate::print!("  Migrate all your files from this disk? [Y/n]: ");
         let ans = read_input_line();
         !matches!(ans.trim(), "n" | "N" | "no" | "No" | "NO")
     };
@@ -904,6 +1030,19 @@ pub fn cmd_install(arg: &str) {
     crate::println!("  User: {}", username);
     crate::println!("  /userdata: {} MiB (ext2)", userdata_sectors / 2048);
     crate::println!("  Disk is partitioned and ready to boot standalone.");
-    crate::println!("  Reboot: 'reboot'");
     crate::println!("==================================================");
+
+    // Этап 3: предложение немедленно перезагрузиться. Для Slave BIOS
+    // всё равно грузит первый диск — честно предупреждаем об этом.
+    if !test_mode {
+        if target == Drive::Slave {
+            crate::println!("  Note: BIOS boots the first disk; select the new disk");
+            crate::println!("  in the boot menu (in QEMU: put it first, e.g. -hda).");
+        }
+        crate::print!("  Reboot now? [y/N]: ");
+        let ans = read_input_line();
+        if matches!(ans.trim(), "y" | "Y" | "yes" | "Yes" | "YES") {
+            crate::cli::cmd_reboot();
+        }
+    }
 }

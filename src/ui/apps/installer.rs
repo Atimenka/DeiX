@@ -36,10 +36,17 @@ pub fn field_rect(win_w: u32, i: usize) -> Rect {
     Rect::new(16, BODY_Y + 40 + i as i32 * 54, win_w.saturating_sub(32), 26)
 }
 
-/// Строка-переключатель «Migrate accounts and wallpapers» (страница
-/// Confirm, этап 2 переноса данных).
+/// Строка-переключатель «Migrate all your files» (страница Confirm,
+/// этап 2 переноса данных).
 pub fn migrate_row_rect(win_w: u32) -> Rect {
     Rect::new(16, BODY_Y + 116, win_w.saturating_sub(32), 22)
+}
+
+/// Кнопка «Restart now» страницы Done (этап 3 — немедленная
+/// перезагрузка с нового диска). Стоит слева внизу: невидимые на Done
+/// click-зоны Back/Next остаются справа и не перехватывают клик.
+pub fn done_reboot_rect(win_h: u32) -> Rect {
+    Rect::new(16, win_h as i32 - 38, 150, 28)
 }
 
 /// Есть ли у страницы кнопка Back.
@@ -221,7 +228,7 @@ pub fn draw_installer(r: &mut Renderer, theme: &UiTheme, w: &Window, st: &Instal
             r.draw_text(x + 16, ly, &format!("/userdata size: {} MiB (ext2)", mib), theme.text_primary, None);
             ly += 20;
             r.draw_text(x + 16, ly, &format!("User:           {}", st.username.trim()), theme.text_primary, None);
-            // Этап 2: строка-переключатель переноса аккаунтов и обоев.
+            // Этап 2: строка-переключатель переноса всех файлов пользователя.
             let mrect = migrate_row_rect(ww);
             r.draw_rect(x + mrect.x, y + mrect.y + 3, 14, 14, theme.titlebar_inactive);
             if st.migrate {
@@ -230,7 +237,7 @@ pub fn draw_installer(r: &mut Renderer, theme: &UiTheme, w: &Window, st: &Instal
             r.draw_text(
                 x + mrect.x + 24,
                 y + mrect.y + 4,
-                "Migrate accounts and wallpapers from this disk",
+                "Migrate all your files from this disk",
                 theme.text_primary,
                 None,
             );
@@ -264,12 +271,14 @@ pub fn draw_installer(r: &mut Renderer, theme: &UiTheme, w: &Window, st: &Instal
             r.draw_icon(x + 16, y + BODY_Y + 24, IconType::Check, Color::rgb(80, 200, 120));
             r.draw_text(x + 40, y + BODY_Y + 26, "Install complete.", theme.text_primary, None);
             let mut ly = y + BODY_Y + 50;
-            for note in st.result_notes.iter().take(5) {
+            for note in st.result_notes.iter().take(7) {
                 r.draw_text(x + 16, ly, note, theme.text_secondary, None);
                 ly += 18;
             }
             ly += 6;
-            r.draw_text(x + 16, ly, "Close this window and reboot to use the new disk.", theme.text_primary, None);
+            r.draw_text(x + 16, ly, "Restart to begin using your new disk.", theme.text_primary, None);
+            // Этап 3: кнопка немедленной перезагрузки.
+            draw_button(r, theme, x, y, done_reboot_rect(wh), "Restart now", true);
         }
         InstallerPage::Failed => {
             r.draw_text(x + 16, y + BODY_Y + 26, "Installation failed:", Color::rgb(220, 60, 60), None);

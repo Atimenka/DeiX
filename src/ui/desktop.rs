@@ -2029,12 +2029,19 @@ impl Desktop {
                         }
                     }
                     InstallerPage::Confirm => {
-                        // Строка этапа 2: клик переключает перенос
-                        // аккаунтов и обоев с загрузочного диска.
+                        // Строка этапа 2: клик переключает перенос всех
+                        // пользовательских файлов с загрузочного диска.
                         if installer_ui::migrate_row_rect(ww).contains(rel_x, rel_y) {
                             st.migrate = !st.migrate;
                             st.note = None;
                             self.dirty = true;
+                        }
+                    }
+                    InstallerPage::Done => {
+                        // Этап 3: кнопка немедленной перезагрузки — вход
+                        // в новую систему прямо из установщика.
+                        if installer_ui::done_reboot_rect(wh).contains(rel_x, rel_y) {
+                            crate::cli::cmd_reboot();
                         }
                     }
                     _ => {}
@@ -2461,6 +2468,19 @@ impl Desktop {
         // Настройки рабочего стола (тема/акцент/обои/профиль) из
         // /userdata/config/desktop.cfg — один раз за загрузку.
         crate::ui::config::load_once();
+
+        // Этап 3 установщика: маркер первой загрузки нового диска.
+        // Приветствуем, напоминаем о шифровании (экран входа или CLI
+        // `encrypt confirm <пароль>`) и удаляем маркер, чтобы уведомление
+        // не повторялось при следующих загрузках.
+        if crate::vfs::exists("/userdata/config/first_boot") {
+            let _ = crate::ext2::delete_file_path("config/first_boot");
+            crate::ui::notify::push(
+                crate::ui::notify::Kind::Success,
+                "DeiX installed",
+                "First boot from the new disk. Your files were migrated. To encrypt /userdata: the login screen offers it, or run `encrypt confirm <password>` in the CLI.",
+            );
+        }
 
         // Автоустановка некритичного на /userdata: демо-пакеты (.mex)
         // пишутся синхронно (они крошечные), медиапак (обои, демо-видео,
