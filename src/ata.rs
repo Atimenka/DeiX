@@ -21,12 +21,21 @@
 //! Live-диск.
 
 use crate::port::{inb, insw, outb, outsw};
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::arch::asm;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 /// Накопленный дисковой I/O в секторах. Считается только успешные
 /// операции: счётчик увеличивается после завершения передачи данных.
 static SECTORS_READ: AtomicU64 = AtomicU64::new(0);
 static SECTORS_WRITTEN: AtomicU64 = AtomicU64::new(0);
+
+/// Верхняя граница блока READ MULTIPLE: степень двойки, поддерживаемая
+/// всеми контроллерами, что умеют команду (ATA допускает до 128).
+const MAX_MULTIPLE: u32 = 16;
+
+/// Размер блока READ MULTIPLE на Master (секторов за один DRQ); 0 —
+/// команда не включена, читаем по одному сектору (READ SECTORS).
+static MULTIPLE: AtomicU8 = AtomicU8::new(0);
 
 /// Накопленный дисковой I/O: `(прочитано секторов, записано секторов)`.
 pub fn io_counters() -> (u64, u64) {
@@ -52,6 +61,8 @@ const STATUS_DRQ: u8 = 0x08;
 const STATUS_BSY: u8 = 0x80;
 
 const CMD_READ_SECTORS: u8 = 0x20;
+const CMD_READ_MULTIPLE: u8 = 0xC4;
+const CMD_SET_MULTIPLE: u8 = 0xC6;
 const CMD_WRITE_SECTORS: u8 = 0x30;
 const CMD_CACHE_FLUSH: u8 = 0xE7;
 const CMD_IDENTIFY: u8 = 0xEC;
@@ -80,18 +91,85 @@ impl Drive {
     }
 }
 
+/// Сколько раз опросить статус, прежде чем уступать процессор.
+const SPIN_POLLS: u32 = 32;
+/// Предел опросов, когда уступать процессор нельзя (без прерываний).
+const LEGACY_MAX_POLLS: u32 = 1_000_000;
+/// Предел ожидания устройства в режиме с уступкой процессора.
+const IRQ_WAIT_TIMEOUT_MS: u64 = 5000;
+
+/// Ожидание готовности устройства по прерыванию IRQ14 (включается
+/// `enable_irq_wait`). Пока оно выключено, статус опрашивается в цикле.
+static IRQ_WAIT: AtomicBool = AtomicBool::new(false);
+
+/// Включает ожидание по прерыванию: вместо плотного опроса порта процессор
+/// засыпает (`hlt`) до IRQ14 или тика таймера. Плотный опрос в эмуляторе
+/// не даёт потоку, завершающему дисковую операцию, получить управление, и
+/// каждая команда растягивается на миллисекунды.
+pub fn enable_irq_wait() {
+    crate::interrupts::enable_ata_irq();
+    IRQ_WAIT.store(true, Ordering::Relaxed);
+}
+
+fn interrupts_enabled() -> bool {
+    let flags: u64;
+    unsafe {
+        asm!("pushfq", "pop {}", out(reg) flags, options(nomem, preserves_flags));
+    }
+    flags & (1 << 9) != 0
+}
+
+/// Шаг ожидания между опросами статуса.
+struct Waiter {
+    polls: u32,
+    deadline_ms: u64,
+}
+
+impl Waiter {
+    fn new() -> Self {
+        Waiter { polls: 0, deadline_ms: 0 }
+    }
+
+    /// `false` — ожидание исчерпано, устройство не отвечает.
+    fn pause(&mut self) -> bool {
+        self.polls = self.polls.saturating_add(1);
+        if self.polls < SPIN_POLLS {
+            return true;
+        }
+        if IRQ_WAIT.load(Ordering::Relaxed) && interrupts_enabled() {
+            let now = crate::timer::uptime_ms();
+            if self.deadline_ms == 0 {
+                self.deadline_ms = now + IRQ_WAIT_TIMEOUT_MS;
+            }
+            if now > self.deadline_ms {
+                return false;
+            }
+            unsafe {
+                asm!("hlt", options(nomem, nostack, preserves_flags));
+            }
+            true
+        } else {
+            self.polls < LEGACY_MAX_POLLS
+        }
+    }
+}
+
 fn wait_bsy_clear() -> bool {
-    for _ in 0..1_000_000u32 {
+    let mut waiter = Waiter::new();
+    loop {
         let status = unsafe { inb(STATUS_PORT) };
         if status & STATUS_BSY == 0 {
             return true;
         }
+        if !waiter.pause() {
+            return false;
+        }
     }
-    false
 }
 
 fn wait_drq_or_err() -> Result<(), ()> {
-    for _ in 0..1_000_000u32 {
+    let mut waiter = Waiter::new();
+    loop {
         let status = unsafe { inb(STATUS_PORT) };
         if status & STATUS_ERR != 0 {
             return Err(());
@@ -99,8 +177,65 @@ fn wait_drq_or_err() -> Result<(), ()> {
         if status & STATUS_DRQ != 0 {
             return Ok(());
         }
+        if !waiter.pause() {
+            return Err(());
+        }
     }
-    Err(())
+}
+
+// ---------------- сброс кеша записи ----------------
+
+/// Глубина вложенных пакетов записи: пока она не нулевая, сброс кеша
+/// диска откладывается до конца пакета.
+static FLUSH_DEPTH: AtomicU32 = AtomicU32::new(0);
+/// Диски с записанными, но ещё не сброшенными данными (бит 0 — Master,
+/// бит 1 — Slave).
+static FLUSH_DIRTY: AtomicU8 = AtomicU8::new(0);
+
+fn drive_bit(drive: Drive) -> u8 {
+    match drive {
+        Drive::Master => 1,
+        Drive::Slave => 2,
+    }
+}
+
+fn flush_drive(drive: Drive) {
+    wait_bsy_clear();
+    unsafe {
+        outb(DRIVE_HEAD_PORT, drive.select_byte(0));
+        outb(COMMAND_PORT, CMD_CACHE_FLUSH);
+    }
+    wait_bsy_clear();
+}
+
+/// Пакет записей: одна высокоуровневая операция (создание файла,
+/// форматирование) пишет десятки блоков. Сброс кеша диска после КАЖДОГО
+/// блока заставляет эмулятор делать fsync образа на хосте; здесь он
+/// выполняется один раз, когда пакет закрыт. Гарантия «после возврата из
+/// операции данные сброшены на носитель» сохраняется, ослаблен лишь
+/// порядок записи блоков внутри операции.
+pub struct FlushBatch;
+
+impl FlushBatch {
+    pub fn begin() -> Self {
+        FLUSH_DEPTH.fetch_add(1, Ordering::SeqCst);
+        FlushBatch
+    }
+}
+
+impl Drop for FlushBatch {
+    fn drop(&mut self) {
+        if FLUSH_DEPTH.fetch_sub(1, Ordering::SeqCst) != 1 {
+            return;
+        }
+        let dirty = FLUSH_DIRTY.swap(0, Ordering::SeqCst);
+        if dirty & drive_bit(Drive::Master) != 0 {
+            flush_drive(Drive::Master);
+        }
+        if dirty & drive_bit(Drive::Slave) != 0 {
+            flush_drive(Drive::Slave);
+        }
+    }
 }
 
 /// Читает `count` секторов начиная с `lba` (LBA28, максимум 256 секторов
@@ -131,6 +266,9 @@ pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -
         return Err(());
     }
 
+    let multiple = if drive == Drive::Master { MULTIPLE.load(Ordering::Relaxed) as usize } else { 0 };
+    let (cmd, per_drq) = if multiple > 1 { (CMD_READ_MULTIPLE, multiple) } else { (CMD_READ_SECTORS, 1) };
+
     unsafe {
         outb(CONTROL_PORT, 0x00); // включаем прерывания контроллера (nIEN=0), нам они не нужны, но не мешают
         outb(DRIVE_HEAD_PORT, drive.select_byte(lba));
@@ -139,22 +277,25 @@ pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -
         outb(LBA_LOW_PORT, (lba & 0xFF) as u8);
         outb(LBA_MID_PORT, ((lba >> 8) & 0xFF) as u8);
         outb(LBA_HIGH_PORT, ((lba >> 16) & 0xFF) as u8);
-        outb(COMMAND_PORT, CMD_READ_SECTORS);
+        outb(COMMAND_PORT, cmd);
     }
 
     let sectors = if count == 0 { 256 } else { count as usize };
-    for i in 0..sectors {
+    let mut done = 0usize;
+    while done < sectors {
         if wait_drq_or_err().is_err() {
             crate::diag::error(
                 crate::diag::ErrorCode::new(crate::diag::Subsystem::Disk, 2),
-                &alloc::format!("ATA: ошибка чтения LBA {} (сектор {} из {})", lba, i + 1, sectors),
+                &alloc::format!("ATA: ошибка чтения LBA {} (сектор {} из {})", lba, done + 1, sectors),
             );
             return Err(());
         }
-        let offset = i * SECTOR_SIZE;
+        let n = per_drq.min(sectors - done);
+        let offset = done * SECTOR_SIZE;
         unsafe {
-            insw(DATA_PORT, &mut buffer[offset..offset + SECTOR_SIZE]);
+            insw(DATA_PORT, &mut buffer[offset..offset + n * SECTOR_SIZE]);
         }
+        done += n;
     }
 
     SECTORS_READ.fetch_add(sectors as u64, Ordering::Relaxed);
@@ -210,13 +351,50 @@ pub fn write_sectors_to(drive: Drive, lba: u32, count: u8, data: &[u8]) -> Resul
         }
     }
 
-    unsafe {
-        outb(COMMAND_PORT, CMD_CACHE_FLUSH);
+    if FLUSH_DEPTH.load(Ordering::SeqCst) > 0 {
+        FLUSH_DIRTY.fetch_or(drive_bit(drive), Ordering::SeqCst);
+    } else {
+        flush_drive(drive);
     }
-    wait_bsy_clear();
 
     SECTORS_WRITTEN.fetch_add(sectors as u64, Ordering::Relaxed);
     Ok(())
+}
+
+/// Включает на Master чтение блоками (SET MULTIPLE MODE + READ MULTIPLE).
+///
+/// READ SECTORS отдаёт сектор за сектором: эмулятор (и часть реальных
+/// контроллеров) обрабатывает каждый сектор отдельным обращением к
+/// носителю. READ MULTIPLE переносит до `MAX_MULTIPLE` секторов за одно
+/// ожидание DRQ. Если диск команду не поддерживает или отказал, остаётся
+/// прежний READ SECTORS. Возвращает выбранный размер блока (0 — не включено).
+pub fn enable_multiple() -> u8 {
+    let Some(id) = identify(Drive::Master) else {
+        return 0;
+    };
+    // Слово 47, биты 7:0 — максимум секторов на блок (0 — не поддерживается).
+    let max = id[94] as u32;
+    let mut block = 1u32;
+    while block * 2 <= max && block * 2 <= MAX_MULTIPLE {
+        block *= 2;
+    }
+    if block < 2 {
+        return 0;
+    }
+    unsafe {
+        outb(DRIVE_HEAD_PORT, 0xE0);
+        outb(SECTOR_COUNT_PORT, block as u8);
+        outb(COMMAND_PORT, CMD_SET_MULTIPLE);
+    }
+    if !wait_bsy_clear() {
+        return 0;
+    }
+    let status = unsafe { inb(STATUS_PORT) };
+    if status & STATUS_ERR != 0 {
+        return 0;
+    }
+    MULTIPLE.store(block as u8, Ordering::Relaxed);
+    block as u8
 }
 
 /// Простая проверка "диск отвечает вообще хоть как-то" — читаем сектор 0

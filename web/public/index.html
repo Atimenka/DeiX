@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeiX OS — операционная система на Rust</title>
+  <meta name="description" content="DeiX OS — 64-битная операционная система, написанная с нуля на Rust и ассемблере для x86_64.">
+  <meta name="theme-color" content="#0b0b0c">
+  <link rel="alternate" hreflang="ru" href="/">
+  <link rel="alternate" hreflang="en" href="/en">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="preload" href="/vendor/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/vendor/fonts/inter-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-page="home">
+  <main>
+    <section class="hero">
+      <div class="wrap hero-grid">
+        <div>
+          <span class="chip reveal"><span class="dot"></span>0.3.0-beta · x86_64 · Rust no_std</span>
+          <h1 class="reveal d1">Операционная система, написанная <span class="grad">с нуля</span></h1>
+          <p class="lead reveal d2">Маленькое ядро на Rust и ассемблере, неизменяемый системный раздел EROFS, собственный сетевой стек с TLS 1.3 и графическая оболочка. Работает в QEMU и на реальном железе.</p>
+          <div class="cta reveal d3">
+            <a class="btn primary large" href="https://github.com/Atimenka/DeiX" rel="noopener"><svg class="icon"><use href="/icons.svg#github"/></svg>Исходный код</a>
+            <a class="btn large" href="/request">Получить ключ dev-режима<svg class="icon"><use href="/icons.svg#arrow"/></svg></a>
+          </div>
+          <div class="hero-meta reveal d3">
+            <span><svg class="icon"><use href="/icons.svg#shield"/></svg>TLS 1.3 без libc</span>
+            <span><svg class="icon"><use href="/icons.svg#lock"/></svg>EROFS только для чтения</span>
+            <span><svg class="icon"><use href="/icons.svg#code"/></svg>Открытый код</span>
+          </div>
+        </div>
+
+        <div class="desktop reveal d2" aria-hidden="true">
+          <div class="win term">
+            <div class="win-bar"><i></i><i></i><i></i><b>deix — терминал</b></div>
+            <div class="win-body">
+              <div class="ln"><span class="ps">deix@os</span> <span class="cmd">uname</span></div>
+              <div class="ln out">DeiX 0.3.0-beta x86_64</div>
+              <div class="ln"><span class="ps">deix@os</span> <span class="cmd">dev id</span></div>
+              <div class="ln out">b4e65262d8a1…e81153b9</div>
+              <div class="ln"><span class="ps">deix@os</span> <span class="cmd">dev unlock DX7K-…</span></div>
+              <div class="ln"><span class="okc">✓ ключ принят</span> <span class="caret"></span></div>
+            </div>
+          </div>
+          <div class="win mon">
+            <div class="win-bar"><i></i><i></i><i></i><b>монитор</b></div>
+            <div class="win-body">
+              <div class="bar w1">ЦП<span></span></div>
+              <div class="bar w2">Память<span></span></div>
+              <div class="bar w3">Сеть<span></span></div>
+            </div>
+          </div>
+          <div class="os-toast">
+            <div class="ico"><svg class="icon"><use href="/icons.svg#key"/></svg></div>
+            <div><b>Dev-режим</b><span>Ключ принят. Выполните <code>dev on</code></span></div>
+          </div>
+          <div class="dock">
+            <i><svg class="icon"><use href="/icons.svg#layers"/></svg></i>
+            <i><svg class="icon"><use href="/icons.svg#terminal"/></svg></i>
+            <i><svg class="icon"><use href="/icons.svg#disk"/></svg></i>
+            <i><svg class="icon"><use href="/icons.svg#globe"/></svg></i>
+            <i><svg class="icon"><use href="/icons.svg#pulse"/></svg></i>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="ticker reveal" aria-hidden="true"><div class="ticker-track"><span>Rust no_std</span><span>x86_64 long mode</span><span>TLS 1.3</span><span>X.509 · RSA · ECDSA</span><span>EROFS /system</span><span>ext2/4 /userdata</span><span>VBE 32 bpp</span><span>Intel HDA</span><span>RTL8139</span><span>dinit PID 1</span><span>MEX SDK</span><span>DeiX Script</span><span>XTS-AES-256</span><span>SHA-256</span><span>Rust no_std</span><span>x86_64 long mode</span><span>TLS 1.3</span><span>X.509 · RSA · ECDSA</span><span>EROFS /system</span><span>ext2/4 /userdata</span><span>VBE 32 bpp</span><span>Intel HDA</span><span>RTL8139</span><span>dinit PID 1</span><span>MEX SDK</span><span>DeiX Script</span><span>XTS-AES-256</span><span>SHA-256</span></div></div>
+
+    <div class="wrap">
+      <div class="stats">
+        <div class="stat reveal"><b>~32 000</b><span>строк Rust</span></div>
+        <div class="stat reveal d1"><b>~0,9 МБ</b><span>ядро</span></div>
+        <div class="stat reveal d2"><b>TLS 1.3</b><span>собственная реализация</span></div>
+        <div class="stat reveal d3"><b>EROFS + ext2/4</b><span>/system и /userdata</span></div>
+      </div>
+    </div>
+
+    <section class="block" id="features">
+      <div class="wrap">
+        <span class="eyebrow reveal">Возможности</span>
+        <h2 class="reveal">Что внутри</h2>
+        <p class="sub reveal">Всё написано для DeiX: без заимствованного ядра и без libc.</p>
+        <div class="bento">
+          <div class="card reveal"><div class="ico"><svg class="icon"><use href="/icons.svg#cpu"/></svg></div><h3>Ядро на Rust</h3><p>Загрузка MBR → stage2 → long mode → kernel.bin. Вытесняющая многозадачность на таймере PIT и изоляция Ring 3 для MEX-программ.</p></div>
+          <div class="card reveal d1"><div class="ico"><svg class="icon"><use href="/icons.svg#disk"/></svg></div><h3>Файловые системы</h3><p>/system — настоящий EROFS только для чтения, /userdata — ext2/4 для пользователей, настроек и пакетов.</p></div>
+          <div class="card reveal d2"><div class="ico"><svg class="icon"><use href="/icons.svg#globe"/></svg></div><h3>Сеть и TLS</h3><p>RTL8139, ARP, IPv4, ICMP, UDP, TCP, DNS и HTTP/1.1 с gzip. TLS 1.3 с проверкой сертификатов: X.509, RSA, ECDSA и 23 корневых CA.</p></div>
+          <div class="card wide reveal"><div class="ico"><svg class="icon"><use href="/icons.svg#monitor"/></svg></div><h3>Графика и звук</h3><p>VBE 32 bpp с кириллическим шрифтом, рабочий стол с уведомлениями, Intel HDA и PC Speaker.</p></div>
+          <div class="card wide reveal d1"><div class="ico"><svg class="icon"><use href="/icons.svg#pulse"/></svg></div><h3>Dinit и диагностика</h3><p>PID 1 — супервизор служб. Реестр кодов DX-*, кольцевой журнал, отчёт о сбое, который переживает перезагрузку.</p></div>
+          <div class="card wide reveal"><div class="ico"><svg class="icon"><use href="/icons.svg#code"/></svg></div><h3>DeiX Script и MEX SDK</h3><p>Интерпретатор скриптов с функциями и циклами. Собственный формат программ MEX и freestanding-SDK для C/C++.</p></div>
+          <div class="card wide reveal d1"><div class="ico"><svg class="icon"><use href="/icons.svg#layers"/></svg></div><h3>Установщик</h3><p>Установка на физический диск из системы: MBR, образ /system, форматирование /userdata, проверка SHA-256 и шифрование XTS-AES-256.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="stack">
+      <div class="wrap">
+        <span class="eyebrow reveal">Архитектура</span>
+        <h2 class="reveal">Стек DeiX слой за слоем</h2>
+        <p class="sub reveal">Потяните модель, чтобы повернуть, и наведите на слой — он выдвинется вперёд.</p>
+        <div class="stack reveal">
+          <div class="stack-view" id="stack3d" aria-hidden="true"></div>
+          <ol class="stack-list" id="stack-list">
+            <li><button type="button" class="stack-item" data-i="5"><b>Рабочий стол</b><span>VBE 32 bpp, окна, уведомления и звук.</span></button></li>
+            <li><button type="button" class="stack-item" data-i="4"><b>Dinit (PID 1)</b><span>Супервизор служб и реестр кодов DX-*.</span></button></li>
+            <li><button type="button" class="stack-item" data-i="3"><b>/userdata</b><span>ext2/4 под XTS-AES-256: пользователи, настройки, пакеты.</span></button></li>
+            <li><button type="button" class="stack-item" data-i="2"><b>/system</b><span>EROFS только для чтения: образ нельзя изменить на лету.</span></button></li>
+            <li><button type="button" class="stack-item" data-i="1"><b>Ядро на Rust</b><span>Long mode, многозадачность, сеть, TLS 1.3, Ring 3 для MEX.</span></button></li>
+            <li><button type="button" class="stack-item" data-i="0"><b>Загрузчик</b><span>MBR → stage2 → kernel.bin с проверкой SHA-256.</span></button></li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="net">
+      <div class="wrap">
+        <span class="eyebrow reveal">Сеть</span>
+        <h2 class="reveal">Свой стек до последнего байта</h2>
+        <p class="sub reveal">Иллюстрация: пакеты бегут между узлами. Потяните, чтобы повернуть глобус.</p>
+        <div class="logo-stage net-stage reveal">
+          <div class="logo-view" id="net3d" aria-hidden="true"></div>
+          <ul class="net-tags"><li>TLS 1.3 без libc</li><li>ARP · IPv4 · TCP · DNS</li><li>HTTP/1.1 и gzip</li></ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="disk">
+      <div class="wrap">
+        <span class="eyebrow reveal">Диск</span>
+        <h2 class="reveal">Как устроен диск DeiX</h2>
+        <p class="sub reveal">Схема раскладки, не масштаб. Головка чтения наводится на область, на которую вы навели курсор.</p>
+        <div class="stack flip reveal">
+          <div class="stack-view" id="disk3d" aria-hidden="true"></div>
+          <ol class="stack-list" id="disk-list">
+            <li><button type="button" class="stack-item" data-i="0"><b>Загрузчик</b><span>MBR и stage2 переводят процессор в long mode.</span></button></li>
+            <li><button type="button" class="stack-item" data-i="1"><b>Ядро</b><span>kernel.bin и его описание; SHA-256 проверяется до запуска.</span></button></li>
+            <li><button type="button" class="stack-item" data-i="2"><b>Служебная область</b><span>Дамп паники и управляющий сектор обновления.</span></button></li>
+            <li><button type="button" class="stack-item" data-i="3"><b>/system</b><span>Образ EROFS только для чтения.</span></button></li>
+            <li><button type="button" class="stack-item" data-i="4"><b>/userdata</b><span>Зашифрованный ext2/4: пользователи, настройки, загрузка обновлений.</span></button></li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="logo">
+      <div class="wrap">
+        <span class="eyebrow reveal">Логотип</span>
+        <h2 class="reveal">DeiX в трёх измерениях</h2>
+        <p class="sub reveal">Потяните, чтобы повернуть. Нажмите на букву — она перевернётся.</p>
+        <div class="logo-stage reveal">
+          <div class="logo-view" id="logo3d" aria-hidden="true"></div>
+          <span class="logo-fallback" aria-hidden="true">DEIX</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="dev">
+      <div class="wrap">
+        <span class="eyebrow reveal">Dev-режим</span>
+        <h2 class="reveal">Одноразовый ключ для вашего устройства</h2>
+        <p class="sub reveal">Dev-режим включает root-оболочку и снимает гарантии целостности системы. Ключ подписан владельцем проекта и работает только на одном устройстве, один раз.</p>
+        <div class="steps">
+          <div class="step reveal"><h3>Узнайте Device ID</h3><p>В DeiX выполните <code>dev id</code>. Команда печатает идентификатор устройства из 32 символов.</p></div>
+          <div class="step reveal d1"><h3>Войдите на сайт</h3><p>Создайте аккаунт, подтвердите почту и вставьте Device ID в разделе «Аккаунт» → «Dev-ключ».</p></div>
+          <div class="step reveal d2"><h3>Получите ключ</h3><p>Сайт выдаёт подписанный ключ, пока владелец принимает запросы. Ключ показывается один раз и нигде не хранится.</p></div>
+          <div class="step reveal d3"><h3>Включите режим</h3><p>В DeiX: <code>dev unlock КЛЮЧ</code>, затем <code>dev on</code>. Сеть в этот момент не нужна.</p></div>
+        </div>
+        <div class="note reveal"><b>Честная граница:</b> это реестр устройств, а не защита от владельца машины. Исходники открыты, и проверку можно обойти.</div>
+      </div>
+    </section>
+
+    <section class="block" id="security">
+      <div class="wrap">
+        <span class="eyebrow reveal">Аккаунты</span>
+        <h2 class="reveal">Безопасность без лишнего</h2>
+        <p class="sub reveal">Пароль хранится у Supabase Auth, сессия — в HttpOnly-cookie, формы защищены от ботов.</p>
+        <div class="bento">
+          <div class="card reveal"><div class="ico"><svg class="icon"><use href="/icons.svg#qr"/></svg></div><h3>Двухфакторный вход</h3><p>Любое TOTP-приложение: Google Authenticator, Aegis, 1Password. Восемь резервных кодов на случай потери телефона. Для панели Owner 2FA обязательна.</p></div>
+          <div class="card reveal d1"><div class="ico"><svg class="icon"><use href="/icons.svg#mail"/></svg></div><h3>Проверка почты</h3><p>Одноразовые адреса и домены без почтового сервера отклоняются, а письмо со ссылкой подтверждает владение адресом.</p></div>
+          <div class="card reveal d2"><div class="ico"><svg class="icon"><use href="/icons.svg#key"/></svg></div><h3>Ключи с подписью</h3><p>ECDSA P-256 над Device ID и случайным nonce. Закрытый ключ хранится только на сервере, открытый вшит в систему.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="mega" aria-hidden="true"><div class="mega-track"><span>No libc</span><span class="o">No runtime</span><span>Built from scratch</span><span class="o">Rust no_std</span><span>No libc</span><span class="o">No runtime</span><span>Built from scratch</span><span class="o">Rust no_std</span></div></div>
+    <section class="block" id="faq">
+      <div class="wrap">
+        <span class="eyebrow reveal">Вопросы</span>
+        <h2 class="reveal">Частые вопросы</h2>
+        <div class="faq reveal">
+          <details><summary>Как запустить DeiX?</summary><p>Соберите проект скриптом <code>./build.sh</code> и запустите <code>./run.sh</code>: система стартует в QEMU. Подробности — в README репозитория.</p></details>
+          <details><summary>Зачем нужен dev-режим?</summary><p>Он открывает root-оболочку для разработки и отладки. В обычной работе система неизменяема: /system смонтирован только для чтения.</p></details>
+          <details><summary>Потерял телефон с кодами 2FA. Что делать?</summary><p>Войдите с резервным кодом: он отключит 2FA, и её можно будет подключить заново на новом телефоне. Каждый резервный код работает один раз.</p></details>
+          <details><summary>Не приходит письмо подтверждения</summary><p>Проверьте папку «Спам» и запросите письмо ещё раз из аккаунта. Ссылка действует 24 часа.</p></details>
+        </div>
+        <div class="cta-band reveal">
+          <h2>Попробуйте DeiX сами</h2>
+          <p>Создайте аккаунт, привяжите устройство и получите ключ dev-режима за пару минут.</p>
+          <div class="cta">
+            <a class="btn primary large" href="/register">Создать аккаунт</a>
+            <a class="btn large" href="https://github.com/Atimenka/DeiX" rel="noopener">Исходный код</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script src="/i18n.js"></script>
+  <script src="/site.js"></script>
+  <script src="/motion.js" defer></script>
+</body>
+</html>

@@ -31,11 +31,10 @@ bash build.sh
 Result: `build/deix_disk.img` (20 MiB) and the release artifacts
 `build/deix-0.3.0-beta-x86_64.img` + `build/SHA256SUMS`.
 
-Steps: partition map check (`tools/check_partition_map.py`) -> nasm
-stage2/ramboot -> cargo build --release -> objcopy kernel.bin -> MBR ->
-rebuild of stage2/ramboot with the real kernel size and LBA -> image
-assembly -> partition formatting (`tools/make_deix_fs.py`: EROFS
-`/system`, ext2 `/userdata`, `DEIXKIMG` kernel descriptor).
+Steps: nasm stage2/ramboot/MBR -> cargo build --release -> objcopy kernel.bin
+-> partition map check (`tools/check_partition_map.py`) -> image: MBR, then
+`tools/make_deix_fs.py` (EROFS `/system` with `boot/stage2.bin`,
+`boot/ramboot.bin`, `kernel/kernel.bin`, ext2 `/userdata`, `DEIXKIMG` boot map).
 
 Kernel only, no image: `cargo build --release`.
 
@@ -44,16 +43,17 @@ Kernel only, no image: `cargo build --release`.
 | Area | LBA | Sectors | Contents |
 |---|---|---|---|
 | MBR | 0 | 1 | boot sector + partition table |
-| boot | 1..2046 | ≤2046 | stage2 + ramboot + raw kernel.bin |
-| `DEIXKIMG` | 2047 | 1 | kernel descriptor: LBA, size, SHA-256 |
+| reserved | 1..2046 | 2046 | zeros (stage2, ramboot and the kernel live in `/system`) |
+| `DEIXKIMG` | 2047 | 1 | boot map: extents of stage2, ramboot and kernel.bin, kernel SHA-256 |
 | panic dump | 2048 | 64 | crash dump (`DEIXPNIC`), outside any FS |
-| `/system` | 4096 | 20480 | EROFS, read-only |
-| `/userdata` | 24576 | 16384 | ext2, read/write |
+| `/system` | 4096 | 32768 | EROFS, read-only |
+| `/userdata` | 36864 | 32768 | ext2, read/write |
 
-Booting uses the raw kernel (MBR -> stage2 -> kernel.bin at LBA 1..2046);
-`/system/kernel/kernel.bin` is a copy of the same file inside EROFS. After
-startup the kernel compares both copies by size and SHA-256 via the
-`DEIXKIMG` descriptor; a mismatch is recorded as `DX-KRN-0013`.
+Booting reads the files inside `/system` through the boot map (MBR reads
+`stage2.bin` and `ramboot.bin`, ramboot reads `kernel.bin`; see
+`docs/BOOTMAP.md`). After startup the kernel reads the kernel by the map's
+extents, checks its SHA-256 and compares it with `/system/kernel/kernel.bin`
+opened by name; a mismatch is recorded as `DX-KRN-0013`.
 
 The single source of truth for geometry is `src/partition_map.rs`.
 `tools/check_partition_map.py` checks `tools/make_deix_fs.py`,
@@ -95,7 +95,7 @@ python3 tools/qemu_install_test.py      # install onto a second disk + boot from
 Verifying EROFS with a third-party tool:
 
 ```bash
-dd if=build/deix_disk.img of=/tmp/system.img bs=512 skip=4096 count=20480
+dd if=build/deix_disk.img of=/tmp/system.img bs=512 skip=4096 count=32768
 dump.erofs /tmp/system.img | head -5     # -> Filesystem magic number: 0xE0F5E1E2
 fsck.erofs --extract=/tmp/out /tmp/system.img && ls -R /tmp/out
 ```

@@ -1,21 +1,24 @@
-; boot_sector.asm — классический MBR-загрузчик (512 байт, BIOS реальный режим).
-; BIOS сам находит его по сигнатуре 0xAA55 и загружает по адресу 0x7c00.
-; Используется для обычного дискового образа (deix_disk.img, -drive в QEMU
-; / прямая запись на физический носитель). Для гибридного .iso (загрузка
-; через -cdrom) используется ОТДЕЛЬНЫЙ загрузчик boot/boot_sector_iso.asm —
-; см. подробное объяснение прямо в том файле: реальный SeaBIOS не
-; поддерживает El Torito "hard disk emulation" для произвольных образов
-; (была экспериментально обнаружена нулевая CHS-геометрия), поэтому ISO
-; собирается через другой механизм (El Torito "no emulation" boot).
+; boot_sector.asm — MBR-загрузчик DeiX (512 байт, BIOS реальный режим).
+; BIOS находит его по сигнатуре 0xAA55 и загружает по адресу 0x7c00.
+; Используется для дискового образа (deix_disk.img, -drive в QEMU / прямая
+; запись на физический носитель). Для .iso используется отдельный стаб
+; boot/boot_sector_iso.asm.
+;
+; Загрузчик и ядро лежат ФАЙЛАМИ в /system (EROFS), а не в сырой области
+; диска:
+;   /system/boot/stage2.bin, /system/boot/ramboot.bin, /system/kernel/kernel.bin
+; MBR не знает файловых систем: путь к файлам задаёт КАРТА ЗАГРУЗКИ в секторе
+; LBA 2047 (формат DEIXKIMG, версия 2, см. docs/BOOTMAP.md): для каждого файла
+; список участков диска (LBA, секторов). Карту пишут tools/make_deix_fs.py
+; при сборке образа и ядро (install, sysfs convert).
 ;
 ; Задача:
-;   1) вывести сообщение через BIOS (int 10h)
-;   2) прочитать stage2 (наш 32/64-битный код + ядро) с диска через int 13h
-;      (extended read, AH=42h, LBA-адресация — доступно всегда для
-;      настоящего/эмулированного жёсткого диска, подключённого как -drive)
-;   3) включить линию A20
-;   4) переключиться в 32-битный защищённый режим (через GDT)
-;   5) прыгнуть на stage2, загруженный по физическому адресу 0x10000
+;   1) вывести сообщение через BIOS (int 10h) и в COM1
+;   2) прочитать карту загрузки (LBA 2047) в 0x7000 и проверить её
+;   3) прочитать stage2 по карте в 0x10000
+;   4) прочитать ramboot по карте в 0x7E00 и передать ему управление
+;      (DL = номер загрузочного диска, полученный от BIOS)
+;   Ядро в память 0x100000 грузит ramboot, затем stage2 включает long mode.
 
 bits 16
 org 0x7c00
@@ -50,24 +53,34 @@ start:
     mov si, msg_loading
     call serial_str
 
-    ; ---- читаем stage2 (NUM_SECTORS секторов) в 0x10000 ----
-    mov word [sectors_left], NUM_SECTORS
-    mov word [cur_lba_lo], 1        ; стартовый LBA (сектор 1, сразу после MBR)
+    ; ---- карта загрузки: LBA BOOTMAP_LBA -> 0x7000 ----
+    mov word [sectors_left], 1
+    mov word [cur_lba_lo], BOOTMAP_LBA
     mov word [cur_lba_hi], 0
-    mov word [cur_segment], 0x1000  ; физ. адрес 0x10000 = 0x1000:0x0000
+    mov word [cur_segment], 0x0700
     call read_sectors_loop
+    mov si, BOOTMAP
+    mov di, bootmap_magic
+    mov cx, 4
+    repe cmpsw
+    jne map_error
+    cmp word [BOOTMAP + 48], 2      ; версия карты
+    jne map_error
+
+    ; ---- stage2 по карте в 0x10000 ----
+    mov si, BOOTMAP + 64
+    mov ax, [BOOTMAP + 52]
+    mov word [cur_segment], 0x1000
+    call load_extents
     mov al, 'S'
     call serial_byte
 
-    ; ---- читаем ramboot (RAM-диск загрузчик, RAMBOOT_SECTORS секторов)
-    ; в 0x9000 (низкая память: org=0x9000, DS=0, PM-сегменты плоские).
-    ; kernel.bin НЕ читаем здесь — ramboot сам скопирует его из RAM-диска
-    ; (читает весь образ через int13 в 0x2000000). ----
-    mov word [sectors_left], RAMBOOT_SECTORS
-    mov word [cur_lba_lo], RAMBOOT_LBA
-    mov word [cur_lba_hi], 0
-    mov word [cur_segment], 0x07E0  ; физ. адрес 0x7E00 = 0x07E0:0x0000
-    call read_sectors_loop
+    ; ---- ramboot по карте в 0x7E00 (низкая память: org=0x7E00, DS=0,
+    ; плоские сегменты PM). Ядро грузит сам ramboot. ----
+    mov si, BOOTMAP + 128
+    mov ax, [BOOTMAP + 56]
+    mov word [cur_segment], 0x07E0
+    call load_extents
 
     ; ---- передаём управление ramboot (real mode) ----
     ; DL = номер загрузочного диска, который дал BIOS. Раньше ramboot
@@ -78,10 +91,52 @@ start:
     mov dl, [boot_drive]
     jmp 0x07E0:0x0000
 
+map_error:
+    mov si, msg_map_error
+    jmp fatal
 disk_error:
     mov si, msg_disk_error
+fatal:
+    push si
     call print_string
+    pop si
+    call serial_str
     jmp $
+
+; Читает участки диска подряд в память с сегмента cur_segment.
+; SI = таблица участков (до 8 записей: LBA u32, секторов u32; секторов = 0 —
+; конец), AX = сколько секторов нужно всего. Нехватка участков — ошибка карты.
+load_extents:
+    mov cx, 8
+.next:
+    mov dx, [si + 4]
+    test dx, dx
+    jz .done
+    cmp dx, ax
+    jbe .keep
+    mov dx, ax
+.keep:
+    mov [sectors_left], dx
+    sub ax, dx
+    mov bx, [si]
+    mov [cur_lba_lo], bx
+    mov bx, [si + 2]
+    mov [cur_lba_hi], bx
+    push ax
+    push cx
+    push si
+    call read_sectors_loop
+    pop si
+    pop cx
+    pop ax
+    add si, 8
+    test ax, ax
+    jz .done
+    loop .next
+.done:
+    test ax, ax
+    jnz map_error
+    ret
 
 print_string:
     pusha
@@ -175,8 +230,10 @@ cur_lba_lo:   dw 0
 cur_lba_hi:   dw 0
 cur_segment:  dw 0
 
-msg_loading:    db "DeiX bootloader: loading stage2...", 13, 10, 0
-msg_disk_error: db "Disk read error!", 13, 10, 0
+msg_loading:    db "DeiX: loading", 13, 10, 0
+msg_disk_error: db "Disk error", 13, 10, 0
+msg_map_error:  db "Bad boot map", 13, 10, 0
+bootmap_magic:  db "DEIXKIMG"
 
 ; ---------------- Disk Address Packet (для int 13h, ah=0x42) ----------------
 align 4
@@ -195,59 +252,40 @@ dap_lba_hi:
     dw 0
     dw 0
 
-; NUM_SECTORS передаётся снаружи через `nasm -D NUM_SECTORS=N` (см. build.sh),
-; чтобы не читать с диска больше, чем реально есть (иначе BIOS вернёт ошибку
-; на образах маленького размера). Значение по умолчанию — на случай ручной
-; сборки без параметра.
-%ifndef NUM_SECTORS
-NUM_SECTORS equ 64
-%endif
-%ifndef KERNEL_SECTORS
-KERNEL_SECTORS equ 2048
-%endif
-; ramboot лежит сразу после stage2 (LBA = 1 + NUM_SECTORS).
-%ifndef RAMBOOT_LBA
-RAMBOOT_LBA equ (1 + NUM_SECTORS)
-%endif
-%ifndef RAMBOOT_SECTORS
-RAMBOOT_SECTORS equ 1
-%endif
-; kernel.bin лежит сразу после ramboot (LBA = 1 + NUM_SECTORS + RAMBOOT_SECTORS).
-%ifndef KERNEL_LBA
-KERNEL_LBA equ (1 + NUM_SECTORS + RAMBOOT_SECTORS)
-%endif
+BOOTMAP_LBA equ 2047        ; = partition_map.rs KERNEL_IMAGE_INFO_LBA
+BOOTMAP     equ 0x7000      ; карта загрузки в памяти (читает и ramboot)
 
 ; ---------------- MBR Partition Table (offset 446 = 0x1BE) ----------------
 ; Таблица разделов DeiX (источник истины — src/partition_map.rs,
 ; та же таблица пишется tools/make_deix_fs.py в собранный образ и
 ; src/install.rs::build_mbr на целевой диск):
 ;
-;   P1 0x83 bootable  LBA 4096  + 20480 сект (4096..24575)   /system  (EROFS RO)
-;   P2 0x83           LBA 24576 + 16384 сект (24576..40959)  /userdata (EXT2 RW)
+;   P1 0x83 bootable  LBA 4096  + 32768 сект (4096..36863)   /system  (EROFS RO)
+;   P2 0x83           LBA 36864 + 32768 сект (36864..69631)  /userdata (EXT2 RW)
 ;
 ; Сам загрузчик и ядро НЕ читают эту таблицу в рантайме — она нужна,
 ; чтобы внешние инструменты (fdisk, parted, GParted) видели диск как
 ; нормально размеченный. CHS-поля legacy, вычислены из LBA при
 ; HPC=255, SPT=63.
 ;
-; Секторы 1..2046 (до дескриптора ядра LBA 2047 и области аварийного
-; дампа LBA 2048..2111) заняты stage2 + ramboot + сырым kernel.bin —
-; стандартный "MBR gap", как у GRUB.
+; Секторы 1..2046 свободны (стандартный "MBR gap", как у GRUB): stage2,
+; ramboot и ядро лежат в /system. LBA 2047 — карта загрузки, 2048..2111 —
+; область аварийного дампа.
 times (446-($-$$)) db 0
 ; --- P1: /system (EROFS RO) ---
 db 0x80                     ; boot indicator: активный раздел
 db 0x41, 0x02, 0x00          ; CHS start (LBA 4096)
 db 0x83                     ; тип раздела: Linux native
-db 0x87, 0x06, 0x01          ; CHS end (LBA 24575)
+db 0x4B, 0x09, 0x02          ; CHS end (LBA 36863)
 dd 4096                     ; LBA start (= partition_map.rs /system)
-dd 20480                    ; секторов   (= partition_map.rs /system)
+dd 32768                    ; секторов   (= partition_map.rs /system)
 ; --- P2: /userdata (EXT2 RW) ---
 db 0x00                     ; не загрузочный
-db 0x87, 0x07, 0x01          ; CHS start (LBA 24576)
+db 0x4B, 0x0A, 0x02          ; CHS start (LBA 36864)
 db 0x83                     ; тип раздела: Linux native
-db 0x8C, 0x0A, 0x02          ; CHS end (LBA 40959)
-dd 24576                    ; LBA start (= partition_map.rs /userdata)
-dd 16384                    ; секторов   (= partition_map.rs /userdata)
+db 0x55, 0x11, 0x04          ; CHS end (LBA 69631)
+dd 36864                    ; LBA start (= partition_map.rs /userdata)
+dd 32768                    ; секторов   (= partition_map.rs /userdata)
 times 16 db 0                ; запись 3 (не используется)
 times 16 db 0                ; запись 4 (не используется)
 

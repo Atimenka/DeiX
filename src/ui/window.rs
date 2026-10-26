@@ -2,6 +2,7 @@
 
 use crate::ext2;
 use crate::renderer::{Color, Rect, Renderer};
+use crate::spinlock::SpinLock;
 use crate::ui::apps;
 use crate::ui::metrics::UiMetrics;
 use crate::ui::theme::UiTheme;
@@ -49,6 +50,9 @@ pub struct InstallerState {
     pub username: String,
     pub password: String,
     pub confirm: String,
+    /// Этап 2: перенести аккаунты и обои с загрузочного диска
+    /// (переключается на странице Confirm).
+    pub migrate: bool,
     /// Активное поле страницы Account: 0 = username, 1 = password,
     /// 2 = confirm.
     pub field: usize,
@@ -70,6 +74,7 @@ impl InstallerState {
             username: String::new(),
             password: String::new(),
             confirm: String::new(),
+            migrate: true,
             field: 0,
             note: None,
             job: None,
@@ -179,7 +184,7 @@ impl InstallerState {
 
     fn start_install(&mut self) {
         let options = self.size_options_mib();
-        let mib = options.get(self.size_idx).copied().unwrap_or(8);
+        let mib = options.get(self.size_idx).copied().unwrap_or(16);
         let drive = match self.disks.get(self.disk_idx) {
             Some(d) => d.drive,
             None => {
@@ -192,6 +197,7 @@ impl InstallerState {
             mib * 2048,
             String::from(self.username.trim()),
             self.password.clone(),
+            self.migrate,
         ) {
             Ok(job) => {
                 self.job = Some(job);
@@ -218,9 +224,16 @@ pub struct BrowserTab {
 }
 
 impl BrowserTab {
-    /// Новая вкладка, сразу загружающая URL.
+    /// Новая вкладка: внутренние страницы рисуются сразу, сетевые
+    /// загружает фоновая задача browser-net (на это время вкладка
+    /// показывает заглушку «Loading...», рабочий стол не блокируется).
     pub fn open(url: &str) -> Self {
-        let (content, links, title) = fetch_and_render_web_page(url);
+        let (content, links, title) = if needs_network(url) {
+            submit_nav(url);
+            loading_page(url)
+        } else {
+            fetch_and_render_web_page(url)
+        };
         BrowserTab {
             title,
             url: String::from(url),
@@ -234,9 +247,17 @@ impl BrowserTab {
 
     /// Переход по URL: загрузка страницы + запись в историю.
     /// `push_history=false` — для Back/Forward/Reload (позиция в истории
-    /// не меняется или уже изменена вызывающим).
+    /// не меняется или уже изменена вызывающим). Сетевые страницы
+    /// загружаются в фоновой задаче: вкладка сразу показывает
+    /// «Loading...», готовую страницу подставляет цикл событий рабочего
+    /// стола (take_nav_results).
     pub fn navigate(&mut self, url: &str, push_history: bool) {
-        let (content, links, title) = fetch_and_render_web_page(url);
+        let (content, links, title) = if needs_network(url) {
+            submit_nav(url);
+            loading_page(url)
+        } else {
+            fetch_and_render_web_page(url)
+        };
         self.url = String::from(url);
         self.title = title;
         self.content = content;
@@ -330,6 +351,32 @@ pub enum WindowContent {
     Installer {
         st: InstallerState,
     },
+    /// Центр обновлений ОС (Updates).
+    Updates {
+        center: crate::update::center::Center,
+    },
+    /// Просмотрщик фото: библиотека (path пуст) или один файл.
+    ImageViewer {
+        path: String,
+        library: Vec<String>,
+        selected: usize,
+        /// Декодированные пиксели 0xRRGGBB + размеры.
+        img: Option<(Vec<u32>, usize, usize)>,
+        error: Option<String>,
+    },
+    /// Видеоплеер: список файлов (list_mode) или воспроизведение.
+    VideoPlayer {
+        list: Vec<String>,
+        idx: Option<usize>,
+        list_mode: bool,
+        status: Option<String>,
+    },
+    /// Плеер музыки: плейлист + транспорт.
+    MusicPlayer {
+        list: Vec<String>,
+        idx: Option<usize>,
+        status: Option<String>,
+    },
 }
 
 impl WindowContent {
@@ -347,6 +394,10 @@ impl WindowContent {
             WindowContent::About => IconType::About,
             WindowContent::DisplaySettings { .. } => IconType::Display,
             WindowContent::Installer { .. } => IconType::Install,
+            WindowContent::Updates { .. } => IconType::Reload,
+            WindowContent::ImageViewer { .. } => IconType::Image,
+            WindowContent::VideoPlayer { .. } => IconType::Video,
+            WindowContent::MusicPlayer { .. } => IconType::Music,
         }
     }
 }
@@ -592,6 +643,172 @@ impl Window {
         }
     }
 
+    pub fn new_updates(x: i32, y: i32) -> Self {
+        Window {
+            id: 0,
+            title: String::from("Updates"),
+            x,
+            y,
+            width: 480,
+            height: 340,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 480, 340),
+            content: WindowContent::Updates { center: crate::update::center::Center::new() },
+        }
+    }
+
+    /// Просмотрщик фото в режиме библиотеки (список + превью).
+    pub fn new_image_viewer(x: i32, y: i32) -> Self {
+        Window {
+            id: 0,
+            title: String::from("Photos"),
+            x,
+            y,
+            width: 560,
+            height: 400,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 560, 400),
+            content: WindowContent::ImageViewer {
+                path: String::new(),
+                library: crate::ui::apps::media::collect_images(),
+                selected: 0,
+                img: None,
+                error: None,
+            },
+        }
+    }
+
+    /// Просмотрщик фото с открытым файлом: декодирует сразу; ошибка
+    /// декодирования показывается в окне честно.
+    pub fn new_image_viewer_file(x: i32, y: i32, path: &str) -> Self {
+        let name = crate::media::file_name(path);
+        let (img, error) = match crate::ui::apps::media::decode_image_file(path) {
+            Ok(v) => (Some(v), None),
+            Err(e) => (None, Some(e)),
+        };
+        Window {
+            id: 0,
+            title: format!("Photo - {}", name),
+            x,
+            y,
+            width: 520,
+            height: 400,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 520, 400),
+            content: WindowContent::ImageViewer {
+                path: String::from(path),
+                library: Vec::new(),
+                selected: 0,
+                img,
+                error,
+            },
+        }
+    }
+
+    /// Видеоплеер в режиме списка файлов.
+    pub fn new_video_player(x: i32, y: i32) -> Self {
+        Window {
+            id: 0,
+            title: String::from("Video"),
+            x,
+            y,
+            width: 520,
+            height: 380,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 520, 380),
+            content: WindowContent::VideoPlayer {
+                list: crate::ui::apps::media::collect_videos(),
+                idx: None,
+                list_mode: true,
+                status: None,
+            },
+        }
+    }
+
+    /// Видеоплеер с немедленным запуском файла.
+    pub fn new_video_player_file(x: i32, y: i32, path: &str) -> Self {
+        let name = crate::media::file_name(path);
+        let status = match crate::media::play(path) {
+            Ok(()) => None,
+            Err(e) => Some(e),
+        };
+        Window {
+            id: 0,
+            title: format!("Video - {}", name),
+            x,
+            y,
+            width: 520,
+            height: 380,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 520, 380),
+            content: WindowContent::VideoPlayer {
+                list: alloc::vec![String::from(path)],
+                idx: Some(0),
+                list_mode: false,
+                status,
+            },
+        }
+    }
+
+    /// Плеер музыки: плейлист из медиапака и загрузок.
+    pub fn new_music_player(x: i32, y: i32) -> Self {
+        Window {
+            id: 0,
+            title: String::from("Music"),
+            x,
+            y,
+            width: 430,
+            height: 380,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 430, 380),
+            content: WindowContent::MusicPlayer {
+                list: crate::ui::apps::media::collect_audio(),
+                idx: None,
+                status: None,
+            },
+        }
+    }
+
+    /// Плеер музыки с немедленным запуском файла: файл добавляется в
+    /// плейлист первым, если его там нет.
+    pub fn new_music_player_file(x: i32, y: i32, path: &str) -> Self {
+        let name = crate::media::file_name(path);
+        let mut list = crate::ui::apps::media::collect_audio();
+        let idx = match list.iter().position(|p| p == path) {
+            Some(i) => i,
+            None => {
+                list.insert(0, String::from(path));
+                0
+            }
+        };
+        let status = match crate::media::play(path) {
+            Ok(()) => None,
+            Err(e) => Some(e),
+        };
+        Window {
+            id: 0,
+            title: format!("Music - {}", name),
+            x,
+            y,
+            width: 430,
+            height: 380,
+            minimized: false,
+            maximized: false,
+            restore_geometry: (x, y, 430, 380),
+            content: WindowContent::MusicPlayer {
+                list,
+                idx: Some(idx),
+                status,
+            },
+        }
+    }
+
     /// Открывает редактор, читая файл через VFS. Ошибка чтения не рисует
     /// пустой документ как настоящий: редактор открывается только для
     /// чтения и показывает причину в строке состояния.
@@ -656,6 +873,83 @@ impl Window {
     }
 }
 
+// ==================== Фоновая загрузка страниц ====================
+
+/// Готовая страница от фоновой задачи: подставляется во вкладку,
+/// чей URL совпал.
+pub struct NavPage {
+    pub url: String,
+    pub content: Vec<String>,
+    pub links: Vec<String>,
+    pub title: String,
+}
+
+/// Очередь URL, которые должна загрузить задача `browser-net`.
+static NAV_JOBS: SpinLock<alloc::collections::VecDeque<String>> =
+    SpinLock::new(alloc::collections::VecDeque::new());
+/// Готовые страницы, которые забирает цикл событий рабочего стола.
+static NAV_RESULTS: SpinLock<alloc::collections::VecDeque<NavPage>> =
+    SpinLock::new(alloc::collections::VecDeque::new());
+/// Создана ли уже задача `browser-net` планировщиком.
+static NAV_TASK_STARTED: SpinLock<bool> = SpinLock::new(false);
+
+/// true, если URL ведёт в сеть: внутренние страницы (deix://… и
+/// http://deix.os) рисуются мгновенно и фоновая задача им не нужна.
+fn needs_network(url: &str) -> bool {
+    let clean = url.trim();
+    !clean.is_empty() && !clean.starts_with("deix://") && clean != "http://deix.os"
+}
+
+/// Задача `browser-net`: по очереди забирает URL, выполняет сетевую
+/// навигацию (DNS + TCP + TLS + HTTP + разбор ответа) и кладёт готовую
+/// страницу в результаты. Пока она работает, рабочий стол остаётся
+/// отзывчивым — сеть больше не блокирует ввод и отрисовку.
+extern "C" fn browser_net_task() {
+    loop {
+        match NAV_JOBS.lock().pop_front() {
+            Some(url) => {
+                let (content, links, title) = fetch_and_render_web_page(&url);
+                let mut results = NAV_RESULTS.lock();
+                if results.len() >= 16 {
+                    results.pop_front();
+                }
+                results.push_back(NavPage { url, content, links, title });
+            }
+            None => crate::timer::sleep_ms(50),
+        }
+    }
+}
+
+/// Ставит URL в очередь фоновой загрузки; при первом вызове создаёт
+/// задачу `browser-net` (видна в Task Manager под этим именем).
+fn submit_nav(url: &str) {
+    NAV_JOBS.lock().push_back(String::from(url));
+    let mut started = NAV_TASK_STARTED.lock();
+    if !*started && crate::sched::spawn("browser-net", browser_net_task).is_some() {
+        *started = true;
+    }
+}
+
+/// Содержимое вкладки, пока страница грузится в фоне.
+fn loading_page(url: &str) -> (Vec<String>, Vec<String>, String) {
+    (
+        alloc::vec![
+            String::from("# Loading..."),
+            String::new(),
+            format!("Fetching {} in a background task.", url),
+            String::from("The desktop stays responsive; this page is replaced when the download finishes."),
+        ],
+        Vec::new(),
+        String::from("Loading..."),
+    )
+}
+
+/// Забирает все готовые страницы с прошлого вызова (цикл событий
+/// рабочего стола подставляет их во вкладки с совпавшим URL).
+pub fn take_nav_results() -> alloc::collections::VecDeque<NavPage> {
+    core::mem::take(&mut *NAV_RESULTS.lock())
+}
+
 /// Загружает URL и возвращает (строки страницы, ссылки, заголовок вкладки).
 pub fn fetch_and_render_web_page(url: &str) -> (Vec<String>, Vec<String>, String) {
     let clean_url = url.trim();
@@ -664,6 +958,7 @@ pub fn fetch_and_render_web_page(url: &str) -> (Vec<String>, Vec<String>, String
         return (alloc::vec![
             String::from("# DeiX Browser"),
             String::from("Limited text-oriented HTTP/HTTPS client."),
+            format!("{} | build {}", crate::OS_RELEASE, crate::update::installed_build()),
             String::new(),
             String::from("## Quick Navigation (click a link):"),
             String::from("[1] https://example.com — HTTPS test page (TLS 1.3)"),
@@ -762,9 +1057,21 @@ pub fn fetch_and_render_web_page(url: &str) -> (Vec<String>, Vec<String>, String
             String::from("* server does not support TLS 1.3 (older HTTPS sites will not load)"),
             String::from("* server certificate failed verification (expiry, hostname, CA chain)"),
             String::new(),
+            network_summary_line(),
             String::from("Check in the CLI: `ifconfig`, `dns <host>`, `ping <ip>`."),
         ], Vec::new(), String::from("Load failed")),
     }
+}
+
+/// Строка с текущей сетевой конфигурацией для страницы ошибки загрузки.
+fn network_summary_line() -> String {
+    let ip = crate::net::my_ip();
+    let gw = crate::net::gateway_ip();
+    let dns = crate::net::dns_ip();
+    format!(
+        "Network now: eth0 {}.{}.{}.{} gw {}.{}.{}.{} dns {}.{}.{}.{}",
+        ip[0], ip[1], ip[2], ip[3], gw[0], gw[1], gw[2], gw[3], dns[0], dns[1], dns[2], dns[3]
+    )
 }
 
 /// Бинарный ли ответ: смотрим Content-Type, сигнатуры картинок и долю
@@ -1218,20 +1525,27 @@ pub fn load_partition_entries(partition: &str, path: &str) -> (Vec<FileViewEntry
                 Err(_) => (Vec::new(), Some(String::from("Failed to list directory"))),
             }
         }
-        "/system" => match crate::vfs::readdir("/system") {
-            Ok(entries) => {
-                let mut items = Vec::new();
-                for e in entries {
-                    items.push(FileViewEntry {
-                        name: e.name,
-                        is_dir: e.is_dir,
-                        size: e.size.min(u32::MAX as u64) as u32,
-                    });
+        "/system" => {
+            let full = if path == "/" || path.is_empty() {
+                String::from("/system")
+            } else {
+                format!("/system{}", path)
+            };
+            match crate::vfs::readdir(&full) {
+                Ok(entries) => {
+                    let mut items = Vec::new();
+                    for e in entries {
+                        items.push(FileViewEntry {
+                            name: e.name,
+                            is_dir: e.is_dir,
+                            size: e.size.min(u32::MAX as u64) as u32,
+                        });
+                    }
+                    (items, None)
                 }
-                (items, None)
+                Err(e) => (Vec::new(), Some(format!("/system: {}", e.message()))),
             }
-            Err(e) => (Vec::new(), Some(format!("/system: {}", e.message()))),
-        },
+        }
         _ => (Vec::new(), Some(String::from("Unknown partition"))),
     }
 }
@@ -1257,14 +1571,10 @@ pub fn draw_window(
     }
 
     if fx.shadows_enabled() {
-        r.draw_drop_shadow(w.x, w.y, w.width, total_h, 4);
+        r.draw_soft_shadow(w.x, w.y, w.width, total_h, 8, 3, 70);
     }
     if !is_focused {
         r.shade_rect(w.x, w.y, w.width, total_h, 15);
-    }
-
-    if fx.shadows_enabled() {
-        r.fill_rounded_rect_alpha(w.x + 4, w.y + 4, w.width, total_h, theme.corner_radius, Color::SHADOW, 80);
     }
 
     let title_bg = if is_focused { theme.titlebar_active } else { theme.titlebar_inactive };
@@ -1278,6 +1588,16 @@ pub fn draw_window(
         title_bg,
         theme.opacity,
     );
+
+    let inset = theme.corner_radius;
+    let sheen_w = (w.width as i32 - 2 * inset).max(0) as u32;
+    r.fill_fade_v(w.x + inset, w.y, sheen_w, titlebar_h as u32, Color::WHITE, 26, 0);
+    r.fill_rect_alpha(w.x + inset, w.y, sheen_w, 1, Color::WHITE, 40);
+    if is_focused {
+        r.fill_rect_alpha(w.x, w.y + titlebar_h - 1, w.width, 1, theme.accent, 190);
+    } else {
+        r.fill_rect_alpha(w.x, w.y + titlebar_h - 1, w.width, 1, Color::BLACK, 60);
+    }
 
     let title_color = if is_focused { theme.text_primary } else { theme.text_secondary };
     // Длинный заголовок (имя файла в редакторе) не должен заезжать под
@@ -1399,6 +1719,22 @@ pub fn draw_window(
         }
         WindowContent::Installer { st } => {
             apps::draw_installer(r, theme, w, st, content_y);
+        }
+        WindowContent::Updates { center } => {
+            apps::draw_updates(r, theme, w, center, content_y);
+        }
+        WindowContent::ImageViewer { path, library, selected, img, error } => {
+            apps::media::draw_image_viewer(
+                r, theme, w, path, library, *selected, img, error.as_ref(), content_y,
+            );
+        }
+        WindowContent::VideoPlayer { list, idx, list_mode, status } => {
+            apps::media::draw_video_player(
+                r, theme, w, list, *idx, *list_mode, status.as_ref(), content_y,
+            );
+        }
+        WindowContent::MusicPlayer { list, idx, status } => {
+            apps::media::draw_music_player(r, theme, w, list, *idx, status.as_ref(), content_y);
         }
     }
 }

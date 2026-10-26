@@ -19,6 +19,10 @@ use crate::net::{dns, inflate, tcp, tls};
 
 const MAX_REDIRECTS: u32 = 3;
 const MAX_BODY: usize = 1024 * 1024;
+/// Пауза данных, после которой ответ считается полным (обычные страницы).
+const IDLE_MS: u64 = 1500;
+/// Сколько ждать ответ на один запрос целиком.
+const RESPONSE_TIMEOUT_MS: u64 = 10_000;
 
 /// Ответ HTTP-запроса после всех redirect, байты тела как приняты
 /// (текстовые потребители сами делают from_utf8_lossy; бинарные —
@@ -56,6 +60,17 @@ pub fn parse_url(url: &str) -> Option<(String, u16, String, bool)> {
 
     if host.is_empty() { return None; }
     Some((host, port, path.to_string(), https))
+}
+
+/// Все адреса хоста: литерал и алиасы дают один адрес, DNS — до четырёх.
+pub fn resolve_all(host: &str) -> Vec<[u8; 4]> {
+    let clean = host.trim().to_lowercase();
+    match clean.as_str() {
+        "deix.os" | "deix" | "localhost" | "gateway" | "router" => {}
+        _ if clean.split('.').count() == 4 && clean.split('.').all(|p| p.parse::<u8>().is_ok()) => {}
+        _ => return dns::resolve_all(&clean),
+    }
+    resolve(host).into_iter().collect()
 }
 
 /// Разбирает host: IPv4-литерал, локальные алиасы или настоящий DNS-запрос.
@@ -102,6 +117,13 @@ impl Conn {
         }
     }
 
+    fn diagnosis(&self) -> String {
+        match self {
+            Conn::Plain => format!("{}; TCP принято {} байт", tcp::last_end(), tcp::rx_bytes()),
+            Conn::Tls(t) => t.diagnosis(),
+        }
+    }
+
     fn close(&mut self) {
         match self {
             Conn::Plain => tcp::close(),
@@ -112,8 +134,25 @@ impl Conn {
 
 /// Один HTTP GET без redirect: (status, reason, location, тело-байты, content-type).
 fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
-    request_once("GET", url, &[], &[])
+    request_once("GET", url, &[], &[], MAX_BODY, IDLE_MS)
 }
+
+/// Ошибки, при которых запрос честно повторяют новым соединением: обрыв
+/// рукопожатия или отказ TCP — то, что лечится повтором, а не молчанием.
+fn retryable(e: &str) -> bool {
+    e.contains("ждём ServerHello")
+        || e.contains("таймаут чтения record")
+        || e.starts_with("Не удалось установить TCP")
+        || e.contains("Сервер не прислал ответа")
+}
+
+/// Глобальный сетевой замок для HTTP: стек однопоточный по соединениям
+/// (tcp.rs/tls.rs держат ОДНО соединение в статике), а фоновые задачи
+/// (автоустановка медиапака) и UI (браузер, центр обновлений) живут в
+/// разных задачах планировщика. Без замка второй запрос разобрал бы
+/// чужое соединение на середине. Замок держится на весь запрос с
+/// ретраями; redirect-цепочка захватывает его заново на каждый скачок.
+static NET_LOCK: crate::spinlock::SpinLock<()> = crate::spinlock::SpinLock::new(());
 
 /// Один HTTP-запрос произвольным методом без redirect.
 /// `extra_headers` добавляются к базовым; `body` отправляется как есть
@@ -123,20 +162,55 @@ fn request_once(
     url: &str,
     extra_headers: &[(&str, &str)],
     body: &[u8],
+    max_body: usize,
+    idle_ms: u64,
+) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
+    // Сетевой замок ждём кооперативно: пока его держит фоновая задача
+    // (медиапак, центр обновлений), уступаем процессор вместо пустого
+    // спиннинга — так владелец замка и остальные задачи работают быстрее.
+    let _net_guard = loop {
+        match NET_LOCK.try_lock() {
+            Some(guard) => break guard,
+            None => crate::sched::yield_now(),
+        }
+    };
+    let mut last_err = String::new();
+    for attempt in 1..=3u32 {
+        match attempt_once(method, url, extra_headers, body, max_body, idle_ms) {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                if attempt < 3 && retryable(&e) {
+                    last_err = e;
+                    crate::timer::sleep_ms(400);
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+    Err(last_err)
+}
+
+fn attempt_once(
+    method: &str,
+    url: &str,
+    extra_headers: &[(&str, &str)],
+    body: &[u8],
+    max_body: usize,
+    idle_ms: u64,
 ) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
     let (host, port, path, https) = parse_url(url)
         .ok_or_else(|| "Некорректный URL адрес".to_string())?;
-    let ip = resolve(&host)
-        .ok_or_else(|| format!("DNS: не удалось разрешить хост '{}'", host))?;
+    let ips = resolve_all(&host);
+    if ips.is_empty() {
+        return Err(format!("DNS: не удалось разрешить хост '{}': {}", host, dns::last_error()));
+    }
 
     let mut conn = if https {
-        Conn::Tls(tls::connect(ip, port, &host)?)
+        Conn::Tls(tls::connect(&ips, port, &host)?)
     } else {
-        if !tcp::connect(ip, port) {
-            return Err(format!(
-                "Не удалось установить TCP-соединение с {} ({}.{}.{}.{}:{})",
-                host, ip[0], ip[1], ip[2], ip[3], port
-            ));
+        if let Err(why) = tcp::connect_any(&ips, port) {
+            return Err(format!("Не удалось установить TCP-соединение с {} ({})", host, why));
         }
         Conn::Plain
     };
@@ -164,18 +238,28 @@ fn request_once(
 
     let mut raw: Vec<u8> = Vec::new();
     let t0 = crate::timer::uptime_ms();
+    let mut last = t0;
+    // Крупным телам (payload обновлений) даём больше времени: суммарный
+    // потолок растёт с лимитом, простой оцениваем по последним данным.
+    let total_ms = if max_body > MAX_BODY { 120_000 } else { RESPONSE_TIMEOUT_MS };
     loop {
         let chunk = conn.recv(1000);
         if !chunk.is_empty() {
             raw.extend_from_slice(&chunk);
-            if raw.len() > MAX_BODY {
+            last = crate::timer::uptime_ms();
+            if raw.len() > max_body {
                 break;
             }
         } else if !raw.is_empty() {
-            // Если получили данные и новые не поступают более 1500мс
-            if crate::timer::uptime_ms() - t0 > 1500 {
+            // Данные пришли, но новых нет дольше idle_ms — конец ответа.
+            if crate::timer::uptime_ms().saturating_sub(last) > idle_ms {
                 break;
             }
+        }
+        if tcp::peer_fin() {
+            // Сервер прислал FIN — ответ целиком доставлен, ждать
+            // простоя незачем (мы всегда работаем с Connection: close).
+            break;
         }
         if let Some(he) = find_header_end(&raw) {
             let head = String::from_utf8_lossy(&raw[..he]).into_owned();
@@ -190,14 +274,15 @@ fn request_once(
                 }
             }
         }
-        if crate::timer::uptime_ms() - t0 > 4000 {
+        if crate::timer::uptime_ms() - t0 > total_ms {
             break;
         }
     }
+    let diagnosis = conn.diagnosis();
     conn.close();
 
     if raw.is_empty() {
-        return Err("Сервер не прислал ответа".into());
+        return Err(format!("Сервер не прислал ответа: {}", diagnosis));
     }
 
     let body_offset = find_header_end(&raw).unwrap_or(0);
@@ -217,7 +302,7 @@ fn request_once(
                 "{} — ответ сжат gzip, но повреждён или обрезан (принято {} байт, лимит {} КиБ)",
                 e,
                 raw.len(),
-                MAX_BODY / 1024
+                max_body / 1024
             )
         })?;
         body_bytes = data;
@@ -302,8 +387,20 @@ pub fn request_bytes(
     headers: &[(&str, &str)],
     body: &[u8],
 ) -> Result<HttpBytes, String> {
+    request_bytes_max(method, url, headers, body, MAX_BODY)
+}
+
+/// То же с повышенным пределом тела и терпеливым idle: payload обновлений.
+pub fn request_bytes_max(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+    max_body: usize,
+) -> Result<HttpBytes, String> {
+    let idle = if max_body > MAX_BODY { 5000 } else { IDLE_MS };
     let (status, reason, _location, resp_body, content_type) =
-        request_once(method, url, headers, body)?;
+        request_once(method, url, headers, body, max_body, idle)?;
     Ok(HttpBytes {
         status,
         reason,

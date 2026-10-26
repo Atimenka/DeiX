@@ -4,12 +4,15 @@
 use crate::net::ipv4;
 use crate::rtl8139;
 use crate::spinlock::SpinLock;
+use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::collections::VecDeque;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 const TCP_PROTO: u8 = 6;
 const FIN: u8 = 0x01; const SYN: u8 = 0x02;
-const PSH: u8 = 0x08; const ACK: u8 = 0x10;
+const RST: u8 = 0x04; const PSH: u8 = 0x08; const ACK: u8 = 0x10;
 
 #[repr(C, packed)] #[derive(Clone, Copy)]
 struct TcpHdr { src: u16, dst: u16, seq: u32, ack: u32, off_flags: u16, win: u16, csum: u16, urg: u16 }
@@ -24,6 +27,70 @@ impl TcpHdr {
 pub struct TcpConn { pub state: u8, sport: u16, dip: [u8;4], dport: u16, seq: u32, ack: u32 }
 static CONN: SpinLock<Option<TcpConn>> = SpinLock::new(None);
 static NPORT: SpinLock<u16> = SpinLock::new(1024);
+
+// Диагностика приёма: почему recv вернул пустой результат и сколько
+// байт данных принято с начала текущего соединения.
+static LAST_END: SpinLock<&'static str> = SpinLock::new("данных ещё не ждали");
+/// Сервер закрыл свою сторону соединения (FIN): данных больше не будет.
+static PEER_FIN: AtomicBool = AtomicBool::new(false);
+static RX_BYTES: AtomicU32 = AtomicU32::new(0);
+static DUP_DROPPED: AtomicU32 = AtomicU32::new(0);
+static GAP_DROPPED: AtomicU32 = AtomicU32::new(0);
+/// Наш seq сразу после последней отправки и наибольший ack от сервера.
+static SENT_END: AtomicU32 = AtomicU32::new(0);
+static PEER_ACK: AtomicU32 = AtomicU32::new(0);
+/// Отправленные сегменты, которые сервер ещё не подтвердил: (seq, данные).
+static UNACKED: SpinLock<Vec<(u32, Vec<u8>)>> = SpinLock::new(Vec::new());
+static LAST_TX_MS: AtomicU64 = AtomicU64::new(0);
+static RTO_MS: AtomicU32 = AtomicU32::new(RTO_INITIAL_MS);
+static RETRANSMITS: AtomicU32 = AtomicU32::new(0);
+static CUR_RETRIES: AtomicU32 = AtomicU32::new(0);
+const RTO_INITIAL_MS: u32 = 1000;
+const RTO_MAX_MS: u32 = 8000;
+const MAX_RETRIES: u32 = 5;
+/// Паузы после каждого SYN при единственном адресе: 15 с суммарно.
+const SYN_WAITS_ONE_MS: [u64; 4] = [1000, 2000, 4000, 8000];
+/// Паузы при нескольких адресах: 7 с на адрес, затем следующий адрес.
+const SYN_WAITS_MANY_MS: [u64; 3] = [1000, 2000, 4000];
+
+/// Начальный seq (ISN) всех наших соединений.
+const ISN: u32 = 0xDEADBEEF;
+
+/// Причина последнего пустого результата `recv`.
+pub fn last_end() -> &'static str {
+    *LAST_END.lock()
+}
+
+/// true, если сервер прислал FIN в текущем соединении: ожидание данных
+/// можно прекращать сразу, не дожидаясь таймаутов.
+pub fn peer_fin() -> bool {
+    PEER_FIN.load(Ordering::Relaxed)
+}
+
+/// Сводка по соединению: сколько байт отправлено и сколько из них
+/// подтвердил сервер, сколько сегментов отброшено как дубликаты и
+/// сколько как пришедшие с пропуском.
+pub fn link_stats() -> alloc::string::String {
+    let base = ISN.wrapping_add(1);
+    let sent = SENT_END.load(Ordering::Relaxed).wrapping_sub(base);
+    let acked = PEER_ACK.load(Ordering::Relaxed).wrapping_sub(base);
+    let (nic_frames, _, _, _) = rtl8139::traffic_counters();
+    alloc::format!(
+        "отправлено {} байт, сервер подтвердил {}, повторных отправок {}; сегментов-дубликатов {}, с пропуском {}; кадров от карты {}, потеряно в кольце {}",
+        sent,
+        acked,
+        RETRANSMITS.load(Ordering::Relaxed),
+        DUP_DROPPED.load(Ordering::Relaxed),
+        GAP_DROPPED.load(Ordering::Relaxed),
+        nic_frames,
+        rtl8139::rx_drops()
+    )
+}
+
+/// Сколько байт TCP-данных принято в текущем соединении.
+pub fn rx_bytes() -> u32 {
+    RX_BYTES.load(Ordering::Relaxed)
+}
 
 // Очередь принятых TCP-пакетов (наполняется из обработчика прерываний).
 static RX_QUEUE: SpinLock<VecDeque<Vec<u8>>> = SpinLock::new(VecDeque::new());
@@ -95,41 +162,142 @@ fn tcp_payload(pkt: &[u8]) -> Vec<u8> {
     if pkt.len() < tcp+TcpHdr::SZ { return Vec::new(); }
     let h = unsafe { &*(pkt.as_ptr().add(tcp) as *const TcpHdr) };
     let start = tcp + h.doff();
-    if pkt.len() > start { Vec::from(&pkt[start..]) } else { Vec::new() }
+    // Короткие кадры Ethernet добиваются нулями до 60 байт: данные TCP
+    // заканчиваются по полю Total Length заголовка IPv4, а не по концу кадра.
+    let ip_total = u16::from_be_bytes([pkt[16], pkt[17]]) as usize;
+    let end = (14 + ip_total).min(pkt.len());
+    if end > start { Vec::from(&pkt[start..end]) } else { Vec::new() }
 }
 
-pub fn connect(dip: [u8;4], dport: u16) -> bool {
-    if !rtl8139::is_ready() { return false; }
-    let sp = { let mut p = NPORT.lock(); let v = *p; *p = if *p>=65535 {1024} else {*p+1}; v };
-    let isn: u32 = 0xDEADBEEF;
-    let mut c = TcpConn { state:0, sport:sp, dip, dport, seq:isn, ack:0 };
-    send_seg(&c, SYN, &[]);
-    let t0 = crate::timer::uptime_ms();
-    loop {
-        while let Some(pkt) = rx_dequeue() {
-            if let Some((f, _a, s)) = parse_tcp(&pkt, sp, dport) {
-                if f&SYN!=0 && f&ACK!=0 {
-                    c.ack = s.wrapping_add(1); c.seq = isn.wrapping_add(1);
-                    send_seg(&c, ACK, &[]);
-                    c.state = 1; *CONN.lock() = Some(c); return true;
-                }
+/// Пробует адреса по очереди до первого ответившего. Ошибка —
+/// причина отказа по каждому адресу.
+pub fn connect_any(ips: &[[u8; 4]], dport: u16) -> Result<(), String> {
+    let mut report = String::new();
+    for ip in ips {
+        let waits: &[u64] = if ips.len() == 1 { &SYN_WAITS_ONE_MS } else { &SYN_WAITS_MANY_MS };
+        match connect_one(*ip, dport, waits) {
+            Ok(()) => return Ok(()),
+            Err(why) => {
+                if !report.is_empty() { report.push_str("; "); }
+                report.push_str(&format!("{}.{}.{}.{}:{}: {}", ip[0], ip[1], ip[2], ip[3], dport, why));
             }
         }
-        if crate::timer::uptime_ms()-t0 > 5000 { return false; }
-        crate::sched::idle_wait();
     }
+    if report.is_empty() { report.push_str("нет адресов для подключения"); }
+    Err(report)
 }
 
+fn connect_one(dip: [u8;4], dport: u16, waits: &[u64]) -> Result<(), &'static str> {
+    if !rtl8139::is_ready() { return Err("сетевая карта не готова"); }
+    let sp = { let mut p = NPORT.lock(); let v = *p; *p = if *p>=65535 {1024} else {*p+1}; v };
+    let isn: u32 = ISN;
+    rtl8139::poll_rx();
+    RX_QUEUE.lock().clear();
+    let mut c = TcpConn { state:0, sport:sp, dip, dport, seq:isn, ack:0 };
+    RX_BYTES.store(0, Ordering::Relaxed);
+    PEER_FIN.store(false, Ordering::Relaxed);
+    DUP_DROPPED.store(0, Ordering::Relaxed);
+    GAP_DROPPED.store(0, Ordering::Relaxed);
+    RETRANSMITS.store(0, Ordering::Relaxed);
+    CUR_RETRIES.store(0, Ordering::Relaxed);
+    RTO_MS.store(RTO_INITIAL_MS, Ordering::Relaxed);
+    UNACKED.lock().clear();
+    SENT_END.store(isn.wrapping_add(1), Ordering::Relaxed);
+    PEER_ACK.store(isn.wrapping_add(1), Ordering::Relaxed);
+    *LAST_END.lock() = "данных ещё не ждали";
+    for wait in waits.iter().copied() {
+        send_seg(&c, SYN, &[]);
+        let t0 = crate::timer::uptime_ms();
+        loop {
+            crate::rtl8139::poll_rx();
+            while let Some(pkt) = rx_dequeue() {
+                if let Some((f, _a, s)) = parse_tcp(&pkt, sp, dport) {
+                    if f&RST != 0 {
+                        *LAST_END.lock() = "сервер отклонил соединение (RST на SYN)";
+                        return Err("сервер отклонил соединение (RST на SYN)");
+                    }
+                    if f&SYN!=0 && f&ACK!=0 {
+                        c.ack = s.wrapping_add(1); c.seq = isn.wrapping_add(1);
+                        send_seg(&c, ACK, &[]);
+                        c.state = 1; *CONN.lock() = Some(c); return Ok(());
+                    }
+                }
+            }
+            if crate::timer::uptime_ms()-t0 > wait { break; }
+            crate::sched::idle_wait();
+        }
+    }
+    let why = if waits.len() == SYN_WAITS_ONE_MS.len() {
+        "нет SYN-ACK за 15 с (4 попытки SYN)"
+    } else {
+        "нет SYN-ACK за 7 с (3 попытки SYN)"
+    };
+    *LAST_END.lock() = why;
+    Err(why)
+}
+
+/// Наибольший объём данных в одном сегменте: IPv4-буфер отправки равен
+/// 1500 байт (20 заголовок IP + 20 заголовок TCP + данные).
+const MSS: usize = 1460;
+
 pub fn send(data: &[u8]) -> bool {
-    let cl = CONN.lock();
-    if let Some(ref c) = *cl { if c.state != 1 { return false; } send_seg(c, PSH|ACK, data); drop(cl);
-        let mut l = CONN.lock(); if let Some(ref mut c) = *l {
-            c.seq = c.seq.wrapping_add(data.len() as u32); } true } else { false }
+    let mut cl = CONN.lock();
+    let c = match *cl {
+        Some(ref mut c) if c.state == 1 => c,
+        _ => return false,
+    };
+    // Крупные данные (тело POST, TLS-записи с сертификатами) режем на
+    // сегменты по MSS: один большой сегмент не влез бы в кадр и не ушёл.
+    for chunk in data.chunks(MSS) {
+        send_seg(c, PSH | ACK, chunk);
+        UNACKED.lock().push((c.seq, chunk.to_vec()));
+        c.seq = c.seq.wrapping_add(chunk.len() as u32);
+    }
+    SENT_END.store(c.seq, Ordering::Relaxed);
+    LAST_TX_MS.store(crate::timer::uptime_ms(), Ordering::Relaxed);
+    RTO_MS.store(RTO_INITIAL_MS, Ordering::Relaxed);
+    CUR_RETRIES.store(0, Ordering::Relaxed);
+    true
+}
+
+/// Повторно отправляет неподтверждённые сегменты, если сервер молчит
+/// дольше текущего RTO (удваивается до RTO_MAX_MS, не более MAX_RETRIES
+/// попыток на отправку). Вызывается из ожидания в `recv`.
+fn retransmit_if_due() {
+    let now = crate::timer::uptime_ms();
+    let rto = RTO_MS.load(Ordering::Relaxed) as u64;
+    if now.saturating_sub(LAST_TX_MS.load(Ordering::Relaxed)) < rto {
+        return;
+    }
+    if CUR_RETRIES.load(Ordering::Relaxed) >= MAX_RETRIES {
+        return;
+    }
+    let conn = match *CONN.lock() {
+        Some(c) => c,
+        None => return,
+    };
+    let pending = (*UNACKED.lock()).clone();
+    if pending.is_empty() {
+        return;
+    }
+    for (seq, data) in pending.iter() {
+        let mut seg = conn;
+        seg.seq = *seq;
+        send_seg(&seg, PSH|ACK, data);
+    }
+    RETRANSMITS.fetch_add(1, Ordering::Relaxed);
+    CUR_RETRIES.fetch_add(1, Ordering::Relaxed);
+    LAST_TX_MS.store(now, Ordering::Relaxed);
+    RTO_MS.store((rto as u32).saturating_mul(2).min(RTO_MAX_MS), Ordering::Relaxed);
 }
 
 pub fn recv(to: u64) -> Vec<u8> {
     let t0 = crate::timer::uptime_ms();
     loop {
+        if PEER_FIN.load(Ordering::Relaxed) {
+            *LAST_END.lock() = "сервер закрыл TCP-соединение (FIN)";
+            return Vec::new();
+        }
         if rx_dequeue_len() == 0 {
             // Страховка: читаем RX-буфер RTL8139 напрямую, не полагаясь на
             // прерывания (QEMU заливает большой ответ быстрее, чем приходят
@@ -138,27 +306,79 @@ pub fn recv(to: u64) -> Vec<u8> {
         }
         while let Some(pkt) = rx_dequeue() {
             let cl = CONN.lock();
-            if let Some(ref c) = *cl {
-                if let Some((f, _, s)) = parse_tcp(&pkt, c.sport, c.dport) {
-                    if f&(PSH|ACK) != 0 {
-                        let p = tcp_payload(&pkt);
-                        if !p.is_empty() {
-                            // Подтверждаем полученные данные (window update):
-                            // иначе сервер упирается в окно и передача встаёт.
-                            let new_ack = s.wrapping_add(p.len() as u32);
-                            let mut nc = *c;
-                            nc.ack = new_ack;
-                            drop(cl);
-                            *CONN.lock() = Some(nc);
-                            send_seg(&nc, ACK, &[]);
-                            return p;
+            let c = match *cl {
+                Some(ref c) => c,
+                None => continue,
+            };
+            let (f, peer_ack, s) = match parse_tcp(&pkt, c.sport, c.dport) {
+                Some(v) => v,
+                None => continue,
+            };
+            if f&RST != 0 {
+                *LAST_END.lock() = "сервер сбросил соединение (RST)";
+                return Vec::new();
+            }
+            if f&ACK != 0 && (peer_ack.wrapping_sub(PEER_ACK.load(Ordering::Relaxed)) as i32) > 0 {
+                PEER_ACK.store(peer_ack, Ordering::Relaxed);
+                UNACKED.lock().retain(|(seq, d)| {
+                    (seq.wrapping_add(d.len() as u32).wrapping_sub(peer_ack) as i32) > 0
+                });
+            }
+            if f&(PSH|ACK) != 0 {
+                let p = tcp_payload(&pkt);
+                if !p.is_empty() {
+                    // Принимаем только данные, продолжающие поток: дубликаты
+                    // (повторная отправка сервера) отбрасываем, перекрытие
+                    // обрезаем, сегмент с пропуском не принимаем. На любое
+                    // отклонение отвечаем текущим ACK, чтобы сервер повторил.
+                    let gap = s.wrapping_sub(c.ack) as i32;
+                    let skip = if gap < 0 { gap.unsigned_abs() as usize } else { 0 };
+                    if gap > 0 || skip >= p.len() {
+                        if gap > 0 {
+                            GAP_DROPPED.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            DUP_DROPPED.fetch_add(1, Ordering::Relaxed);
                         }
+                        let nc = *c;
+                        send_seg(&nc, ACK, &[]);
+                        continue;
                     }
-                    if f&FIN != 0 { return Vec::new(); }
+                    let fresh = p[skip..].to_vec();
+                    let mut nc = *c;
+                    nc.ack = c.ack.wrapping_add(fresh.len() as u32);
+                    if f & FIN != 0 {
+                        // FIN может прийти в одном сегменте с последними
+                        // данными: подтверждаем его вместе с ними.
+                        nc.ack = nc.ack.wrapping_add(1);
+                        PEER_FIN.store(true, Ordering::Relaxed);
+                    }
+                    drop(cl);
+                    RX_BYTES.fetch_add(fresh.len() as u32, Ordering::Relaxed);
+                    *CONN.lock() = Some(nc);
+                    // Подтверждаем полученные данные (window update):
+                    // иначе сервер упирается в окно и передача встаёт.
+                    send_seg(&nc, ACK, &[]);
+                    return fresh;
                 }
             }
+            if f&FIN != 0 {
+                *LAST_END.lock() = "сервер закрыл TCP-соединение (FIN)";
+                let mut nc = *c;
+                nc.ack = s.wrapping_add(1);
+                drop(cl);
+                PEER_FIN.store(true, Ordering::Relaxed);
+                *CONN.lock() = Some(nc);
+                // Подтверждаем FIN, чтобы сервер не повторял его и закрыл
+                // сокет; повторные recv после этого возвращают пусто сразу.
+                send_seg(&nc, ACK, &[]);
+                return Vec::new();
+            }
         }
-        if crate::timer::uptime_ms()-t0 > to { return Vec::new(); }
+        retransmit_if_due();
+        if crate::timer::uptime_ms()-t0 > to {
+            *LAST_END.lock() = "таймаут: от сервера нет данных";
+            return Vec::new();
+        }
         crate::sched::idle_wait();
     }
 }

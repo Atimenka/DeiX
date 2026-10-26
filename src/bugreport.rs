@@ -76,10 +76,11 @@ pub fn collect_report() -> String {
         ));
     }
     out.push_str(&format!(
-        "  {:<12} LBA {:>6}..{:>6} (stage2, {} sect)\n",
-        "/bootloader",
+        "  {:<12} LBA {:>6}..{:>6} (reserved, boot map at {}, {} sect)\n",
+        "/boot-gap",
         crate::partition_map::BOOTLOADER_LBA,
         crate::partition_map::BOOTLOADER_LBA + crate::partition_map::BOOTLOADER_SECTORS - 1,
+        crate::partition_map::KERNEL_IMAGE_INFO_LBA,
         crate::partition_map::BOOTLOADER_SECTORS,
     ));
 

@@ -102,6 +102,7 @@ pub fn ping(dst_ip: [u8; 4], id: u16, seq: u16, timeout_ms: u64) -> Option<u64> 
     }
 
     loop {
+        crate::rtl8139::poll_rx();
         let received = without_interrupts(|| PING_STATE.lock().reply_received);
         if received {
             return Some(timer::uptime_ms() - start);

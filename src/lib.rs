@@ -11,9 +11,12 @@ mod ramdisk;
 mod auth;
 mod autostart;
 mod bootlogo;
+mod bootprof;
 mod bootchain;
+mod bootmap;
 mod bugreport;
 mod cli;
+mod cloudauth;
 mod cp866;
 mod cpuid;
 mod crypto;
@@ -21,11 +24,11 @@ mod crypto_storage;
 mod devauth;
 mod devmode;
 mod diag;
-mod dialog;
 mod dinit;
 mod ds;
 mod duil;
 mod erofs;
+mod erofs_disk;
 mod ext2;
 mod font;
 mod font_cyrillic;
@@ -37,11 +40,14 @@ mod drivers;
 mod init_parser;
 mod install;
 mod interrupts;
+mod jpeg;
 mod keyboard;
 mod lang;
 mod linux;
 mod loginui;
 mod luks;
+mod media;
+mod mediapack;
 mod mex;
 mod mm;
 mod module;
@@ -68,6 +74,7 @@ mod sync;
 mod sysfs;
 mod timer;
 mod ui;
+mod update;
 mod userfs;
 mod usermode;
 mod vault;
@@ -163,12 +170,14 @@ pub extern "C" fn kernel_main() -> ! {
     allocator::init();
     println!("Heap allocator (16 MiB): OK");
     crate::serial_println!("[deix] I: heap ok");
+    bootprof::mark("heap ready");
 
     // Система диагностики: с этого момента каждое существенное событие
     // регистрируется в кольцевом буфере и уходит в serial. Постоянное
     // хранилище подключается позже (diag::storage_ready), когда /userdata
     // доступен — буфер до тех пор ничего не теряет.
     diag::init();
+    bootprof::mark("diag ring ready");
 
     println!("PS/2 keyboard: OK (handled via IRQ1)");
 
@@ -176,12 +185,19 @@ pub extern "C" fn kernel_main() -> ! {
     println!("PS/2 mouse: OK (handled via IRQ12)");
 
     if ata::is_present() {
+        match ata::enable_multiple() {
+            0 => crate::serial_println!("[ata] READ MULTIPLE недоступен — чтение по одному сектору"),
+            n => crate::serial_println!("[ata] READ MULTIPLE включён: {} секторов за один DRQ", n),
+        }
+        ata::enable_irq_wait();
         println!("ATA disk: OK (PIO mode)");
     } else {
         println!("ATA disk: not detected");
     }
 
+    bootprof::mark("ata probe");
     let net_ok = rtl8139::init();
+    bootprof::mark("rtl8139 init");
     if net_ok {
         println!(
             "Network: IP {}.{}.{}.{} (type 'ifconfig' for details)",
@@ -194,6 +210,7 @@ pub extern "C" fn kernel_main() -> ! {
 
     let gpu_info = gpu::detect();
     let gpu_ok = gpu_info.is_some();
+    bootprof::mark("gpu detect");
     match gpu_info {
         Some(info) => {
             println!(
@@ -206,6 +223,7 @@ pub extern "C" fn kernel_main() -> ! {
     }
 
     let audio_ok = hda::init();
+    bootprof::mark("hda init");
     if audio_ok {
         println!("Audio: Intel High Definition Audio (HDA) ready");
     } else {
@@ -215,6 +233,7 @@ pub extern "C" fn kernel_main() -> ! {
     println!("Default language: English. Type 'lang ru' to switch to Russian.");
 
     bootlogo::show("starting system...");
+    bootprof::mark("boot logo shown");
 
     bootlogo::set_status("verifying boot partitions...");
     match crate::bootchain::run_boot_chain() {
@@ -224,11 +243,13 @@ pub extern "C" fn kernel_main() -> ! {
         }
     }
 
+    bootprof::mark("bootchain done");
     bootlogo::set_status("initializing memory...");
     // Инициализируем менеджер памяти (физический + виртуальный).
     mm::phys::init();
     println!("  [mm] Physical page allocator: OK");
     mm::print_stats();
+    bootprof::mark("mm phys init");
 
     // Полнодисковое шифрование (XTS-AES-256). ЕДИНЫЙ ПАРОЛЬ: пароль учётной
     // записи пользователя является ключом шифрования диска.
@@ -250,7 +271,13 @@ pub extern "C" fn kernel_main() -> ! {
     // Загружаем модули ядра (.kmod файлы) с ext2-диска.
     // Модули расширяют функциональность ядра: сеть, графика, криптография.
     // Если модуль не найден на диске — система продолжает работу без него.
-    module::load_boot_modules();
+    bootprof::mark("crypto state check");
+    if update::pending() {
+        crate::println!("  [update] an update is waiting: kernel modules are not loaded, /system is about to be replaced.");
+    } else {
+        module::load_boot_modules();
+    }
+    bootprof::mark("kmod load");
 
     // GDT/TSS ставим ПЕРВЫМИ: планировщик кладёт в начальный кадр задачи
     // SS=0x10 (kernel data), а в GDT загрузчика есть только null и
@@ -259,6 +286,7 @@ pub extern "C" fn kernel_main() -> ! {
 
     // ПЛАНИРОВЩИК: включаем вытесняющую многозадачность.
     sched::start();
+    bootprof::mark("usermode+sched start");
 
     // Самопроверки sched/ring3 из загрузки УБРАНЫ: они своё отработали
     // (результаты зафиксированы в REFACTOR_REPORT.md), а kernel.bin
@@ -269,9 +297,12 @@ pub extern "C" fn kernel_main() -> ! {
     // /system (EROFS RO) + /userdata (EXT2 RW) и разбор скрипта init.deix
     // процессом PID 1 (Dinit).
     partition_map::validate_partition_map_report();
+    bootprof::mark("partition map validate");
     init_parser::boot_report(init_parser::INIT_DEIX_SCRIPT);
     security_monitor::boot_selfcheck();
+    bootprof::mark("init script + security selfcheck");
     crate::dinit::init();
+    bootprof::mark("dinit init");
     crate::serial_println!("[deix] Dinit (PID 1, Ring 0) запущен");
 
     // ВНИМАНИЕ: autostart::run() ПЕРЕНЕСЁН за экран входа (см. ниже).
@@ -283,6 +314,7 @@ pub extern "C" fn kernel_main() -> ! {
     // Контрольный список загрузки: каждая строка — реальная проверка
     // подсистемы, сбой регистрируется в журнале со своим кодом DX-*.
     diag::boot::screen(net_ok, audio_ok, gpu_ok);
+    bootprof::mark("diag boot screen");
 
     // Если прошлая сессия завершилась отказом ядра (дамп в сырых секторах,
     // LBA 2048), сообщаем об этом до входа. Плановая перезагрузка дампа
@@ -290,6 +322,7 @@ pub extern "C" fn kernel_main() -> ! {
     diag::cli::announce_previous_failure();
 
     bootlogo::set_status("system ready");
+    bootprof::mark("system ready, waiting at login");
 
     // Экран входа — до первого запуска создаёт первый аккаунт, при
     // последующих запусках требует ввод логина/пароля (сверяется с
@@ -307,11 +340,19 @@ pub extern "C" fn kernel_main() -> ! {
         }
         None => auth::run_login_screen(),
     };
+    bootprof::mark("login finished (includes the time the user spent typing)");
+    bootchain::finish();
+    update::run_apply_mode();
     cli::set_current_user(&username);
     let uid = if username == "root" { 0 } else { 1000 };
     if let Some(dinit) = crate::dinit::DINIT.lock().as_mut() {
         dinit.register_user(uid, &username);
     }
+
+    // Все записи первого входа (профиль, журналы, каталоги, autostart) идут
+    // одним пакетом: кеш диска сбрасывается один раз в конце, а не после
+    // каждой мелкой операции (каждый сброс — fsync образа на хосте).
+    let first_login_writes = ata::FlushBatch::begin();
 
     // Профиль пользователя: /userdata/home/<имя>/{files,configs}.
     if let Err(e) = userfs::init_profile(&username) {
@@ -321,7 +362,9 @@ pub extern "C" fn kernel_main() -> ! {
     // /userdata доступен (и расшифрован, если включено шифрование) —
     // подключаем постоянные журналы и сбрасываем в них всё, что накопил
     // кольцевой буфер с начала загрузки. События до этой точки не теряются.
+    bootprof::mark("user profile init");
     diag::storage_ready();
+    bootprof::mark("diag storage_ready");
     crate::serial_println!("[deix] J: storage_ready done ({} ms)", timer::uptime_ms());
 
     // Канонический layout /userdata: недостающие каталоги создаются
@@ -335,24 +378,38 @@ pub extern "C" fn kernel_main() -> ! {
 
     // Базовый /userdata/config/autostart.cfg — создаём при первом входе.
     autostart::ensure_default();
+    bootprof::mark("userdata dirs + autostart defaults");
+    drop(first_login_writes);
+    bootprof::mark("first login writes flushed");
     crate::serial_println!("[deix] K: autostart ensure_default done ({} ms)", timer::uptime_ms());
 
     // Автозапуск ТОЛЬКО после успешного входа: команды выполняются от
     // имени вошедшего пользователя, а не анонимно до аутентификации.
     autostart::run();
+    bootprof::mark("autostart run");
     crate::serial_println!("[deix] L: autostart run done ({} ms)", timer::uptime_ms());
 
     // UI-звуки (PC speaker, src/sound.rs; файлы *.dps в /system/media/audio/ui —
     // если в образе их нет, просто играем в тишине, как раньше).
     // Загрузка шла с USB-флешки (RAM-диск) — сигнал «носитель подключён»,
-    // затем общий стартовый сигнал «система готова».
+    // затем общий стартовый сигнал «система готова». Играет отдельная
+    // задача: звук идёт секунды, и ждать его до приглашения незачем.
+    if sched::spawn("boot-sound", boot_sound_task).is_none() {
+        boot_sound_task();
+    }
+
+    bootprof::mark("boot sound + cli prompt");
+    cli::run();
+}
+
+/// Стартовые UI-звуки; выполняется в фоновой задаче планировщика.
+extern "C" fn boot_sound_task() {
     if crate::ramdisk::is_active() {
         let _ = sound::play_ui(sound::UiSound::UsbConnect);
     }
     let _ = sound::play_ui(sound::UiSound::Startup);
+    let _ = sound::play_ui(sound::UiSound::Welcome);
     crate::serial_println!("[deix] M: startup sound done ({} ms)", timer::uptime_ms());
-
-    cli::run();
 }
 
 /// Полный сброс глобальных структур состояния (.data/.bss) перед переносом

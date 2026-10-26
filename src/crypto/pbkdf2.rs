@@ -29,53 +29,80 @@ const BLOCK_LEN: usize = 128;
 /// Размер выхода SHA-512.
 const DIGEST_LEN: usize = 64;
 
-/// HMAC-SHA512 (RFC 2104).
-///
-/// `HMAC(K, m) = H((K' ^ opad) || H((K' ^ ipad) || m))`, где `K'` — ключ,
-/// дополненный нулями до размера блока (или сначала хешированный, если
-/// он длиннее блока).
-pub fn hmac_sha512(key: &[u8], message: &[u8]) -> [u8; DIGEST_LEN] {
-    let mut k = [0u8; BLOCK_LEN];
+/// HMAC-SHA512 (RFC 2104): `HMAC(K, m) = H((K' ^ opad) || H((K' ^ ipad) || m))`,
+/// где `K'` — ключ, дополненный нулями до размера блока (или сначала
+/// хешированный, если он длиннее блока). Хранит готовые состояния после
+/// `K' ^ ipad` и `K' ^ opad`.
+/// PBKDF2 считает HMAC с одним ключом сто тысяч раз: поглощать ipad и
+/// opad (по блоку SHA-512) заново в каждой итерации — половина всей
+/// работы впустую. Результат побитово тот же, что при полном пересчёте.
+struct HmacSha512 {
+    inner: sha512::Sha512,
+    outer: sha512::Sha512,
+}
 
-    if key.len() > BLOCK_LEN {
-        // Слишком длинный ключ сначала сжимаем хешем — так требует RFC.
-        let h = sha512::sha512(key);
-        k[..DIGEST_LEN].copy_from_slice(&h);
-    } else {
-        k[..key.len()].copy_from_slice(key);
+impl HmacSha512 {
+    fn new(key: &[u8]) -> Self {
+        let mut k = [0u8; BLOCK_LEN];
+
+        if key.len() > BLOCK_LEN {
+            // Слишком длинный ключ сначала сжимаем хешем — так требует RFC.
+            let h = sha512::sha512(key);
+            k[..DIGEST_LEN].copy_from_slice(&h);
+        } else {
+            k[..key.len()].copy_from_slice(key);
+        }
+
+        let mut ipad = [0x36u8; BLOCK_LEN];
+        let mut opad = [0x5Cu8; BLOCK_LEN];
+        for i in 0..BLOCK_LEN {
+            ipad[i] ^= k[i];
+            opad[i] ^= k[i];
+        }
+
+        let mut inner = sha512::Sha512::new();
+        inner.update(&ipad);
+        let mut outer = sha512::Sha512::new();
+        outer.update(&opad);
+
+        // Затираем копию ключа: она лежала на стеке в открытом виде.
+        for b in k.iter_mut() {
+            *b = 0;
+        }
+        for b in ipad.iter_mut() {
+            *b = 0;
+        }
+        for b in opad.iter_mut() {
+            *b = 0;
+        }
+
+        HmacSha512 { inner, outer }
     }
 
-    let mut ipad = [0x36u8; BLOCK_LEN];
-    let mut opad = [0x5Cu8; BLOCK_LEN];
-    for i in 0..BLOCK_LEN {
-        ipad[i] ^= k[i];
-        opad[i] ^= k[i];
+    /// `H((K ^ opad) || H((K ^ ipad) || message))`.
+    fn mac(&self, message: &[u8]) -> [u8; DIGEST_LEN] {
+        let mut inner = self.inner.clone();
+        inner.update(message);
+        let inner_digest = inner.finalize();
+
+        let mut outer = self.outer.clone();
+        outer.update(&inner_digest);
+        outer.finalize()
     }
 
-    // Внутренний хеш: H((K ^ ipad) || message)
-    let mut inner = sha512::Sha512::new();
-    inner.update(&ipad);
-    inner.update(message);
-    let inner_digest = inner.finalize();
-
-    // Внешний хеш: H((K ^ opad) || inner)
-    let mut outer = sha512::Sha512::new();
-    outer.update(&opad);
-    outer.update(&inner_digest);
-    let result = outer.finalize();
-
-    // Затираем копию ключа: она лежала на стеке в открытом виде.
-    for b in k.iter_mut() {
-        *b = 0;
+    /// То же для сообщения ровно в один выход SHA-512, заданного словами:
+    /// две компрессии без буферов и преобразований байтов.
+    fn mac_words(&self, message: &[u64; 8]) -> [u64; 8] {
+        let inner_digest = self.inner.digest_of_words(message);
+        self.outer.digest_of_words(&inner_digest)
     }
-    for b in ipad.iter_mut() {
-        *b = 0;
-    }
-    for b in opad.iter_mut() {
-        *b = 0;
-    }
+}
 
-    result
+impl Drop for HmacSha512 {
+    fn drop(&mut self) {
+        self.inner.wipe();
+        self.outer.wipe();
+    }
 }
 
 /// PBKDF2-HMAC-SHA512, выход ровно 64 байта (один блок).
@@ -89,19 +116,30 @@ pub fn pbkdf2_sha512(password: &[u8], salt: &[u8], iterations: u32) -> [u8; DIGE
     salt_block.extend_from_slice(salt);
     salt_block.extend_from_slice(&1u32.to_be_bytes());
 
-    let mut u = hmac_sha512(password, &salt_block);
+    let hmac = HmacSha512::new(password);
+    let first = hmac.mac(&salt_block);
+    let mut u = [0u64; 8];
+    for (word, chunk) in u.iter_mut().zip(first.chunks_exact(8)) {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(chunk);
+        *word = u64::from_be_bytes(bytes);
+    }
     let mut result = u;
 
     // T = U1 ^ U2 ^ ... ^ Uc, где Ui = HMAC(password, U(i-1))
     for _ in 1..iterations.max(1) {
-        u = hmac_sha512(password, &u);
-        for i in 0..DIGEST_LEN {
+        u = hmac.mac_words(&u);
+        for i in 0..8 {
             result[i] ^= u[i];
         }
     }
 
-    for b in u.iter_mut() {
-        *b = 0;
+    let mut out = [0u8; DIGEST_LEN];
+    for (chunk, word) in out.chunks_exact_mut(8).zip(result.iter()) {
+        chunk.copy_from_slice(&word.to_be_bytes());
     }
-    result
+    for word in u.iter_mut() {
+        *word = 0;
+    }
+    out
 }

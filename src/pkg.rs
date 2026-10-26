@@ -1,16 +1,17 @@
 //! Пакетный менеджер DeiX ("pkg") — устанавливает/удаляет пакеты на
 //! ext2-томе (см. ext2.rs).
 //!
-//! Честное ограничение: репозитория пакетов в сети не существует, а
-//! HTTPS/TLS у DeiX нет, поэтому "скачивать" пакеты из интернета
-//! невозможно — заявлять обратное было бы нечестной заглушкой. Вместо
-//! этого pkg
-//! работает с ВСТРОЕННЫМ локальным каталогом (см. CATALOG ниже):
-//! `pkg install <name>` берёт содержимое пакета из этого каталога
-//! (зашитого в само ядро при сборке) и реально копирует файлы на
-//! ext2-диск, `pkg remove` реально удаляет их оттуда, `pkg list`
+//! Честное ограничение: сетевого репозитория .mex-пакетов пока нет,
+//! поэтому pkg работает с ВСТРОЕННЫМ локальным каталогом (см. CATALOG
+//! ниже): `pkg install <name>` берёт содержимое пакета из этого
+//! каталога (зашитого в само ядро при сборке) и реально копирует файлы
+//! на ext2-диск, `pkg remove` реально удаляет их оттуда, `pkg list`
 //! реально читает установленные пакеты из файла-реестра на диске.
 //! Всё это самая настоящая работа с файловой системой — не имитация.
+//!
+//! Автоустановка: при первом входе в рабочий стол все пакеты каталога,
+//! которых нет в реестре, ставятся сами (`auto_install_bundled`) — так
+//! демо-приложения живут на /userdata, а не «в ядре навсегда».
 
 use crate::ext2;
 use crate::{println, println_t, t};
@@ -164,16 +165,59 @@ pub fn cmd_list() {
     println!(
         "{}",
         t!(
-            en: "Note: DeiX has no HTTP/TLS network stack (only Ethernet/ARP/IPv4/ICMP), \
-                 so there is no real internet download here - packages come from a small \
-                 built-in local catalog compiled into the kernel itself, but installing/ \
-                 removing them does real file I/O on the ext2 disk.",
-            ru: "Примечание: у DeiX нет сетевого стека HTTP/TLS (только Ethernet/ARP/IPv4/ \
-                 ICMP), поэтому реального скачивания из интернета здесь нет - пакеты берутся \
-                 из небольшого встроенного локального каталога, вкомпилированного в само \
-                 ядро, но их установка/удаление - это настоящая работа с файлами на ext2."
+            en: "Note: there is no network repository of packages yet - they come from a \
+                 small built-in local catalog compiled into the kernel itself, but \
+                 installing/removing them does real file I/O on the ext2 disk. Heavy \
+                 media (wallpapers, demo video/music) lives elsewhere: see 'media status'.",
+            ru: "Примечание: сетевого репозитория пакетов пока нет - они берутся из \
+                 небольшого встроенного локального каталога, вкомпилированного в само \
+                 ядро, но их установка/удаление - это настоящая работа с файлами на ext2. \
+                 Тяжёлая среда (обои, демо-видео/музыка) живёт отдельно: см. 'media status'."
         )
     );
+}
+
+/// Автоустановка встроенных пакетов на /userdata/apps: вызывается один
+/// раз при старте рабочего стола. Пакеты каталога, которых нет в
+/// реестре, записываются на диск без вывода на консоль (пользователь в
+/// это время уже в GUI). Если ext2 не готов (например, загрузка с
+/// RAM-диска без тома) — честно ничего не делаем.
+pub fn auto_install_bundled() {
+    if !ext2::is_formatted() {
+        return;
+    }
+    let installed = read_registry();
+    for pkg in CATALOG.iter() {
+        if installed.iter().any(|n| n.eq_ignore_ascii_case(pkg.name)) {
+            continue;
+        }
+        if crate::vfs::mkdir(APPS_DIR).is_err() {
+            return;
+        }
+        let mut ok = true;
+        for (filename, content) in pkg.files {
+            let path = alloc::format!("{}/{}", APPS_DIR, filename);
+            if crate::vfs::write_file(&path, content).is_err() {
+                crate::diag::error(
+                    crate::diag::ErrorCode::new(crate::diag::Subsystem::Pkg, 6),
+                    &alloc::format!(
+                        "pkg: автоустановка {} прервана — не записан {}",
+                        pkg.name, filename
+                    ),
+                );
+                ok = false;
+                break;
+            }
+        }
+        if !ok {
+            continue;
+        }
+        let mut reg = read_registry();
+        if !reg.iter().any(|n| n.eq_ignore_ascii_case(pkg.name)) {
+            reg.push(pkg.name.to_string());
+            let _ = write_registry(&reg);
+        }
+    }
 }
 
 /// `pkg install <name>` — реально копирует файлы пакета на ext2-диск и

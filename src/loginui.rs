@@ -128,6 +128,17 @@ enum Focus {
     User,
     Pass,
     Confirm,
+    Totp,
+}
+
+/// Состояние отображения третьей строки экрана входа: что показывать
+/// ниже поля пароля — переключатель LOCAL/CLOUD, поле TOTP-кода или
+/// поле пароля диска (после облачного входа на зашифрованном томе).
+#[derive(Clone, Copy)]
+struct Mode {
+    cloud: bool,
+    totp: bool,
+    disk: bool,
 }
 
 /// Перерисовывает экран входа целиком.
@@ -137,6 +148,7 @@ fn redraw(
     confirm: &Field,
     focus: Focus,
     setup: bool,
+    mode: Mode,
     status: &str,
     status_color: Color,
 ) {
@@ -146,16 +158,16 @@ fn redraw(
         r.clear(BG);
 
         let pw = 440u32;
-        let ph = if setup { 270u32 } else { 215u32 };
+        let ph = if setup { 270u32 } else { 250u32 };
         let px = (w - pw as i32) / 2;
         let py = (h - ph as i32) / 2;
 
         // Рисуем эмблему/логотип DeiX над панелью входа
         let logo_scale = 1;
-        let logo_dim = 128 * logo_scale;
+        let logo_dim = (crate::bootlogo::size() / 2) as i32 * logo_scale;
         let logo_y = py - logo_dim - 16;
         if logo_y >= 10 {
-            crate::bootlogo::draw_logo_at(r, (w - logo_dim) / 2, logo_y, logo_scale);
+            crate::bootlogo::draw_logo_div(r, (w - logo_dim) / 2, logo_y, logo_scale, 2);
         }
 
         r.fill_rect(px, py, pw, ph, PANEL);
@@ -166,6 +178,8 @@ fn redraw(
 
         let sub = if setup {
             "first run: this password also unlocks the disk"
+        } else if mode.cloud {
+            "cloud account: email + password"
         } else {
             "enter your credentials"
         };
@@ -192,20 +206,36 @@ fn redraw(
                 }
             };
 
-        draw_field(r, "USERNAME", user, focus == Focus::User, fy);
+        // Первый row: USERNAME или EMAIL в облачном режиме.
+        let user_label = if mode.cloud { "EMAIL" } else { "USERNAME" };
+        draw_field(r, user_label, user, focus == Focus::User, fy);
         fy += 50;
         draw_field(r, "PASSWORD", pass, focus == Focus::Pass, fy);
         if setup {
             fy += 50;
             draw_field(r, "CONFIRM PASSWORD", confirm, focus == Focus::Confirm, fy);
+        } else {
+            // Третья строка: TOTP-код, пароль диска или переключатель.
+            fy += 50;
+            if mode.totp {
+                draw_field(r, "6-DIGIT CODE", pass, focus == Focus::Totp, fy);
+            } else if mode.disk {
+                draw_field(r, "DISK PASSWORD", pass, focus == Focus::Pass, fy);
+            } else {
+                let mode_label = if mode.cloud { "ACCOUNT: CLOUD" } else { "ACCOUNT: LOCAL" };
+                let mode_color = if mode.cloud { ACCENT } else { HINT };
+                text_center(r, fy + 8, mode_label, mode_color, 1);
+                // Подпись «click to switch» слева.
+                text_center(r, fy + 26, "click or press C to switch", HINT, 1);
+            }
         }
 
         if !status.is_empty() {
-            text_center(r, py + ph as i32 - 44, status, status_color, 1);
+            text_center(r, py + ph as i32 - 34, status, status_color, 1);
         }
         text_center(
             r,
-            py + ph as i32 - 24,
+            py + ph as i32 - 14,
             "Tab/mouse - select field   Enter - confirm",
             HINT,
             1,
@@ -268,13 +298,14 @@ struct Layout {
     user_y: i32,
     pass_y: i32,
     confirm_y: i32,
+    third_y: i32,
 }
 
 fn layout(r: &crate::renderer::Renderer, setup: bool) -> Layout {
     let w = r.width() as i32;
     let h = r.height() as i32;
     let pw = 440u32;
-    let ph = if setup { 270u32 } else { 215u32 };
+    let ph = if setup { 270u32 } else { 250u32 };
     let px = (w - pw as i32) / 2;
     let py = (h - ph as i32) / 2;
     Layout {
@@ -283,11 +314,12 @@ fn layout(r: &crate::renderer::Renderer, setup: bool) -> Layout {
         user_y: py + 78 + 14,
         pass_y: py + 128 + 14,
         confirm_y: py + 178 + 14,
+        third_y: py + 178 + 14,
     }
 }
 
 /// Определяет, по какому полю кликнули.
-fn hit_test(l: &Layout, setup: bool, mx: i32, my: i32) -> Option<Focus> {
+fn hit_test(l: &Layout, setup: bool, mode: Mode, mx: i32, my: i32) -> Option<Focus> {
     let inside = |y: i32| mx >= l.fx && mx < l.fx + l.fw as i32 && my >= y && my < y + 22;
     if inside(l.user_y) {
         Some(Focus::User)
@@ -295,9 +327,24 @@ fn hit_test(l: &Layout, setup: bool, mx: i32, my: i32) -> Option<Focus> {
         Some(Focus::Pass)
     } else if setup && inside(l.confirm_y) {
         Some(Focus::Confirm)
+    } else if !setup && !mode.totp && !mode.disk && my >= l.third_y && my < l.third_y + 44 {
+        // Третья строка в режиме переключателя — клик переключает
+        // LOCAL/CLOUD (или переводит фокус, если это поле TOTP/диска).
+        Some(if mode.cloud { Focus::User } else { Focus::User })
+    } else if !setup && mode.totp && inside(l.third_y) {
+        Some(Focus::Totp)
+    } else if !setup && mode.disk && inside(l.third_y) {
+        Some(Focus::Pass)
     } else {
         None
     }
+}
+
+/// Y-координата строки переключателя LOCAL/CLOUD (центр панели).
+fn mode_toggle_y(r: &crate::renderer::Renderer) -> i32 {
+    let h = r.height() as i32;
+    let py = (h - 250i32) / 2;
+    py + 178
 }
 
 /// Читает байт из PS/2 или COM1. `None`, если ввода нет.
@@ -306,6 +353,35 @@ fn poll_key() -> Option<u8> {
         Some(crate::serial::read_byte())
     } else {
         crate::keyboard::try_read_char()
+    }
+}
+
+/// Статус диска после успешного облачного входа.
+enum CloudDisk {
+    /// Диск зашифрован, разблокирован cloud-паролем (он уже в LUKS
+    /// с предыдущего входа) или разблокирован успешно.
+    Unlocked,
+    /// Диск зашифрован, cloud-пароль не в LUKS — нужен пароль диска.
+    NeedPassword,
+    /// Диск не зашифрован — разблокировка не нужна.
+    Plain,
+}
+
+/// Проверяет, разблокирован ли том после облачного входа. Добавляет
+/// cloud-пароль в LUKS (работает, только если том уже разблокирован,
+/// т.е. cloud-пароль был добавлен в предыдущий вход). Проверяет
+/// разблокировку cloud-паролем. Если и то, и другое не удалось —
+/// диск зашифрован другим паролем, нужен пароль диска.
+fn cloud_disk_status(password: &str) -> CloudDisk {
+    if crate::crypto_storage::is_encryption_enabled() {
+        let _ = crate::luks::add_password_with_master(password);
+        if crate::crypto_storage::try_unlock(password) {
+            CloudDisk::Unlocked
+        } else {
+            CloudDisk::NeedPassword
+        }
+    } else {
+        CloudDisk::Plain
     }
 }
 
@@ -334,7 +410,25 @@ pub fn run() -> Option<String> {
     let mut status = String::new();
     let mut status_color = HINT;
 
-    redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
+    // Облачный режим: cloud_mode — активен переключатель,
+    // totp_pending — ожидание 6-значного кода, disk_unlock —
+    // ожидание пароля диска после облачного входа на зашифрованном
+    // томе (cloud-пароль ещё не в LUKS, нужен старый пароль диска,
+    // чтобы разблокировать том и добавить cloud-пароль в слоты).
+    let mut cloud_mode = false;
+    let mut totp_pending = false;
+    let mut disk_unlock = false;
+    let mut cloud_password = String::new();
+    let mut cloud_email = String::new();
+    let mut totp_factor = String::new();
+    let mut totp_token = String::new();
+    let mut cloud_local = String::new();
+
+    redraw(
+        &user, &pass, &confirm, focus, setup,
+        Mode { cloud: cloud_mode, totp: totp_pending, disk: disk_unlock },
+        &status, status_color,
+    );
 
     // Предыдущее состояние мыши: перерисовываем экран только когда
     // курсор реально сдвинулся, иначе 60 кадров в секунду впустую.
@@ -342,6 +436,8 @@ pub fn run() -> Option<String> {
     let mut last_click = false;
 
     loop {
+        let mode = Mode { cloud: cloud_mode, totp: totp_pending, disk: disk_unlock };
+
         let c = match poll_key() {
             Some(c) => c,
             None => {
@@ -349,24 +445,42 @@ pub fn run() -> Option<String> {
                 let m = crate::mouse::snapshot();
                 let moved = (m.x, m.y) != last_mouse;
 
-                // Клик по полю переводит на него фокус.
+                // Клик по полю переводит на него фокус. Клик по строке
+                // переключателя (LOCAL/CLOUD) включает облачный режим.
                 if m.left_button && !last_click {
                     let hit = crate::renderer::with_renderer_ret(|r| {
                         let l = layout(r, setup);
-                        hit_test(&l, setup, m.x, m.y)
+                        hit_test(&l, setup, mode, m.x, m.y)
                     })
                     .flatten();
                     if let Some(f) = hit {
                         focus = f;
+                    } else {
+                        // Клик на строке переключателя LOCAL/CLOUD.
+                        let toggle_y = crate::renderer::with_renderer_ret(|r| mode_toggle_y(r))
+                            .unwrap_or(0);
+                        if !setup && !totp_pending && !disk_unlock
+                            && m.y >= toggle_y && m.y < toggle_y + 44
+                        {
+                            cloud_mode = !cloud_mode;
+                            user.clear();
+                            pass.clear();
+                            focus = Focus::User;
+                            status = String::from("enter cloud email + password");
+                            status_color = HINT;
+                        }
                     }
                 }
                 last_click = m.left_button;
 
                 if moved || m.left_button {
                     last_mouse = (m.x, m.y);
-                    redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
-                } else {
-                    // hlt: спим до прерывания, не жжём процессор впустую.
+                    let mode = Mode { cloud: cloud_mode, totp: totp_pending, disk: disk_unlock };
+                    redraw(&user, &pass, &confirm, focus, setup, mode, &status, status_color);
+                } else if !crate::bootchain::pump() {
+                    // Порция отложенной сверки ядра обработана — сразу
+                    // опрашиваем ввод снова. Если делать нечего: hlt, спим
+                    // до прерывания, не жжём процессор впустую.
                     crate::sched::idle_wait();
                 }
                 continue;
@@ -376,19 +490,28 @@ pub fn run() -> Option<String> {
         let mut dirty = true;
         match c {
             b'\t' => {
-                focus = match (focus, setup) {
-                    (Focus::User, _) => Focus::Pass,
-                    (Focus::Pass, true) => Focus::Confirm,
-                    (Focus::Pass, false) => Focus::User,
-                    (Focus::Confirm, _) => Focus::User,
+                focus = match (focus, setup, totp_pending) {
+                    (Focus::User, _, _) => Focus::Pass,
+                    (Focus::Pass, true, _) => Focus::Confirm,
+                    (Focus::Pass, false, true) => Focus::Totp,
+                    (Focus::Pass, false, false) => Focus::User,
+                    (Focus::Confirm, _, _) => Focus::User,
+                    (Focus::Totp, _, _) => Focus::User,
                 };
             }
             b'\n' | b'\r' => {
-                let last = if setup { Focus::Confirm } else { Focus::Pass };
+                let last = if setup {
+                    Focus::Confirm
+                } else if totp_pending {
+                    Focus::Totp
+                } else {
+                    Focus::Pass
+                };
                 if focus != last {
-                    focus = match (focus, setup) {
-                        (Focus::User, _) => Focus::Pass,
-                        (Focus::Pass, true) => Focus::Confirm,
+                    focus = match (focus, setup, totp_pending) {
+                        (Focus::User, _, _) => Focus::Pass,
+                        (Focus::Pass, true, _) => Focus::Confirm,
+                        (Focus::Pass, false, true) => Focus::Totp,
                         _ => Focus::User,
                     };
                 } else if setup {
@@ -404,6 +527,7 @@ pub fn run() -> Option<String> {
                     } else {
                         match crate::auth::create_user(user.as_str(), pass.as_str()) {
                             Ok(()) => {
+                                crate::bootprof::mark("login: account record created");
                                 // ПЕРВАЯ НАСТРОЙКА: включаем шифрование тома
                                 // паролем аккаунта. Без этого вызова том
                                 // оставался ОТКРЫТЫМ — USERS.DB и все файлы
@@ -411,7 +535,7 @@ pub fn run() -> Option<String> {
                                 // Текстовый auth::run_login_screen это делал,
                                 // а графический вход — нет.
                                 status = String::from("encrypting disk, wait...");
-                                redraw(&user, &pass, &confirm, focus, setup,
+                                redraw(&user, &pass, &confirm, focus, setup, mode,
                                        &status, status_color);
                                 match crate::crypto_storage::enable_encryption(pass.as_str()) {
                                     Ok(()) => crate::serial_println!(
@@ -419,10 +543,11 @@ pub fn run() -> Option<String> {
                                     Err(_) => crate::serial_println!(
                                         "[loginui] ВНИМАНИЕ: шифрование НЕ включено (ошибка диска)"),
                                 }
+                                crate::bootprof::mark("login: volume encryption enabled");
                                 status = String::from("account created, signing in...");
                                 status_color = OK_C;
                                 redraw(
-                                    &user, &pass, &confirm, focus, setup, &status, status_color,
+                                    &user, &pass, &confirm, focus, setup, mode, &status, status_color,
                                 );
                                 return Some(String::from(user.as_str()));
                             }
@@ -442,6 +567,120 @@ pub fn run() -> Option<String> {
                             }
                         }
                     }
+                } else if cloud_mode && totp_pending {
+                    // Второй этап 2FA: 6-значный код из приложения.
+                    let code = String::from(pass.as_str());
+                    match crate::cloudauth::finish_totp(&totp_token, &totp_factor, &code) {
+                        Ok((username, user_id)) => {
+                            match crate::cloudauth::cache_login(&username, &cloud_password, &cloud_email, &user_id) {
+                                Ok(local_username) => {
+                                    match cloud_disk_status(&cloud_password) {
+                                        CloudDisk::Unlocked | CloudDisk::Plain => {
+                                            crate::bootprof::mark("login: cloud verified");
+                                            status = String::from("welcome!");
+                                            status_color = OK_C;
+                                            let mode = Mode { cloud: true, totp: false, disk: false };
+                                            redraw(&user, &pass, &confirm, focus, setup, mode, &status, status_color);
+                                            return Some(local_username);
+                                        }
+                                        CloudDisk::NeedPassword => {
+                                            cloud_local = local_username;
+                                            disk_unlock = true;
+                                            totp_pending = false;
+                                            pass.clear();
+                                            focus = Focus::Pass;
+                                            status = String::from("cloud verified - enter disk password");
+                                            status_color = HINT;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    status = e;
+                                    status_color = ERR;
+                                    totp_pending = false;
+                                    pass.clear();
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            status = e;
+                            status_color = ERR;
+                            pass.clear();
+                        }
+                    }
+                } else if cloud_mode && disk_unlock {
+                    // Пароль диска: разблокируем том, затем добавим
+                    // cloud-пароль в LUKS (теперь том разблокирован).
+                    if crate::crypto_storage::try_unlock(pass.as_str()) {
+                        let _ = crate::luks::add_password_with_master(&cloud_password);
+                        crate::bootprof::mark("login: cloud password synced to LUKS");
+                        status = String::from("welcome!");
+                        status_color = OK_C;
+                        disk_unlock = false;
+                        let mode = Mode { cloud: cloud_mode, totp: totp_pending, disk: disk_unlock };
+                        redraw(&user, &pass, &confirm, focus, setup, mode, &status, status_color);
+                        return Some(cloud_local);
+                    } else {
+                        status = String::from("invalid disk password");
+                        status_color = ERR;
+                        pass.clear();
+                    }
+                } else if cloud_mode {
+                    // Первый этап облачного входа: email + пароль.
+                    let email = String::from(user.as_str());
+                    let password = String::from(pass.as_str());
+                    if email.is_empty() || password.is_empty() {
+                        status = String::from("email and password required");
+                        status_color = ERR;
+                    } else {
+                        match crate::cloudauth::begin(&email, &password) {
+                            Ok(crate::cloudauth::CloudStep::Done { username, user_id }) => {
+                                match crate::cloudauth::cache_login(&username, &password, &email, &user_id) {
+                                    Ok(local_username) => {
+                                        match cloud_disk_status(&password) {
+                                            CloudDisk::Unlocked | CloudDisk::Plain => {
+                                                crate::bootprof::mark("login: cloud verified");
+                                                status = String::from("welcome!");
+                                                status_color = OK_C;
+                                                let mode = Mode { cloud: true, totp: false, disk: false };
+                                                redraw(&user, &pass, &confirm, focus, setup, mode, &status, status_color);
+                                                return Some(local_username);
+                                            }
+                                            CloudDisk::NeedPassword => {
+                                                cloud_local = local_username;
+                                                cloud_password = password;
+                                                disk_unlock = true;
+                                                pass.clear();
+                                                focus = Focus::Pass;
+                                                status = String::from("cloud verified - enter disk password");
+                                                status_color = HINT;
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        status = e;
+                                        status_color = ERR;
+                                    }
+                                }
+                            }
+                            Ok(crate::cloudauth::CloudStep::NeedTotp { factor_id, access_token }) => {
+                                cloud_password = password;
+                                cloud_email = email;
+                                totp_factor = factor_id;
+                                totp_token = access_token;
+                                totp_pending = true;
+                                pass.clear();
+                                focus = Focus::Totp;
+                                status = String::from("enter 6-digit code from app");
+                                status_color = HINT;
+                            }
+                            Err(e) => {
+                                status = e;
+                                status_color = ERR;
+                                pass.clear();
+                            }
+                        }
+                    }
                 } else {
                     // Зашифрованный том сначала надо РАЗБЛОКИРОВАТЬ: пока
                     // XTS-движок не активирован верным паролем, ext2 читает
@@ -454,14 +693,16 @@ pub fn run() -> Option<String> {
                         pass.clear();
                         focus = Focus::Pass;
                         let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
-                        redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
+                        redraw(&user, &pass, &confirm, focus, setup, mode, &status, status_color);
                         continue;
                     }
+                    crate::bootprof::mark("login: volume unlocked");
                     match crate::auth::verify_login(user.as_str(), pass.as_str()) {
                         Ok(()) => {
+                            crate::bootprof::mark("login: password verified");
                             status = String::from("welcome!");
                             status_color = OK_C;
-                            redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
+                            redraw(&user, &pass, &confirm, focus, setup, mode, &status, status_color);
                             return Some(String::from(user.as_str()));
                         }
                         Err(_) => {
@@ -480,17 +721,23 @@ pub fn run() -> Option<String> {
                 Focus::User => user.pop(),
                 Focus::Pass => pass.pop(),
                 Focus::Confirm => confirm.pop(),
+                Focus::Totp => pass.pop(),
             },
             0x20..=0x7E => match focus {
                 Focus::User => user.push(c),
                 Focus::Pass => pass.push(c),
                 Focus::Confirm => confirm.push(c),
+                Focus::Totp => pass.push(c),
             },
             _ => dirty = false,
         }
 
         if dirty {
-            redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
+            redraw(
+                &user, &pass, &confirm, focus, setup,
+                Mode { cloud: cloud_mode, totp: totp_pending, disk: disk_unlock },
+                &status, status_color,
+            );
         }
     }
 }

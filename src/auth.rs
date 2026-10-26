@@ -283,6 +283,39 @@ pub fn change_password(username: &str, old_password: &str, new_password: &str) -
     Ok(())
 }
 
+/// ПЕРЕЗАПИСЫВАЕТ пароль аккаунта БЕЗ проверки старого пароля и
+/// БЕЗ перестановки LUKS-слотов. Используется облачной
+/// синхронизацией (см. cloudauth): после успешного входа через
+/// Supabase пароль сайта — авторитетный, и локальный хэш должен
+/// совпадать с ним — иначе офлайн-вход с этим паролем не пройдёт.
+/// change_password() тут НЕ подходит: он требует старый пароль
+/// (только что проверен сервером) и синхронизирует слоты
+/// шифрования диска — неприемлемо для входа с экрана.
+pub fn force_set_password(username: &str, password: &str) -> Result<(), AuthError> {
+    validate_username(username)?;
+
+    let mut users = load_users()?;
+    let mut salt = [0u8; SALT_LEN];
+    rng::fill_random(&mut salt);
+    let hash = hash_password(&salt, password);
+
+    match users.iter_mut().find(|u| u.username == username) {
+        Some(u) => {
+            u.salt = salt;
+            u.hash = hash;
+        }
+        None => {
+            users.push(UserRecord {
+                username: username.to_string(),
+                salt,
+                hash,
+            });
+        }
+    }
+
+    save_users(&users)
+}
+
 /// true, если хотя бы один аккаунт уже создан — используется CLI, чтобы
 /// решить, нужно ли при загрузке предлагать "создать первый аккаунт"
 /// или сразу "войти в систему".

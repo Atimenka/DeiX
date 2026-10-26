@@ -94,6 +94,12 @@ fn build_header(protocol: u8, src_ip: [u8; 4], dst_ip: [u8; 4], payload_len: usi
 /// и отправляет его через RTL8139. dst_ip должен быть уже разрешён в MAC
 /// через arp::resolve (или найден в кэше) — эта функция сама ARP не шлёт.
 pub fn send_packet(dst_ip: [u8; 4], dst_mac: [u8; 6], protocol: u8, payload: &[u8], ident: u16) -> bool {
+    // Буфер кадра 1500 байт: больший payload в него не влезет. Отправитель
+    // обязан резать данные сам (tcp::send режет по MSS) — честно возвращаем
+    // false вместо паники на переполнении среза.
+    if payload.len() > 1500 - MIN_HEADER_LEN {
+        return false;
+    }
     let my_ip = crate::net::my_ip();
     let my_mac = rtl8139::mac_address();
 

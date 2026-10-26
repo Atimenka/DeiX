@@ -50,6 +50,28 @@ const HRR_RANDOM: [u8; 32] = [
     0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C,
 ];
 
+/// Стадия рукопожатия и время её начала — для сообщения об ошибке:
+/// видно, где именно оно встало и сколько ушло на вычисления.
+static STAGE: crate::spinlock::SpinLock<&'static str> = crate::spinlock::SpinLock::new("не начато");
+static STAGE_START_MS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static HANDSHAKE_START_MS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+fn mark(stage: &'static str) {
+    *STAGE.lock() = stage;
+    STAGE_START_MS.store(crate::timer::uptime_ms(), core::sync::atomic::Ordering::Relaxed);
+}
+
+fn stage_report() -> String {
+    let now = crate::timer::uptime_ms();
+    format!(
+        "стадия «{}», {} мс в ней, {} мс с начала рукопожатия; {}",
+        *STAGE.lock(),
+        now.saturating_sub(STAGE_START_MS.load(core::sync::atomic::Ordering::Relaxed)),
+        now.saturating_sub(HANDSHAKE_START_MS.load(core::sync::atomic::Ordering::Relaxed)),
+        tcp::link_stats()
+    )
+}
+
 /// Односторонний набор ключей записи (клиентский или серверный).
 struct Keys {
     gcm: AesGcm128,
@@ -85,6 +107,10 @@ pub struct TlsStream {
     server: Keys,
     rx: Vec<u8>,
     closed: bool,
+    /// Причина, по которой `recv` последний раз вернул пустой результат.
+    last_error: Option<String>,
+    /// Принято TLS-записей после рукопожатия.
+    records: u32,
 }
 
 /// HKDF-Expand-Label (RFC 8446 §7.1).
@@ -132,6 +158,10 @@ fn alert_text(p: &[u8]) -> String {
 /// Дочитывает rx из TCP до need байт или до дедлайна.
 fn tcp_fill(rx: &mut Vec<u8>, need: usize, deadline_ms: u64) -> bool {
     while rx.len() < need {
+        // Сервер закрыл соединение — новых байт уже не будет: не ждём дедлайн.
+        if tcp::peer_fin() {
+            return false;
+        }
         let now = crate::timer::uptime_ms();
         if now >= deadline_ms {
             return false;
@@ -174,6 +204,38 @@ fn send_record(rtype: u8, ver_minor: u8, payload: &[u8]) -> Result<(), String> {
     rec.extend_from_slice(payload);
     if !tcp::send(&rec) {
         return Err("TCP: отправка TLS record не удалась".into());
+    }
+    Ok(())
+}
+
+/// Отправляет ClientHello двумя TCP-сегментами, разрезая запись внутри
+/// имени хоста (SNI). Приёмнику это не мешает (поток тот же), а DPI,
+/// который ищет имя в первом сегменте, имени целиком не видит.
+fn send_client_hello(ch: &[u8], host: &str) -> Result<(), String> {
+    let mut rec = Vec::with_capacity(5 + ch.len());
+    rec.push(CONTENT_HANDSHAKE);
+    rec.push(3);
+    rec.push(1);
+    rec.extend_from_slice(&(ch.len() as u16).to_be_bytes());
+    rec.extend_from_slice(ch);
+    let name = host.as_bytes();
+    let at = if name.len() >= 2 {
+        ch.windows(name.len()).position(|w| w == name)
+    } else {
+        None
+    };
+    match at {
+        Some(p) => {
+            let split = 5 + p + name.len() / 2;
+            if !tcp::send(&rec[..split]) || !tcp::send(&rec[split..]) {
+                return Err("TCP: отправка ClientHello не удалась".into());
+            }
+        }
+        None => {
+            if !tcp::send(&rec) {
+                return Err("TCP: отправка ClientHello не удалась".into());
+            }
+        }
     }
     Ok(())
 }
@@ -262,8 +324,12 @@ fn build_client_hello(
     // supported_versions: только 1.3
     push_ext(&mut ext, 0x002b, &[2, 0x03, 0x04]);
 
-    // psk_key_exchange_modes: psk_dhe_ke
-    push_ext(&mut ext, 0x002d, &[1, 1]);
+    // ALPN: http/1.1 (RFC 7301). ProtocolNameList = длина_списка(2) +
+    // записи длина(1)+имя; для "http/1.1" список = 1 + 8 = 9 байт.
+    // С длиной 8 расширение неполное: строгий парсер (BoringSSL на краю
+    // Vercel) считает ClientHello испорченным и молча рвёт рукопожатие —
+    // TCP подтверждает байты, но ServerHello никогда не приходит.
+    push_ext(&mut ext, 0x0010, &[0, 9, 8, b'h', b't', b't', b'p', b'/', b'1', b'.', b'1']);
 
     // key_share: X25519
     let mut ks = Vec::with_capacity(38);
@@ -364,18 +430,27 @@ fn parse_server_hello(msg: &[u8]) -> Result<[u8; 32], String> {
 }
 
 /// Устанавливает TLS 1.3 соединение (TCP + рукопожатие).
-pub fn connect(ip: [u8; 4], port: u16, host: &str) -> Result<TlsStream, String> {
-    if !tcp::connect(ip, port) {
-        return Err(format!(
-            "Не удалось установить TCP-соединение с {} ({}.{}.{}.{}:{})",
-            host, ip[0], ip[1], ip[2], ip[3], port
-        ));
+pub fn connect(ips: &[[u8; 4]], port: u16, host: &str) -> Result<TlsStream, String> {
+    if let Err(why) = tcp::connect_any(ips, port) {
+        return Err(format!("Не удалось установить TCP-соединение с {} ({})", host, why));
     }
     match handshake(host) {
-        Ok(stream) => Ok(stream),
+        Ok(stream) => {
+            crate::diag::notice(
+                crate::diag::NONE,
+                &format!(
+                    "TLS {}: рукопожатие заняло {} мс",
+                    host,
+                    crate::timer::uptime_ms()
+                        .saturating_sub(HANDSHAKE_START_MS.load(core::sync::atomic::Ordering::Relaxed))
+                ),
+            );
+            Ok(stream)
+        }
         Err(e) => {
+            let report = stage_report();
             tcp::close();
-            Err(e)
+            Err(format!("{} [{}]", e, report))
         }
     }
 }
@@ -417,7 +492,13 @@ fn parse_certificate_msg(msg: &[u8]) -> Result<Vec<Vec<u8>>, String> {
 }
 
 fn handshake(host: &str) -> Result<TlsStream, String> {
-    let deadline = crate::timer::uptime_ms() + HANDSHAKE_TIMEOUT_MS;
+    HANDSHAKE_START_MS.store(crate::timer::uptime_ms(), core::sync::atomic::Ordering::Relaxed);
+    mark("ключи клиента");
+    // Дедлайн ожидания данных от сети. Вычисления (X25519, проверка
+    // цепочки и подписей) могут занимать секунды и не должны съедать
+    // время, отведённое серверу, поэтому после каждого из них он
+    // отсчитывается заново.
+    let mut deadline: u64;
 
     let mut priv_key = [0u8; 32];
     crate::rng::fill_random(&mut priv_key);
@@ -430,7 +511,9 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
     let ch = build_client_hello(host, &random, &session_id, &pubkey);
     let mut transcript = Sha256::new();
     transcript.update(&ch);
-    send_record(CONTENT_HANDSHAKE, 1, &ch)?;
+    send_client_hello(&ch, host)?;
+    mark("ClientHello отправлен, ждём ServerHello");
+    deadline = crate::timer::uptime_ms() + HANDSHAKE_TIMEOUT_MS;
 
     let mut rx: Vec<u8> = Vec::new();
 
@@ -457,7 +540,10 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
     transcript.update(&sh);
 
     // --- ключевое расписание (RFC 8446 §7.1) ---
+    mark("X25519 с ключом сервера");
     let shared = x25519(&priv_key, &server_pub);
+    deadline = crate::timer::uptime_ms() + HANDSHAKE_TIMEOUT_MS;
+    mark("ждём серверный flight (EncryptedExtensions..Finished)");
     if shared.iter().all(|&b| b == 0) {
         return Err("TLS: X25519 дал нулевой общий секрет".into());
     }
@@ -522,10 +608,13 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
                 }
                 HS_CERTIFICATE => {
                     let chain = parse_certificate_msg(&msg)?;
+                    mark("проверка цепочки сертификатов");
                     x509::verify_chain(&chain, host)
                         .map_err(|e| format!("сертификат {}: {}", host, e))?;
                     leaf_key = Some(x509::leaf_public_key(&chain[0])?);
                     transcript.update(&msg);
+                    deadline = crate::timer::uptime_ms() + HANDSHAKE_TIMEOUT_MS;
+                    mark("ждём серверный flight (CertificateVerify, Finished)");
                 }
                 HS_CERT_VERIFY => {
                     // Подпись покрывает транскрипт ПО Certificate
@@ -547,10 +636,13 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
                     content.extend_from_slice(b"TLS 1.3, server CertificateVerify");
                     content.push(0);
                     content.extend_from_slice(&th);
+                    mark("проверка подписи CertificateVerify");
                     x509::verify_tls_signature(key, scheme, &content, &msg[8..])
                         .map_err(|e| format!("TLS: {}", e))?;
                     cert_verified = true;
                     transcript.update(&msg);
+                    deadline = crate::timer::uptime_ms() + HANDSHAKE_TIMEOUT_MS;
+                    mark("ждём серверный Finished");
                 }
                 other => {
                     return Err(format!("TLS: неожиданное handshake-сообщение {}", other))
@@ -566,6 +658,7 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
     let c_ap = derive_secret(&master, b"c ap traffic", &th_server_fin);
     let s_ap = derive_secret(&master, b"s ap traffic", &th_server_fin);
 
+    mark("отправка client Finished");
     // --- CCS (совместимость с middlebox) + client Finished ---
     send_record(CONTENT_CCS, 3, &[1])?;
     let fk_v = hkdf_expand_label(&c_hs, b"finished", &[], 32);
@@ -586,6 +679,8 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
         server: Keys::from_secret(&s_ap),
         rx,
         closed: false,
+        last_error: None,
+        records: 0,
     })
 }
 
@@ -602,7 +697,8 @@ impl TlsStream {
     }
 
     /// Возвращает очередную порцию расшифрованных данных приложения.
-    /// Пустой Vec — таймаут либо соединение закрыто (как у tcp::recv).
+    /// Пустой Vec — таймаут либо соединение закрыто (как у tcp::recv);
+    /// причина сохраняется и доступна через `diagnosis`.
     pub fn recv(&mut self, timeout_ms: u64) -> Vec<u8> {
         if self.closed {
             return Vec::new();
@@ -611,8 +707,12 @@ impl TlsStream {
         loop {
             let (rtype, payload) = match read_record(&mut self.rx, deadline) {
                 Ok(r) => r,
-                Err(_) => return Vec::new(), // таймаут/обрыв
+                Err(e) => {
+                    self.last_error = Some(format!("{} ({})", e, tcp::last_end()));
+                    return Vec::new();
+                }
             };
+            self.records += 1;
             match rtype {
                 CONTENT_APPDATA => match open_record(&mut self.server, &payload) {
                     Ok((CONTENT_APPDATA, plain)) => {
@@ -627,24 +727,50 @@ impl TlsStream {
                             continue;
                         }
                     }
-                    // alert (включая close_notify), неизвестный тип или
-                    // ошибка расшифровки — соединение закрывается.
-                    _ => {
+                    Ok((CONTENT_ALERT, plain)) => {
+                        self.last_error = Some(alert_text(&plain));
+                        self.closed = true;
+                        return Vec::new();
+                    }
+                    Ok((other, _)) => {
+                        self.last_error = Some(format!("неожиданный inner type {}", other));
+                        self.closed = true;
+                        return Vec::new();
+                    }
+                    Err(e) => {
+                        self.last_error = Some(e);
                         self.closed = true;
                         return Vec::new();
                     }
                 },
                 CONTENT_ALERT => {
+                    self.last_error = Some(alert_text(&payload));
                     self.closed = true;
                     return Vec::new();
                 }
                 CONTENT_CCS => {}
-                _ => {
+                other => {
+                    self.last_error = Some(format!("неожиданный record {}", other));
                     self.closed = true;
                     return Vec::new();
                 }
             }
         }
+    }
+
+    /// Человекочитаемая причина отсутствия данных.
+    pub fn diagnosis(&self) -> String {
+        let why = match &self.last_error {
+            Some(e) => e.clone(),
+            None => String::from(tcp::last_end()),
+        };
+        format!(
+            "{}; TCP принято {} байт, TLS-записей после рукопожатия {}; {}",
+            why,
+            tcp::rx_bytes(),
+            self.records,
+            tcp::link_stats()
+        )
     }
 
     /// Отправляет close_notify и закрывает TCP.

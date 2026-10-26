@@ -1,46 +1,69 @@
 //! DNS-клиент (RFC 1035): настоящий резолвинг A-записей по UDP/53.
 //!
 //! Запрос уходит на сервер из NetConfig (по умолчанию 10.0.2.3 — DNS,
-//! который QEMU slirp предоставляет гостю). Ответы кешируются с учётом
-//! TTL записи — по его истечении имя резолвится заново.
+//! который QEMU slirp предоставляет гостю). Если настроенный сервер не
+//! отвечает (случается в WSL/за NAT, где slirp-DNS не может достучаться
+//! до хостового резолвера), запрос честно повторяется на публичные
+//! 1.1.1.1 и 8.8.8.8 — через slirp они достижимы обычным NAT. Ответы
+//! с флагом TC (обрезание >512 байт) и полный отказ UDP повторяются
+//! по TCP/53 (RFC 1035 §4.2.2). Ответы кешируются с учётом TTL записи —
+//! по его истечении имя резолвится заново.
 //!
-//! Ограничения (честно): только IPv4 (QTYPE=A), только UDP (без TCP
-//! fallback для ответов >512 байт), без DNSSEC.
+//! Ограничения (честно): только IPv4 (QTYPE=A), без DNSSEC.
 
 use crate::net::udp;
 use crate::spinlock::SpinLock;
 use crate::sync::without_interrupts;
+use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
 const DNS_PORT: u16 = 53;
-const ATTEMPTS: u32 = 2;
+/// UDP-попыток на основной сервер и на каждый резервный.
+const ATTEMPTS_PRIMARY: u32 = 2;
+const ATTEMPTS_FALLBACK: u32 = 1;
 const ATTEMPT_TIMEOUT_MS: u64 = 2000;
+/// Общий таймаут TCP/53-запроса (RFC 1035 §4.2.2: TCP обязателен при TC).
+const TCP_TIMEOUT_MS: u64 = 3000;
+/// Резервные публичные серверы: используются, только когда настроенный
+/// (NetConfig::dns) не ответил вовсе — NXDOMAIN с него остаётся окончательным.
+const FALLBACK_SERVERS: [[u8; 4]; 2] = [[1, 1, 1, 1], [8, 8, 8, 8]];
 /// TTL кеша ограничиваем сверху 10 минутами, снизу — 5 секундами.
 const TTL_MAX_MS: u64 = 600_000;
 const TTL_MIN_MS: u64 = 5_000;
 const CACHE_CAP: usize = 16;
 
+const MAX_ADDRS: usize = 4;
+
 struct CacheEntry {
     name: String,
-    ip: [u8; 4],
+    ips: Vec<[u8; 4]>,
     expires_ms: u64,
 }
 
 static CACHE: SpinLock<Vec<CacheEntry>> = SpinLock::new(Vec::new());
+static LAST_ERROR: SpinLock<String> = SpinLock::new(String::new());
 static QUERY_SEQ: SpinLock<u16> = SpinLock::new(0);
 
-fn cache_get(name: &str) -> Option<[u8; 4]> {
+fn cache_get(name: &str) -> Option<Vec<[u8; 4]>> {
     let now = crate::timer::uptime_ms();
     without_interrupts(|| {
-        let mut c = CACHE.lock();
-        c.retain(|e| e.expires_ms > now);
-        c.iter().find(|e| e.name == name).map(|e| e.ip)
+        let c = CACHE.lock();
+        c.iter().find(|e| e.name == name && e.expires_ms > now).map(|e| e.ips.clone())
     })
 }
 
-fn cache_put(name: &str, ip: [u8; 4], ttl_ms: u64) {
+/// Запись с истёкшим TTL: используется, только если свежий запрос не
+/// получил ответа (RFC 8767, serve-stale).
+fn cache_stale(name: &str) -> Option<Vec<[u8; 4]>> {
+    without_interrupts(|| {
+        let c = CACHE.lock();
+        c.iter().find(|e| e.name == name).map(|e| e.ips.clone())
+    })
+}
+
+fn cache_put(name: &str, ips: Vec<[u8; 4]>, ttl_ms: u64) {
     let now = crate::timer::uptime_ms();
     let ttl = ttl_ms.clamp(TTL_MIN_MS, TTL_MAX_MS);
     without_interrupts(|| {
@@ -51,7 +74,7 @@ fn cache_put(name: &str, ip: [u8; 4], ttl_ms: u64) {
         }
         c.push(CacheEntry {
             name: name.to_string(),
-            ip,
+            ips,
             expires_ms: now + ttl,
         });
     });
@@ -105,10 +128,20 @@ fn skip_name(msg: &[u8], mut pos: usize) -> Option<usize> {
     }
 }
 
-/// Разбирает ответ: возвращает (ip, ttl_ms) первой A-записи из секции
-/// ответов. CNAME-записи пропускаются — сервер кладёт A каноничного
-/// имени в тот же ответ.
-fn parse_response(msg: &[u8], expect_id: u16) -> Option<([u8; 4], u64)> {
+/// Результат разбора ответа DNS.
+enum Parsed {
+    /// Есть A-записи и наименьший TTL в мс.
+    Answer(Vec<[u8; 4]>, u64),
+    /// Флаг TC: ответ обрезан, нужен повтор по TCP/53.
+    Truncated,
+    /// Сервер ответил ошибкой (RCODE) или в ответе нет A-записей.
+    Reject(String),
+}
+
+/// Разбирает ответ: все A-записи из секции ответов (не более MAX_ADDRS)
+/// и наименьший TTL в мс. CNAME-записи пропускаются — сервер кладёт A
+/// каноничного имени в тот же ответ.
+fn parse_response(msg: &[u8], expect_id: u16) -> Option<Parsed> {
     if msg.len() < 12 {
         return None;
     }
@@ -118,7 +151,14 @@ fn parse_response(msg: &[u8], expect_id: u16) -> Option<([u8; 4], u64)> {
         return None; // не наш ответ или это не ответ вовсе
     }
     if flags & 0x000F != 0 {
-        return None; // RCODE != 0: NXDOMAIN, SERVFAIL и т.д.
+        let rcode = flags & 0x000F;
+        let why = match rcode {
+            3 => String::from("имя не существует (NXDOMAIN)"),
+            2 => String::from("SERVFAIL: сервер не смог обработать запрос"),
+            5 => String::from("запрос отклонён (REFUSED)"),
+            c => format!("ошибка сервера (RCODE {})", c),
+        };
+        return Some(Parsed::Reject(why));
     }
     let qdcount = u16::from_be_bytes([msg[4], msg[5]]) as usize;
     let ancount = u16::from_be_bytes([msg[6], msg[7]]) as usize;
@@ -128,6 +168,8 @@ fn parse_response(msg: &[u8], expect_id: u16) -> Option<([u8; 4], u64)> {
         pos = skip_name(msg, pos)? + 4; // QTYPE + QCLASS
     }
 
+    let mut ips: Vec<[u8; 4]> = Vec::new();
+    let mut min_ttl_ms = u64::MAX;
     for _ in 0..ancount {
         pos = skip_name(msg, pos)?;
         if pos + 10 > msg.len() {
@@ -143,66 +185,222 @@ fn parse_response(msg: &[u8], expect_id: u16) -> Option<([u8; 4], u64)> {
         }
         if rtype == 1 && rclass == 1 && rdlen == 4 {
             let ip = [msg[pos], msg[pos + 1], msg[pos + 2], msg[pos + 3]];
-            return Some((ip, ttl as u64 * 1000));
+            if ips.len() < MAX_ADDRS && !ips.contains(&ip) {
+                ips.push(ip);
+            }
+            min_ttl_ms = min_ttl_ms.min(ttl as u64 * 1000);
         }
         pos += rdlen; // CNAME и прочие типы пропускаем
     }
-    None
+    if ips.is_empty() {
+        if flags & 0x0200 != 0 {
+            return Some(Parsed::Truncated); // TC: A-записи не влезли в UDP-ответ
+        }
+        return Some(Parsed::Reject(String::from("ответ без A-записей")));
+    }
+    Some(Parsed::Answer(ips, min_ttl_ms))
 }
 
-/// Резолвит A-запись `host` через настроенный DNS-сервер.
-/// None — имя не разрешилось (нет сети, таймаут или NXDOMAIN).
+fn set_error(msg: String) {
+    without_interrupts(|| *LAST_ERROR.lock() = msg);
+}
+
+/// Причина последней неудачи резолвинга.
+pub fn last_error() -> String {
+    without_interrupts(|| (*LAST_ERROR.lock()).clone())
+}
+
+/// Резолвит первую A-запись `host`.
 pub fn resolve_a(host: &str) -> Option<[u8; 4]> {
+    resolve_all(host).first().copied()
+}
+
+/// Резолвит все A-записи `host` (до MAX_ADDRS) через настроенный
+/// DNS-сервер. Пустой список — имя не разрешилось (нет сети, таймаут
+/// или NXDOMAIN).
+pub fn resolve_all(host: &str) -> Vec<[u8; 4]> {
     let name = host.trim().to_lowercase();
     if !valid_hostname(&name) {
-        return None;
+        set_error(format!("недопустимое имя '{}'", name));
+        return Vec::new();
     }
-    if let Some(ip) = cache_get(&name) {
-        return Some(ip);
+    if let Some(ips) = cache_get(&name) {
+        return ips;
     }
     if !crate::rtl8139::is_ready() {
-        return None;
+        set_error(String::from("сетевая карта не готова"));
+        return Vec::new();
     }
 
-    let server = crate::net::dns_ip();
-    for _ in 0..ATTEMPTS {
+    let servers = server_list();
+    let mut report = String::new();
+    for (si, server) in servers.iter().enumerate() {
         let seq = without_interrupts(|| {
             let mut s = QUERY_SEQ.lock();
             *s = s.wrapping_add(1);
             *s
         });
-        // ID из тиков таймера + счётчика, локальный порт из
-        // эфемерального диапазона — защита от случайных совпадений.
+        // ID из тиков таймера + счётчика, локальный порт из эфемерального
+        // диапазона. Один ID и порт на все попытки одному серверу: поздний
+        // ответ на первую отправку принимается так же, как на повторную.
         let id = (crate::timer::uptime_ms() as u16) ^ (seq.rotate_left(7)) ^ 0x5A17;
         let sport = 49152 + (seq & 0x3FFF);
         let query = build_query(id, &name);
-        if !udp::send_to(server, DNS_PORT, sport, &query) {
-            continue;
-        }
+        let attempts = if si == 0 { ATTEMPTS_PRIMARY } else { ATTEMPTS_FALLBACK };
 
-        let deadline = crate::timer::uptime_ms() + ATTEMPT_TIMEOUT_MS;
-        loop {
-            let left = deadline.saturating_sub(crate::timer::uptime_ms());
-            if left == 0 {
+        let mut outcome: Option<Parsed> = None;
+        for _ in 0..attempts {
+            if !udp::send_to(*server, DNS_PORT, sport, &query) {
+                continue;
+            }
+            let deadline = crate::timer::uptime_ms() + ATTEMPT_TIMEOUT_MS;
+            loop {
+                let left = deadline.saturating_sub(crate::timer::uptime_ms());
+                if left == 0 {
+                    break;
+                }
+                let Some((sip, sp, data)) = udp::recv_from(sport, left) else { break };
+                if sip != *server || sp != DNS_PORT || data.len() < 2
+                    || u16::from_be_bytes([data[0], data[1]]) != id
+                {
+                    continue;
+                }
+                if let Some(parsed) = parse_response(&data, id) {
+                    outcome = Some(parsed);
+                    break;
+                }
+                // Пакет наш по порту, но не разобрался (обрывок/мусор) —
+                // ждём следующий до конца таймаута попытки.
+            }
+            if outcome.is_some() {
                 break;
             }
-            match udp::recv_from(sport, left) {
-                Some((sip, sp, data)) => {
-                    if sip != server || sp != DNS_PORT {
-                        continue; // чужая датаграмма — ждём дальше
+        }
+
+        match outcome {
+            Some(Parsed::Answer(ips, ttl_ms)) => {
+                cache_put(&name, ips.clone(), ttl_ms);
+                return ips;
+            }
+            Some(Parsed::Truncated) => {
+                // UDP-ответ обрезан (TC): тот же запрос по TCP/53.
+                match query_tcp(*server, &query, id) {
+                    Some(Parsed::Answer(ips, ttl_ms)) => {
+                        cache_put(&name, ips.clone(), ttl_ms);
+                        return ips;
                     }
-                    if let Some((ip, ttl_ms)) = parse_response(&data, id) {
-                        cache_put(&name, ip, ttl_ms);
-                        return Some(ip);
+                    Some(Parsed::Reject(why)) => {
+                        push_report(&mut report, *server, &why);
                     }
-                    // Ответ сервера с ошибкой (NXDOMAIN и т.п.) —
-                    // повторять бессмысленно.
-                    return None;
+                    _ => push_report(&mut report, *server, "ответ обрезан (TC), TCP/53 не ответил"),
                 }
-                None => break, // таймаут попытки
+            }
+            Some(Parsed::Reject(why)) => {
+                // NXDOMAIN от настроенного сервера — окончательный ответ:
+                // имя действительно не существует, повторять на публичных
+                // серверах смысла нет. Прочие отказы (SERVFAIL, REFUSED,
+                // «без A-записей») пробуем переспросить у следующих.
+                if si == 0 && why.contains("NXDOMAIN") {
+                    set_error(format!("'{}': {}", name, why));
+                    return Vec::new();
+                }
+                push_report(&mut report, *server, &why);
+            }
+            None => {
+                // Сервер молчит по UDP: последняя надежда — TCP/53 (NAT
+                // иногда режет только UDP), дальше — следующий сервер.
+                match query_tcp(*server, &query, id) {
+                    Some(Parsed::Answer(ips, ttl_ms)) => {
+                        cache_put(&name, ips.clone(), ttl_ms);
+                        return ips;
+                    }
+                    Some(Parsed::Reject(why)) => push_report(&mut report, *server, &why),
+                    _ => push_report(
+                        &mut report,
+                        *server,
+                        &format!(
+                            "нет ответа по UDP ({}×{} мс) и TCP",
+                            attempts, ATTEMPT_TIMEOUT_MS
+                        ),
+                    ),
+                }
             }
         }
     }
+    if let Some(ips) = cache_stale(&name) {
+        crate::diag::notice(
+            crate::diag::NONE,
+            &format!("DNS: нет ответа для '{}', использован прошлый ответ с истёкшим TTL", name),
+        );
+        return ips;
+    }
+    if report.is_empty() {
+        report = String::from("нет DNS-серверов для запроса");
+    }
+    set_error(report);
+    Vec::new()
+}
+
+/// Очередь серверов: настроенный (NetConfig) первым, затем публичные
+/// резервные — без дублей и без 0.0.0.0.
+fn server_list() -> Vec<[u8; 4]> {
+    let mut out = Vec::new();
+    let primary = crate::net::dns_ip();
+    if primary != [0, 0, 0, 0] {
+        out.push(primary);
+    }
+    for fb in FALLBACK_SERVERS.iter() {
+        if !out.contains(fb) {
+            out.push(*fb);
+        }
+    }
+    out
+}
+
+fn push_report(report: &mut String, server: [u8; 4], why: &str) {
+    if !report.is_empty() {
+        report.push_str("; ");
+    }
+    report.push_str(&format!(
+        "{}.{}.{}.{}: {}",
+        server[0], server[1], server[2], server[3], why
+    ));
+}
+
+/// Запрос по TCP/53 (RFC 1035 §4.2.2): длина u16 BE + тот же UDP-запрос.
+fn query_tcp(server: [u8; 4], query: &[u8], id: u16) -> Option<Parsed> {
+    use crate::net::tcp;
+    if tcp::connect_any(&[server], DNS_PORT).is_err() {
+        return None;
+    }
+    let mut msg = Vec::with_capacity(query.len() + 2);
+    msg.extend_from_slice(&(query.len() as u16).to_be_bytes());
+    msg.extend_from_slice(query);
+    if !tcp::send(&msg) {
+        tcp::close();
+        return None;
+    }
+    let deadline = crate::timer::uptime_ms() + TCP_TIMEOUT_MS;
+    let mut acc: Vec<u8> = Vec::new();
+    loop {
+        let left = deadline.saturating_sub(crate::timer::uptime_ms());
+        if left == 0 {
+            break;
+        }
+        let chunk = tcp::recv(left);
+        if chunk.is_empty() {
+            break; // FIN/RST или таймаут — больше данных не будет
+        }
+        acc.extend_from_slice(&chunk);
+        if acc.len() >= 2 {
+            let n = u16::from_be_bytes([acc[0], acc[1]]) as usize;
+            if acc.len() >= 2 + n {
+                tcp::close();
+                return parse_response(&acc[2..2 + n], id);
+            }
+        }
+    }
+    tcp::close();
     None
 }
 

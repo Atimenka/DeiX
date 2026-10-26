@@ -155,6 +155,7 @@ pub fn resolve(ip: [u8; 4], timeout_ms: u64) -> Option<[u8; 6]> {
 
     let start = timer::uptime_ms();
     loop {
+        rtl8139::poll_rx();
         if let Some(mac) = cache_lookup(ip) {
             return Some(mac);
         }

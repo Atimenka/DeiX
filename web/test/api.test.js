@@ -1,0 +1,1170 @@
+'use strict';
+
+process.env.SUPABASE_URL = 'https://db.test';
+process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key';
+process.env.SUPABASE_ANON_KEY = 'anon-key';
+process.env.FLOOD_MAX_PER_MINUTE = '100000';
+
+const nodeCrypto = require('node:crypto');
+const dnsPromises = require('node:dns').promises;
+dnsPromises.resolveMx = async (domain) => {
+  if (domain === 'nomx.invalid') throw Object.assign(new Error('nx'), { code: 'ENOTFOUND' });
+  if (domain === 'flaky.test') throw Object.assign(new Error('timeout'), { code: 'ETIMEOUT' });
+  return [{ exchange: `mx.${domain}`, priority: 10 }];
+};
+dnsPromises.resolve4 = async () => {
+  throw Object.assign(new Error('nx'), { code: 'ENOTFOUND' });
+};
+const keyPair = nodeCrypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+process.env.DEV_KEY_PRIVATE = keyPair.privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64');
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const ID = 'a'.repeat(32);
+
+const db = {
+  users: new Map(),
+  profiles: new Map(),
+  rows: new Map(),
+  links: new Map(),
+  tokens: new Map(),
+  refresh: new Map(),
+  refreshAal: new Map(),
+  open: true,
+  codes: new Map(),
+  keys: [],
+  factors: new Map(),
+  verifications: [],
+  backup: [],
+  mails: [],
+  challenges: new Map(),
+  releases: [],
+  updates: [],
+  objects: new Map(),
+  blobs: new Map(),
+  seq: 0,
+};
+
+const GOOD_CODE = '123456';
+
+function jsonResponse(status, data) {
+  return { ok: status < 400, status, text: async () => (data === undefined ? '' : JSON.stringify(data)) };
+}
+
+function addUser(email, password, username, role) {
+  const id = `00000000-0000-0000-0000-${String(++db.seq).padStart(12, '0')}`;
+  db.users.set(id, { id, email, password });
+  db.profiles.set(id, { id, username, role, email_verified: true });
+  return id;
+}
+
+function userView(userId) {
+  return { ...db.users.get(userId), factors: db.factors.get(userId) || [] };
+}
+
+function issue(userId, aal = 'aal1') {
+  const payload = Buffer.from(JSON.stringify({ aal })).toString('base64url');
+  const access = `h.${payload}.${++db.seq}`;
+  const refresh = `rt-${++db.seq}`;
+  db.tokens.set(access, userId);
+  db.refresh.set(refresh, userId);
+  db.refreshAal.set(refresh, aal);
+  return { access_token: access, refresh_token: refresh, user: userView(userId) };
+}
+
+function bearer(init) {
+  return String(init.headers.Authorization || '').replace('Bearer ', '');
+}
+
+globalThis.fetch = async (url, init = {}) => {
+  const u = new URL(url);
+  const body = init.body ? JSON.parse(init.body) : undefined;
+  const p = u.pathname;
+
+  if (u.host === 'challenges.cloudflare.com') {
+    return jsonResponse(200, { success: String(init.body).includes('response=good') });
+  }
+
+  if (p === '/auth/v1/token') {
+    if (u.searchParams.get('grant_type') === 'password') {
+      const user = [...db.users.values()].find((x) => x.email === body.email && x.password === body.password);
+      return user ? jsonResponse(200, issue(user.id)) : jsonResponse(400, { error_code: 'invalid_credentials' });
+    }
+    const userId = db.refresh.get(body.refresh_token);
+    if (!userId) return jsonResponse(400, { error_code: 'refresh_token_not_found' });
+    db.refresh.delete(body.refresh_token);
+    return jsonResponse(200, issue(userId, db.refreshAal.get(body.refresh_token)));
+  }
+  if (p === '/auth/v1/user') {
+    const userId = db.tokens.get(bearer(init));
+    return userId ? jsonResponse(200, userView(userId)) : jsonResponse(401, { msg: 'invalid JWT' });
+  }
+  if (p === '/auth/v1/factors') {
+    const userId = db.tokens.get(bearer(init));
+    if (!userId) return jsonResponse(401, {});
+    const factor = { id: `f-${++db.seq}`, factor_type: 'totp', status: 'unverified' };
+    db.factors.set(userId, [...(db.factors.get(userId) || []), factor]);
+    return jsonResponse(200, { id: factor.id, totp: { qr_code: '<svg></svg>', secret: 'JBSWY3DPEHPK3PXP', uri: 'otpauth://totp/x' } });
+  }
+  const factorCall = /^\/auth\/v1\/factors\/([^/]+)\/(challenge|verify)$/.exec(p);
+  if (factorCall) {
+    const userId = db.tokens.get(bearer(init));
+    if (!userId) return jsonResponse(401, {});
+    if (factorCall[2] === 'challenge') {
+      const id = `c-${++db.seq}`;
+      db.challenges.set(id, factorCall[1]);
+      return jsonResponse(200, { id });
+    }
+    if (db.challenges.get(body.challenge_id) !== factorCall[1] || body.code !== GOOD_CODE) {
+      return jsonResponse(400, { error_code: 'mfa_verification_failed' });
+    }
+    for (const f of db.factors.get(userId)) if (f.id === factorCall[1]) f.status = 'verified';
+    return jsonResponse(200, issue(userId, 'aal2'));
+  }
+  const factorDelete = /^\/auth\/v1\/admin\/users\/([^/]+)\/factors\/([^/]+)$/.exec(p);
+  if (factorDelete && init.method === 'DELETE') {
+    db.factors.set(factorDelete[1], (db.factors.get(factorDelete[1]) || []).filter((f) => f.id !== factorDelete[2]));
+    return jsonResponse(200, {});
+  }
+  if (u.host === 'api.resend.com') {
+    db.mails.push(JSON.parse(init.body));
+    return jsonResponse(200, { id: 'm1' });
+  }
+  if (u.host === 'api.smtp2go.com') {
+    db.smtp2go = { key: init.headers['X-Smtp2go-Api-Key'], body: JSON.parse(init.body) };
+    return jsonResponse(200, { data: { succeeded: 1, failed: 0 } });
+  }
+  if (p === '/auth/v1/logout') {
+    db.tokens.delete(bearer(init));
+    return jsonResponse(204);
+  }
+  if (p === '/auth/v1/admin/users' && init.method === 'POST') {
+    assert.equal(init.headers.apikey, 'service-key');
+    if ([...db.users.values()].some((x) => x.email === body.email)) return jsonResponse(422, { error_code: 'email_exists' });
+    const id = addUser(body.email, body.password, body.user_metadata.username, 'user');
+    db.profiles.get(id).email_verified = false;
+    return jsonResponse(200, { id });
+  }
+  if (p.startsWith('/auth/v1/admin/users/') && init.method === 'PUT') {
+    db.users.get(p.split('/').pop()).password = body.password;
+    return jsonResponse(200, {});
+  }
+
+  if (p.startsWith('/storage/v1/')) {
+    assert.equal(init.headers.apikey, 'service-key');
+    const rel = p.slice('/storage/v1'.length);
+    const upload = /^\/object\/upload\/sign\/os-images\/(.+)$/.exec(rel);
+    if (upload && db.signFailure) return jsonResponse(400, { statusCode: '400', error: 'Bad Request', message: 'Body cannot be empty' });
+    if (upload) {
+      // Реальный Storage отвечает 400 на POST с application/json и пустым телом.
+      assert.equal(init.body, '{}');
+    }
+    if (upload) return jsonResponse(200, { url: `/object/upload/sign/os-images/${upload[1]}?token=up` });
+    const sign = /^\/object\/sign\/os-images\/(.+)$/.exec(rel);
+    if (sign) {
+      assert.equal(body.expiresIn, 300);
+      return jsonResponse(200, { signedURL: `/object/sign/os-images/${sign[1]}?token=dl` });
+    }
+    const authed = /^\/object\/authenticated\/os-images\/(.+)$/.exec(rel);
+    if (authed) {
+      const blob = db.blobs.get(authed[1]);
+      if (!blob) return jsonResponse(404, { error: 'not_found' });
+      const [, from, to] = /^bytes=(\d+)-(\d+)$/.exec(init.headers.Range);
+      const slice = blob.subarray(Number(from), Number(to) + 1);
+      return { ok: true, status: 206, arrayBuffer: async () => slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.length) };
+    }
+    const info = /^\/object\/info\/os-images\/(.+)$/.exec(rel);
+    if (info) {
+      return db.objects.has(info[1]) ? jsonResponse(200, { size: db.objects.get(info[1]) }) : jsonResponse(404, { error: 'not_found' });
+    }
+    if (rel === '/object/os-images' && init.method === 'DELETE') {
+      for (const prefix of body.prefixes) db.objects.delete(prefix);
+      return jsonResponse(200, []);
+    }
+  }
+
+  const path = p.replace('/rest/v1/', '');
+  assert.equal(init.headers.apikey, 'service-key');
+  if (path === 'os_releases') {
+    const q = u.searchParams;
+    const eq = (name) => (q.get(name) || '').slice(3);
+    if (init.method === 'POST') {
+      const row = { id: `00000000-0000-0000-0000-${String(++db.seq).padStart(12, '0')}`, downloads: 0, created_at: new Date().toISOString(), published_at: null, ...body };
+      db.releases.push(row);
+      return jsonResponse(201, [row]);
+    }
+    let rows = db.releases;
+    if (q.get('id')) rows = rows.filter((r) => r.id === eq('id'));
+    if (q.get('version')) rows = rows.filter((r) => r.version === eq('version'));
+    if (q.get('ready')) rows = rows.filter((r) => String(r.ready) === eq('ready'));
+    if (q.get('published')) rows = rows.filter((r) => String(r.published) === eq('published'));
+    if (init.method === 'PATCH') {
+      for (const row of rows) Object.assign(row, body);
+      return jsonResponse(204);
+    }
+    if (init.method === 'DELETE') {
+      db.releases = db.releases.filter((r) => !rows.includes(r));
+      return jsonResponse(204);
+    }
+    const cols = (q.get('select') || '*').split(',');
+    return jsonResponse(200, cols.includes('*') ? rows : rows.map((r) => Object.fromEntries(cols.map((c) => [c, r[c]]))));
+  }
+  if (path === 'os_updates') {
+    const q = u.searchParams;
+    const eq = (name) => (q.get(name) || '').slice(3);
+    if (init.method === 'POST') {
+      const row = { id: `00000000-0000-0000-0000-${String(++db.seq).padStart(12, '0')}`, downloads: 0, created_at: new Date().toISOString(), published_at: null, ...body };
+      db.updates.push(row);
+      return jsonResponse(201, [row]);
+    }
+    let rows = db.updates;
+    if (q.get('id')) rows = rows.filter((r) => r.id === eq('id'));
+    if (q.get('build')) rows = rows.filter((r) => String(r.build) === eq('build'));
+    if (q.get('channel')) rows = rows.filter((r) => r.channel === eq('channel'));
+    if (q.get('ready')) rows = rows.filter((r) => String(r.ready) === eq('ready'));
+    if (q.get('published')) rows = rows.filter((r) => String(r.published) === eq('published'));
+    if (init.method === 'PATCH') {
+      for (const row of rows) Object.assign(row, body);
+      return jsonResponse(204);
+    }
+    if (init.method === 'DELETE') {
+      db.updates = db.updates.filter((r) => !rows.includes(r));
+      return jsonResponse(204);
+    }
+    rows = [...rows].sort((a, b) => b.build - a.build).slice(0, Number(q.get('limit') || 1000));
+    const cols = (q.get('select') || '*').split(',');
+    return jsonResponse(200, rows.map((r) => Object.fromEntries(cols.map((c) => [c, r[c]]))));
+  }
+  if (path === 'rpc/bump_update_downloads') {
+    for (const row of db.updates) if (row.id === body.p_id) row.downloads += 1;
+    return jsonResponse(200);
+  }
+  if (path === 'rpc/bump_release_downloads') {
+    for (const row of db.releases) if (row.id === body.p_id) row.downloads += 1;
+    return jsonResponse(200);
+  }
+  if (path === 'profiles') {
+    let rows = [...db.profiles.values()];
+    const id = u.searchParams.get('id');
+    const name = u.searchParams.get('username');
+    if (id) rows = rows.filter((r) => r.id === id.slice(3));
+    if (name) rows = rows.filter((r) => r.username.toLowerCase() === name.slice(6).toLowerCase());
+    if (init.method === 'PATCH') {
+      for (const row of rows) Object.assign(row, body);
+      return jsonResponse(204);
+    }
+    return jsonResponse(200, rows);
+  }
+  if (path === 'email_verifications') {
+    if (init.method === 'POST') {
+      db.verifications.push({ id: ++db.seq, used_at: null, ...body });
+      return jsonResponse(201);
+    }
+    if (init.method === 'PATCH') {
+      const row = db.verifications.find((r) => r.id === Number(u.searchParams.get('id').slice(3)));
+      Object.assign(row, body);
+      return jsonResponse(204);
+    }
+    const hash = u.searchParams.get('token_hash').slice(3);
+    return jsonResponse(
+      200,
+      db.verifications.filter((r) => r.token_hash === hash && !r.used_at && new Date(r.expires_at) > new Date()),
+    );
+  }
+  if (path === 'mfa_backup_codes') {
+    const owner = (u.searchParams.get('user_id') || 'eq.').slice(3);
+    if (init.method === 'DELETE') {
+      db.backup = db.backup.filter((r) => r.user_id !== owner);
+      return jsonResponse(204);
+    }
+    if (init.method === 'POST') {
+      db.backup.push(...body.map((r) => ({ id: ++db.seq, used_at: null, ...r })));
+      return jsonResponse(201);
+    }
+    if (init.method === 'PATCH') {
+      const row = db.backup.find((r) => r.id === Number(u.searchParams.get('id').slice(3)));
+      Object.assign(row, body);
+      return jsonResponse(204);
+    }
+    const hash = u.searchParams.get('code_hash');
+    return jsonResponse(
+      200,
+      db.backup.filter((r) => r.user_id === owner && !r.used_at && (!hash || r.code_hash === hash.slice(3))),
+    );
+  }
+  if (path === 'rpc/email_for_username') {
+    const row = [...db.profiles.values()].find((r) => r.username.toLowerCase() === body.p_username.toLowerCase());
+    return jsonResponse(200, row ? db.users.get(row.id).email : null);
+  }
+  if (path === 'rpc/verify_user_password') {
+    return jsonResponse(200, db.users.get(body.p_user_id).password === body.p_password);
+  }
+  if (path === 'dev_settings') {
+    if (init.method === 'POST') {
+      db.open = body.value;
+      return jsonResponse(201);
+    }
+    return jsonResponse(200, [{ value: db.open }]);
+  }
+  if (path === 'dev_unlocks') {
+    if (init.method === 'DELETE') {
+      db.rows.delete(u.searchParams.get('device_id').slice(3));
+      return jsonResponse(204);
+    }
+    let rows = [...db.rows.values()];
+    const owner = u.searchParams.get('user_id');
+    if (owner) rows = rows.filter((r) => r.user_id === owner.slice(3));
+    return jsonResponse(
+      200,
+      rows.map((r) => ({ ...r, profiles: r.user_id ? { username: db.profiles.get(r.user_id).username } : null })),
+    );
+  }
+  if (path.startsWith('dev_keys')) {
+    if (init.method === 'POST') {
+      db.keys.push({ ...body, created_at: new Date().toISOString() });
+      return jsonResponse(201);
+    }
+    const owner = u.searchParams.get('user_id').slice(3);
+    return jsonResponse(200, db.keys.filter((k) => k.user_id === owner));
+  }
+  if (path === 'device_links') {
+    const owner = u.searchParams.get('user_id').slice(3);
+    return jsonResponse(200, [...db.links.values()].filter((l) => l.user_id === owner));
+  }
+  if (path === 'rpc/begin_device_link') {
+    db.codes.set(body.p_device_id, 'ABCD2345');
+    return jsonResponse(200, { status: 'code', code: 'ABCD-2345', expires_in: 600 });
+  }
+  if (path === 'rpc/request_dev_unlock') {
+    const link = db.links.get(body.p_device_id);
+    if (!link) return jsonResponse(400, { code: 'P0001', message: "device is not linked to an account: run 'dev link' in DeiX" });
+    assert.equal(body.p_source, 'os');
+    return jsonResponse(200, { result: 'created', status: 'pending' });
+  }
+  if (path === 'rpc/link_device') {
+    const entry = [...db.codes].find(([, c]) => c === body.p_code.replace('-', '').toUpperCase());
+    if (!entry) return jsonResponse(400, { code: 'P0001', message: 'invalid or expired code' });
+    db.codes.delete(entry[0]);
+    db.links.set(entry[0], { device_id: entry[0], user_id: body.p_user_id, linked_at: new Date().toISOString() });
+    return jsonResponse(200, { device_id: entry[0] });
+  }
+  if (path === 'rpc/unlink_device') {
+    const link = db.links.get(body.p_device_id);
+    const ok = Boolean(link && link.user_id === body.p_user_id);
+    if (ok) db.links.delete(body.p_device_id);
+    return jsonResponse(200, ok);
+  }
+  if (path === 'rpc/web_request_dev_unlock') {
+    const link = db.links.get(body.p_device_id);
+    if (!link || link.user_id !== body.p_user_id) {
+      return jsonResponse(400, { code: 'P0001', message: 'this device is not linked to your account' });
+    }
+    if (!db.open) return jsonResponse(400, { code: 'P0001', message: 'closed' });
+    const cur = db.rows.get(body.p_device_id);
+    if (cur) return jsonResponse(200, { result: 'exists', status: cur.status });
+    db.rows.set(body.p_device_id, {
+      device_id: body.p_device_id,
+      hostname: body.p_name,
+      note: body.p_note,
+      source: 'web',
+      status: 'pending',
+      user_id: body.p_user_id,
+      created_at: new Date().toISOString(),
+    });
+    return jsonResponse(200, { result: 'created', status: 'pending' });
+  }
+  if (path === 'rpc/approve_dev_unlock' || path === 'rpc/deny_dev_unlock') {
+    const row = db.rows.get(body.p_device_id);
+    if (!row) return jsonResponse(400, { code: 'P0001', message: 'request not found' });
+    row.status = path.includes('approve') ? 'approved' : 'denied';
+    row.decided_by = body.p_by;
+    return jsonResponse(200, row);
+  }
+  throw new Error(`unexpected fetch ${url}`);
+};
+
+const authHandler = require('../api/auth');
+const adminHandler = require('../api/admin');
+const requestHandler = require('../api/request');
+const devicesHandler = require('../api/devices');
+const osHandler = require('../api/os');
+const keysHandler = require('../api/keys');
+const releasesHandler = require('../api/releases');
+const updateHandler = require('../api/update');
+const { signedMessage } = require('../api/_keys');
+
+function call(handler, body, { cookies = {}, headers } = {}) {
+  return new Promise((resolve) => {
+    const out = { headers: {}, statusCode: 200 };
+    const cookie = Object.entries(cookies)
+      .map(([k, v]) => `${k}=${v}`)
+      .join('; ');
+    const req = {
+      method: 'POST',
+      body,
+      headers: { host: 'site.test', 'x-deix-csrf': '1', 'x-forwarded-for': '1.2.3.4', cookie, ...headers },
+    };
+    const res = {
+      setHeader: (k, v) => {
+        out.headers[k.toLowerCase()] = v;
+      },
+      getHeader: (k) => out.headers[k.toLowerCase()],
+      end: (text) => resolve({ status: res.statusCode, headers: out.headers, json: JSON.parse(text) }),
+    };
+    Object.defineProperty(res, 'statusCode', { get: () => out.statusCode, set: (v) => (out.statusCode = v) });
+    handler(req, res);
+  });
+}
+
+function sessionOf(response) {
+  const jar = {};
+  for (const line of response.headers['set-cookie'] || []) {
+    const [pair] = line.split(';');
+    const idx = pair.indexOf('=');
+    jar[pair.slice(0, idx)] = pair.slice(idx + 1);
+  }
+  return jar;
+}
+
+const REG = { action: 'register', username: 'Alice_1', email: 'Alice@Example.com', password: 'secret-pass', password2: 'secret-pass' };
+
+let ownerId;
+
+test.before(() => {
+  ownerId = addUser('owner@example.com', 'owner-pass', 'Atimenka', 'owner');
+  db.factors.set(ownerId, [{ id: 'owner-factor', factor_type: 'totp', status: 'verified' }]);
+});
+
+async function loginOwner() {
+  const step = await call(authHandler, { action: 'login', identifier: 'Atimenka', password: 'owner-pass' });
+  assert.equal(step.json.mfa, true);
+  const pending = sessionOf(step);
+  const done = await call(authHandler, { action: 'mfa_verify', code: GOOD_CODE }, { cookies: pending });
+  assert.equal(done.status, 200, JSON.stringify(done.json));
+  return sessionOf(done);
+}
+
+test('registration validates input and creates a signed-in account', async () => {
+  assert.equal((await call(authHandler, { ...REG, password2: 'other-pass' })).status, 400);
+  assert.equal((await call(authHandler, { ...REG, username: 'a b' })).status, 400);
+  assert.equal((await call(authHandler, { ...REG, email: 'nope' })).status, 400);
+  assert.equal((await call(authHandler, { ...REG, password: 'short', password2: 'short' })).status, 400);
+  assert.equal((await call(authHandler, { ...REG, website: 'bot' })).status, 400);
+  assert.equal((await call(authHandler, { ...REG, username: 'ATIMENKA' })).status, 409);
+
+  const ok = await call(authHandler, REG);
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json.user.username, 'Alice_1');
+  const jar = sessionOf(ok);
+  assert.ok(jar.deix_at && jar.deix_rt);
+  assert.ok(ok.headers['set-cookie'].every((c) => /HttpOnly; Secure; SameSite=Strict; Path=\/; Max-Age=2592000/.test(c)));
+
+  assert.equal((await call(authHandler, { ...REG, username: 'Alice_2' })).status, 409);
+});
+
+test('login accepts username or email and rejects wrong passwords', async () => {
+  assert.equal((await call(authHandler, { action: 'login', identifier: 'alice_1', password: 'secret-pass' })).status, 200);
+  assert.equal((await call(authHandler, { action: 'login', identifier: 'alice@example.com', password: 'secret-pass' })).status, 200);
+  assert.equal((await call(authHandler, { action: 'login', identifier: 'alice_1', password: 'bad' })).status, 401);
+  assert.equal((await call(authHandler, { action: 'login', identifier: 'nobody', password: 'bad' })).status, 401);
+});
+
+test('expired access token is refreshed from the refresh cookie', async () => {
+  const login = await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'secret-pass' });
+  const jar = sessionOf(login);
+  db.tokens.delete(jar.deix_at);
+  const me = await call(authHandler, { action: 'me' }, { cookies: jar });
+  assert.equal(me.json.user.username, 'Alice_1');
+  const renewed = sessionOf(me);
+  assert.notEqual(renewed.deix_at, jar.deix_at);
+  const stale = await call(authHandler, { action: 'me' }, { cookies: { deix_at: 'garbage', deix_rt: 'garbage' } });
+  assert.equal(stale.json.user, null);
+  assert.match(stale.headers['set-cookie'][0], /Max-Age=0/);
+});
+
+test('requests need an account; owner panel needs the owner role', async () => {
+  assert.equal((await call(requestHandler, { action: 'mine' })).status, 401);
+  assert.equal((await call(adminHandler, { action: 'list' })).status, 401);
+
+  const user = sessionOf(await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'secret-pass' }));
+  assert.equal((await call(adminHandler, { action: 'list' }, { cookies: user })).status, 403);
+
+  assert.equal((await call(requestHandler, { action: 'submit', device_id: 'zz' }, { cookies: user })).status, 400);
+  const unlinked = await call(requestHandler, { action: 'submit', device_id: ID }, { cookies: user });
+  assert.equal(unlinked.status, 400);
+  assert.match(unlinked.json.error, /не привязано/);
+
+  db.codes.set(ID, 'ABCD2345');
+  assert.equal((await call(devicesHandler, { action: 'link', code: 'zzzz-zzzz' }, { cookies: user })).status, 400);
+  assert.equal((await call(devicesHandler, { action: 'link', code: 'bad' }, { cookies: user })).status, 400);
+  assert.equal((await call(devicesHandler, { action: 'link', code: 'abcd-2345' }, { cookies: user })).json.device_id, ID);
+  assert.equal((await call(devicesHandler, { action: 'list' }, { cookies: user })).json.devices.length, 1);
+
+  const sub = await call(requestHandler, { action: 'submit', device_id: ID.toUpperCase(), name: 'qemu' }, { cookies: user });
+  assert.equal(sub.json.result, 'created');
+  const mine = await call(requestHandler, { action: 'mine' }, { cookies: user });
+  assert.equal(mine.json.requests.length, 1);
+
+  const owner = await loginOwner();
+  const list = await call(adminHandler, { action: 'list' }, { cookies: owner });
+  assert.equal(list.json.counts.pending, 1);
+  assert.equal(list.json.requests[0].requester, 'Alice_1');
+
+  assert.equal((await call(adminHandler, { action: 'decide', device_id: ID, decision: 'approve' }, { cookies: owner })).json.status, 'approved');
+  assert.equal(db.rows.get(ID).decided_by, 'Atimenka');
+  assert.equal((await call(adminHandler, { action: 'decide', device_id: ID, decision: 'maybe' }, { cookies: owner })).status, 400);
+  assert.equal((await call(adminHandler, { action: 'set_open', open: false }, { cookies: owner })).json.requests_open, false);
+  await call(adminHandler, { action: 'set_open', open: true }, { cookies: owner });
+  await call(adminHandler, { action: 'remove', device_id: ID }, { cookies: owner });
+  assert.equal(db.rows.size, 0);
+});
+
+test('devices need login and are unlinkable only by their owner', async () => {
+  assert.equal((await call(devicesHandler, { action: 'list' })).status, 401);
+  const owner = await loginOwner();
+  assert.equal((await call(devicesHandler, { action: 'unlink', device_id: ID }, { cookies: owner })).status, 404);
+  const user = sessionOf(await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'secret-pass' }));
+  assert.equal((await call(devicesHandler, { action: 'unlink', device_id: ID }, { cookies: user })).status, 200);
+  assert.equal((await call(devicesHandler, { action: 'list' }, { cookies: user })).json.devices.length, 0);
+  assert.equal((await call(requestHandler, { action: 'submit', device_id: ID }, { cookies: user })).status, 400);
+});
+
+test('wrong link codes are rate limited', async () => {
+  const user = sessionOf(await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'secret-pass' }));
+  for (let i = 0; i < 9; i++) {
+    assert.equal((await call(devicesHandler, { action: 'link', code: 'ZZZZ-ZZZZ' }, { cookies: user })).status, 400);
+  }
+  assert.equal((await call(devicesHandler, { action: 'link', code: 'ZZZZ-ZZZZ' }, { cookies: user })).status, 429);
+});
+
+function callOs(fn, body, method = 'POST') {
+  return new Promise((resolve) => {
+    const out = { statusCode: 200 };
+    const req = { method, url: `/api/os?fn=${fn}`, body, headers: { host: 'site.test', 'x-forwarded-for': '7.7.7.7' } };
+    const res = {
+      setHeader: () => {},
+      getHeader: () => undefined,
+      end: (text) => resolve({ status: out.statusCode, json: JSON.parse(text) }),
+    };
+    Object.defineProperty(res, 'statusCode', { get: () => out.statusCode, set: (v) => (out.statusCode = v) });
+    osHandler(req, res);
+  });
+}
+
+test('OS gateway forwards only whitelisted functions and reports refusals as PostgREST errors', async () => {
+  const dev = 'c'.repeat(32);
+  assert.equal((await callOs('begin_device_link', {}, 'GET')).status, 405);
+  assert.equal((await callOs('drop_everything', { p_device_id: dev })).status, 404);
+  assert.equal((await callOs('begin_device_link', { p_device_id: 'zz' })).status, 400);
+
+  const code = await callOs('begin_device_link', { p_device_id: dev });
+  assert.equal(code.status, 200);
+  assert.equal(code.json.code, 'ABCD-2345');
+
+  const refused = await callOs('request_dev_unlock', { p_device_id: dev, p_hostname: 'DeiX', p_source: 'web' });
+  assert.equal(refused.status, 400);
+  assert.match(refused.json.message, /not linked/);
+
+  db.links.set(dev, { device_id: dev, user_id: 'u' });
+  const ok = await callOs('request_dev_unlock', { p_device_id: dev, p_hostname: 'DeiX', p_source: 'web' });
+  assert.equal(ok.json.result, 'created');
+  db.links.delete(dev);
+});
+
+test('OS gateway: cloud login without MFA returns the profile username', async () => {
+  const dev = 'd'.repeat(32);
+  const alice = [...db.profiles.values()].find((r) => r.username === 'Alice_1');
+  const r = await callOs('cloud_login', { p_email: 'alice@example.com', p_password: 'secret-pass', p_device_id: dev });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.status, 'ok');
+  assert.equal(r.json.username, 'Alice_1');
+  assert.equal(r.json.user_id, alice.id);
+});
+
+test('OS gateway: cloud login with 2FA asks for a code', async () => {
+  const dev = 'e'.repeat(32);
+  const r = await callOs('cloud_login', { p_email: 'owner@example.com', p_password: 'owner-pass', p_device_id: dev });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.status, 'totp_required');
+  assert.equal(r.json.factor_id, 'owner-factor');
+  assert.ok(r.json.access_token);
+});
+
+test('OS gateway: cloud login rejects wrong credentials', async () => {
+  const dev = 'f'.repeat(32);
+  const r = await callOs('cloud_login', { p_email: 'alice@example.com', p_password: 'wrong', p_device_id: dev });
+  assert.equal(r.status, 400);
+  assert.match(r.json.message, /invalid email or password/);
+});
+
+test('OS gateway: cloud verify accepts a correct TOTP code and returns the profile', async () => {
+  const dev = 'b'.repeat(32);
+  const login = await callOs('cloud_login', { p_email: 'owner@example.com', p_password: 'owner-pass', p_device_id: dev });
+  const r = await callOs('cloud_verify', {
+    p_access_token: login.json.access_token,
+    p_factor_id: login.json.factor_id,
+    p_code: '123456',
+    p_device_id: dev,
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.status, 'ok');
+  assert.equal(r.json.username, 'Atimenka');
+  assert.equal(r.json.user_id, ownerId);
+});
+
+test('OS gateway: cloud verify rejects a wrong code', async () => {
+  const dev = 'c'.repeat(32);
+  const login = await callOs('cloud_login', { p_email: 'owner@example.com', p_password: 'owner-pass', p_device_id: dev });
+  const r = await callOs('cloud_verify', {
+    p_access_token: login.json.access_token,
+    p_factor_id: login.json.factor_id,
+    p_code: '000000',
+    p_device_id: dev,
+  });
+  assert.equal(r.status, 401);
+});
+
+test('OS gateway: cloud verify rejects a malformed code', async () => {
+  const dev = 'a'.repeat(32);
+  const r = await callOs('cloud_verify', {
+    p_access_token: 'x',
+    p_factor_id: 'y',
+    p_code: 'abc',
+    p_device_id: dev,
+  });
+  assert.equal(r.status, 400);
+});
+
+test('csrf header and origin are enforced', async () => {
+  assert.equal((await call(authHandler, { action: 'me' }, { headers: { 'x-deix-csrf': '0' } })).status, 403);
+  assert.equal((await call(authHandler, { action: 'me' }, { headers: { origin: 'https://evil.test' } })).status, 403);
+});
+
+test('password change verifies the current password and keeps the session', async () => {
+  const jar = sessionOf(await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'secret-pass' }));
+  assert.equal((await call(authHandler, { action: 'change_password', current: 'bad', next: 'brand-new-pass' }, { cookies: jar })).status, 401);
+  assert.equal((await call(authHandler, { action: 'change_password', current: 'secret-pass', next: 'short' }, { cookies: jar })).status, 400);
+  const changed = await call(authHandler, { action: 'change_password', current: 'secret-pass', next: 'brand-new-pass' }, { cookies: jar });
+  assert.equal(changed.status, 200);
+  assert.ok(sessionOf(changed).deix_at);
+  assert.equal((await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'secret-pass' })).status, 401);
+  assert.equal((await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'brand-new-pass' })).status, 200);
+});
+
+test('logout clears cookies', async () => {
+  const jar = sessionOf(await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'brand-new-pass' }));
+  const out = await call(authHandler, { action: 'logout' }, { cookies: jar });
+  assert.equal(out.status, 200);
+  assert.ok(out.headers['set-cookie'].every((c) => /Max-Age=0/.test(c)));
+});
+
+test('login is rate limited after repeated failures', async () => {
+  const headers = { 'x-forwarded-for': '9.9.9.9' };
+  for (let i = 0; i < 8; i++) {
+    assert.equal((await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'x' }, { headers })).status, 401);
+  }
+  assert.equal((await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'brand-new-pass' }, { headers })).status, 429);
+});
+
+function decode32(text) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let bits = 0;
+  let acc = 0;
+  const out = [];
+  for (const ch of text.replace(/-/g, '')) {
+    acc = (acc << 5) | alphabet.indexOf(ch);
+    bits += 5;
+    if (bits >= 8) {
+      out.push((acc >> (bits - 8)) & 255);
+      bits -= 8;
+      acc &= (1 << bits) - 1;
+    }
+  }
+  return Buffer.from(out);
+}
+
+test('dev keys: need login, are signed for the device, and are rate limited', async () => {
+  assert.equal((await call(keysHandler, { action: 'issue', device_id: ID })).status, 401);
+  const user = sessionOf(await call(authHandler, { action: 'login', identifier: 'Alice_1', password: 'brand-new-pass' }));
+  assert.equal((await call(keysHandler, { action: 'issue', device_id: 'zz' }, { cookies: user })).status, 400);
+
+  const out = await call(keysHandler, { action: 'issue', device_id: ID.toUpperCase() }, { cookies: user });
+  assert.equal(out.status, 200);
+  assert.match(out.json.key, /^([A-Z2-9]{4}-){28}[A-Z2-9]{4}$/);
+  const raw = decode32(out.json.key).subarray(0, 72);
+  const nonce = raw.subarray(0, 8);
+  const signature = raw.subarray(8);
+  const verify = (deviceId) =>
+    nodeCrypto.verify('sha256', signedMessage(deviceId, nonce), { key: keyPair.publicKey, dsaEncoding: 'ieee-p1363' }, signature);
+  assert.equal(verify(ID), true);
+  assert.equal(verify('b'.repeat(32)), false);
+  assert.equal(db.keys.length, 1);
+  assert.deepEqual(Object.keys(db.keys[0]).sort(), ['created_at', 'user_id']);
+  assert.equal((await call(keysHandler, { action: 'list' }, { cookies: user })).status, 400);
+
+  const second = await call(keysHandler, { action: 'issue', device_id: ID }, { cookies: user });
+  assert.notEqual(second.json.key, out.json.key);
+
+  db.open = false;
+  assert.equal((await call(keysHandler, { action: 'issue', device_id: ID }, { cookies: user })).status, 400);
+  db.open = true;
+
+  for (let i = 0; i < 3; i++) {
+    assert.equal((await call(keysHandler, { action: 'issue', device_id: ID }, { cookies: user })).status, 200);
+  }
+  assert.equal((await call(keysHandler, { action: 'issue', device_id: ID }, { cookies: user })).status, 429);
+});
+
+const FRESH = { 'x-forwarded-for': '5.5.5.5' };
+
+test('email domain check rejects disposable and mail-less domains but tolerates resolver failures', async () => {
+  const reg = (email, username) => call(authHandler, { ...REG, email, username }, { headers: FRESH });
+  const disposable = await reg('x@mailinator.com', 'Dom_1');
+  assert.equal(disposable.status, 400);
+  assert.match(disposable.json.error, /Одноразовые/);
+  assert.equal((await reg('x@sub.yopmail.com', 'Dom_2')).status, 400);
+  const nomx = await reg('x@nomx.invalid', 'Dom_3');
+  assert.equal(nomx.status, 400);
+  assert.match(nomx.json.error, /почтового сервера/);
+  assert.equal((await reg('x@flaky.test', 'Dom_4')).status, 200);
+});
+
+test('verification mail: sent with a provider, gates keys and requests until the link is opened', async () => {
+  process.env.RESEND_API_KEY = 're_test';
+  process.env.MAIL_FROM = 'DeiX <noreply@site.test>';
+  try {
+    const cfg = await call(authHandler, { action: 'config' });
+    assert.equal(cfg.json.email_verification, true);
+
+    const headers = { 'x-forwarded-for': '6.6.6.6' };
+    const reg = await call(authHandler, { ...REG, email: 'bob@example.org', username: 'Bob_1' }, { headers });
+    assert.equal(reg.status, 200);
+    assert.equal(reg.json.verification, 'sent');
+    assert.equal(db.mails.length, 1);
+    assert.deepEqual(db.mails[0].to, ['bob@example.org']);
+    const token = /verify\?token=([0-9a-f]{64})/.exec(db.mails[0].text)[1];
+    assert.match(db.mails[0].text, /^.*Bob_1/);
+    assert.ok(db.mails[0].text.includes(`https://site.test/verify?token=${token}`));
+    assert.equal(db.verifications[0].token_hash, nodeCrypto.createHash('sha256').update(token).digest('hex'));
+
+    const jar = sessionOf(reg);
+    const me = await call(authHandler, { action: 'me' }, { cookies: jar });
+    assert.equal(me.json.user.email_verified, false);
+    const blocked = await call(keysHandler, { action: 'issue', device_id: ID }, { cookies: jar });
+    assert.equal(blocked.status, 403);
+    assert.equal(blocked.json.code, 'email_unverified');
+    assert.equal((await call(requestHandler, { action: 'submit', device_id: ID }, { cookies: jar })).json.code, 'email_unverified');
+
+    assert.equal((await call(authHandler, { action: 'verify_email', token: 'f'.repeat(64) })).status, 400);
+    assert.equal((await call(authHandler, { action: 'verify_email', token: 'bad' })).status, 400);
+    assert.equal((await call(authHandler, { action: 'verify_email', token })).status, 200);
+    assert.equal((await call(authHandler, { action: 'verify_email', token })).status, 400);
+    assert.equal((await call(authHandler, { action: 'me' }, { cookies: jar })).json.user.email_verified, true);
+    assert.notEqual((await call(keysHandler, { action: 'issue', device_id: ID }, { cookies: jar })).json.code, 'email_unverified');
+
+    assert.equal((await call(authHandler, { action: 'resend_verification' }, { cookies: jar })).status, 400);
+  } finally {
+    delete process.env.RESEND_API_KEY;
+    delete process.env.MAIL_FROM;
+  }
+});
+
+test('without a mail provider nothing is gated and registration reports it', async () => {
+  const reg = await call(authHandler, { ...REG, email: 'dan@example.org', username: 'Dan_1' }, { headers: { 'x-forwarded-for': '6.6.6.7' } });
+  assert.equal(reg.json.verification, 'off');
+  assert.equal((await call(authHandler, { action: 'resend_verification' }, { cookies: sessionOf(reg) })).status, 503);
+});
+
+test('owner panel needs a two-factor session', async () => {
+  const saved = db.factors.get(ownerId);
+  db.factors.set(ownerId, []);
+  try {
+    const jar = sessionOf(await call(authHandler, { action: 'login', identifier: 'Atimenka', password: 'owner-pass' }));
+    const denied = await call(adminHandler, { action: 'list' }, { cookies: jar });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.json.code, 'mfa_required');
+  } finally {
+    db.factors.set(ownerId, saved);
+  }
+});
+
+test('two-factor lifecycle: enroll, login step, backup code, disable', async () => {
+  const headers = { 'x-forwarded-for': '8.8.4.4' };
+  const reg = await call(authHandler, { ...REG, email: 'carol@example.net', username: 'Carol_1' }, { headers });
+  let jar = sessionOf(reg);
+
+  assert.equal((await call(authHandler, { action: 'mfa_disable', code: GOOD_CODE }, { cookies: jar })).status, 400);
+  assert.equal((await call(authHandler, { action: 'mfa_enroll_start' })).status, 401);
+  const start = await call(authHandler, { action: 'mfa_enroll_start' }, { cookies: jar });
+  assert.equal(start.status, 200);
+  assert.ok(start.json.uri.startsWith('otpauth://totp/'));
+  assert.ok(start.json.secret);
+
+  assert.equal((await call(authHandler, { action: 'mfa_enroll_finish', factor_id: 'nope', code: GOOD_CODE }, { cookies: jar })).status, 400);
+  assert.equal((await call(authHandler, { action: 'mfa_enroll_finish', factor_id: start.json.factor_id, code: 'abc' }, { cookies: jar })).status, 400);
+  assert.equal((await call(authHandler, { action: 'mfa_enroll_finish', factor_id: start.json.factor_id, code: '000000' }, { cookies: jar })).status, 400);
+  const done = await call(authHandler, { action: 'mfa_enroll_finish', factor_id: start.json.factor_id, code: GOOD_CODE }, { cookies: jar });
+  assert.equal(done.status, 200);
+  assert.equal(done.json.backup_codes.length, 8);
+  assert.ok(done.json.backup_codes.every((c) => /^[A-Z2-9]{5}-[A-Z2-9]{5}$/.test(c)));
+  assert.ok(db.backup.every((r) => /^[0-9a-f]{64}$/.test(r.code_hash)));
+  jar = sessionOf(done);
+  const me = await call(authHandler, { action: 'me' }, { cookies: jar });
+  assert.equal(me.json.user.mfa, true);
+  assert.equal(me.json.user.aal, 'aal2');
+  assert.equal((await call(authHandler, { action: 'mfa_enroll_start' }, { cookies: jar })).status, 400);
+
+  const step = await call(authHandler, { action: 'login', identifier: 'carol_1', password: 'secret-pass' });
+  assert.equal(step.json.mfa, true);
+  assert.equal(step.json.user, undefined);
+  const pending = sessionOf(step);
+  assert.ok(pending.deix_mfa);
+  assert.equal(pending.deix_at, undefined);
+  assert.match(step.headers['set-cookie'][0], /Path=\/api; Max-Age=300/);
+  assert.equal((await call(authHandler, { action: 'me' }, { cookies: pending })).json.user, null);
+  assert.equal((await call(authHandler, { action: 'mfa_verify', code: GOOD_CODE })).status, 401);
+  assert.equal((await call(authHandler, { action: 'mfa_verify', code: '111111' }, { cookies: pending })).status, 401);
+  assert.equal((await call(authHandler, { action: 'mfa_verify', code: 'zz' }, { cookies: pending })).status, 400);
+  const ok = await call(authHandler, { action: 'mfa_verify', code: GOOD_CODE }, { cookies: pending });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json.user.aal, 'aal2');
+  assert.ok(sessionOf(ok).deix_at);
+  assert.ok(ok.headers['set-cookie'].some((c) => /^deix_mfa=; .*Max-Age=0/.test(c)));
+  jar = sessionOf(ok);
+
+  const regen = await call(authHandler, { action: 'mfa_backup_regenerate', code: GOOD_CODE }, { cookies: jar });
+  assert.equal(regen.json.backup_codes.length, 8);
+  assert.equal(db.backup.length, 8);
+  const status = await call(authHandler, { action: 'mfa_status' }, { cookies: jar });
+  assert.deepEqual([status.json.enabled, status.json.backup_left], [true, 8]);
+
+  const second = sessionOf(await call(authHandler, { action: 'login', identifier: 'carol_1', password: 'secret-pass' }));
+  const code = regen.json.backup_codes[0].toLowerCase();
+  assert.equal((await call(authHandler, { action: 'mfa_verify', code: 'AAAAA-AAAAA' }, { cookies: second })).status, 401);
+  const reset = await call(authHandler, { action: 'mfa_verify', code }, { cookies: second });
+  assert.equal(reset.status, 200);
+  assert.equal(reset.json.mfa_reset, true);
+  assert.equal(reset.json.user.mfa, false);
+  assert.equal(db.backup.length, 0);
+  assert.equal((await call(authHandler, { action: 'login', identifier: 'carol_1', password: 'secret-pass' })).json.mfa, undefined);
+});
+
+test('two-factor can be disabled with a valid code', async () => {
+  const headers = { 'x-forwarded-for': '8.8.4.5' };
+  let jar = sessionOf(await call(authHandler, { ...REG, email: 'erin@example.net', username: 'Erin_1' }, { headers }));
+  const start = await call(authHandler, { action: 'mfa_enroll_start' }, { cookies: jar });
+  jar = sessionOf(await call(authHandler, { action: 'mfa_enroll_finish', factor_id: start.json.factor_id, code: GOOD_CODE }, { cookies: jar }));
+  assert.equal((await call(authHandler, { action: 'mfa_disable', code: '000000' }, { cookies: jar })).status, 401);
+  assert.equal((await call(authHandler, { action: 'mfa_disable', code: GOOD_CODE }, { cookies: jar })).status, 200);
+  assert.equal(db.backup.length, 0);
+  const again = await call(authHandler, { action: 'login', identifier: 'erin_1', password: 'secret-pass' });
+  assert.equal(again.json.mfa, undefined);
+});
+
+test('API errors are answered in English when the site asks for it', async () => {
+  const headers = { 'x-deix-lang': 'en', 'x-forwarded-for': '9.9.9.1' };
+  const wrong = await call(authHandler, { action: 'login', identifier: 'nobody_here', password: 'whatever-pass' }, { headers });
+  assert.equal(wrong.status, 401);
+  assert.equal(wrong.json.error, 'Wrong username or password');
+  const unknown = await call(authHandler, { action: 'no_such_action' }, { headers });
+  assert.equal(unknown.json.error, 'Unknown action');
+  const short = await call(authHandler, { ...REG, password: 'abc', password2: 'abc' }, { headers });
+  assert.equal(short.json.error, 'The password must be at least 8 characters long');
+  const russian = await call(authHandler, { action: 'no_such_action' }, { headers: { 'x-forwarded-for': '9.9.9.2' } });
+  assert.equal(russian.json.error, 'Неизвестное действие');
+});
+
+test('verification email follows the language of the page', async () => {
+  process.env.RESEND_API_KEY = 're_test';
+  process.env.MAIL_FROM = 'DeiX <noreply@site.test>';
+  try {
+    const headers = { 'x-deix-lang': 'en', 'x-forwarded-for': '9.9.9.3' };
+    const before = db.mails.length;
+    const reg = await call(authHandler, { ...REG, email: 'lang@example.net', username: 'Lang_1' }, { headers });
+    assert.equal(reg.status, 200);
+    assert.equal(reg.json.verification, 'sent');
+    const mail = db.mails[before];
+    assert.equal(mail.subject, 'Verify your email for DeiX OS');
+    assert.match(mail.text, /^Hello, Lang_1!/);
+    assert.match(mail.text, /https:\/\/site\.test\/en\/verify\?token=[0-9a-f]{64}/);
+  } finally {
+    delete process.env.RESEND_API_KEY;
+    delete process.env.MAIL_FROM;
+  }
+});
+
+function callGet(handler, url, headers) {
+  return new Promise((resolve) => {
+    const out = { headers: {}, statusCode: 200 };
+    const req = { method: 'GET', url, headers: { host: 'site.test', 'x-forwarded-for': '9.9.9.9', ...headers } };
+    const res = {
+      setHeader: (k, v) => {
+        out.headers[k.toLowerCase()] = v;
+      },
+      getHeader: (k) => out.headers[k.toLowerCase()],
+      end: (text) => resolve({ status: res.statusCode, headers: out.headers, json: text ? JSON.parse(text) : null }),
+    };
+    Object.defineProperty(res, 'statusCode', { get: () => out.statusCode, set: (v) => (out.statusCode = v) });
+    handler(req, res);
+  });
+}
+
+function callRaw(handler, url) {
+  return new Promise((resolve) => {
+    const out = { headers: {}, statusCode: 200 };
+    const req = { method: 'GET', url, headers: { host: 'site.test', 'x-forwarded-for': '7.7.7.7' } };
+    const res = {
+      setHeader: (k, v) => {
+        out.headers[k.toLowerCase()] = v;
+      },
+      getHeader: (k) => out.headers[k.toLowerCase()],
+      end: (data) => resolve({ status: res.statusCode, headers: out.headers, bytes: Buffer.from(data || ''), body: Buffer.from(data || '').toString('latin1') }),
+    };
+    Object.defineProperty(res, 'statusCode', { get: () => out.statusCode, set: (v) => (out.statusCode = v) });
+    handler(req, res);
+  });
+}
+
+test('OS releases: owner uploads, the public downloads', async () => {
+  const sha = 'ab'.repeat(32);
+  const good = { action: 'release_prepare', version: '0.1.0', title: 'First', notes: 'Hello', filename: 'disk.IMG', size: 2048, sha256: sha };
+
+  assert.equal((await call(adminHandler, good)).status, 401);
+  addUser('bob@example.com', 'bob-pass', 'Bob', 'user');
+  const user = sessionOf(await call(authHandler, { action: 'login', identifier: 'Bob', password: 'bob-pass' }));
+  assert.equal((await call(adminHandler, good, { cookies: user })).status, 403);
+
+  const owner = await loginOwner();
+  const bad = async (patch) => (await call(adminHandler, { ...good, ...patch }, { cookies: owner })).status;
+  assert.equal(await bad({ version: '../x' }), 400);
+  assert.equal(await bad({ version: '' }), 400);
+  assert.equal(await bad({ filename: 'disk.exe' }), 400);
+  assert.equal(await bad({ size: 0 }), 400);
+  assert.equal(await bad({ size: 50 * 1024 * 1024 + 1 }), 400);
+  assert.equal(await bad({ sha256: 'xyz' }), 400);
+  assert.equal(await bad({ title: 'x'.repeat(121) }), 400);
+  assert.equal(db.releases.length, 0);
+
+  const prepared = await call(adminHandler, good, { cookies: owner });
+  assert.equal(prepared.status, 200, JSON.stringify(prepared.json));
+  assert.equal(prepared.json.upload_url, 'https://db.test/storage/v1/object/upload/sign/os-images/0.1.0/deix-0.1.0.img?token=up');
+  assert.equal(db.releases[0].file_name, 'deix-0.1.0.img');
+  assert.equal(db.releases[0].created_by, 'Atimenka');
+  const id = prepared.json.id;
+
+  assert.equal((await callGet(releasesHandler, '/api/releases')).json.releases.length, 0);
+  assert.equal((await call(adminHandler, { action: 'release_finalize', id, publish: true }, { cookies: owner })).status, 400);
+
+  db.objects.set('0.1.0/deix-0.1.0.img', 1000);
+  const mismatch = await call(adminHandler, { action: 'release_finalize', id, publish: true }, { cookies: owner });
+  assert.equal(mismatch.status, 400);
+  assert.equal(db.objects.has('0.1.0/deix-0.1.0.img'), false);
+  assert.equal(db.releases[0].ready, false);
+
+  const again = await call(adminHandler, good, { cookies: owner });
+  assert.equal(again.json.id, id);
+  assert.equal(db.releases.length, 1);
+  db.objects.set('0.1.0/deix-0.1.0.img', 2048);
+  const done = await call(adminHandler, { action: 'release_finalize', id, publish: true }, { cookies: owner });
+  assert.equal(done.json.published, true);
+  assert.equal((await call(adminHandler, good, { cookies: owner })).status, 409);
+
+  const listed = await call(adminHandler, { action: 'releases' }, { cookies: owner });
+  assert.equal(listed.json.releases[0].published, true);
+  assert.equal(listed.json.releases[0].file_path, undefined);
+
+  const open = await callGet(releasesHandler, '/api/releases');
+  assert.equal(open.json.releases.length, 1);
+  assert.equal(open.json.releases[0].sha256, sha);
+  assert.equal(open.json.releases[0].file_path, undefined);
+  assert.equal(open.json.releases[0].id, undefined);
+
+  assert.equal((await callGet(releasesHandler, '/api/releases?download=..%2Fx')).status, 400);
+  assert.equal((await callGet(releasesHandler, '/api/releases?download=9.9.9')).status, 404);
+  const link = await callGet(releasesHandler, '/api/releases?download=0.1.0');
+  assert.equal(link.status, 302);
+  assert.equal(link.headers.location, 'https://db.test/storage/v1/object/sign/os-images/0.1.0/deix-0.1.0.img?token=dl&download=deix-0.1.0.img');
+  assert.equal(db.releases[0].downloads, 1);
+
+  await call(adminHandler, { action: 'release_publish', id, published: false }, { cookies: owner });
+  assert.equal((await callGet(releasesHandler, '/api/releases?download=0.1.0')).status, 404);
+  assert.equal((await callGet(releasesHandler, '/api/releases')).json.releases.length, 0);
+  assert.equal((await call(adminHandler, { action: 'release_publish', id, published: 'yes' }, { cookies: owner })).status, 400);
+  assert.equal((await call(adminHandler, { action: 'release_publish', id: 'nope', published: true }, { cookies: owner })).status, 400);
+
+  assert.equal((await call(adminHandler, { action: 'release_remove', id }, { cookies: owner })).status, 200);
+  assert.equal(db.releases.length, 0);
+  assert.equal(db.objects.size, 0);
+
+  const english = await callGet(releasesHandler, '/api/releases?download=..%2Fx', { 'x-deix-lang': 'en' });
+  assert.equal(english.json.error, 'Invalid version');
+});
+
+test('OS releases: downloads are rate limited per address', async () => {
+  db.releases.push({ id: 'r1', version: '1.0', file_path: '1.0/deix-1.0.img', file_name: 'deix-1.0.img', ready: true, published: true, downloads: 0 });
+  const headers = { 'x-forwarded-for': '7.7.7.7' };
+  for (let i = 0; i < 30; i += 1) assert.equal((await callGet(releasesHandler, '/api/releases?download=1.0', headers)).status, 302);
+  assert.equal((await callGet(releasesHandler, '/api/releases?download=1.0', headers)).status, 429);
+  db.releases.length = 0;
+});
+
+const updateKeys = nodeCrypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+
+function updateManifestFile(overrides = {}, signer = updateKeys.privateKey) {
+  const payload = overrides.payload || nodeCrypto.randomBytes(300 * 1024);
+  const doc = {
+    build: 1790000000,
+    channel: 'stable',
+    payload_sha256: nodeCrypto.createHash('sha256').update(payload).digest('hex'),
+    payload_size: payload.length,
+    product: 'deix',
+    version: '0.4.0',
+    ...overrides.doc,
+  };
+  const text = JSON.stringify(Object.fromEntries(Object.entries(doc).sort(([a], [b]) => (a < b ? -1 : 1))));
+  const message = Buffer.concat([Buffer.from('DEIX-UPDATE-1\0', 'latin1'), Buffer.from(text, 'latin1')]);
+  const signature = nodeCrypto.sign('sha256', message, { key: signer, dsaEncoding: 'ieee-p1363' }).toString('hex');
+  return { file: `DEIXMANIFEST1\n${signature}\n${text}\n`, text, signature, payload, doc };
+}
+
+test('OS updates: an upload-sign failure shows the Storage status and reason', async () => {
+  const owner = await loginOwner();
+  const made = updateManifestFile();
+  db.signFailure = true;
+  try {
+    const ru = await call(adminHandler, { action: 'update_prepare', manifest_file: made.file }, { cookies: owner });
+    assert.equal(ru.status, 502);
+    assert.equal(ru.json.error, 'Не удалось подготовить загрузку в хранилище (Storage HTTP 400: Body cannot be empty)');
+    const en = await call(adminHandler, { action: 'update_prepare', manifest_file: made.file }, { cookies: owner, headers: { 'x-deix-lang': 'en' } });
+    assert.equal(en.json.error, 'Could not prepare the upload to storage (Storage HTTP 400: Body cannot be empty)');
+  } finally {
+    db.signFailure = false;
+    db.updates.length = 0;
+  }
+});
+
+test('OS updates: owner publishes, the OS fetches the manifest and the payload in parts', async () => {
+  const pub = updateKeys.publicKey.export({ type: 'spki', format: 'der' }).subarray(-65).toString('hex');
+  process.env.UPDATE_PUBKEY = pub;
+  const owner = await loginOwner();
+  const made = updateManifestFile();
+  const prepare = (manifest_file) => call(adminHandler, { action: 'update_prepare', manifest_file }, { cookies: owner });
+
+  assert.equal((await call(adminHandler, { action: 'update_prepare', manifest_file: made.file })).status, 401);
+  assert.equal((await prepare('junk')).status, 400);
+  assert.equal((await prepare(made.file.replace(made.signature, '0'.repeat(128)))).status, 400);
+  assert.equal((await prepare(updateManifestFile({}, nodeCrypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey).file)).status, 400);
+  assert.equal((await prepare(updateManifestFile({ doc: { channel: 'nightly' } }).file)).status, 400);
+  assert.equal((await prepare(updateManifestFile({ doc: { payload_size: 9 * 1024 * 1024 } }).file)).status, 400);
+  assert.equal(db.updates.length, 0);
+
+  const prepared = await prepare(made.file);
+  assert.equal(prepared.status, 200);
+  assert.equal(prepared.json.upload_url, 'https://db.test/storage/v1/object/upload/sign/os-images/updates/1790000000/payload.bin?token=up');
+  assert.equal(db.updates[0].manifest, made.text);
+
+  assert.equal((await call(adminHandler, { action: 'update_finalize', id: prepared.json.id }, { cookies: owner })).status, 400);
+  db.objects.set('updates/1790000000/payload.bin', made.payload.length - 1);
+  assert.equal((await call(adminHandler, { action: 'update_finalize', id: prepared.json.id }, { cookies: owner })).status, 400);
+  assert.equal(db.objects.has('updates/1790000000/payload.bin'), false);
+
+  assert.equal((await callGet(updateHandler, '/api/update')).json.none, true);
+  db.objects.set('updates/1790000000/payload.bin', made.payload.length);
+  db.blobs.set('updates/1790000000/payload.bin', made.payload);
+  const done = await call(adminHandler, { action: 'update_finalize', id: prepared.json.id, publish: true }, { cookies: owner });
+  assert.equal(done.json.published, true);
+
+  const head = await callRaw(updateHandler, '/api/update?channel=stable');
+  assert.equal(head.status, 200);
+  const doc = JSON.parse(head.body);
+  assert.equal(doc.parts, 3);
+  assert.equal(doc.part_size, 131072);
+  assert.equal(doc.signature, made.signature);
+  assert.ok(head.body.includes(`"manifest":${made.text},`), 'the manifest must be embedded byte for byte');
+  assert.equal((await callGet(updateHandler, '/api/update?channel=beta')).json.none, true);
+  assert.equal((await callGet(updateHandler, '/api/update?channel=x')).status, 400);
+
+  const parts = [];
+  for (let i = 0; i < 3; i += 1) {
+    const part = await callRaw(updateHandler, `/api/update?build=1790000000&part=${i}`);
+    assert.equal(part.status, 200);
+    parts.push(part.bytes);
+  }
+  assert.equal(Buffer.concat(parts).equals(made.payload), true);
+  assert.equal((await callGet(updateHandler, '/api/update?build=1790000000&part=3')).status, 404);
+  assert.equal((await callGet(updateHandler, '/api/update?build=1&part=0')).status, 404);
+  assert.equal((await callGet(updateHandler, '/api/update?build=x&part=0')).status, 400);
+  assert.equal(db.updates[0].downloads, 1);
+
+  const listed = await call(adminHandler, { action: 'updates' }, { cookies: owner });
+  assert.equal(listed.json.updates[0].published, true);
+  assert.equal(listed.json.updates[0].manifest, undefined);
+  assert.equal((await call(adminHandler, { action: 'update_publish', id: prepared.json.id, published: false }, { cookies: owner })).status, 200);
+  assert.equal((await callGet(updateHandler, '/api/update')).json.none, true);
+  assert.equal((await prepare(made.file)).status, 409);
+  assert.equal((await call(adminHandler, { action: 'update_remove', id: prepared.json.id }, { cookies: owner })).status, 200);
+  assert.equal(db.updates.length, 0);
+  delete process.env.UPDATE_PUBKEY;
+});
+
+test('OS updates: requests are rate limited per address', async () => {
+  const headers = { 'x-forwarded-for': '8.8.4.4' };
+  for (let i = 0; i < 120; i += 1) assert.equal((await callGet(updateHandler, '/api/update', headers)).status, 200);
+  assert.equal((await callGet(updateHandler, '/api/update', headers)).status, 429);
+});
+
+test('flood guard: one address cannot exceed the per-minute ceiling on any endpoint', async () => {
+  process.env.FLOOD_MAX_PER_MINUTE = '5';
+  try {
+    const headers = { 'x-forwarded-for': '10.20.30.40' };
+    for (let i = 0; i < 5; i += 1) assert.equal((await callGet(releasesHandler, '/api/releases', headers)).status, 200);
+    assert.equal((await callGet(releasesHandler, '/api/releases', headers)).status, 429);
+    assert.equal((await callGet(updateHandler, '/api/update', headers)).status, 429);
+    assert.equal((await call(authHandler, { action: 'config' }, { headers })).status, 429);
+    assert.equal((await callGet(releasesHandler, '/api/releases', { 'x-forwarded-for': '10.20.30.41' })).status, 200);
+  } finally {
+    process.env.FLOOD_MAX_PER_MINUTE = '100000';
+  }
+});
+
+test('public read endpoints are CDN-cacheable, private ones are not', async () => {
+  const list = await callGet(releasesHandler, '/api/releases');
+  assert.match(list.headers['cache-control'], /s-maxage=60/);
+  const manifest = await callGet(updateHandler, '/api/update?channel=stable');
+  assert.match(manifest.headers['cache-control'], /s-maxage=60/);
+  const me = await call(authHandler, { action: 'me' });
+  assert.equal(me.headers['cache-control'], 'no-store');
+});
+
+test('mail: SMTP2GO is used through its HTTP API with the verified sender', async () => {
+  const { sendMail, mailConfigured } = require('../api/_mail');
+  process.env.SMTP2GO_API_KEY = 'api-test';
+  process.env.MAIL_FROM = 'DeiX OS <me@gmail.test>';
+  try {
+    assert.equal(mailConfigured(), true);
+    await sendMail({ to: 'a@b.test', subject: 'Hi', html: '<p>x</p>', text: 'x' });
+    assert.equal(db.smtp2go.key, 'api-test');
+    assert.deepEqual(db.smtp2go.body, { sender: 'DeiX OS <me@gmail.test>', to: ['a@b.test'], subject: 'Hi', html_body: '<p>x</p>', text_body: 'x' });
+  } finally {
+    delete process.env.SMTP2GO_API_KEY;
+    delete process.env.MAIL_FROM;
+  }
+});
+
+test('Rate limit: подделанный X-Forwarded-For не сбрасывает счётчик', async () => {
+  const { clientIp } = require('../api/_lib');
+  assert.equal(clientIp({ headers: { 'x-real-ip': '5.6.7.8', 'x-forwarded-for': '1.1.1.1, 2.2.2.2' }, socket: {} }), '5.6.7.8');
+  assert.equal(clientIp({ headers: { 'x-forwarded-for': '1.1.1.1, 2.2.2.2' }, socket: {} }), '2.2.2.2');
+  assert.equal(clientIp({ headers: {}, socket: { remoteAddress: '::1' } }), '::1');
+  const token = '0'.repeat(64);
+  let last = 0;
+  for (let i = 1; i <= 21; i++) {
+    // Эмуляция края: клиент подставляет свой левый адрес, край дописывает настоящий.
+    const r = await call(authHandler, { action: 'verify_email', token },
+      { headers: { 'x-forwarded-for': `203.0.113.${i}, 9.9.9.9` } });
+    last = r.status;
+    if (i < 21) assert.equal(r.status, 400);
+  }
+  assert.equal(last, 429);
+});
