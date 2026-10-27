@@ -339,9 +339,9 @@ fn apply_settings(settings_json: &str) -> Result<(), String> {
     if let Some(accent_str) = json_accent_field(settings_json) {
         let parts: Vec<&str> = accent_str.split(',').collect();
         if parts.len() == 3 {
-            let r: u32 = parts[0].parse().unwrap_or(0);
-            let g: u32 = parts[1].parse().unwrap_or(0);
-            let b: u32 = parts[2].parse().unwrap_or(0);
+            let r: u8 = parts[0].parse().unwrap_or(0);
+            let g: u8 = parts[1].parse().unwrap_or(0);
+            let b: u8 = parts[2].parse().unwrap_or(0);
             t.accent = crate::renderer::Color::rgb(r, g, b);
         }
     }
