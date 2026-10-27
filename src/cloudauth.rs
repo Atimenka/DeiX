@@ -94,7 +94,7 @@ fn json_escape(s: &str) -> String {
     for c in s.chars() {
         match c {
             '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
+            '\\' => out.push_str("\\\"),
             _ => out.push(c),
         }
     }
@@ -445,5 +445,70 @@ pub fn cmd_pull() {
             }
         }
         _ => println!("  [cloud] unexpected response: {}", clip(&text, 120)),
+    }
+}
+
+/// CLI: `cloud clip get` — забирает текст буфера обмена из сервера.
+pub fn cmd_clip_get() {
+    let Some((user_id, _, _)) = linked() else {
+        println!("  [cloud] не привязан. Сначала войдите в аккаунт.");
+        return;
+    };
+    let body = format!("{{\"p_user_id\":\"{}\"}}", json_escape(&user_id));
+    let resp = match http_call("cloud_clip_get", &body) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("  [cloud] clip get failed: {}", e);
+            return;
+        }
+    };
+    if resp.status != 200 {
+        println!("  [cloud] clip get failed: {}", http_error("cloud clip", resp.status, &resp.body));
+        return;
+    }
+    let text = String::from_utf8_lossy(&resp.body).into_owned();
+    match json_str_field(&text, "status").as_deref() {
+        Some("none") => println!("  [cloud] буфер пуст"),
+        Some("ok") => {
+            if let Some(content) = json_str_field(&text, "content") {
+                println!("{}", content);
+            } else {
+                println!("  [cloud] unexpected response: {}", clip(&text, 120));
+            }
+        }
+        _ => println!("  [cloud] unexpected response: {}", clip(&text, 120)),
+    }
+}
+
+/// CLI: `cloud clip set "текст"` — отправляет текст в буфер обмена.
+pub fn cmd_clip_set(text: &str) {
+    let Some((user_id, _, _)) = linked() else {
+        println!("  [cloud] не привязан. Сначала войдите в аккаунт.");
+        return;
+    };
+    if text.is_empty() {
+        println!("  [cloud] пустой текст");
+        return;
+    }
+    let body = format!(
+        "{{\"p_user_id\":\"{}\",\"p_content\":\"{}\"}}",
+        json_escape(&user_id),
+        json_escape(text)
+    );
+    let resp = match http_call("cloud_clip_set", &body) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("  [cloud] clip set failed: {}", e);
+            return;
+        }
+    };
+    if resp.status != 200 {
+        println!("  [cloud] clip set failed: {}", http_error("cloud clip", resp.status, &resp.body));
+        return;
+    }
+    let text_resp = String::from_utf8_lossy(&resp.body);
+    match json_str_field(&text_resp, "status").as_deref() {
+        Some("ok") => println!("  [cloud] буфер обновлён"),
+        _ => println!("  [cloud] unexpected response: {}", clip(&text_resp, 120)),
     }
 }

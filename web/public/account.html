@@ -168,6 +168,20 @@
             <p class="hint">Настройки рабочего стола синхронизируются между устройствами. В DeiX выполните <code>cloud sync</code> для отправки текущих настроек и <code>cloud pull</code> для загрузки сохранённых.</p>
             <div id="sync-content"></div>
           </div>
+
+          <div class="panel">
+            <h3>Общий буфер обмена</h3>
+            <p class="hint">Текст между устройствами. В DeiX: <code>cloud clip set "текст"</code> для отправки, <code>cloud clip get</code> для получения.</p>
+            <div class="row-gap">
+              <textarea id="clip-text" rows="3" maxlength="4000" placeholder="Текст буфера обмена…" aria-label="Текст буфера обмена"></textarea>
+            </div>
+            <div class="row-gap">
+              <button class="btn primary" id="clip-save" type="button">Сохранить</button>
+              <button class="btn" id="clip-copy" type="button">Скопировать</button>
+              <button class="btn small" id="clip-refresh" type="button">Обновить</button>
+            </div>
+            <div class="result" id="clip-result" hidden></div>
+          </div>
         </section>
       </div>
     </div>

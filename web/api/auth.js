@@ -525,6 +525,30 @@ module.exports = async function handler(req, res) {
           updated_at: result.updated_at,
         });
       }
+      case 'sync_clipboard': {
+        const user = await currentUser(req, res);
+        if (!user) throw new HttpError(401, 'Не авторизован');
+        if (body.op === 'set') {
+          if (!body.content || typeof body.content !== 'string') {
+            throw new HttpError(400, 'content required');
+          }
+          if (body.content.length > 4000) {
+            throw new HttpError(400, 'content too long (max 4000 chars)');
+          }
+          const result = await rpc('save_clipboard', { p_user_id: user.id, p_content: body.content });
+          return send(res, 200, { ok: true, status: 'ok', created_at: result.created_at });
+        }
+        const result = await rpc('get_clipboard', { p_user_id: user.id });
+        if (result.result === 'none') {
+          return send(res, 200, { ok: true, status: 'none' });
+        }
+        return send(res, 200, {
+          ok: true,
+          status: 'ok',
+          content: result.content,
+          created_at: result.created_at,
+        });
+      }
       default:
         throw new HttpError(400, 'Неизвестное действие');
     }

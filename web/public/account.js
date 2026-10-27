@@ -58,6 +58,7 @@ function renderMail() {
   loadDevices();
   loadKeyHistory();
   loadSync();
+  loadClipboard();
 })();
 
 for (const button of document.querySelectorAll('#menu [data-tab]')) {
@@ -291,6 +292,46 @@ async function loadSync() {
     box.replaceChildren(el('p', { class: 'hint', text: err.message }));
   }
 }
+
+async function loadClipboard() {
+  const box = document.getElementById('clip-result');
+  try {
+    const data = await authApi({ action: 'sync_clipboard' });
+    const ta = document.getElementById('clip-text');
+    if (data.status === 'none') {
+      ta.value = '';
+      ta.placeholder = tr('Буфер пуст');
+      return;
+    }
+    ta.value = data.content;
+    ta.placeholder = tr('Текст буфера обмена…');
+  } catch (err) {
+    showResult(box, 'err', err.message);
+  }
+}
+
+document.getElementById('clip-refresh').addEventListener('click', loadClipboard);
+
+document.getElementById('clip-save').addEventListener('click', async () => {
+  const box = document.getElementById('clip-result');
+  const ta = document.getElementById('clip-text');
+  try {
+    await authApi({ action: 'sync_clipboard', op: 'set', content: ta.value });
+    showResult(box, 'ok', tr('Буфер обновлён'));
+  } catch (err) {
+    showResult(box, 'err', err.message);
+  }
+});
+
+document.getElementById('clip-copy').addEventListener('click', async () => {
+  const ta = document.getElementById('clip-text');
+  try {
+    await navigator.clipboard.writeText(ta.value);
+    toast(tr('Текст скопирован'), 'ok');
+  } catch {
+    toast(tr('Не удалось скопировать: выделите текст вручную'), 'err');
+  }
+});
 
 document.getElementById('key-form').addEventListener('submit', async (event) => {
   event.preventDefault();

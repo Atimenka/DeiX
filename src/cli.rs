@@ -339,7 +339,15 @@ pub fn execute(line: &str) {
             "unlink" => crate::cloudauth::cmd_unlink(),
             "sync" => crate::cloudauth::cmd_sync(),
             "pull" => crate::cloudauth::cmd_pull(),
-            _ => crate::cloudauth::cmd_status(),
+            "clip get" => crate::cloudauth::cmd_clip_get(),
+            "clip" => crate::cloudauth::cmd_clip_get(),
+            _ => {
+                if let Some(text) = rest.trim().strip_prefix("clip set ") {
+                    crate::cloudauth::cmd_clip_set(text.trim().trim_matches('"'));
+                } else {
+                    crate::cloudauth::cmd_status();
+                }
+            }
         },
         "crypt" => crate::luks::cmd_crypt(rest),
         "dinit" => crate::dinit::cmd_dinit(rest),

@@ -207,6 +207,14 @@ const EN = {
   'Язык': 'Language',
   'Обновлено': 'Updated',
   'Стиль {n}': 'Style {n}',
+  'Общий буфер обмена': 'Shared clipboard',
+  'Текст между устройствами. В DeiX: «cloud clip set «текст»» для отправки, «cloud clip get» для получения.': 'Text between devices. In DeiX: «cloud clip set «text»» to send, «cloud clip get» to receive.',
+  'Текст буфера обмена…': 'Clipboard text…',
+  'Буфер пуст': 'Clipboard is empty',
+  'Буфер обновлён': 'Clipboard updated',
+  'Текст скопирован': 'Text copied',
+  'Не удалось скопировать: выделите текст вручную': 'Could not copy: select the text manually',
+  'Сохранить': 'Save',
 };
 
 /** Перевод строки интерфейса: ключ — русский текст, `{имя}` — подстановки. */
