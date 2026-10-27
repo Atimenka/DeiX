@@ -527,6 +527,8 @@ textarea { min-height: 96px; resize: vertical; }
 .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 18px; }
 .kv > div { padding: 14px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--glass); }
 .kv span { display: block; color: var(--faint); font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.06em; }
+.kv b { font-weight: 600; font-size: 0.95rem; display: flex; align-items: center; gap: 8px; }
+.swatch { display: inline-block; width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--border); flex-shrink: 0; }
 .kv b { display: block; margin-top: 3px; font-weight: 600; word-break: break-all; }
 .sec-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; }
 .sec-row h3 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

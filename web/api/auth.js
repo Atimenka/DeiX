@@ -511,6 +511,20 @@ module.exports = async function handler(req, res) {
         return await logout(req, res);
       case 'change_password':
         return await changePassword(req, res, body);
+      case 'sync_settings': {
+        const user = await currentUser(req, res);
+        if (!user) throw new HttpError(401, 'Не авторизован');
+        const result = await rpc('get_user_settings', { p_user_id: user.id });
+        if (result.result === 'none') {
+          return send(res, 200, { ok: true, status: 'none' });
+        }
+        return send(res, 200, {
+          ok: true,
+          status: 'ok',
+          settings: result.settings,
+          updated_at: result.updated_at,
+        });
+      }
       default:
         throw new HttpError(400, 'Неизвестное действие');
     }

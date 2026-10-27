@@ -25,6 +25,7 @@
           <button type="button" data-tab="devices"><svg class="icon"><use href="/icons.svg#laptop"/></svg>Устройства</button>
           <button type="button" data-tab="key"><svg class="icon"><use href="/icons.svg#key"/></svg>Dev-ключ</button>
           <button type="button" data-tab="security"><svg class="icon"><use href="/icons.svg#shield"/></svg>Безопасность</button>
+          <button type="button" data-tab="sync"><svg class="icon"><use href="/icons.svg#sync"/></svg>Синхронизация</button>
           <div class="sep"></div>
           <button type="button" id="logout-btn"><svg class="icon"><use href="/icons.svg#logout"/></svg>Выйти</button>
         </nav>
@@ -158,6 +159,14 @@
               <div><button class="btn primary" type="submit">Сменить пароль</button></div>
             </form>
             <div class="result" id="pw-result" hidden></div>
+          </div>
+        </section>
+
+        <section class="tabpane" data-pane="sync" hidden>
+          <div class="panel">
+            <h3>Синхронизация настроек</h3>
+            <p class="hint">Настройки рабочего стола синхронизируются между устройствами. В DeiX выполните <code>cloud sync</code> для отправки текущих настроек и <code>cloud pull</code> для загрузки сохранённых.</p>
+            <div id="sync-content"></div>
           </div>
         </section>
       </div>

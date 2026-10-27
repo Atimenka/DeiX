@@ -1,6 +1,6 @@
 'use strict';
 
-const TABS = ['overview', 'devices', 'key', 'security'];
+const TABS = ['overview', 'devices', 'key', 'security', 'sync'];
 let me = null;
 let mailEnabled = false;
 
@@ -57,6 +57,7 @@ function renderMail() {
   await refreshVault();
   loadDevices();
   loadKeyHistory();
+  loadSync();
 })();
 
 for (const button of document.querySelectorAll('#menu [data-tab]')) {
@@ -241,6 +242,53 @@ async function loadKeyHistory() {
         el('div', { class: 'hint', text: new Date(item.created_at).toLocaleString(LOCALE) }),
       ]),
     );
+  }
+}
+
+const THEME_LABELS = {
+  catppuccin: 'Catppuccin Dark',
+  nord_light: 'Nord Light',
+  cyberpunk: 'Cyberpunk Neon',
+  aero_glass: 'Aero Glass',
+  emerald: 'Emerald Forest',
+  sunset_gold: 'Sunset Gold',
+};
+
+const PROFILE_LABELS = {
+  balanced: 'Сбалансированный',
+  performance: 'Производительность',
+  quiet: 'Тихий',
+};
+
+async function loadSync() {
+  const box = document.getElementById('sync-content');
+  try {
+    const data = await authApi({ action: 'sync_settings' });
+    if (data.status === 'none') {
+      box.replaceChildren(
+        el('p', { class: 'hint', text: tr('Настроек на сервере нет. Выполните «cloud sync» в DeiX для их отправки.') }),
+      );
+      return;
+    }
+    const s = data.settings;
+    const theme = s.theme || '?';
+    const accent = Array.isArray(s.accent) ? s.accent : [];
+    const accentHex = `#${accent.map((c) => Math.max(0, Math.min(255, c)).toString(16).padStart(2, '0')).join('')}`;
+    const profile = PROFILE_LABELS[s.profile] || s.profile || '?';
+    const lang = s.lang === 'ru' ? 'Русский' : 'English';
+    const updated = data.updated_at ? new Date(data.updated_at).toLocaleString(LOCALE) : '—';
+    box.replaceChildren(
+      el('div', { class: 'kv' }, [
+        el('div', null, [el('span', { text: tr('Тема') }), el('b', { text: THEME_LABELS[theme] || theme })]),
+        el('div', null, [el('span', { text: tr('Акцент') }), el('b', null, [el('span', { class: 'swatch', style: `background:${accentHex}` }), ` ${accentHex}`])]),
+        el('div', null, [el('span', { text: tr('Обои') }), el('b', { text: tr('Стиль {n}', { n: s.wallpaper_style || 0 }) })]),
+        el('div', null, [el('span', { text: tr('Профиль') }), el('b', { text: profile })]),
+        el('div', null, [el('span', { text: tr('Язык') }), el('b', { text: lang })]),
+        el('div', null, [el('span', { text: tr('Обновлено') }), el('b', { text: updated })]),
+      ]),
+    );
+  } catch (err) {
+    box.replaceChildren(el('p', { class: 'hint', text: err.message }));
   }
 }
 

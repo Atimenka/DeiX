@@ -198,6 +198,15 @@ const EN = {
   'Имя устройства. Хранится только в этом браузере.': 'Device name. Stored only in this browser.',
   'Пароль изменён. Локальные данные остались под старым паролем: откройте их им или сбросьте.': 'Password changed. The local data is still under the old password: unlock it with that or reset it.',
   'Этот браузер не поддерживает шифрованное хранилище: имена устройств и история ключей не сохраняются.': 'This browser does not support encrypted storage: device names and key history are not saved.',
+  'Синхронизация настроек': 'Settings sync',
+  'Настройки рабочего стола синхронизируются между устройствами. В DeiX выполните «cloud sync» для отправки текущих настроек и «cloud pull» для загрузки сохранённых.': 'Desktop settings sync between devices. In DeiX, run «cloud sync» to send current settings and «cloud pull» to load saved ones.',
+  'Настроек на сервере нет. Выполните «cloud sync» в DeiX для их отправки.': 'No settings on the server. Run «cloud sync» in DeiX to send them.',
+  'Тема': 'Theme',
+  'Акцент': 'Accent',
+  'Профиль': 'Profile',
+  'Язык': 'Language',
+  'Обновлено': 'Updated',
+  'Стиль {n}': 'Style {n}',
 };
 
 /** Перевод строки интерфейса: ключ — русский текст, `{имя}` — подстановки. */
