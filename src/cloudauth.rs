@@ -94,7 +94,7 @@ fn json_escape(s: &str) -> String {
     for c in s.chars() {
         match c {
             '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\"),
+            '\\' => out.push_str("\\\\"),
             _ => out.push(c),
         }
     }
@@ -323,7 +323,7 @@ fn collect_settings() -> String {
         crate::lang::Lang::Ru => "ru",
     };
     format!(
-        "{{\\"theme\\":\\"{}\\",\\"accent\\":[{},{},{}],\\"wallpaper_style\\":{},\\"profile\\":\\"{}\\",\\"lang\\":\\"{}\\"}}",
+        "{{\"theme\":\"{}\",\"accent\":[{},{},{}],\"wallpaper_style\":{},\"profile\":\"{}\",\"lang\":\"{}\"}}",
         preset, ar, ag, ab, t.wallpaper_style, profile, lang
     )
 }
@@ -396,7 +396,7 @@ pub fn cmd_sync() {
     };
     let settings = collect_settings();
     let body = format!(
-        "{{\\"p_user_id\\":\\"{}\\",\\"p_settings\\":{}}}",
+        "{{\"p_user_id\":\"{}\",\"p_settings\":{}}}",
         json_escape(&user_id), settings
     );
     let resp = match http_call("cloud_sync_push", &body) {
@@ -423,7 +423,7 @@ pub fn cmd_pull() {
         println!("  [cloud] не привязан. Сначала войдите в аккаунт.");
         return;
     };
-    let body = format!("{{\\"p_user_id\\":\\"{}\\"}}", json_escape(&user_id));
+    let body = format!("{{\"p_user_id\":\"{}\"}}", json_escape(&user_id));
     let resp = match http_call("cloud_sync_pull", &body) {
         Ok(r) => r,
         Err(e) => {
