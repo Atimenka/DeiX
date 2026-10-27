@@ -70,6 +70,35 @@ async function loadProfileByToken(token) {
 
 // dev functions: (id, body) => PostgREST body for RPC.
 // cloud functions: async (id, body) => {status, body} | {status, message}.
+// cloud_sync_push(p_settings) — save settings to user_settings.
+// Called by OS `cloud sync`; the OS sends its cloud user_id from the
+// link file. Settings are a flat JSON object with theme preset,
+// accent, wallpaper style, perf profile, and language.
+async function cloudSyncPush(body) {
+  const user_id = String(body.p_user_id || '');
+  if (!user_id) throw new HttpError(400, 'user_id required');
+  const settings = body.p_settings;
+  if (!settings || typeof settings !== 'object') {
+    throw new HttpError(400, 'settings must be a JSON object');
+  }
+  const result = await rpc('save_user_settings', {
+    p_user_id: user_id,
+    p_settings: settings,
+  });
+  return { status: 200, body: { status: 'ok', result: result.result, updated_at: result.updated_at } };
+}
+
+// cloud_sync_pull — return saved settings. Called by OS `cloud pull`.
+async function cloudSyncPull(body) {
+  const user_id = String(body.p_user_id || '');
+  if (!user_id) throw new HttpError(400, 'user_id required');
+  const result = await rpc('get_user_settings', { p_user_id: user_id });
+  if (result.result === 'none') {
+    return { status: 200, body: { status: 'none' } };
+  }
+  return { status: 200, body: { status: 'ok', settings: result.settings, updated_at: result.updated_at } };
+}
+
 const FUNCTIONS = {
   begin_device_link: (id) => ({ p_device_id: id }),
   device_link_status: (id) => ({ p_device_id: id }),
@@ -81,6 +110,8 @@ const FUNCTIONS = {
   }),
   cloud_login: (id, body) => cloudLogin(body),
   cloud_verify: (id, body) => cloudVerify(body),
+  cloud_sync_push: (id, body) => cloudSyncPush(body),
+  cloud_sync_pull: (id, body) => cloudSyncPull(body),
 };
 
 function reject(res, status, message) {

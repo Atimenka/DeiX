@@ -106,7 +106,7 @@ fn json_escape(s: &str) -> String {
 fn json_str_field(obj: &str, key: &str) -> Option<String> {
     let pat = format!("\"{}\":", key);
     let start = obj.find(&pat)? + pat.len();
-    let rest = obj[start..].trim_start().strip_prefix(':')?.trim_start();
+    let rest = obj[start..].trim_start();
     let inner = rest.strip_prefix('\"')?;
     let end = inner.find('\"')?;
     Some(inner[..end].to_string())
@@ -302,5 +302,148 @@ pub fn cmd_unlink() {
     match crate::vfs::remove(LINK_FILE) {
         Ok(()) => println!("  [cloud] link removed. The local account stays."),
         Err(_) => println!("  [cloud] no link to remove."),
+    }
+}
+
+// ==================== cloud sync ====================
+
+/// Собирает настройки рабочего стола в JSON для `cloud sync`.
+/// Формат — тот же, что desktop.cfg: theme, accent, wallpaper, profile, lang.
+fn collect_settings() -> String {
+    let t = crate::ui::theme::get_theme();
+    let preset = crate::ui::theme::preset_token(t.preset);
+    let (ar, ag, ab) = (
+        (t.accent.0 >> 16) & 0xFF,
+        (t.accent.0 >> 8) & 0xFF,
+        t.accent.0 & 0xFF,
+    );
+    let profile = crate::ui::effects::current().token();
+    let lang = match crate::lang::current() {
+        crate::lang::Lang::En => "en",
+        crate::lang::Lang::Ru => "ru",
+    };
+    format!(
+        "{{\\"theme\\":\\"{}\\",\\"accent\\":[{},{},{}],\\"wallpaper_style\\":{},\\"profile\\":\\"{}\\",\\"lang\\":\\"{}\\"}}",
+        preset, ar, ag, ab, t.wallpaper_style, profile, lang
+    )
+}
+
+/// Применяет настройки из JSON (ответ cloud_sync_pull).
+/// Возвращает Ok(()) — настройки применены; Err(причина).
+fn apply_settings(settings_json: &str) -> Result<(), String> {
+    let theme_token = json_str_field(settings_json, "theme").ok_or("no theme field")?;
+    let mut t = crate::ui::theme::preset_from_token(&theme_token)
+        .ok_or_else(|| format!("unknown theme preset: {}", theme_token))?;
+
+    if let Some(accent_str) = json_accent_field(settings_json) {
+        let parts: Vec<&str> = accent_str.split(',').collect();
+        if parts.len() == 3 {
+            let r: u32 = parts[0].parse().unwrap_or(0);
+            let g: u32 = parts[1].parse().unwrap_or(0);
+            let b: u32 = parts[2].parse().unwrap_or(0);
+            t.accent = crate::renderer::Color::rgb(r, g, b);
+        }
+    }
+
+    if let Some(ws_str) = json_num_field(settings_json, "wallpaper_style") {
+        if let Ok(ws) = ws_str.parse::<u8>() {
+            t.wallpaper_style = ws;
+        }
+    }
+
+    crate::ui::theme::set_theme(t);
+
+    if let Some(profile_token) = json_str_field(settings_json, "profile") {
+        if let Some(p) = crate::ui::effects::PerfProfile::from_token(&profile_token) {
+            crate::ui::effects::set(p);
+        }
+    }
+
+    if let Some(lang_str) = json_str_field(settings_json, "lang") {
+        match lang_str.as_str() {
+            "ru" => crate::lang::set(crate::lang::Lang::Ru),
+            _ => crate::lang::set(crate::lang::Lang::En),
+        }
+    }
+
+    crate::ui::config::save();
+    Ok(())
+}
+
+/// Значение числового поля в JSON (просто целочисленное значение).
+fn json_num_field(obj: &str, key: &str) -> Option<String> {
+    let pat = format!("\"{}\":", key);
+    let start = obj.find(&pat)? + pat.len();
+    let rest = obj[start..].trim_start();
+    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    Some(rest[..end].to_string())
+}
+
+/// Значение accent поля в JSON (массив [r,g,b] → "r,g,b").
+fn json_accent_field(obj: &str) -> Option<String> {
+    let pat = format!("\"accent\":[");
+    let start = obj.find(&pat)? + pat.len();
+    let rest = obj[start..].trim_start();
+    let end = rest.find(']')?;
+    Some(rest[..end].to_string())
+}
+
+/// CLI: `cloud sync` — отправляет текущие настройки рабочего стола на сервер.
+pub fn cmd_sync() {
+    let Some((user_id, _, _)) = linked() else {
+        println!("  [cloud] не привязан. Сначала войдите в аккаунт.");
+        return;
+    };
+    let settings = collect_settings();
+    let body = format!(
+        "{{\\"p_user_id\\":\\"{}\\",\\"p_settings\\":{}}}",
+        json_escape(&user_id), settings
+    );
+    let resp = match http_call("cloud_sync_push", &body) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("  [cloud] sync failed: {}", e);
+            return;
+        }
+    };
+    if resp.status != 200 {
+        println!("  [cloud] sync failed: {}", http_error("cloud sync", resp.status, &resp.body));
+        return;
+    }
+    let text = String::from_utf8_lossy(&resp.body);
+    match json_str_field(&text, "status").as_deref() {
+        Some("ok") => println!("  [cloud] настройки синхронизированы"),
+        _ => println!("  [cloud] unexpected response: {}", clip(&text, 120)),
+    }
+}
+
+/// CLI: `cloud pull` — забирает настройки из сервера и применяет их.
+pub fn cmd_pull() {
+    let Some((user_id, _, _)) = linked() else {
+        println!("  [cloud] не привязан. Сначала войдите в аккаунт.");
+        return;
+    };
+    let body = format!("{{\\"p_user_id\\":\\"{}\\"}}", json_escape(&user_id));
+    let resp = match http_call("cloud_sync_pull", &body) {
+        Ok(r) => r,
+        Err(e) => {
+            println!("  [cloud] pull failed: {}", e);
+            return;
+        }
+    };
+    if resp.status != 200 {
+        println!("  [cloud] pull failed: {}", http_error("cloud pull", resp.status, &resp.body));
+        return;
+    }
+    let text = String::from_utf8_lossy(&resp.body).into_owned();
+    match json_str_field(&text, "status").as_deref() {
+        Some("none") => println!("  [cloud] настроек на сервере нет — выполните 'cloud sync'"),
+        Some("ok") => {
+            match apply_settings(&text) {
+                Ok(()) => println!("  [cloud] настройки применены"),
+                Err(e) => println!("  [cloud] apply failed: {}", e),
+            }
+        }
+        _ => println!("  [cloud] unexpected response: {}", clip(&text, 120)),
     }
 }

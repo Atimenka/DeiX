@@ -337,6 +337,8 @@ pub fn execute(line: &str) {
         "cloud" => match rest.trim() {
             "status" => crate::cloudauth::cmd_status(),
             "unlink" => crate::cloudauth::cmd_unlink(),
+            "sync" => crate::cloudauth::cmd_sync(),
+            "pull" => crate::cloudauth::cmd_pull(),
             _ => crate::cloudauth::cmd_status(),
         },
         "crypt" => crate::luks::cmd_crypt(rest),

@@ -223,3 +223,28 @@ pub fn set_theme(theme: UiTheme) {
         CURRENT_THEME = Some(theme);
     }
 }
+
+/// Creates a theme from a preset token (same tokens as desktop.cfg).
+pub fn preset_from_token(token: &str) -> Option<UiTheme> {
+    match token {
+        "catppuccin" => Some(UiTheme::catppuccin()),
+        "nord_light" => Some(UiTheme::nord_light()),
+        "cyberpunk" => Some(UiTheme::cyberpunk()),
+        "aero_glass" => Some(UiTheme::aero_glass()),
+        "emerald" => Some(UiTheme::emerald_forest()),
+        "sunset_gold" => Some(UiTheme::sunset_gold()),
+        _ => None,
+    }
+}
+
+/// Token for a preset (same tokens as desktop.cfg).
+pub fn preset_token(p: ThemePreset) -> &'static str {
+    match p {
+        ThemePreset::DarkCatppuccin => "catppuccin",
+        ThemePreset::NordLight => "nord_light",
+        ThemePreset::CyberpunkNeon => "cyberpunk",
+        ThemePreset::AeroGlass => "aero_glass",
+        ThemePreset::EmeraldForest => "emerald",
+        ThemePreset::SunsetGold => "sunset_gold",
+    }
+}
