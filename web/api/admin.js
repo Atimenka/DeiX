@@ -1,6 +1,6 @@
 'use strict';
 
-const { DEVICE_ID_RE, HttpError, fail, guardPost, readBody, requireOwner, rpc, sb, send, storage, storageBytes, storageUrl } = require('./_lib');
+const { DEVICE_ID_RE, HttpError, fail, guardPost, readBody, requireOwner, rpc, sb, send, storage, storageBytes, storageUrl, auth } = require('./_lib');
 const crypto = require('node:crypto');
 const { BUCKET, EXT_RE, MAX_SIZE, UUID_RE, VERSION_RE, objectPath } = require('./_releases');
 const { parseManifestFile, payloadPath } = require('./_updates');
