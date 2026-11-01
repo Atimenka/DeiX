@@ -268,11 +268,16 @@ fn sys_nanosleep(req: u64) -> i64 {
 
 /// `getrandom` — криптостойкий энтропия из ГСЧ ядра (RDRAND + jitter).
 fn sys_getrandom(buf: u64, len: u64) -> i64 {
+    // Лимит: 1 МиБ за один вызов — защита от OOM.
+    // Linux kernel имеет лимит 32 КБ (getrandom_ctx), но для хобби-ОС
+    // 1 МиБ достаточно (ключи, соли, токены — все меньше).
+    const MAX_GETRANDOM: u64 = 1024 * 1024;
+    if len > MAX_GETRANDOM {
+        return EINVAL;
+    }
     if !user_range_ok(buf, len) {
         return EFAULT;
     }
-    // Используем системный ГСЧ, а не предсказуемый LCG из uptime.
-    // LCG seeded от uptime_ms легко восстанавливается наблюдателем.
     let mut chunk = [0u8; 64];
     let mut filled = 0u64;
     while filled < len {

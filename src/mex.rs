@@ -169,8 +169,17 @@ fn resolve_program_path(name: &str) -> alloc::string::String {
     alloc::format!("/userdata/{}", name)
 }
 
+/// Максимальный размер файла для чтения через MEX API.
+/// 128 КиБ — достаточно для конфигов, логи, USERS.DB.
+/// Большие файлы читаются по частям через offset (когда будет API).
+const MEX_MAX_READ: usize = 128 * 1024;
+
 extern "C" fn api_read_file(name_ptr: *const u8, name_len: usize, out_ptr: *mut u8, out_cap: usize) -> i64 {
     if name_ptr.is_null() || name_len == 0 || name_len > 64 {
+        return -1;
+    }
+    // Лимит размера — защита от OOM при чтении больших файлов.
+    if out_cap > MEX_MAX_READ {
         return -1;
     }
     let name_slice = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
@@ -211,8 +220,17 @@ extern "C" fn api_read_file(name_ptr: *const u8, name_len: usize, out_ptr: *mut 
     }
 }
 
+/// Максимальный размер данных для записи через MEX API.
+/// 256 КиБ за один вызов — достаточно для конфигов и лога.
+/// Большие данные идут по частям.
+const MEX_MAX_WRITE: usize = 256 * 1024;
+
 extern "C" fn api_write_file(name_ptr: *const u8, name_len: usize, data_ptr: *const u8, data_len: usize) -> i64 {
     if name_ptr.is_null() || name_len == 0 || name_len > 64 || data_ptr.is_null() {
+        return -1;
+    }
+    // Лимит размера — защита от заполнения диска.
+    if data_len > MEX_MAX_WRITE {
         return -1;
     }
     let name_slice = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };

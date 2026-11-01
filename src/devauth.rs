@@ -185,6 +185,43 @@ fn json_str_field(obj: &str, key: &str) -> Option<String> {
     Some(inner[..end].to_string())
 }
 
+/// JSON boolean field: "enabled":true → true.
+fn json_bool_field(obj: &str, key: &str) -> Option<bool> {
+    let pat = format!("\"{}\":", key);
+    let start = obj.find(&pat)? + pat.len();
+    let rest = obj[start..].trim_start();
+    match rest.strip_prefix("true") {
+        Some(_) => Some(true),
+        None => match rest.strip_prefix("false") {
+            Some(_) => Some(false),
+            None => None,
+        },
+    }
+}
+
+/// Спрашивает сервер: включен ли global dev-mode toggle?
+/// Если NO — dev-режим нельзя включить, даже с правильным unlock_key.
+fn dev_mode_enabled() -> Result<bool, String> {
+    let url = format!("{}/rest/v1/dev_mode?select=enabled", SUPABASE_URL);
+    let resp = crate::net::http::request_bytes(
+        "GET",
+        &url,
+        &[("apikey", ANON_KEY)],
+        &[],
+    )?;
+    if resp.status != 200 {
+        return Err(http_error("dev_mode check", resp.status, &resp.body));
+    }
+    let body = String::from_utf8_lossy(&resp.body).into_owned();
+    let trimmed = body.trim();
+    if trimmed == "[]" {
+        return Ok(false);
+    }
+    json_bool_field(trimmed, "enabled").ok_or_else(|| {
+        format!("dev_mode: unexpected response: {}", clip(trimmed, 120))
+    })
+}
+
 // ==================== публичный интерфейс ====================
 
 /// Проверяет активацию для `dev on`. Ok(описание источника) — активация
@@ -196,8 +233,17 @@ pub fn ensure_unlocked() -> Result<&'static str, String> {
     }
     match server_status(&id)? {
         ServerStatus::Approved(key) => {
-            store_unlock(&id, &key)?;
-            Ok("server approval (key cached)")
+            // Проверяем global dev-mode toggle на сервере.
+            // Если сервер говорит НЕТ — dev-режим не включаем.
+            match dev_mode_enabled()? {
+                true => {
+                    store_unlock(&id, &key)?;
+                    Ok("server approval (key cached, dev toggle on)")
+                }
+                false => Err(String::from(
+                    "dev mode is disabled on the server (Owner toggle)",
+                )),
+            }
         }
         ServerStatus::Pending => Err(String::from(
             "request is still pending approval on the server",
