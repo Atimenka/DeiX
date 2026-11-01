@@ -432,7 +432,23 @@ pub fn run_login_screen() -> String {
         }
     }
 
+    let mut attempts = 0u32;
+    let max_attempts: u32 = 5;
+
     loop {
+        if attempts >= max_attempts {
+            println!("Too many failed attempts. System halting in 30 seconds.");
+            // Пауза перед halt — блокирует brute-force.
+            let deadline = crate::timer::uptime_ms() + 30_000;
+            while crate::timer::uptime_ms() < deadline {
+                unsafe { core::arch::asm!("hlt") };
+            }
+            // Halt CPU — следующая загрузка с нуля.
+            unsafe { core::arch::asm!("cli; hlt"); }
+            // Если hlt не сработал (не должен), выходим.
+            return String::new();
+        }
+
         print!("Username: ");
         let username = read_line(false);
 
@@ -442,7 +458,8 @@ pub fn run_login_screen() -> String {
         // Если диск зашифрован — пароль должен сначала разблокировать том.
         if crate::crypto_storage::is_encryption_enabled() {
             if !crate::crypto_storage::try_unlock(&password) {
-                println!("Invalid username or password. Try again.");
+                attempts += 1;
+                println!("Invalid username or password. Attempts: {}/{}", attempts, max_attempts);
                 let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
                 continue;
             }
@@ -454,7 +471,8 @@ pub fn run_login_screen() -> String {
                 return username.trim().to_string();
             }
             Err(AuthError::WrongPassword) | Err(AuthError::UserNotFound) => {
-                println!("Invalid username or password. Try again.");
+                attempts += 1;
+                println!("Invalid username or password. Attempts: {}/{}", attempts, max_attempts);
                 let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
             }
             Err(_) => {

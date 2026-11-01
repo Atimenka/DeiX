@@ -183,20 +183,19 @@ extern "C" fn api_read_file(name_ptr: *const u8, name_len: usize, out_ptr: *mut 
     // Если программа исполняется как процесс — чтение идёт через её own
     // таблицу дескрипторов, иначе (запуск из CLI) — напрямую через VFS.
     let path = resolve_program_path(name);
-    let opened = match crate::process::current_pid() {
-        Some(pid) => crate::process::open(pid, &path, false).and_then(|fd| {
-            crate::process::read_fd(pid, fd).map(|d| (fd, d))
-        }),
-        None => Err(crate::process::ProcessError::NotFound(0)),
-    };
-    let result = match opened {
-        Ok((fd, data)) => {
-            if let Some(pid) = crate::process::current_pid() {
-                let _ = crate::process::close(pid, fd);
-            }
-            Ok(data)
-        }
-        Err(_) => crate::vfs::read_file(&path),
+    // При вызове из процесса — строго через process::open (проверка капс).
+    // Fallback в vfs::read_file только для CLI-контекста (без PID), где
+    // капсы не применимы — вызывающий код управляет доступом сам.
+    let result = match crate::process::current_pid() {
+        Some(pid) => match crate::process::open(pid, &path, false).and_then(|fd| {
+            let data = crate::process::read_fd(pid, fd);
+            let _ = crate::process::close(pid, fd);
+            data
+        }) {
+            Ok(data) => Ok(data),
+            Err(_) => Err(()),
+        },
+        None => crate::vfs::read_file(&path).map_err(|_| ()),
     };
     match result {
         Ok(data) => {
@@ -228,22 +227,22 @@ extern "C" fn api_write_file(name_ptr: *const u8, name_len: usize, data_ptr: *co
     }
 
     let path = resolve_program_path(name);
-    // Запись идёт через таблицу дескрипторов процесса, если программа
-    // исполняется как процесс: только там проверяется возможность записи.
+    // Запись из процесса — строго через process::open (проверка WRITE_USERDATA).
+    // Fallback в vfs::write_file только для CLI-контекста (без PID).
     let written = match crate::process::current_pid() {
-        Some(pid) => crate::process::open(pid, &path, true).and_then(|fd| {
+        Some(pid) => match crate::process::open(pid, &path, true).and_then(|fd| {
             let r = crate::process::write_fd(pid, fd, data);
             let _ = crate::process::close(pid, fd);
             r
-        }),
-        None => Err(crate::process::ProcessError::NotFound(0)),
+        }) {
+            Ok(()) => Ok(()),
+            Err(_) => Err(()),
+        },
+        None => crate::vfs::write_file(&path, data).map_err(|_| ()),
     };
     match written {
         Ok(()) => 0,
-        Err(_) => match crate::vfs::write_file(&path, data) {
-            Ok(()) => 0,
-            Err(_) => -1,
-        },
+        Err(_) => -1,
     }
 }
 

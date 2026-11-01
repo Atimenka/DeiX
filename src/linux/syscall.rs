@@ -266,17 +266,22 @@ fn sys_nanosleep(req: u64) -> i64 {
     0
 }
 
-/// `getrandom` — источник энтропии из счётчика тактов.
+/// `getrandom` — криптостойкий энтропия из ГСЧ ядра (RDRAND + jitter).
 fn sys_getrandom(buf: u64, len: u64) -> i64 {
     if !user_range_ok(buf, len) {
         return EFAULT;
     }
-    let mut state = crate::timer::uptime_ms().wrapping_mul(6364136223846793005).wrapping_add(1);
-    for i in 0..len {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        unsafe { core::ptr::write((buf + i) as *mut u8, (state >> 24) as u8) };
+    // Используем системный ГСЧ, а не предсказуемый LCG из uptime.
+    // LCG seeded от uptime_ms легко восстанавливается наблюдателем.
+    let mut chunk = [0u8; 64];
+    let mut filled = 0u64;
+    while filled < len {
+        let need = (len - filled).min(chunk.len() as u64) as usize;
+        crate::rng::fill_random(&mut chunk);
+        unsafe {
+            core::ptr::copy_nonoverlapping(chunk.as_ptr(), (buf + filled) as *mut u8, need);
+        }
+        filled += need as u64;
     }
     len as i64
 }

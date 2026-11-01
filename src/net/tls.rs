@@ -209,9 +209,9 @@ fn open_record(keys: &mut Keys, payload: &[u8]) -> Result<(u8, Vec<u8>), String>
         .open(&nonce, &aad, payload)
         .ok_or_else(|| String::from("TLS: AEAD-тег записи не сошёлся"))?;
     keys.seq += 1;
-    while plain.last() == Some(&0) {
-        plain.pop();
-    }
+    // В TLS 1.3 внутренний plaintext = data || content_type (ровно один
+    // байт типа в конце). Обрезка нулей НЕ допустима — если данные
+    // закончены нулями, они будут съедены. Убираем только тип.
     let itype = plain
         .pop()
         .ok_or_else(|| String::from("TLS: пустой inner plaintext"))?;

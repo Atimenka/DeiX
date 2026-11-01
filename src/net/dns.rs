@@ -171,10 +171,13 @@ pub fn resolve_a(host: &str) -> Option<[u8; 4]> {
             *s = s.wrapping_add(1);
             *s
         });
-        // ID из тиков таймера + счётчика, локальный порт из
-        // эфемерального диапазона — защита от случайных совпадений.
-        let id = (crate::timer::uptime_ms() as u16) ^ (seq.rotate_left(7)) ^ 0x5A17;
-        let sport = 49152 + (seq & 0x3FFF);
+        // ID из тиков таймера + счётчика + случайный XOR.
+        // Локальный порт — случайный из эфемерального диапазона
+        // через ГСЧ ядра (ранее был предсказуем: 49152 + seq).
+        let mut rnd = [0u8; 2];
+        crate::rng::fill_random(&mut rnd);
+        let sport = 49152 + (((rnd[0] as u16) << 8 | rnd[1] as u16) & 0x3FFF);
+        let id = (crate::timer::uptime_ms() as u16) ^ (seq.rotate_left(7)) ^ (rnd[0] as u16) ^ 0x5A17;
         let query = build_query(id, &name);
         if !udp::send_to(server, DNS_PORT, sport, &query) {
             continue;

@@ -103,7 +103,10 @@ fn server_status(id: &str) -> Result<ServerStatus, String> {
     let resp = crate::net::http::request_bytes(
         "GET",
         &url,
-        &[("apikey", ANON_KEY)],
+        &[
+            ("apikey", ANON_KEY),
+            ("x-device-id", id),
+        ],
         &[],
     )?;
     if resp.status != 200 {
@@ -136,6 +139,7 @@ fn server_request(id: &str) -> Result<(), String> {
         &url,
         &[
             ("apikey", ANON_KEY),
+            ("x-device-id", id),
             ("Content-Type", "application/json"),
             ("Prefer", "return=minimal"),
         ],
