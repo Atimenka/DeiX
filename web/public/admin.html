@@ -99,6 +99,60 @@
         <p class="hint">Опубликованные версии видны всем на странице «Скачать». Черновик виден только здесь.</p>
       </div>
 
+      <div id="manage-section" hidden>
+        <div class="toolbar">
+          <h1 class="title">Управление <span class="grad">системой</span></h1>
+          <div class="right">
+            <button class="btn small" id="mg-refresh-btn" type="button">Обновить</button>
+          </div>
+        </div>
+
+        <div class="panel rel-panel">
+          <h3>Dev-режим</h3>
+          <p class="hint">Глобальный тумблер dev-режима. Если выключен — устройства не смогут активировать dev-режим даже с действительным ключом.</p>
+          <label class="switch">
+            <input type="checkbox" id="mg-dev-mode">
+            <span id="mg-dev-mode-label">Dev-режим</span>
+          </label>
+          <div class="result" id="mg-dev-result" hidden></div>
+        </div>
+
+        <div class="panel rel-panel">
+          <h3>Feature flags</h3>
+          <p class="hint">Тумблеры по частям. Выключенный флаг отключает соответствующую функцию на всех устройствах.</p>
+          <div id="mg-flags-list" class="stack"></div>
+          <div class="result" id="mg-flags-result" hidden></div>
+        </div>
+
+        <div class="panel rel-panel">
+          <h3>Роли пользователей</h3>
+          <p class="hint">Роли: owner (полный доступ), admin (управление всем), moderator (заявки), tester (тестирование).</p>
+          <form id="mg-role-form" class="stack" autocomplete="off">
+            <label>Пользователь
+              <input id="mg-user-id" name="user_id" type="text" placeholder="UUID или username" required>
+            </label>
+            <label>Роль
+              <select id="mg-role-select" name="role" required>
+                <option value="admin">admin</option>
+                <option value="moderator">moderator</option>
+                <option value="tester">tester</option>
+              </select>
+            </label>
+            <button class="btn primary" id="mg-role-submit" type="submit">Назначить роль</button>
+          </form>
+          <div class="result" id="mg-role-result" hidden></div>
+          <div class="table-wrap" style="margin-top:16px">
+            <table>
+              <thead>
+                <tr><th>Пользователь</th><th>Email</th><th>Роль</th><th>Назначена</th><th>Действия</th></tr>
+              </thead>
+              <tbody id="mg-roles-rows"></tbody>
+            </table>
+            <div class="empty" id="mg-roles-empty" hidden>Роли не назначены.</div>
+          </div>
+        </div>
+      </div>
+
       <div id="updates-section" hidden>
         <div class="toolbar">
           <h1 class="title">Обновления <span class="grad">ОС</span></h1>

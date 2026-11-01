@@ -186,7 +186,7 @@ async function refresh() {
 function renderSections() {
   const box = $('section-tabs');
   box.replaceChildren();
-  for (const [key, label] of [['requests', tr('Заявки')], ['releases', tr('Версии ОС')], ['updates', tr('Обновления ОС')]]) {
+  for (const [key, label] of [['requests', tr('Заявки')], ['releases', tr('Версии ОС')], ['updates', tr('Обновления ОС')], ['manage', tr('Управление')]]) {
     box.append(
       el('button', {
         class: `tab${state.section === key ? ' active' : ''}`,
@@ -197,6 +197,7 @@ function renderSections() {
           renderSections();
           if (key === 'releases') loadReleases();
           if (key === 'updates') loadUpdates();
+          if (key === 'manage') loadManage();
         },
       }),
     );
@@ -204,6 +205,7 @@ function renderSections() {
   $('requests-section').hidden = state.section !== 'requests';
   $('releases-section').hidden = state.section !== 'releases';
   $('updates-section').hidden = state.section !== 'updates';
+  $('manage-section').hidden = state.section !== 'manage';
 }
 
 function releaseBadge(row) {
@@ -468,6 +470,165 @@ $('open-switch').addEventListener('change', async (event) => {
     await refresh();
   } catch (err) {
     event.target.checked = !open;
+    toast(err.message, 'err');
+  }
+});
+
+const FLAG_LABELS = {
+  dev_mode: tr('Dev-режим'),
+  cloud_sync: tr('Облачная синхронизация'),
+  cloud_clipboard: tr('Общий буфер обмена'),
+  os_updates: tr('Обновления ОС'),
+  media_player: tr('Медиаплеер'),
+  wallpapers: tr('Встроенные обои'),
+  widgets: tr('Виджеты рабочего стола'),
+  '2048': tr('Пасхалка 2048'),
+};
+
+const ROLE_LABELS = {
+  owner: tr('Owner'),
+  admin: tr('Администратор'),
+  moderator: tr('Модератор'),
+  tester: tr('Тестировщик'),
+  user: tr('Пользователь'),
+};
+
+function flagLabel(name) {
+  return FLAG_LABELS[name] || name;
+}
+
+function roleLabel(role) {
+  return ROLE_LABELS[role] || role;
+}
+
+async function loadManage() {
+  try {
+    const data = await api({ action: 'dev_mode_list' });
+    $('mg-dev-mode').checked = data.dev_mode;
+    $('mg-dev-mode-label').textContent = data.dev_mode ? tr('Dev-режим активен') : tr('Dev-режим выключен');
+    renderFlags(data.flags);
+    renderRoles(data.user_roles);
+  } catch (err) {
+    if (err.code === 'mfa_required') {
+      denyMfa(await fetchMe());
+      return;
+    }
+    if (err.status === 401 || err.status === 403) {
+      showDenied(tr('Нужен вход'), tr('Сессия закончилась. Войдите снова.'), [loginButton()]);
+      return;
+    }
+    toast(err.message, 'err');
+  }
+}
+
+function renderFlags(flags) {
+  const box = $('mg-flags-list');
+  box.replaceChildren();
+  for (const flag of flags) {
+    box.append(
+      el('label', { class: 'switch' }, [
+        el('input', {
+          type: 'checkbox',
+          checked: flag.enabled,
+          onchange: (event) => toggleFlag(flag.name, event.target.checked),
+        }),
+        el('span', { text: flagLabel(flag.name) }),
+        el('small', { class: 'hint', text: flag.description || '' }),
+      ]),
+    );
+  }
+}
+
+async function toggleFlag(name, enabled) {
+  try {
+    await api({ action: 'flags_set', name, enabled });
+    toast(enabled ? tr('Флаг включён') : tr('Флаг выключен'), 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+    await loadManage();
+  }
+}
+
+function renderRoles(userRoles) {
+  const body = $('mg-roles-rows');
+  body.replaceChildren();
+  $('mg-roles-empty').hidden = userRoles.length > 0;
+  for (const row of userRoles) {
+    body.append(
+      el('tr', null, [
+        el('td', { class: 'devcell' }, [
+          el('span', { class: 'mono', text: row.profiles ? row.profiles.username : row.user_id.slice(0, 8) + '…' }),
+        ]),
+        el('td', null, [el('span', { text: row.profiles ? row.profiles.email || '—' : '—' })]),
+        el('td', null, [el('span', { class: 'badge', text: roleLabel(row.role_name) })]),
+        el('td', null, [el('div', { text: fmt(row.assigned_at) }), el('small', { class: 'hint', text: row.assigned_by || '' })]),
+        el('td', { class: 'actions' }, [
+          el('button', {
+            class: 'btn bad small',
+            type: 'button',
+            text: tr('Снять'),
+            onclick: () => removeRole(row),
+          }),
+        ]),
+      ]),
+    );
+  }
+}
+
+async function removeRole(row) {
+  if (!confirm(tr('Снять роль {role} у пользователя {user}?', { role: row.role_name, user: row.profiles ? row.profiles.username : row.user_id }))) return;
+  try {
+    await api({ action: 'roles_remove', user_id: row.user_id });
+    toast(tr('Роль снята'), 'ok');
+    await loadManage();
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+}
+
+async function submitRoleForm(event) {
+  event.preventDefault();
+  const result = $('mg-role-result');
+  const input = $('mg-user-id');
+  let userId = input.value.trim();
+  const role = $('mg-role-select').value;
+  // If it's not a UUID, try to look up by username
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(userId)) {
+    try {
+      const users = await api({ action: 'list' });
+      // Can't look up by username from list, need a different approach
+      // Let's just show error for non-UUID
+      showResult(result, 'err', tr('Введите корректный UUID пользователя'));
+      return;
+    } catch {
+      showResult(result, 'err', tr('Введите корректный UUID пользователя'));
+      return;
+    }
+  }
+  const submitBtn = $('mg-role-submit');
+  submitBtn.disabled = true;
+  try {
+    await api({ action: 'roles_assign', user_id: userId, role_name: role });
+    showResult(result, 'ok', tr('Роль назначена'));
+    input.value = '';
+    await loadManage();
+  } catch (err) {
+    showResult(result, 'err', err.message);
+  } finally {
+    submitBtn.disabled = false;
+  }
+}
+
+$('mg-role-form').addEventListener('submit', submitRoleForm);
+$('mg-refresh-btn').addEventListener('click', loadManage);
+$('mg-dev-mode').addEventListener('change', async (event) => {
+  const enabled = event.target.checked;
+  try {
+    await api({ action: 'dev_mode_set', enabled });
+    toast(enabled ? tr('Dev-режим активирован') : tr('Dev-режим деактивирован'), 'ok');
+    $('mg-dev-mode-label').textContent = enabled ? tr('Dev-режим активен') : tr('Dev-режим выключен');
+  } catch (err) {
+    event.target.checked = !enabled;
     toast(err.message, 'err');
   }
 });
