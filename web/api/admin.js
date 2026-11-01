@@ -277,8 +277,15 @@ async function devModeList(res) {
     sb('dev_mode?id=eq.1&select=enabled'),
     sb('feature_flags?select=name,enabled,description&order=name'),
     sb('roles?select=name,description,rank&order=rank.desc'),
-    sb('user_roles?select=user_id,role_name,assigned_at,profiles(username,email)&order=assigned_at.desc'),
+    sb('user_roles?select=user_id,role_name,assigned_at,profiles(username)&order=assigned_at.desc'),
   ]);
+  // Добавляем email из auth.users для каждого пользователя
+  for (const row of userRoles) {
+    const authRes = await auth(`users?id=eq.${row.user_id}&select=email`, { admin: true });
+    if (authRes.status === 200 && authRes.data && authRes.data[0]) {
+      row.profiles = { ...(row.profiles || {}), email: authRes.data[0].email || null };
+    }
+  }
   return send(res, 200, {
     ok: true,
     dev_mode: mode[0] ? mode[0].enabled : false,
@@ -320,8 +327,14 @@ async function flagsSet(res, body) {
 async function rolesList(res) {
   const [roles, userRoles] = await Promise.all([
     sb('roles?select=name,description,rank&order=rank.desc'),
-    sb('user_roles?select=user_id,role_name,assigned_at,profiles(username,email)&order=assigned_at.desc'),
+    sb('user_roles?select=user_id,role_name,assigned_at,profiles(username)&order=assigned_at.desc'),
   ]);
+  for (const row of userRoles) {
+    const authRes = await auth(`users?id=eq.${row.user_id}&select=email`, { admin: true });
+    if (authRes.status === 200 && authRes.data && authRes.data[0]) {
+      row.profiles = { ...(row.profiles || {}), email: authRes.data[0].email || null };
+    }
+  }
   return send(res, 200, { ok: true, roles, user_roles: userRoles });
 }
 
