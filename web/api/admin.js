@@ -281,7 +281,7 @@ async function devModeList(res) {
   ]);
   // Добавляем email из auth.users для каждого пользователя
   for (const row of userRoles) {
-    const authRes = await auth(`users?id=eq.${row.user_id}&select=email`, { admin: true });
+    const authRes = await auth(`users?id=eq.${row.user_id}&select=email`, { method: 'GET', admin: true });
     if (authRes.status === 200 && authRes.data && authRes.data[0]) {
       row.profiles = { ...(row.profiles || {}), email: authRes.data[0].email || null };
     }
@@ -330,7 +330,7 @@ async function rolesList(res) {
     sb('user_roles?select=user_id,role_name,assigned_at,profiles(username)&order=assigned_at.desc'),
   ]);
   for (const row of userRoles) {
-    const authRes = await auth(`users?id=eq.${row.user_id}&select=email`, { admin: true });
+    const authRes = await auth(`users?id=eq.${row.user_id}&select=email`, { method: 'GET', admin: true });
     if (authRes.status === 200 && authRes.data && authRes.data[0]) {
       row.profiles = { ...(row.profiles || {}), email: authRes.data[0].email || null };
     }
