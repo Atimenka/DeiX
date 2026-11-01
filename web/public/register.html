@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Регистрация — DeiX OS</title>
+  <meta name="theme-color" content="#0b0b0c">
+  <link rel="alternate" hreflang="ru" href="/register">
+  <link rel="alternate" hreflang="en" href="/en/register">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="preload" href="/vendor/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/vendor/fonts/inter-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-page="register">
+  <main class="wrap auth">
+    <div class="auth-art">
+      <span class="chip"><span class="dot"></span>Бесплатно, без рекламы</span>
+      <h2>Аккаунт <span class="grad">DeiX</span> за минуту</h2>
+      <p>Привяжите устройство, получите ключ dev-режима и следите за заявками.</p>
+      <ul class="auth-points">
+        <li><svg class="icon"><use href="/icons.svg#mail"/></svg>Почту проверим на лету, а письмо со ссылкой подтвердит владение адресом</li>
+        <li><svg class="icon"><use href="/icons.svg#qr"/></svg>Двухфакторный вход через любое TOTP-приложение — по желанию</li>
+        <li><svg class="icon"><use href="/icons.svg#shield"/></svg>Защита от ботов Cloudflare Turnstile без головоломок</li>
+      </ul>
+    </div>
+
+    <div class="panel auth-card">
+      <h1>Регистрация</h1>
+      <p class="hint lead">Имя, почта и пароль — этого достаточно.</p>
+      <form id="register-form" class="stack" autocomplete="off">
+        <label>Имя пользователя
+          <input id="username" required minlength="3" maxlength="24" pattern="[A-Za-z0-9_]{3,24}" autocomplete="username" autofocus>
+          <span class="hint">3–24 символа: латинские буквы, цифры и _</span>
+        </label>
+        <label>Почта <input id="email" type="email" required autocomplete="email"></label>
+        <label>Пароль
+          <input id="password" type="password" required minlength="8" maxlength="72" autocomplete="new-password">
+          <span class="meter" id="meter" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <span class="hint" id="meter-hint">Не короче 8 символов</span>
+        </label>
+        <label>Повторите пароль <input id="password2" type="password" required minlength="8" maxlength="72" autocomplete="new-password"></label>
+        <div class="hp" aria-hidden="true"><label>Сайт <input id="website" tabindex="-1" autocomplete="off"></label></div>
+        <div id="captcha"></div>
+        <p class="consent">Создавая аккаунт, вы подтверждаете, что прочли <a href="/privacy">политику конфиденциальности</a>.</p>
+        <button class="btn primary block large" id="register-btn" type="submit">Создать аккаунт</button>
+      </form>
+      <div class="result" id="register-result" hidden></div>
+      <p class="hint foot-link">Уже есть аккаунт? <a id="to-login" href="/login">Войти</a></p>
+    </div>
+  </main>
+  <script src="/i18n.js"></script>
+  <script src="/site.js"></script>
+  <script src="/motion.js" defer></script>
+  <script src="/vault.js"></script>
+  <script src="/register.js"></script>
+</body>
+</html>
