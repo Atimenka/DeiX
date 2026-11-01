@@ -222,6 +222,75 @@ fn dev_mode_enabled() -> Result<bool, String> {
     })
 }
 
+// ==================== feature flags ====================
+
+/// Загружает все feature flags с сервера. Возвращает Vec<(name, enabled)>.
+pub fn fetch_feature_flags() -> Result<Vec<(String, bool)>, String> {
+    let url = format!("{}/rest/v1/feature_flags?select=name,enabled&order=name", SUPABASE_URL);
+    let resp = crate::net::http::request_bytes(
+        "GET",
+        &url,
+        &[("apikey", ANON_KEY)],
+        &[],
+    )?;
+    if resp.status != 200 {
+        return Err(http_error("feature flags", resp.status, &resp.body));
+    }
+    let body = String::from_utf8_lossy(&resp.body).into_owned();
+    let trimmed = body.trim();
+    if trimmed == "[]" {
+        return Ok(Vec::new());
+    }
+    let mut flags = Vec::new();
+    // PostgREST возвращает JSON-массив объектов:
+    // [{"name":"dev_mode","enabled":true},...]
+    // Парсим каждый объект: находим "name":"..." и "enabled":true/false
+    let mut rest = trimmed;
+    while let Some(start) = rest.find('{') {
+        rest = &rest[start..];
+        let name = json_str_field(rest, "name");
+        let enabled = json_bool_field(rest, "enabled");
+        if let (Some(n), Some(e)) = (name, enabled) {
+            flags.push((n, e));
+        }
+        match rest.find('}') {
+            Some(end) => rest = &rest[end + 1..],
+            None => break,
+        }
+    }
+    Ok(flags)
+}
+
+/// Проверяет, включен ли конкретный feature flag на сервере.
+/// Если флаг отсутствует — возвращает false (безопасный default).
+pub fn feature_enabled(flag_name: &str) -> Result<bool, String> {
+    let flags = fetch_feature_flags()?;
+    for (name, enabled) in flags {
+        if name == flag_name {
+            return Ok(enabled);
+        }
+    }
+    Ok(false)
+}
+
+/// `dev flags` — список всех feature flags с текущим состоянием.
+pub fn cmd_flags() {
+    match fetch_feature_flags() {
+        Ok(flags) => {
+            if flags.is_empty() {
+                println!("  [dev] no feature flags configured on server");
+                return;
+            }
+            println!("  [dev] feature flags:");
+            for (name, enabled) in flags {
+                let state = if enabled { "ON" } else { "off" };
+                println!("    {}: {}", name, state);
+            }
+        }
+        Err(e) => println!("  [dev] {}", e),
+    }
+}
+
 // ==================== публичный интерфейс ====================
 
 /// Проверяет активацию для `dev on`. Ok(описание источника) — активация

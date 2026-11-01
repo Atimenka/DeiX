@@ -73,7 +73,18 @@ pub fn dev_status() {
     for line in crate::devauth::status_lines() {
         crate::println!("{}", line);
     }
-    crate::println!("  команды: dev request | dev on | dev off | dev revoke");
+    // Feature flags с сервера (если доступен)
+    match crate::devauth::fetch_feature_flags() {
+        Ok(flags) if !flags.is_empty() => {
+            crate::println!("  feature flags:");
+            for (name, enabled) in flags {
+                let state = if enabled { "ON" } else { "off" };
+                crate::println!("    {}: {}", name, state);
+            }
+        }
+        _ => {}
+    }
+    crate::println!("  команды: dev request | dev on | dev off | dev revoke | dev flags");
 }
 
 /// Чтение строки с клавиатуры или COM1.
