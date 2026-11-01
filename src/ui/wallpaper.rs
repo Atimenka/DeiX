@@ -67,6 +67,7 @@ fn decode_image(data: &[u8]) -> Result<Img, String> {
         let p = crate::png::decode(data).map_err(|e| format!("PNG: {}", e))?;
         return Ok(Img { w: p.w, h: p.h, pixels: p.pixels });
     }
+<<<<<<< HEAD
     if crate::jpeg::is_jpeg(data) {
         let p = crate::jpeg::decode(data).map_err(|e| format!("JPEG: {}", e))?;
         return Ok(Img { w: p.w, h: p.h, pixels: p.pixels });
@@ -75,6 +76,12 @@ fn decode_image(data: &[u8]) -> Result<Img, String> {
         return decode_bmp(data);
     }
     Err("формат не распознан: поддерживаются PNG (8 бит, без interlace), baseline JPEG и BMP 24/32 (BI_RGB)".into())
+=======
+    if data.len() >= 54 && &data[0..2] == b"BM" {
+        return decode_bmp(data);
+    }
+    Err("формат не распознан: поддерживаются PNG (8 бит, без interlace) и BMP 24/32 (BI_RGB)".into())
+>>>>>>> arena/e8a29038-deix
 }
 
 /// Несжатый BMP 24/32 бит → пиксели (тот же формат, что понимает

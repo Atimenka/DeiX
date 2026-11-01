@@ -50,7 +50,11 @@ pub fn validate_partition_map() -> Result<(), Vec<String>> {
     let boot_end = BOOTLOADER_LBA + BOOTLOADER_SECTORS; // первый LBA после загрузчика
     if boot_end > KERNEL_IMAGE_INFO_LBA {
         violations.push(format!(
+<<<<<<< HEAD
             "служебная область (до LBA {}) пересекает карту загрузки (LBA {})",
+=======
+            "область загрузчика (до LBA {}) пересекает дескриптор ядра (LBA {})",
+>>>>>>> arena/e8a29038-deix
             boot_end - 1, KERNEL_IMAGE_INFO_LBA
         ));
     }
@@ -58,7 +62,11 @@ pub fn validate_partition_map() -> Result<(), Vec<String>> {
     let panic_end = panic_start + crate::diag::panic::PANIC_SECTORS;
     if KERNEL_IMAGE_INFO_LBA >= panic_start {
         violations.push(format!(
+<<<<<<< HEAD
             "карта загрузки (LBA {}) попадает в область аварийного дампа ({}..{})",
+=======
+            "дескриптор ядра (LBA {}) попадает в область аварийного дампа ({}..{})",
+>>>>>>> arena/e8a29038-deix
             KERNEL_IMAGE_INFO_LBA, panic_start, panic_end - 1
         ));
     }
@@ -120,12 +128,18 @@ pub struct PartitionLayout {
 }
 
 pub const PARTITION_LAYOUT: [PartitionLayout; 2] = [
+<<<<<<< HEAD
     PartitionLayout { name: "/system",     start_lba: 4096,  sectors: 32768, fs: "erofs", flashable: true },
     PartitionLayout { name: "/userdata",   start_lba: 36864, sectors: 32768, fs: "ext2",  flashable: true },
+=======
+    PartitionLayout { name: "/system",     start_lba: 4096,  sectors: 20480, fs: "erofs", flashable: true },
+    PartitionLayout { name: "/userdata",   start_lba: 24576, sectors: 16384, fs: "ext2",  flashable: true },
+>>>>>>> arena/e8a29038-deix
 ];
 
 /// Сырые служебные области до первого раздела (/system @ LBA 4096):
 ///   LBA 0            — MBR (boot_sector.bin)
+<<<<<<< HEAD
 ///   LBA 1..=2046     — свободны (нули); stage2, ramboot и ядро лежат файлами в /system
 ///   LBA 2047         — карта загрузки (DEIXKIMG v2, src/bootmap.rs, docs/BOOTMAP.md)
 ///   LBA 2048..=2111  — область аварийного дампа (DEIXPNIC, см. diag/panic.rs)
@@ -136,6 +150,17 @@ pub const BOOTLOADER_SECTORS: u32 = 2046;
 /// Сектор карты загрузки; пишут сборка, установщик и `sysfs convert`.
 pub const KERNEL_IMAGE_INFO_LBA: u32 = 2047;
 /// Магическая подпись карты загрузки.
+=======
+///   LBA 1..=2046     — stage2 + ramboot + сырой kernel.bin
+///   LBA 2047         — дескриптор образа ядра (DEIXKIMG: LBA/размер/SHA-256)
+///   LBA 2048..=2111  — область аварийного дампа (DEIXPNIC, см. diag/panic.rs)
+pub const BOOTLOADER_LBA: u32 = 1;
+pub const BOOTLOADER_SECTORS: u32 = 2046;
+
+/// Сектор с дескриптором образа ядра, записывается build.sh.
+pub const KERNEL_IMAGE_INFO_LBA: u32 = 2047;
+/// Магическая подпись дескриптора образа ядра.
+>>>>>>> arena/e8a29038-deix
 pub const KERNEL_IMAGE_INFO_MAGIC: [u8; 8] = *b"DEIXKIMG";
 
 pub fn lookup_layout(name: &str) -> Option<&'static PartitionLayout> {

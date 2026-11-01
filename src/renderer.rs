@@ -24,6 +24,7 @@ fn isqrt(n: i32) -> i32 {
     x
 }
 
+<<<<<<< HEAD
 /// Упакованное альфа-смешивание: красный и синий каналы считаются одним
 /// умножением, зелёный отдельно; деление на 255 с точным округлением.
 #[inline]
@@ -98,6 +99,8 @@ fn box_blur_line(
     }
 }
 
+=======
+>>>>>>> arena/e8a29038-deix
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {
     pub x: i32,
@@ -174,6 +177,10 @@ impl Color {
     pub const TITLEBAR_INACTIVE: Color = Color::rgb(15, 23, 42);
     pub const YELLOW: Color = Color::rgb(245, 158, 11);
     pub const CYAN: Color = Color::rgb(6, 182, 212);
+<<<<<<< HEAD
+=======
+    pub const SHADOW: Color = Color::rgb(5, 5, 10);
+>>>>>>> arena/e8a29038-deix
     pub const ACCENT: Color = Color::rgb(99, 102, 241); // Indigo
 
     pub fn palette() -> [Color; 6] {
@@ -197,7 +204,11 @@ impl Color {
         if alpha == 0 {
             return bg;
         }
+<<<<<<< HEAD
         Color(blend_px(self.0, bg.0, alpha as u32))
+=======
+        bg.lerp(self, alpha)
+>>>>>>> arena/e8a29038-deix
     }
 
     #[inline]
@@ -235,6 +246,7 @@ pub enum IconType {
     ArrowRight,
     /// Установщик: стрелка вниз в диск.
     Install,
+<<<<<<< HEAD
     Plus,
     NewFolder,
     Trash,
@@ -254,13 +266,18 @@ pub enum IconType {
     Pause,
     SkipNext,
     SkipPrev,
+=======
+>>>>>>> arena/e8a29038-deix
 }
 
 pub struct Renderer {
     fb: Framebuffer,
     pub back_buffer: Vec<u32>,
     pub damage: crate::ui::surface::DamageList,
+<<<<<<< HEAD
     blur_scratch: Vec<u32>,
+=======
+>>>>>>> arena/e8a29038-deix
 }
 
 impl Renderer {
@@ -271,7 +288,10 @@ impl Renderer {
             fb,
             back_buffer,
             damage: crate::ui::surface::DamageList::new(),
+<<<<<<< HEAD
             blur_scratch: Vec::new(),
+=======
+>>>>>>> arena/e8a29038-deix
         }
     }
 
@@ -317,7 +337,12 @@ impl Renderer {
             self.back_buffer[idx] = color.0;
             return;
         }
+<<<<<<< HEAD
         self.back_buffer[idx] = blend_px(color.0, self.back_buffer[idx], alpha as u32);
+=======
+        let bg = Color(self.back_buffer[idx]);
+        self.back_buffer[idx] = color.alpha_blend(bg, alpha).0;
+>>>>>>> arena/e8a29038-deix
     }
 
     /// Быстрый `memcpy` из RAM back buffer в MMIO Framebuffer только по списку повреждённых областей DamageList.
@@ -400,12 +425,18 @@ impl Renderer {
             let start = row as usize * row_width + x0 as usize;
             let end = start + (x1 - x0) as usize;
             for px in &mut self.back_buffer[start..end] {
+<<<<<<< HEAD
                 *px = blend_px(color.0, *px, alpha as u32);
+=======
+                let bg = Color(*px);
+                *px = color.alpha_blend(bg, alpha).0;
+>>>>>>> arena/e8a29038-deix
             }
         }
         self.add_damage(Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32));
     }
 
+<<<<<<< HEAD
     /// Смешивание горизонтального отрезка без учёта damage.
     fn blend_span(&mut self, x: i32, y: i32, w: i32, color: Color, alpha: u8) {
         if w <= 0 || alpha == 0 || y < 0 || y as u32 >= self.fb.height {
@@ -449,6 +480,9 @@ impl Renderer {
     /// Акриловое размытие: область уменьшается вдвое усреднением блоков
     /// 2x2, размывается двумя проходами скользящего «ящика» и
     /// растягивается обратно. Стоимость линейна по числу пикселей.
+=======
+    /// Оптимизированный акриловый эффекта размытия фонового изображения (Acrylic Box Blur)
+>>>>>>> arena/e8a29038-deix
     pub fn apply_blur_rect(&mut self, x: i32, y: i32, w: u32, h: u32, radius: usize) {
         let x0 = x.max(0) as usize;
         let y0 = y.max(0) as usize;
@@ -458,6 +492,7 @@ impl Renderer {
             return;
         }
         let stride = self.fb.width as usize;
+<<<<<<< HEAD
         let sw = (x1 - x0 + 1) / 2;
         let sh = (y1 - y0 + 1) / 2;
         let n = sw * sh;
@@ -495,6 +530,38 @@ impl Renderer {
             let dst = row * stride;
             for col in x0..x1 {
                 self.back_buffer[dst + col] = small[by * sw + (col - x0) / 2];
+=======
+        let r = radius.min(3);
+
+        for row in (y0..y1).step_by(2) {
+            for col in (x0..x1).step_by(2) {
+                let mut sum_r = 0u32;
+                let mut sum_g = 0u32;
+                let mut sum_b = 0u32;
+                let mut count = 0u32;
+
+                let nr_start = row.saturating_sub(r);
+                let nr_end = (row + r + 1).min(y1);
+                let nc_start = col.saturating_sub(r);
+                let nc_end = (col + r + 1).min(x1);
+
+                for nr in nr_start..nr_end {
+                    for nc in nc_start..nc_end {
+                        let px = self.back_buffer[nr * stride + nc];
+                        sum_r += (px >> 16) & 0xFF;
+                        sum_g += (px >> 8) & 0xFF;
+                        sum_b += px & 0xFF;
+                        count += 1;
+                    }
+                }
+                if count > 0 {
+                    let avg = ((sum_r / count) << 16) | ((sum_g / count) << 8) | (sum_b / count);
+                    self.back_buffer[row * stride + col] = avg;
+                    if col + 1 < x1 { self.back_buffer[row * stride + col + 1] = avg; }
+                    if row + 1 < y1 { self.back_buffer[(row + 1) * stride + col] = avg; }
+                    if row + 1 < y1 && col + 1 < x1 { self.back_buffer[(row + 1) * stride + col + 1] = avg; }
+                }
+>>>>>>> arena/e8a29038-deix
             }
         }
         self.add_damage(Rect::new(x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32));
@@ -521,6 +588,7 @@ impl Renderer {
     }
 
     pub fn fill_rounded_rect(&mut self, x: i32, y: i32, w: u32, h: u32, radius: i32, color: Color) {
+<<<<<<< HEAD
         self.fill_rounded_rect_alpha(x, y, w, h, radius, color, 255);
     }
 
@@ -552,6 +620,39 @@ impl Renderer {
             }
         }
         self.add_damage(Rect::new(x.max(0), y.max(0), w, h));
+=======
+        let r = radius.min(w as i32 / 2).min(h as i32 / 2).max(0);
+        if r == 0 {
+            self.fill_rect(x, y, w, h, color);
+            return;
+        }
+        self.fill_rect(x, y + r, w, h - (2 * r) as u32, color);
+        for row in 0..r {
+            let dy = r - row;
+            let dx = isqrt((r * r - dy * dy).max(0));
+            let line_w = (w as i32 - 2 * (r - dx)).max(0) as u32;
+            self.draw_hline(x + (r - dx), y + row, line_w, color);
+            self.draw_hline(x + (r - dx), y + h as i32 - 1 - row, line_w, color);
+        }
+    }
+
+    pub fn fill_rounded_rect_alpha(&mut self, x: i32, y: i32, w: u32, h: u32, radius: i32, color: Color, alpha: u8) {
+        let r = radius.min(w as i32 / 2).min(h as i32 / 2).max(0);
+        if r == 0 {
+            self.fill_rect_alpha(x, y, w, h, color, alpha);
+            return;
+        }
+        self.fill_rect_alpha(x, y + r, w, h - (2 * r) as u32, color, alpha);
+        for row in 0..r {
+            let dy = r - row;
+            let dx = isqrt((r * r - dy * dy).max(0));
+            let line_w = (w as i32 - 2 * (r - dx)).max(0) as u32;
+            for px in (x + (r - dx))..(x + (r - dx) + line_w as i32) {
+                self.put_pixel_alpha(px, y + row, color, alpha);
+                self.put_pixel_alpha(px, y + h as i32 - 1 - row, color, alpha);
+            }
+        }
+>>>>>>> arena/e8a29038-deix
     }
 
     pub fn draw_drop_shadow(&mut self, x: i32, y: i32, w: u32, h: u32, radius: u32) {
@@ -567,6 +668,7 @@ impl Renderer {
         }
     }
 
+<<<<<<< HEAD
     /// Мягкая тень: квадратичный спад непрозрачности на `spread` пикселей
     /// вокруг окна, смещённая вниз на `offset_y`. Вся тень должна лежать
     /// внутри области, которую восстанавливает damage (margin окна).
@@ -584,6 +686,8 @@ impl Renderer {
         }
     }
 
+=======
+>>>>>>> arena/e8a29038-deix
     /// Контур прямоугольника со скруглёнными углами: прямые стороны +
     /// дуги по midpoint-алгоритму. Используется для рамок акриловых
     /// панелей и подсветки выбранного пункта меню — совпадает по форме
@@ -702,9 +806,16 @@ impl Renderer {
     }
 
     pub fn fill_circle(&mut self, cx: i32, cy: i32, radius: i32, color: Color) {
+<<<<<<< HEAD
         let r = radius.max(0);
         let d = (r * 2 + 1) as u32;
         self.fill_rounded_rect_alpha(cx - r, cy - r, d, d, r, color, 255);
+=======
+        for y in -radius..=radius {
+            let dx = isqrt((radius * radius - y * y).max(0));
+            self.draw_hline(cx - dx, cy + y, (dx * 2 + 1) as u32, color);
+        }
+>>>>>>> arena/e8a29038-deix
     }
 
     pub fn draw_icon(&mut self, x: i32, y: i32, icon: IconType, color: Color) {
@@ -820,6 +931,7 @@ impl Renderer {
                 self.draw_line(x + 4, y + 3, x + 10, y + 8, color);
                 self.draw_line(x + 10, y + 8, x + 4, y + 13, color);
             }
+<<<<<<< HEAD
             IconType::Plus => {
                 self.draw_hline(x + 3, y + 8, 11, color);
                 self.draw_vline(x + 8, y + 3, 11, color);
@@ -913,6 +1025,8 @@ impl Renderer {
                 self.draw_vline(x + 13, y + 3, 11, color);
                 self.draw_vline(x + 4, y + 3, 11, color);
             }
+=======
+>>>>>>> arena/e8a29038-deix
         }
     }
 
@@ -925,6 +1039,7 @@ impl Renderer {
             self.fill_rect(x, y, 8, 16, bg);
         }
         let glyph = crate::font::read_glyph(ch);
+<<<<<<< HEAD
         let (fw, fh) = (self.fb.width as i32, self.fb.height as i32);
         if x >= 0 && y >= 0 && x + 8 <= fw && y + 16 <= fh {
             let stride = fw as usize;
@@ -942,6 +1057,8 @@ impl Renderer {
             }
             return;
         }
+=======
+>>>>>>> arena/e8a29038-deix
         for (row, &byte) in glyph.iter().enumerate() {
             if byte == 0 {
                 continue;

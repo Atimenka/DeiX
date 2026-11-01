@@ -86,7 +86,11 @@ static STATE: SpinLock<Rtl8139State> = SpinLock::new(Rtl8139State::new());
 // а весь стек работает потом, из `poll_deferred`.
 
 /// Число слотов приёмного кольца.
+<<<<<<< HEAD
 const RX_RING_SLOTS: usize = 64;
+=======
+const RX_RING_SLOTS: usize = 16;
+>>>>>>> arena/e8a29038-deix
 /// Максимальный размер кадра в слоте.
 const RX_RING_FRAME: usize = 1600;
 
@@ -211,7 +215,11 @@ pub fn traffic_counters() -> (u64, u64, u64, u64) {
 /// Карта найдена и инициализирована. GUI использует это для честного
 /// статуса сети: без устройства иконка/строка не изображают подключение.
 pub fn is_present() -> bool {
+<<<<<<< HEAD
     without_interrupts(|| STATE.lock().initialized)
+=======
+    STATE.lock().initialized
+>>>>>>> arena/e8a29038-deix
 }
 
 /// Пытается найти RTL8139 на шине PCI и проинициализировать её. Возвращает
@@ -377,6 +385,7 @@ pub fn on_interrupt() {
 /// Вычитывает из кольцевого RX-буфера все накопившиеся пакеты и передаёт
 /// их обработчику Ethernet-уровня.
 pub fn poll_rx() {
+<<<<<<< HEAD
     let io_base = without_interrupts(|| {
         let st = STATE.lock();
         if st.initialized { Some(st.io_base) } else { None }
@@ -390,6 +399,16 @@ pub fn poll_rx() {
     // отключёнными прерываниями: ISR карты читает тот же `rx_offset`, и
     // без этого оба вычитывали бы один кадр и портили указатель CAPR.
     without_interrupts(|| unsafe { drain_rx_buffer(io_base) });
+=======
+    let io_base = {
+        let st = STATE.lock();
+        if !st.initialized { return; }
+        st.io_base
+    };
+    // Сначала выгребаем кадры из карты в кольцо, потом разбираем их
+    // сетевым стеком уже вне контекста прерывания.
+    unsafe { drain_rx_buffer(io_base); }
+>>>>>>> arena/e8a29038-deix
     poll_deferred();
 }
 

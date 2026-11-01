@@ -76,11 +76,18 @@ pub fn collect_report() -> String {
         ));
     }
     out.push_str(&format!(
+<<<<<<< HEAD
         "  {:<12} LBA {:>6}..{:>6} (reserved, boot map at {}, {} sect)\n",
         "/boot-gap",
         crate::partition_map::BOOTLOADER_LBA,
         crate::partition_map::BOOTLOADER_LBA + crate::partition_map::BOOTLOADER_SECTORS - 1,
         crate::partition_map::KERNEL_IMAGE_INFO_LBA,
+=======
+        "  {:<12} LBA {:>6}..{:>6} (stage2, {} sect)\n",
+        "/bootloader",
+        crate::partition_map::BOOTLOADER_LBA,
+        crate::partition_map::BOOTLOADER_LBA + crate::partition_map::BOOTLOADER_SECTORS - 1,
+>>>>>>> arena/e8a29038-deix
         crate::partition_map::BOOTLOADER_SECTORS,
     ));
 

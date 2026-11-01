@@ -1,6 +1,7 @@
 //! DNS-клиент (RFC 1035): настоящий резолвинг A-записей по UDP/53.
 //!
 //! Запрос уходит на сервер из NetConfig (по умолчанию 10.0.2.3 — DNS,
+<<<<<<< HEAD
 //! который QEMU slirp предоставляет гостю). Если настроенный сервер не
 //! отвечает (случается в WSL/за NAT, где slirp-DNS не может достучаться
 //! до хостового резолвера), запрос честно повторяется на публичные
@@ -10,16 +11,27 @@
 //! по его истечении имя резолвится заново.
 //!
 //! Ограничения (честно): только IPv4 (QTYPE=A), без DNSSEC.
+=======
+//! который QEMU slirp предоставляет гостю). Ответы кешируются с учётом
+//! TTL записи — по его истечении имя резолвится заново.
+//!
+//! Ограничения (честно): только IPv4 (QTYPE=A), только UDP (без TCP
+//! fallback для ответов >512 байт), без DNSSEC.
+>>>>>>> arena/e8a29038-deix
 
 use crate::net::udp;
 use crate::spinlock::SpinLock;
 use crate::sync::without_interrupts;
+<<<<<<< HEAD
 use alloc::format;
+=======
+>>>>>>> arena/e8a29038-deix
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
 const DNS_PORT: u16 = 53;
+<<<<<<< HEAD
 /// UDP-попыток на основной сервер и на каждый резервный.
 const ATTEMPTS_PRIMARY: u32 = 2;
 const ATTEMPTS_FALLBACK: u32 = 1;
@@ -29,20 +41,31 @@ const TCP_TIMEOUT_MS: u64 = 3000;
 /// Резервные публичные серверы: используются, только когда настроенный
 /// (NetConfig::dns) не ответил вовсе — NXDOMAIN с него остаётся окончательным.
 const FALLBACK_SERVERS: [[u8; 4]; 2] = [[1, 1, 1, 1], [8, 8, 8, 8]];
+=======
+const ATTEMPTS: u32 = 2;
+const ATTEMPT_TIMEOUT_MS: u64 = 2000;
+>>>>>>> arena/e8a29038-deix
 /// TTL кеша ограничиваем сверху 10 минутами, снизу — 5 секундами.
 const TTL_MAX_MS: u64 = 600_000;
 const TTL_MIN_MS: u64 = 5_000;
 const CACHE_CAP: usize = 16;
 
+<<<<<<< HEAD
 const MAX_ADDRS: usize = 4;
 
 struct CacheEntry {
     name: String,
     ips: Vec<[u8; 4]>,
+=======
+struct CacheEntry {
+    name: String,
+    ip: [u8; 4],
+>>>>>>> arena/e8a29038-deix
     expires_ms: u64,
 }
 
 static CACHE: SpinLock<Vec<CacheEntry>> = SpinLock::new(Vec::new());
+<<<<<<< HEAD
 static LAST_ERROR: SpinLock<String> = SpinLock::new(String::new());
 static QUERY_SEQ: SpinLock<u16> = SpinLock::new(0);
 
@@ -64,6 +87,20 @@ fn cache_stale(name: &str) -> Option<Vec<[u8; 4]>> {
 }
 
 fn cache_put(name: &str, ips: Vec<[u8; 4]>, ttl_ms: u64) {
+=======
+static QUERY_SEQ: SpinLock<u16> = SpinLock::new(0);
+
+fn cache_get(name: &str) -> Option<[u8; 4]> {
+    let now = crate::timer::uptime_ms();
+    without_interrupts(|| {
+        let mut c = CACHE.lock();
+        c.retain(|e| e.expires_ms > now);
+        c.iter().find(|e| e.name == name).map(|e| e.ip)
+    })
+}
+
+fn cache_put(name: &str, ip: [u8; 4], ttl_ms: u64) {
+>>>>>>> arena/e8a29038-deix
     let now = crate::timer::uptime_ms();
     let ttl = ttl_ms.clamp(TTL_MIN_MS, TTL_MAX_MS);
     without_interrupts(|| {
@@ -74,7 +111,11 @@ fn cache_put(name: &str, ips: Vec<[u8; 4]>, ttl_ms: u64) {
         }
         c.push(CacheEntry {
             name: name.to_string(),
+<<<<<<< HEAD
             ips,
+=======
+            ip,
+>>>>>>> arena/e8a29038-deix
             expires_ms: now + ttl,
         });
     });
@@ -128,6 +169,7 @@ fn skip_name(msg: &[u8], mut pos: usize) -> Option<usize> {
     }
 }
 
+<<<<<<< HEAD
 /// Результат разбора ответа DNS.
 enum Parsed {
     /// Есть A-записи и наименьший TTL в мс.
@@ -142,6 +184,12 @@ enum Parsed {
 /// и наименьший TTL в мс. CNAME-записи пропускаются — сервер кладёт A
 /// каноничного имени в тот же ответ.
 fn parse_response(msg: &[u8], expect_id: u16) -> Option<Parsed> {
+=======
+/// Разбирает ответ: возвращает (ip, ttl_ms) первой A-записи из секции
+/// ответов. CNAME-записи пропускаются — сервер кладёт A каноничного
+/// имени в тот же ответ.
+fn parse_response(msg: &[u8], expect_id: u16) -> Option<([u8; 4], u64)> {
+>>>>>>> arena/e8a29038-deix
     if msg.len() < 12 {
         return None;
     }
@@ -151,6 +199,7 @@ fn parse_response(msg: &[u8], expect_id: u16) -> Option<Parsed> {
         return None; // не наш ответ или это не ответ вовсе
     }
     if flags & 0x000F != 0 {
+<<<<<<< HEAD
         let rcode = flags & 0x000F;
         let why = match rcode {
             3 => String::from("имя не существует (NXDOMAIN)"),
@@ -159,6 +208,9 @@ fn parse_response(msg: &[u8], expect_id: u16) -> Option<Parsed> {
             c => format!("ошибка сервера (RCODE {})", c),
         };
         return Some(Parsed::Reject(why));
+=======
+        return None; // RCODE != 0: NXDOMAIN, SERVFAIL и т.д.
+>>>>>>> arena/e8a29038-deix
     }
     let qdcount = u16::from_be_bytes([msg[4], msg[5]]) as usize;
     let ancount = u16::from_be_bytes([msg[6], msg[7]]) as usize;
@@ -168,8 +220,11 @@ fn parse_response(msg: &[u8], expect_id: u16) -> Option<Parsed> {
         pos = skip_name(msg, pos)? + 4; // QTYPE + QCLASS
     }
 
+<<<<<<< HEAD
     let mut ips: Vec<[u8; 4]> = Vec::new();
     let mut min_ttl_ms = u64::MAX;
+=======
+>>>>>>> arena/e8a29038-deix
     for _ in 0..ancount {
         pos = skip_name(msg, pos)?;
         if pos + 10 > msg.len() {
@@ -185,6 +240,7 @@ fn parse_response(msg: &[u8], expect_id: u16) -> Option<Parsed> {
         }
         if rtype == 1 && rclass == 1 && rdlen == 4 {
             let ip = [msg[pos], msg[pos + 1], msg[pos + 2], msg[pos + 3]];
+<<<<<<< HEAD
             if ips.len() < MAX_ADDRS && !ips.contains(&ip) {
                 ips.push(ip);
             }
@@ -235,11 +291,37 @@ pub fn resolve_all(host: &str) -> Vec<[u8; 4]> {
     let servers = server_list();
     let mut report = String::new();
     for (si, server) in servers.iter().enumerate() {
+=======
+            return Some((ip, ttl as u64 * 1000));
+        }
+        pos += rdlen; // CNAME и прочие типы пропускаем
+    }
+    None
+}
+
+/// Резолвит A-запись `host` через настроенный DNS-сервер.
+/// None — имя не разрешилось (нет сети, таймаут или NXDOMAIN).
+pub fn resolve_a(host: &str) -> Option<[u8; 4]> {
+    let name = host.trim().to_lowercase();
+    if !valid_hostname(&name) {
+        return None;
+    }
+    if let Some(ip) = cache_get(&name) {
+        return Some(ip);
+    }
+    if !crate::rtl8139::is_ready() {
+        return None;
+    }
+
+    let server = crate::net::dns_ip();
+    for _ in 0..ATTEMPTS {
+>>>>>>> arena/e8a29038-deix
         let seq = without_interrupts(|| {
             let mut s = QUERY_SEQ.lock();
             *s = s.wrapping_add(1);
             *s
         });
+<<<<<<< HEAD
         // ID из тиков таймера + счётчика, локальный порт из эфемерального
         // диапазона. Один ID и порт на все попытки одному серверу: поздний
         // ответ на первую отправку принимается так же, как на повторную.
@@ -401,6 +483,43 @@ fn query_tcp(server: [u8; 4], query: &[u8], id: u16) -> Option<Parsed> {
         }
     }
     tcp::close();
+=======
+        // ID из тиков таймера + счётчика + случайный XOR.
+        // Локальный порт — случайный из эфемерального диапазона
+        // через ГСЧ ядра (ранее был предсказуем: 49152 + seq).
+        let mut rnd = [0u8; 2];
+        crate::rng::fill_random(&mut rnd);
+        let sport = 49152 + (((rnd[0] as u16) << 8 | rnd[1] as u16) & 0x3FFF);
+        let id = (crate::timer::uptime_ms() as u16) ^ (seq.rotate_left(7)) ^ (rnd[0] as u16) ^ 0x5A17;
+        let query = build_query(id, &name);
+        if !udp::send_to(server, DNS_PORT, sport, &query) {
+            continue;
+        }
+
+        let deadline = crate::timer::uptime_ms() + ATTEMPT_TIMEOUT_MS;
+        loop {
+            let left = deadline.saturating_sub(crate::timer::uptime_ms());
+            if left == 0 {
+                break;
+            }
+            match udp::recv_from(sport, left) {
+                Some((sip, sp, data)) => {
+                    if sip != server || sp != DNS_PORT {
+                        continue; // чужая датаграмма — ждём дальше
+                    }
+                    if let Some((ip, ttl_ms)) = parse_response(&data, id) {
+                        cache_put(&name, ip, ttl_ms);
+                        return Some(ip);
+                    }
+                    // Ответ сервера с ошибкой (NXDOMAIN и т.п.) —
+                    // повторять бессмысленно.
+                    return None;
+                }
+                None => break, // таймаут попытки
+            }
+        }
+    }
+>>>>>>> arena/e8a29038-deix
     None
 }
 

@@ -12,7 +12,11 @@
 //! Декодера PNG в ядре нет, а сырой RGB не влезает: `kernel.bin`
 //! физически ограничен (буфер загрузчика упирается в память).
 //! Поэтому лого хранится в собственном формате `DXLG`: палитра до 255
+<<<<<<< HEAD
 //! цветов + RLE. 256x256 из 16 цветов (со сглаженными краями) занимает ~7 КиБ вместо 192 КиБ сырого RGB.
+=======
+//! цветов + RLE. 128x128 из 5 цветов занимает ~2.3 КиБ вместо 48 КиБ сырого RGB.
+>>>>>>> arena/e8a29038-deix
 //!
 //! ```text
 //!   0   4   магия "DXLG"
@@ -25,9 +29,14 @@
 //! ```
 
 use crate::renderer::Color;
+<<<<<<< HEAD
 use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Встроенное лого (assets/logo.dxlg, собирается tools/make_logo_aa.py; шаг [2d/8] build.sh).
+=======
+
+/// Встроенное лого (собирается из assets/logo.png шагом [2d/8] build.sh).
+>>>>>>> arena/e8a29038-deix
 static LOGO: &[u8] = include_bytes!("../build/logo.dxlg");
 
 const MAGIC: &[u8; 4] = b"DXLG";
@@ -38,11 +47,14 @@ pub const FG: Color = Color(0x8FB8D8);
 /// Цвет подписи под лого.
 pub const TITLE: Color = Color(0x00D0FF);
 
+<<<<<<< HEAD
 /// Число этапов загрузки, о которых сообщается на экране: старт,
 /// проверка разделов, память, готовность системы.
 const BOOT_STEPS: u32 = 4;
 static BOOT_STEP: AtomicU32 = AtomicU32::new(0);
 
+=======
+>>>>>>> arena/e8a29038-deix
 /// Разобранный заголовок DXLG.
 pub struct Logo<'a> {
     pub w: u32,
@@ -86,28 +98,38 @@ impl Logo<'_> {
     }
 }
 
+<<<<<<< HEAD
 /// Ширина встроенного лого в пикселях (0, если оно повреждено).
 pub fn size() -> u32 {
     parse(LOGO).map_or(0, |l| l.w)
 }
 
+=======
+>>>>>>> arena/e8a29038-deix
 /// Рисует лого по координатам (ox, oy) с заданным целочисленным масштабом.
 /// Индекс 0 считается фоном (прозрачным) и не закрашивается.
 /// Возвращает координату нижней границы (oy + sh).
 pub fn draw_logo_at(r: &mut crate::renderer::Renderer, ox: i32, oy: i32, scale: i32) -> i32 {
+<<<<<<< HEAD
     draw_logo_div(r, ox, oy, scale, 1)
 }
 
 /// То же, но берёт каждый `div`-й пиксель по обеим осям: лого 256x256 при
 /// `div` = 2 занимает 128x128 (экран входа, где места меньше).
 pub fn draw_logo_div(r: &mut crate::renderer::Renderer, ox: i32, oy: i32, scale: i32, div: u32) -> i32 {
+=======
+>>>>>>> arena/e8a29038-deix
     let logo = match parse(LOGO) {
         Some(l) => l,
         None => return oy,
     };
     let scale = scale.max(1);
+<<<<<<< HEAD
     let div = div.max(1);
     let sh = logo.h.div_ceil(div) as i32 * scale;
+=======
+    let sh = logo.h as i32 * scale;
+>>>>>>> arena/e8a29038-deix
     let total = logo.w * logo.h;
 
     let mut pos: u32 = 0;
@@ -123,6 +145,7 @@ pub fn draw_logo_div(r: &mut crate::renderer::Renderer, ox: i32, oy: i32, scale:
 
         let mut rem = count;
         while rem > 0 && pos < total {
+<<<<<<< HEAD
             let px = pos % logo.w;
             let py = pos / logo.w;
             let chunk = core::cmp::min(rem, logo.w - px);
@@ -138,6 +161,20 @@ pub fn draw_logo_div(r: &mut crate::renderer::Renderer, ox: i32, oy: i32, scale:
                         logo.color(idx),
                     );
                 }
+=======
+            let px = (pos % logo.w) as i32;
+            let py = (pos / logo.w) as i32;
+            let chunk = core::cmp::min(rem, logo.w - px as u32);
+            if idx != 0 {
+                let color = logo.color(idx);
+                r.fill_rect(
+                    ox + px * scale,
+                    oy + py * scale,
+                    chunk * scale as u32,
+                    scale as u32,
+                    color,
+                );
+>>>>>>> arena/e8a29038-deix
             }
             rem -= chunk;
             pos += chunk;
@@ -169,6 +206,7 @@ pub fn draw_text_scaled(
             if bits == 0 {
                 continue;
             }
+<<<<<<< HEAD
             let mut col = 0i32;
             while col < 8 {
                 if (bits >> (7 - col)) & 1 == 0 {
@@ -186,12 +224,25 @@ pub fn draw_text_scaled(
                     scale as u32,
                     color,
                 );
+=======
+            for col in 0..8i32 {
+                if (bits >> (7 - col)) & 1 != 0 {
+                    r.fill_rect(
+                        x + col * scale,
+                        y + row as i32 * scale,
+                        scale as u32,
+                        scale as u32,
+                        color,
+                    );
+                }
+>>>>>>> arena/e8a29038-deix
             }
         }
         x += 8 * scale;
     }
 }
 
+<<<<<<< HEAD
 /// Полоса прогресса под строкой состояния: заполнена на долю
 /// пройденных этапов загрузки.
 fn draw_progress(r: &mut crate::renderer::Renderer, bottom: i32, step: u32) {
@@ -207,6 +258,8 @@ fn draw_progress(r: &mut crate::renderer::Renderer, bottom: i32, step: u32) {
     }
 }
 
+=======
+>>>>>>> arena/e8a29038-deix
 /// Вычисляет масштаб и вертикальную позицию загрузочного экрана.
 fn compute_layout(screen_w: u32, screen_h: u32, logo_w: u32, logo_h: u32) -> (i32, i32, i32, i32) {
     let scale = core::cmp::max(1, (screen_h as i32 * 5 / 10) / logo_h as i32).min(4);
@@ -222,10 +275,13 @@ fn compute_layout(screen_w: u32, screen_h: u32, logo_w: u32, logo_h: u32) -> (i3
 /// Если графики нет (не удалось включить framebuffer) — молча выходит,
 /// текстовый вывод продолжает работать как раньше.
 pub fn show(status: &str) {
+<<<<<<< HEAD
     show_screen(status, true);
 }
 
 fn show_screen(status: &str, with_bar: bool) {
+=======
+>>>>>>> arena/e8a29038-deix
     crate::renderer::ensure_framebuffer();
     if !crate::renderer::has_active_framebuffer() {
         return;
@@ -247,10 +303,13 @@ fn show_screen(status: &str, with_bar: bool) {
 
         draw_text_scaled(r, "DeiX", bottom + 24, TITLE, 4);
         draw_text_scaled(r, status, bottom + 88, FG, 2);
+<<<<<<< HEAD
         if with_bar {
             BOOT_STEP.store(1, Ordering::Relaxed);
             draw_progress(r, bottom, 1);
         }
+=======
+>>>>>>> arena/e8a29038-deix
 
         r.present();
     });
@@ -271,9 +330,12 @@ pub fn set_status(status: &str) {
         // Затираем область статуса и пишем новую строку
         r.fill_rect(0, y - 4, r.width(), 44, BG);
         draw_text_scaled(r, status, y, FG, 2);
+<<<<<<< HEAD
         let step = (BOOT_STEP.load(Ordering::Relaxed) + 1).min(BOOT_STEPS);
         BOOT_STEP.store(step, Ordering::Relaxed);
         draw_progress(r, bottom, step);
+=======
+>>>>>>> arena/e8a29038-deix
         r.present();
     });
 }
@@ -300,7 +362,11 @@ pub fn cmd_logo(arg: &str) {
             }
         }
         _ => {
+<<<<<<< HEAD
             show_screen("Press Esc, Enter or Space to return", false);
+=======
+            show("Press Esc, Enter or Space to return");
+>>>>>>> arena/e8a29038-deix
             loop {
                 if let Some(ch) = crate::keyboard::try_read_char() {
                     if ch == 0x1b || ch == b'\n' || ch == b'\r' || ch == b' ' || ch == b'q' || ch == b'Q' {

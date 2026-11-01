@@ -4,6 +4,7 @@
 use crate::net::ipv4;
 use crate::rtl8139;
 use crate::spinlock::SpinLock;
+<<<<<<< HEAD
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -13,6 +14,14 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 const TCP_PROTO: u8 = 6;
 const FIN: u8 = 0x01; const SYN: u8 = 0x02;
 const RST: u8 = 0x04; const PSH: u8 = 0x08; const ACK: u8 = 0x10;
+=======
+use alloc::vec::Vec;
+use alloc::collections::VecDeque;
+
+const TCP_PROTO: u8 = 6;
+const FIN: u8 = 0x01; const SYN: u8 = 0x02;
+const PSH: u8 = 0x08; const ACK: u8 = 0x10;
+>>>>>>> arena/e8a29038-deix
 
 #[repr(C, packed)] #[derive(Clone, Copy)]
 struct TcpHdr { src: u16, dst: u16, seq: u32, ack: u32, off_flags: u16, win: u16, csum: u16, urg: u16 }
@@ -28,6 +37,7 @@ pub struct TcpConn { pub state: u8, sport: u16, dip: [u8;4], dport: u16, seq: u3
 static CONN: SpinLock<Option<TcpConn>> = SpinLock::new(None);
 static NPORT: SpinLock<u16> = SpinLock::new(1024);
 
+<<<<<<< HEAD
 // Диагностика приёма: почему recv вернул пустой результат и сколько
 // байт данных принято с начала текущего соединения.
 static LAST_END: SpinLock<&'static str> = SpinLock::new("данных ещё не ждали");
@@ -92,6 +102,8 @@ pub fn rx_bytes() -> u32 {
     RX_BYTES.load(Ordering::Relaxed)
 }
 
+=======
+>>>>>>> arena/e8a29038-deix
 // Очередь принятых TCP-пакетов (наполняется из обработчика прерываний).
 static RX_QUEUE: SpinLock<VecDeque<Vec<u8>>> = SpinLock::new(VecDeque::new());
 
@@ -162,6 +174,7 @@ fn tcp_payload(pkt: &[u8]) -> Vec<u8> {
     if pkt.len() < tcp+TcpHdr::SZ { return Vec::new(); }
     let h = unsafe { &*(pkt.as_ptr().add(tcp) as *const TcpHdr) };
     let start = tcp + h.doff();
+<<<<<<< HEAD
     // Короткие кадры Ethernet добиваются нулями до 60 байт: данные TCP
     // заканчиваются по полю Total Length заголовка IPv4, а не по концу кадра.
     let ip_total = u16::from_be_bytes([pkt[16], pkt[17]]) as usize;
@@ -289,15 +302,50 @@ fn retransmit_if_due() {
     CUR_RETRIES.fetch_add(1, Ordering::Relaxed);
     LAST_TX_MS.store(now, Ordering::Relaxed);
     RTO_MS.store((rto as u32).saturating_mul(2).min(RTO_MAX_MS), Ordering::Relaxed);
+=======
+    if pkt.len() > start { Vec::from(&pkt[start..]) } else { Vec::new() }
+}
+
+pub fn connect(dip: [u8;4], dport: u16) -> bool {
+    if !rtl8139::is_ready() { return false; }
+    let sp = { let mut p = NPORT.lock(); let v = *p; *p = if *p>=65535 {1024} else {*p+1}; v };
+    let isn: u32 = 0xDEADBEEF;
+    let mut c = TcpConn { state:0, sport:sp, dip, dport, seq:isn, ack:0 };
+    send_seg(&c, SYN, &[]);
+    let t0 = crate::timer::uptime_ms();
+    loop {
+        while let Some(pkt) = rx_dequeue() {
+            if let Some((f, _a, s)) = parse_tcp(&pkt, sp, dport) {
+                if f&SYN!=0 && f&ACK!=0 {
+                    c.ack = s.wrapping_add(1); c.seq = isn.wrapping_add(1);
+                    send_seg(&c, ACK, &[]);
+                    c.state = 1; *CONN.lock() = Some(c); return true;
+                }
+            }
+        }
+        if crate::timer::uptime_ms()-t0 > 5000 { return false; }
+        crate::sched::idle_wait();
+    }
+}
+
+pub fn send(data: &[u8]) -> bool {
+    let cl = CONN.lock();
+    if let Some(ref c) = *cl { if c.state != 1 { return false; } send_seg(c, PSH|ACK, data); drop(cl);
+        let mut l = CONN.lock(); if let Some(ref mut c) = *l {
+            c.seq = c.seq.wrapping_add(data.len() as u32); } true } else { false }
+>>>>>>> arena/e8a29038-deix
 }
 
 pub fn recv(to: u64) -> Vec<u8> {
     let t0 = crate::timer::uptime_ms();
     loop {
+<<<<<<< HEAD
         if PEER_FIN.load(Ordering::Relaxed) {
             *LAST_END.lock() = "сервер закрыл TCP-соединение (FIN)";
             return Vec::new();
         }
+=======
+>>>>>>> arena/e8a29038-deix
         if rx_dequeue_len() == 0 {
             // Страховка: читаем RX-буфер RTL8139 напрямую, не полагаясь на
             // прерывания (QEMU заливает большой ответ быстрее, чем приходят
@@ -306,6 +354,7 @@ pub fn recv(to: u64) -> Vec<u8> {
         }
         while let Some(pkt) = rx_dequeue() {
             let cl = CONN.lock();
+<<<<<<< HEAD
             let c = match *cl {
                 Some(ref c) => c,
                 None => continue,
@@ -379,6 +428,29 @@ pub fn recv(to: u64) -> Vec<u8> {
             *LAST_END.lock() = "таймаут: от сервера нет данных";
             return Vec::new();
         }
+=======
+            if let Some(ref c) = *cl {
+                if let Some((f, _, s)) = parse_tcp(&pkt, c.sport, c.dport) {
+                    if f&(PSH|ACK) != 0 {
+                        let p = tcp_payload(&pkt);
+                        if !p.is_empty() {
+                            // Подтверждаем полученные данные (window update):
+                            // иначе сервер упирается в окно и передача встаёт.
+                            let new_ack = s.wrapping_add(p.len() as u32);
+                            let mut nc = *c;
+                            nc.ack = new_ack;
+                            drop(cl);
+                            *CONN.lock() = Some(nc);
+                            send_seg(&nc, ACK, &[]);
+                            return p;
+                        }
+                    }
+                    if f&FIN != 0 { return Vec::new(); }
+                }
+            }
+        }
+        if crate::timer::uptime_ms()-t0 > to { return Vec::new(); }
+>>>>>>> arena/e8a29038-deix
         crate::sched::idle_wait();
     }
 }

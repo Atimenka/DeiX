@@ -172,6 +172,7 @@ impl UiTheme {
 /// в `desktop::generate_wallpaper` — декоративных пунктов здесь нет.
 /// "Custom" читает /userdata/wallpaper.bmp (BMP 24/32 бит, до 268 КБ —
 /// предел файла ext2-тома); без валидного файла рисуется Aurora.
+<<<<<<< HEAD
 /// Имена не длиннее 8 символов: они подписываются на миниатюре в Personalization.
 pub const WALLPAPER_STYLES: [&str; 18] = [
     "Aurora", "Midnight", "Plasma", "Minimal", "Custom", "Nebula", "Horizon", "Crystal", "Forest",
@@ -188,6 +189,10 @@ pub const SYSTEM_WALLPAPER_FILES: [&str; 13] = [
     "savanna.jpg", "glacier.jpg", "canyon.jpg", "reef.jpg", "galaxy.jpg", "mono.jpg",
     "lavender.jpg",
 ];
+=======
+pub const WALLPAPER_STYLES: [&str; 5] =
+    ["Aurora", "Midnight", "Plasma Flow", "Minimal", "Custom"];
+>>>>>>> arena/e8a29038-deix
 
 static mut CURRENT_THEME: Option<UiTheme> = None;
 
@@ -223,6 +228,7 @@ pub fn set_theme(theme: UiTheme) {
         CURRENT_THEME = Some(theme);
     }
 }
+<<<<<<< HEAD
 
 /// Creates a theme from a preset token (same tokens as desktop.cfg).
 pub fn preset_from_token(token: &str) -> Option<UiTheme> {
@@ -248,3 +254,5 @@ pub fn preset_token(p: ThemePreset) -> &'static str {
         ThemePreset::SunsetGold => "sunset_gold",
     }
 }
+=======
+>>>>>>> arena/e8a29038-deix

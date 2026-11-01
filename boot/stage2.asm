@@ -188,6 +188,7 @@ long_mode_entry:
     jmp rax
 
 section .bss
+<<<<<<< HEAD
 ; Стек — ПЕРВЫМ и 64 КиБ: это стек самого ядра (kernel_main и вся оболочка,
 ; включая рабочий стол), он растёт вниз. Раньше стек (16 КиБ) лежал ПОСЛЕ
 ; таблиц страниц, и его переполнение затирало конец page_table_l2_gpu —
@@ -198,6 +199,8 @@ align 4096
 stack_bottom:
     resb 4096 * 16
 stack_top:
+=======
+>>>>>>> arena/e8a29038-deix
 align 4096
 page_table_l4:
     resb 4096
@@ -207,6 +210,12 @@ page_table_l2:
     resb 4096        ; P2 нулевого гигабайта
 page_table_l2_gpu:
     resb 4096        ; P2 для GPU MMIO (4-й гигабайт)
+<<<<<<< HEAD
+=======
+stack_bottom:
+    resb 4096 * 4
+stack_top:
+>>>>>>> arena/e8a29038-deix
 
 section .rodata
 gdt64:

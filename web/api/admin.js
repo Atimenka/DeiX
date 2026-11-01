@@ -272,6 +272,111 @@ async function updateRemove(res, body) {
   return send(res, 200, { ok: true });
 }
 
+async function devModeList(res) {
+  const [mode, flags, roles, userRoles] = await Promise.all([
+    sb('dev_mode?id=eq.1&select=enabled'),
+    sb('feature_flags?select=name,enabled,description&order=name'),
+    sb('roles?select=name,description,rank&order=rank.desc'),
+    sb('user_roles?select=user_id,role_name,assigned_at,profiles(username)&order=assigned_at.desc'),
+  ]);
+  // Добавляем email из auth.users для каждого пользователя
+  for (const row of userRoles) {
+    const authRes = await auth(`users?id=eq.${row.user_id}&select=email`, { method: 'GET', admin: true });
+    if (authRes.status === 200 && authRes.data && authRes.data[0]) {
+      row.profiles = { ...(row.profiles || {}), email: authRes.data[0].email || null };
+    }
+  }
+  return send(res, 200, {
+    ok: true,
+    dev_mode: mode[0] ? mode[0].enabled : false,
+    flags,
+    roles,
+    user_roles: userRoles,
+  });
+}
+
+async function devModeSet(res, body) {
+  if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'Нужно значение enabled: true или false');
+  await sb('dev_mode?id=eq.1', {
+    method: 'PATCH',
+    headers: { Prefer: 'return=minimal' },
+    body: { enabled: body.enabled, updated_by: 'owner' },
+  });
+  return send(res, 200, { ok: true, enabled: body.enabled });
+}
+
+async function flagsList(res) {
+  const flags = await sb('feature_flags?select=name,enabled,description&order=name');
+  return send(res, 200, { ok: true, flags });
+}
+
+async function flagsSet(res, body) {
+  const name = String(body.name || '').trim();
+  if (!name) throw new HttpError(400, 'Нужно имя флага');
+  if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'Нужно значение enabled: true или false');
+  const rows = await sb(`feature_flags?name=eq.${name}&select=id`);
+  if (!rows[0]) throw new HttpError(404, 'Флаг не найден');
+  await sb(`feature_flags?id=eq.${rows[0].id}`, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=minimal' },
+    body: { enabled: body.enabled, updated_by: 'owner' },
+  });
+  return send(res, 200, { ok: true, name, enabled: body.enabled });
+}
+
+async function rolesList(res) {
+  const [roles, userRoles] = await Promise.all([
+    sb('roles?select=name,description,rank&order=rank.desc'),
+    sb('user_roles?select=user_id,role_name,assigned_at,profiles(username)&order=assigned_at.desc'),
+  ]);
+  for (const row of userRoles) {
+    const authRes = await auth(`users?id=eq.${row.user_id}&select=email`, { method: 'GET', admin: true });
+    if (authRes.status === 200 && authRes.data && authRes.data[0]) {
+      row.profiles = { ...(row.profiles || {}), email: authRes.data[0].email || null };
+    }
+  }
+  return send(res, 200, { ok: true, roles, user_roles: userRoles });
+}
+
+async function rolesAssign(res, owner, body) {
+  const userId = String(body.user_id || '').trim();
+  const roleName = String(body.role_name || '').trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(userId)) {
+    throw new HttpError(400, 'Некорректный идентификатор пользователя');
+  }
+  const validRoles = ['owner', 'admin', 'moderator', 'tester'];
+  if (!validRoles.includes(roleName)) throw new HttpError(400, 'Недопустимая роль');
+  // Проверяем, что пользователь существует
+  const userRows = await sb(`profiles?id=eq.${userId}&select=id`);
+  if (!userRows[0]) throw new HttpError(404, 'Пользователь не найден');
+  await sb('user_roles?on_conflict=user_id', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: { user_id: userId, role_name: roleName, assigned_by: owner.username },
+  });
+  // Обновляем profiles.role для совместимости старого UI
+  await sb(`profiles?id=eq.${userId}`, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=minimal' },
+    body: { role: roleName },
+  });
+  return send(res, 200, { ok: true, user_id: userId, role_name: roleName });
+}
+
+async function rolesRemove(res, owner, body) {
+  const userId = String(body.user_id || '').trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(userId)) {
+    throw new HttpError(400, 'Некорректный идентификатор пользователя');
+  }
+  await sb(`user_roles?user_id=eq.${userId}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
+  await sb(`profiles?id=eq.${userId}`, {
+    method: 'PATCH',
+    headers: { Prefer: 'return=minimal' },
+    body: { role: 'user' },
+  });
+  return send(res, 200, { ok: true });
+}
+
 module.exports = async function handler(req, res) {
   try {
     guardPost(req, res);
@@ -306,6 +411,20 @@ module.exports = async function handler(req, res) {
         return await updatePublish(res, body);
       case 'update_remove':
         return await updateRemove(res, body);
+      case 'dev_mode_list':
+        return await devModeList(res);
+      case 'dev_mode_set':
+        return await devModeSet(res, body);
+      case 'flags_list':
+        return await flagsList(res);
+      case 'flags_set':
+        return await flagsSet(res, body);
+      case 'roles_list':
+        return await rolesList(res);
+      case 'roles_assign':
+        return await rolesAssign(res, owner, body);
+      case 'roles_remove':
+        return await rolesRemove(res, owner, body);
       default:
         throw new HttpError(400, 'Неизвестное действие');
     }

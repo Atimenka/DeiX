@@ -29,6 +29,7 @@ const K: [u32; 64] = [
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ];
 
+<<<<<<< HEAD
 /// Один раунд сжатия без пересылки регистров: вместо сдвига a..h на каждом
 /// раунде имена переменных вращаются между восемью раундами подряд.
 /// Результат побитово тот же, что у «классической» записи со сдвигом.
@@ -46,6 +47,8 @@ macro_rules! round {
     };
 }
 
+=======
+>>>>>>> arena/e8a29038-deix
 #[derive(Clone)]
 pub struct Sha256 {
     state: [u32; 8],
@@ -167,6 +170,7 @@ impl Sha256 {
         let mut g = self.state[6];
         let mut h = self.state[7];
 
+<<<<<<< HEAD
         for chunk in 0..8 {
             let i = chunk * 8;
             round!(a, b, c, d, e, f, g, h, K[i], w[i]);
@@ -177,6 +181,28 @@ impl Sha256 {
             round!(d, e, f, g, h, a, b, c, K[i + 5], w[i + 5]);
             round!(c, d, e, f, g, h, a, b, K[i + 6], w[i + 6]);
             round!(b, c, d, e, f, g, h, a, K[i + 7], w[i + 7]);
+=======
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = h
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+>>>>>>> arena/e8a29038-deix
         }
 
         self.state[0] = self.state[0].wrapping_add(a);

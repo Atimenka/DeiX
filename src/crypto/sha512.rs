@@ -43,6 +43,7 @@ const K: [u64; 80] = [
     0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817,
 ];
 
+<<<<<<< HEAD
 /// Один раунд сжатия без пересылки регистров: вместо сдвига a..h на каждом
 /// раунде имена переменных вращаются между восемью раундами подряд.
 /// Результат побитово тот же, что у «классической» записи со сдвигом.
@@ -61,6 +62,8 @@ macro_rules! round {
 }
 
 #[derive(Clone)]
+=======
+>>>>>>> arena/e8a29038-deix
 pub struct Sha512 {
     state: [u64; 8],
     buffer: [u8; 128],
@@ -111,6 +114,7 @@ impl Sha512 {
     pub fn finalize(mut self) -> [u8; DIGEST_LEN] {
         let bit_len = self.total_len * 8;
 
+<<<<<<< HEAD
         let mut at = self.buffer_len;
         self.buffer[at] = 0x80;
         at += 1;
@@ -126,6 +130,15 @@ impl Sha512 {
         self.buffer[112..].copy_from_slice(&bit_len.to_be_bytes());
         let block = self.buffer;
         self.process_block(&block);
+=======
+        self.update_no_len_track(&[0x80]);
+        while self.buffer_len != 112 {
+            self.update_no_len_track(&[0x00]);
+        }
+        // 128-битная длина в битах, big-endian (SHA-512 использует
+        // 128-битное поле длины, а не 64-битное, как SHA-256).
+        self.update_no_len_track(&bit_len.to_be_bytes());
+>>>>>>> arena/e8a29038-deix
 
         let mut out = [0u8; DIGEST_LEN];
         for (i, word) in self.state.iter().enumerate() {
@@ -134,6 +147,7 @@ impl Sha512 {
         out
     }
 
+<<<<<<< HEAD
     /// Затирает внутреннее состояние через write_volatile: в нём лежит
     /// материал, производный от ключа (HMAC-состояния PBKDF2).
     pub fn wipe(&mut self) {
@@ -142,10 +156,38 @@ impl Sha512 {
         }
         for byte in self.buffer.iter_mut() {
             unsafe { core::ptr::write_volatile(byte, 0) };
+=======
+    fn update_no_len_track(&mut self, mut data: &[u8]) {
+        if self.buffer_len > 0 {
+            let need = 128 - self.buffer_len;
+            let take = need.min(data.len());
+            self.buffer[self.buffer_len..self.buffer_len + take].copy_from_slice(&data[..take]);
+            self.buffer_len += take;
+            data = &data[take..];
+
+            if self.buffer_len == 128 {
+                let block = self.buffer;
+                self.process_block(&block);
+                self.buffer_len = 0;
+            }
+        }
+
+        while data.len() >= 128 {
+            let mut block = [0u8; 128];
+            block.copy_from_slice(&data[..128]);
+            self.process_block(&block);
+            data = &data[128..];
+        }
+
+        if !data.is_empty() {
+            self.buffer[..data.len()].copy_from_slice(data);
+            self.buffer_len = data.len();
+>>>>>>> arena/e8a29038-deix
         }
     }
 
     fn process_block(&mut self, block: &[u8; 128]) {
+<<<<<<< HEAD
         let mut w = [0u64; 16];
         for (i, word) in w.iter_mut().enumerate() {
             let mut bytes = [0u8; 8];
@@ -214,6 +256,63 @@ fn compress(state: &mut [u64; 8], block: &[u64; 16]) {
     state[5] = state[5].wrapping_add(f);
     state[6] = state[6].wrapping_add(g);
     state[7] = state[7].wrapping_add(h);
+=======
+        let mut w = [0u64; 80];
+        for i in 0..16 {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&block[i * 8..i * 8 + 8]);
+            w[i] = u64::from_be_bytes(bytes);
+        }
+        for i in 16..80 {
+            let s0 = w[i - 15].rotate_right(1) ^ w[i - 15].rotate_right(8) ^ (w[i - 15] >> 7);
+            let s1 = w[i - 2].rotate_right(19) ^ w[i - 2].rotate_right(61) ^ (w[i - 2] >> 6);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+
+        let mut a = self.state[0];
+        let mut b = self.state[1];
+        let mut c = self.state[2];
+        let mut d = self.state[3];
+        let mut e = self.state[4];
+        let mut f = self.state[5];
+        let mut g = self.state[6];
+        let mut h = self.state[7];
+
+        for i in 0..80 {
+            let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = h
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+
+        self.state[0] = self.state[0].wrapping_add(a);
+        self.state[1] = self.state[1].wrapping_add(b);
+        self.state[2] = self.state[2].wrapping_add(c);
+        self.state[3] = self.state[3].wrapping_add(d);
+        self.state[4] = self.state[4].wrapping_add(e);
+        self.state[5] = self.state[5].wrapping_add(f);
+        self.state[6] = self.state[6].wrapping_add(g);
+        self.state[7] = self.state[7].wrapping_add(h);
+    }
+>>>>>>> arena/e8a29038-deix
 }
 
 pub fn sha512(data: &[u8]) -> [u8; DIGEST_LEN] {
@@ -256,6 +355,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< HEAD
     fn test_digest_of_words_matches_update() {
         let mut base = Sha512::new();
         base.update(&[0x36u8; 128]);
@@ -274,6 +374,8 @@ mod tests {
     }
 
     #[test]
+=======
+>>>>>>> arena/e8a29038-deix
     fn test_sha384_abc() {
         // Официальный вектор NIST: SHA-384("abc").
         let d = sha384(b"abc");

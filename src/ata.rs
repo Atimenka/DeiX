@@ -21,14 +21,19 @@
 //! Live-диск.
 
 use crate::port::{inb, insw, outb, outsw};
+<<<<<<< HEAD
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+=======
+use core::sync::atomic::{AtomicU64, Ordering};
+>>>>>>> arena/e8a29038-deix
 
 /// Накопленный дисковой I/O в секторах. Считается только успешные
 /// операции: счётчик увеличивается после завершения передачи данных.
 static SECTORS_READ: AtomicU64 = AtomicU64::new(0);
 static SECTORS_WRITTEN: AtomicU64 = AtomicU64::new(0);
 
+<<<<<<< HEAD
 /// Верхняя граница блока READ MULTIPLE: степень двойки, поддерживаемая
 /// всеми контроллерами, что умеют команду (ATA допускает до 128).
 const MAX_MULTIPLE: u32 = 16;
@@ -37,6 +42,8 @@ const MAX_MULTIPLE: u32 = 16;
 /// команда не включена, читаем по одному сектору (READ SECTORS).
 static MULTIPLE: AtomicU8 = AtomicU8::new(0);
 
+=======
+>>>>>>> arena/e8a29038-deix
 /// Накопленный дисковой I/O: `(прочитано секторов, записано секторов)`.
 pub fn io_counters() -> (u64, u64) {
     (
@@ -61,8 +68,11 @@ const STATUS_DRQ: u8 = 0x08;
 const STATUS_BSY: u8 = 0x80;
 
 const CMD_READ_SECTORS: u8 = 0x20;
+<<<<<<< HEAD
 const CMD_READ_MULTIPLE: u8 = 0xC4;
 const CMD_SET_MULTIPLE: u8 = 0xC6;
+=======
+>>>>>>> arena/e8a29038-deix
 const CMD_WRITE_SECTORS: u8 = 0x30;
 const CMD_CACHE_FLUSH: u8 = 0xE7;
 const CMD_IDENTIFY: u8 = 0xEC;
@@ -91,6 +101,7 @@ impl Drive {
     }
 }
 
+<<<<<<< HEAD
 /// Сколько раз опросить статус, прежде чем уступать процессор.
 const SPIN_POLLS: u32 = 32;
 /// Предел опросов, когда уступать процессор нельзя (без прерываний).
@@ -157,10 +168,15 @@ impl Waiter {
 fn wait_bsy_clear() -> bool {
     let mut waiter = Waiter::new();
     loop {
+=======
+fn wait_bsy_clear() -> bool {
+    for _ in 0..1_000_000u32 {
+>>>>>>> arena/e8a29038-deix
         let status = unsafe { inb(STATUS_PORT) };
         if status & STATUS_BSY == 0 {
             return true;
         }
+<<<<<<< HEAD
         if !waiter.pause() {
             return false;
         }
@@ -170,6 +186,14 @@ fn wait_bsy_clear() -> bool {
 fn wait_drq_or_err() -> Result<(), ()> {
     let mut waiter = Waiter::new();
     loop {
+=======
+    }
+    false
+}
+
+fn wait_drq_or_err() -> Result<(), ()> {
+    for _ in 0..1_000_000u32 {
+>>>>>>> arena/e8a29038-deix
         let status = unsafe { inb(STATUS_PORT) };
         if status & STATUS_ERR != 0 {
             return Err(());
@@ -177,6 +201,7 @@ fn wait_drq_or_err() -> Result<(), ()> {
         if status & STATUS_DRQ != 0 {
             return Ok(());
         }
+<<<<<<< HEAD
         if !waiter.pause() {
             return Err(());
         }
@@ -236,6 +261,10 @@ impl Drop for FlushBatch {
             flush_drive(Drive::Slave);
         }
     }
+=======
+    }
+    Err(())
+>>>>>>> arena/e8a29038-deix
 }
 
 /// Читает `count` секторов начиная с `lba` (LBA28, максимум 256 секторов
@@ -266,9 +295,12 @@ pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -
         return Err(());
     }
 
+<<<<<<< HEAD
     let multiple = if drive == Drive::Master { MULTIPLE.load(Ordering::Relaxed) as usize } else { 0 };
     let (cmd, per_drq) = if multiple > 1 { (CMD_READ_MULTIPLE, multiple) } else { (CMD_READ_SECTORS, 1) };
 
+=======
+>>>>>>> arena/e8a29038-deix
     unsafe {
         outb(CONTROL_PORT, 0x00); // включаем прерывания контроллера (nIEN=0), нам они не нужны, но не мешают
         outb(DRIVE_HEAD_PORT, drive.select_byte(lba));
@@ -277,6 +309,7 @@ pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -
         outb(LBA_LOW_PORT, (lba & 0xFF) as u8);
         outb(LBA_MID_PORT, ((lba >> 8) & 0xFF) as u8);
         outb(LBA_HIGH_PORT, ((lba >> 16) & 0xFF) as u8);
+<<<<<<< HEAD
         outb(COMMAND_PORT, cmd);
     }
 
@@ -296,6 +329,24 @@ pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -
             insw(DATA_PORT, &mut buffer[offset..offset + n * SECTOR_SIZE]);
         }
         done += n;
+=======
+        outb(COMMAND_PORT, CMD_READ_SECTORS);
+    }
+
+    let sectors = if count == 0 { 256 } else { count as usize };
+    for i in 0..sectors {
+        if wait_drq_or_err().is_err() {
+            crate::diag::error(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Disk, 2),
+                &alloc::format!("ATA: ошибка чтения LBA {} (сектор {} из {})", lba, i + 1, sectors),
+            );
+            return Err(());
+        }
+        let offset = i * SECTOR_SIZE;
+        unsafe {
+            insw(DATA_PORT, &mut buffer[offset..offset + SECTOR_SIZE]);
+        }
+>>>>>>> arena/e8a29038-deix
     }
 
     SECTORS_READ.fetch_add(sectors as u64, Ordering::Relaxed);
@@ -351,16 +402,24 @@ pub fn write_sectors_to(drive: Drive, lba: u32, count: u8, data: &[u8]) -> Resul
         }
     }
 
+<<<<<<< HEAD
     if FLUSH_DEPTH.load(Ordering::SeqCst) > 0 {
         FLUSH_DIRTY.fetch_or(drive_bit(drive), Ordering::SeqCst);
     } else {
         flush_drive(drive);
     }
+=======
+    unsafe {
+        outb(COMMAND_PORT, CMD_CACHE_FLUSH);
+    }
+    wait_bsy_clear();
+>>>>>>> arena/e8a29038-deix
 
     SECTORS_WRITTEN.fetch_add(sectors as u64, Ordering::Relaxed);
     Ok(())
 }
 
+<<<<<<< HEAD
 /// Включает на Master чтение блоками (SET MULTIPLE MODE + READ MULTIPLE).
 ///
 /// READ SECTORS отдаёт сектор за сектором: эмулятор (и часть реальных
@@ -397,6 +456,8 @@ pub fn enable_multiple() -> u8 {
     block as u8
 }
 
+=======
+>>>>>>> arena/e8a29038-deix
 /// Простая проверка "диск отвечает вообще хоть как-то" — читаем сектор 0
 /// (наш собственный boot-сектор) и убеждаемся, что операция не упала.
 pub fn is_present() -> bool {

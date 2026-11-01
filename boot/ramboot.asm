@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ; ramboot.asm — загрузчик ядра из /system (реальный режим, BIOS int 13h).
 ; Ядро в long mode не может вызывать BIOS, поэтому его читает этот код: по
 ; карте загрузки (сектор LBA 2047, MBR уже положил её в 0x7000) он читает
@@ -16,10 +17,41 @@
 ;
 ; Карта загрузки (DEIXKIMG v2, docs/BOOTMAP.md): размер ядра u32 @12,
 ; таблица участков ядра @192 (LBA u32, секторов u32; секторов = 0 — конец).
+=======
+; ramboot.asm — RAM-ДИСК: дочитывает ВЕСЬ дисковый образ в высокую память.
+; Зачем: ядро в long mode не может вызывать BIOS int13 и читает разделы через
+; ATA PIO (порты 0x1F0) — это работает для внутреннего SATA, но НЕ для USB /
+; Ventoy (виртуальный диск). Поэтому до перехода в long mode мы читаем весь
+; образ (20 МиБ) через int13 и кладём его в RAM по адресу RAMDISK_DST, а ядро
+; обращается к разделам как к памяти (см. src/ramdisk.rs).
+;
+; РАЗМЕЩЕНИЕ: код в НИЗКОЙ памяти 0x9000 (org 0x7E00, DS=0). Это позволяет
+; использовать ПЛОСКИЕ 32-битные сегменты в protected mode (linear = IP),
+; т.к. ramboot < 1 МиБ и адреса влезают в imm16.
+;
+; Поток загрузки (MBR):
+;   MBR: stage2 -> 0x10000, ramboot -> 0x9000
+;   MBR: jmp 0x500:0 (real mode)
+;   ramboot: читает RAMDISK_SECTORS секторов с LBA 0 порциями по 64 сектора
+;            в буфер 0x11000, переключается в 32-битный PM, rep movsd в
+;            RAMDISK_DST (0x2000000), возвращается в RM, повторяет;
+;            затем в PM копирует kernel.bin (KERNEL_SECTORS сект) из
+;            RAMDISK_DST + KERNEL_LBA*512 в память ядра;
+;            jmp STAGE2_ADDR (0x10000) — stage2 (32-бит PM, плоский).
+;
+; Константы (nasm -D, см. build.sh):
+;   RAMDISK_SECTORS — сколько секторов образа читать в RAM (весь .img);
+;   KERNEL_SECTORS  — сколько секторов kernel.bin копировать;
+;   KERNEL_LBA      — стартовый сектор kernel.bin внутри образа
+;                     (= 1 + секторы stage2 + 1 сектор ramboot);
+;   RAMDISK_DST     — куда копировать RAM-диск (0x2000000 = 32 МиБ);
+;   STAGE2_ADDR     — куда прыгнуть (0x10000).
+>>>>>>> arena/e8a29038-deix
 
 bits 16
 org 0x7E00
 
+<<<<<<< HEAD
 %ifndef STAGE2_ADDR
 STAGE2_ADDR equ 0x10000
 %endif
@@ -36,6 +68,34 @@ KERNEL_EXT_COUNT equ 40
 CHUNK_SECTORS equ 120
 BUF_SEG       equ 0x2000
 BUF_ADDR      equ 0x20000
+=======
+%ifndef RAMDISK_SECTORS
+RAMDISK_SECTORS equ 40960
+%endif
+%ifndef KERNEL_SECTORS
+KERNEL_SECTORS equ 2048
+%endif
+%ifndef RAMDISK_DST
+RAMDISK_DST equ 0x2000000
+%endif
+%ifndef STAGE2_ADDR
+STAGE2_ADDR equ 0x10000
+%endif
+%ifndef KERNEL_LBA
+KERNEL_LBA equ 3
+%endif
+%ifndef KERNEL_SRC
+KERNEL_SRC equ 0x800000   ; см. пояснение в boot/stage2.asm
+%endif
+
+; 120 секторов за вызов int13 (вместо прежних 64): для 20-МиБ образа это
+; 342 чтения вместо 640 — каждое чтение сопровождается переходом
+; RM→PM→RM, так что загрузка заметно быстрее. Буфер 0x11000..0x20000
+; (120*512 = 0xF000) не пересекает границу сегмента и остаётся ниже
+; стека 0x9FC00 и EBDA; 120 < 127 — лимит на передачу у части BIOS.
+CHUNK_SECTORS equ 120
+BUF_SEG       equ 0x1100          ; буфер чтения 0x11000
+>>>>>>> arena/e8a29038-deix
 
 start:
     cli
@@ -63,6 +123,7 @@ start:
     or al, 2
     out 0x92, al
 
+<<<<<<< HEAD
     mov dword [ram_dst_phys], KERNEL_DST
     mov eax, [BOOTMAP + 12]         ; размер ядра в байтах
     add eax, 511
@@ -94,6 +155,12 @@ start:
     mov [cur_lba_hi], ax
     add word [ext_ptr], 8
     dec word [ext_cnt]
+=======
+    mov dword [ram_dst_phys], RAMDISK_DST
+    mov word [sectors_left], RAMDISK_SECTORS
+    mov word [cur_lba_lo], 0
+    mov word [cur_lba_hi], 0
+>>>>>>> arena/e8a29038-deix
 
 .load_loop:
     cmp word [sectors_left], 0
@@ -117,8 +184,16 @@ start:
     mov si, dap
     int 0x13
     jnc .read_ok
+<<<<<<< HEAD
     ; Ошибка чтения: другой диск не пробуем (можно прочитать чужой носитель
     ; как ядро DeiX) — печатаем причину и останавливаемся.
+=======
+    ; ОШИБКА ЧТЕНИЯ. Раньше здесь был retry с диском 0x81 — это опасно:
+    ; при сбое мы читали ЧУЖОЙ носитель (у пользователя там Windows) и
+    ; складывали его содержимое в RAM как образ DeiX. Ядро потом
+    ; сообщало, что все разделы "не читается". Теперь честно
+    ; останавливаемся и печатаем букву 'R' в COM1 и на экран.
+>>>>>>> arena/e8a29038-deix
     jmp disk_error
 .read_ok:
     ; int13 (BIOS) может оставить DS/ES в другом состоянии — сбрасываем.
@@ -149,8 +224,13 @@ start:
     mov ss, ax
     mov esp, 0x90000
     cld
+<<<<<<< HEAD
     mov esi, BUF_ADDR         ; буфер (absolute)
     mov edi, [ram_dst_phys]   ; ядро (absolute)
+=======
+    mov esi, 0x11000          ; буфер (absolute)
+    mov edi, [ram_dst_phys]   ; RAM-диск (absolute)
+>>>>>>> arena/e8a29038-deix
     mov ecx, [chunk_bytes]
     shr ecx, 2
     rep movsd
@@ -191,17 +271,23 @@ bits 16
 
     jmp .load_loop
 .load_done:
+<<<<<<< HEAD
     cmp word [total_left], 0
     je .kernel_loaded
     cmp word [ext_cnt], 0
     jne .next_ext
     jmp map_fail
 .kernel_loaded:
+=======
+
+    ; ---- копируем kernel.bin из RAM-диска (LBA KERNEL_LBA) в 0x11000 ----
+>>>>>>> arena/e8a29038-deix
     cli
     lgdt [gdt_descriptor]
     mov eax, cr0
     or eax, 1
     mov cr0, eax
+<<<<<<< HEAD
     jmp CODE_SEG:pm_go
 
 bits 32
@@ -212,6 +298,23 @@ pm_go:
     jmp STAGE2_ADDR
 
 bits 16
+=======
+    jmp CODE_SEG:pm_copy_kernel
+
+bits 32
+pm_copy_kernel:
+    mov ax, DATA_SEG
+    mov ds, ax
+    mov es, ax
+    mov esi, RAMDISK_DST + (KERNEL_LBA * 512)
+    mov edi, 0x100000         ; KERNEL_DST (1 МиБ)
+    mov ecx, KERNEL_SECTORS * 512 / 4
+    rep movsd
+
+    ; ---- jmp stage2 (0x10000, 32-бит PM, плоский CS) ----
+    jmp STAGE2_ADDR
+
+>>>>>>> arena/e8a29038-deix
 ; ---------------- GDT (плоские сегменты, base 0) ----------------
 align 8
 gdt_start:
@@ -256,11 +359,16 @@ DATA16_SEG equ gdt_data16 - gdt_start  ; 0x20 data16
 
 ; ---------------- данные (DS=0, адреса 0x9000+off) ----------------
 boot_drive:    db 0
+<<<<<<< HEAD
+=======
+hexdig:        db "0123456789ABCDEF"
+>>>>>>> arena/e8a29038-deix
 sectors_left:  dw 0
 cur_lba_lo:    dw 0
 cur_lba_hi:    dw 0
 ram_dst_phys:  dd 0
 chunk_bytes:   dd 0
+<<<<<<< HEAD
 total_left:    dw 0
 ext_ptr:       dw 0
 ext_cnt:       dw 0
@@ -270,14 +378,30 @@ map_fail:
     jmp disk_error.err_loop
 disk_error:
     ; Причина — на экран (BIOS teletype) и в COM1 (его настроил MBR).
+=======
+
+disk_error:
+    ; Раньше здесь был молчаливый вечный цикл: на реальном железе это
+    ; выглядело как зависание без единого признака причины.
+    ; Печатаем "RAMBOOT: read error" через BIOS teletype (int 10h) и
+    ; дублируем в COM1 — так видно, что упало именно чтение образа.
+>>>>>>> arena/e8a29038-deix
     mov si, msg_read_err
 .err_loop:
     lodsb
     test al, al
     jz .err_hang
+<<<<<<< HEAD
     mov ah, 0x0E
     mov bx, 0x0007
     int 0x10
+=======
+    ; экран
+    mov ah, 0x0E
+    mov bx, 0x0007
+    int 0x10
+    ; COM1 (порт уже настроен MBR)
+>>>>>>> arena/e8a29038-deix
     mov dx, 0x3F8
     out dx, al
     jmp .err_loop
@@ -285,7 +409,10 @@ disk_error:
     jmp $
 
 msg_read_err: db 13, 10, "RAMBOOT: disk read error", 13, 10, 0
+<<<<<<< HEAD
 msg_map_err:  db 13, 10, "RAMBOOT: bad boot map", 13, 10, 0
+=======
+>>>>>>> arena/e8a29038-deix
 
 ; ---------------- Disk Address Packet ----------------
 align 4
@@ -301,4 +428,9 @@ dap_lba_lo:
 dap_lba_hi:
     dw 0, 0
 
+<<<<<<< HEAD
 align 512, db 0
+=======
+times 510-($-$$) db 0
+dw 0xAA55
+>>>>>>> arena/e8a29038-deix

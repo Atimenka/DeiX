@@ -45,6 +45,7 @@ pub fn accent_rect(i: usize) -> Rect {
     Rect::new(12 + i as i32 * 34, 180, 26, 26)
 }
 
+<<<<<<< HEAD
 /// Верх области «EFFECTS»: сразу под последним рядом свотчей обоев.
 fn effects_y() -> i32 {
     232 + (WALLPAPER_STYLES.len().div_ceil(6)) as i32 * 46 + 4
@@ -56,6 +57,14 @@ pub fn wallpaper_rect(i: usize) -> Rect {
         12 + (i % 6) as i32 * 76,
         232 + (i / 6) as i32 * 46,
         72,
+=======
+/// Свотч-превью стиля обоев `i`: 3 в ряд, 2 ряда (5 стилей).
+pub fn wallpaper_rect(i: usize) -> Rect {
+    Rect::new(
+        12 + (i % 3) as i32 * 152,
+        232 + (i / 3) as i32 * 46,
+        144,
+>>>>>>> arena/e8a29038-deix
         40,
     )
 }
@@ -69,7 +78,11 @@ pub const PROFILE_CHOICES: [(&str, PerfProfile); 3] = [
 
 /// Прямоугольник кнопки профиля производительности `i`.
 pub fn profile_rect(i: usize) -> Rect {
+<<<<<<< HEAD
     Rect::new(12 + i as i32 * 152, effects_y() + 18, 144, 26)
+=======
+    Rect::new(12 + i as i32 * 152, 346, 144, 26)
+>>>>>>> arena/e8a29038-deix
 }
 
 /// Тема по пресету — для построения карточек-превью.
@@ -138,7 +151,11 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
 
     // Профиль производительности: каждый пункт реально меняет путь
     // отрисовки (blur/тени/прозрачность — см. ui::effects).
+<<<<<<< HEAD
     r.draw_text(w.x + 12, content_y + effects_y(), "EFFECTS", theme.text_secondary, None);
+=======
+    r.draw_text(w.x + 12, content_y + 328, "EFFECTS", theme.text_secondary, None);
+>>>>>>> arena/e8a29038-deix
     let current_profile = crate::ui::effects::current();
     for (i, (name, profile)) in PROFILE_CHOICES.iter().enumerate() {
         let rect = profile_rect(i);
@@ -154,11 +171,19 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
         PerfProfile::Balanced => "Blur disabled; shadows and translucency kept.",
         PerfProfile::Performance => "Blur and shadows off, surfaces opaque.",
     };
+<<<<<<< HEAD
     r.draw_text(w.x + 12, content_y + effects_y() + 52, hint, theme.text_secondary, None);
 
     r.draw_text(
         w.x + 12,
         content_y + effects_y() + 70,
+=======
+    r.draw_text(w.x + 12, content_y + 380, hint, theme.text_secondary, None);
+
+    r.draw_text(
+        w.x + 12,
+        content_y + 398,
+>>>>>>> arena/e8a29038-deix
         "Custom wallpaper: /userdata/wallpaper.bmp (24/32-bit, <= 268 KB)",
         theme.text_secondary,
         None,
@@ -171,10 +196,17 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
     } else {
         "Sound: PC speaker (no volume control)"
     };
+<<<<<<< HEAD
     r.draw_text(w.x + 12, content_y + effects_y() + 88, audio, theme.text_secondary, None);
     r.draw_text(
         w.x + 12,
         content_y + effects_y() + 106,
+=======
+    r.draw_text(w.x + 12, content_y + 416, audio, theme.text_secondary, None);
+    r.draw_text(
+        w.x + 12,
+        content_y + 434,
+>>>>>>> arena/e8a29038-deix
         "Display resolution: Start menu > Display Settings",
         theme.text_secondary,
         None,
@@ -182,7 +214,11 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
 }
 
 /// Миниатюра стиля обоев: та же палитра и мотив, что у настоящего
+<<<<<<< HEAD
 /// генератора (desktop::generate_wallpaper), в масштабе кнопки 72x40.
+=======
+/// генератора (desktop::generate_wallpaper), в масштабе кнопки.
+>>>>>>> arena/e8a29038-deix
 fn draw_wallpaper_swatch(
     r: &mut Renderer,
     theme: &UiTheme,
@@ -197,6 +233,7 @@ fn draw_wallpaper_swatch(
         // Midnight: тёмное небо, луна, звёзды.
         1 => {
             r.fill_rounded_rect(x, y, w, h, 8, theme.bg_top.lerp(Color::BLACK, 120));
+<<<<<<< HEAD
             r.fill_circle(x + wi - 16, y + 11, 5, Color::rgb(226, 232, 240));
             for (sx, sy) in [(10, 8), (28, 18), (46, 7), (60, 24)] {
                 r.put_pixel(x + sx, y + sy, theme.text_primary);
@@ -207,6 +244,18 @@ fn draw_wallpaper_swatch(
             r.fill_rounded_rect(x, y, w, h, 8, theme.bg_bottom);
             r.fill_circle(x + 22, y + 12, 9, theme.bg_top.lerp(theme.accent, 90));
             r.fill_circle(x + wi - 22, y + hi - 12, 10, theme.bg_top.lerp(theme.accent_hover, 70));
+=======
+            r.fill_circle(x + wi - 22, y + 11, 6, Color::rgb(226, 232, 240));
+            for (sx, sy) in [(14, 8), (40, 16), (70, 7), (96, 20)] {
+                r.put_pixel(x + sx, y + sy, theme.text_primary);
+            }
+        }
+        // Plasma Flow: встречный градиент и круги.
+        2 => {
+            r.fill_rounded_rect(x, y, w, h, 8, theme.bg_bottom);
+            r.fill_circle(x + 30, y + 12, 10, theme.bg_top.lerp(theme.accent, 90));
+            r.fill_circle(x + wi - 34, y + hi - 14, 12, theme.bg_top.lerp(theme.accent_hover, 70));
+>>>>>>> arena/e8a29038-deix
         }
         // Minimal: светлая поверхность с акцентной полосой.
         3 => {
@@ -216,6 +265,7 @@ fn draw_wallpaper_swatch(
         // Custom: пользовательский BMP.
         4 => {
             r.fill_rounded_rect(x, y, w, h, 8, theme.surface_alt);
+<<<<<<< HEAD
             r.draw_icon(x + wi / 2 - 8, y + hi / 2 - 8, IconType::Files, theme.accent);
         }
         // Nebula: тёмный космос с фиолетово-голубым кольцом газа.
@@ -373,16 +423,27 @@ fn draw_wallpaper_swatch(
                 r.draw_hline(x + 5, y + ry, w - 10, row);
             }
             r.fill_rect(x + wi - 20, y + 10, 8, 6, Color::rgb(214, 190, 160));
+=======
+            r.draw_icon(x + wi - 24, y + 5, IconType::Files, theme.accent);
+>>>>>>> arena/e8a29038-deix
         }
         // Aurora: графит и две ленты сияния.
         _ => {
             r.fill_rounded_rect(x, y, w, h, 8, theme.bg_top);
             let violet = Color::rgb(138, 123, 240);
+<<<<<<< HEAD
             r.draw_line(x + 12, y + hi - 4, x + 34, y + 4, theme.bg_top.lerp(theme.accent, 120));
             r.draw_line(x + 13, y + hi - 4, x + 35, y + 4, theme.bg_top.lerp(theme.accent, 90));
             r.draw_line(x + 44, y + 3, x + 64, y + hi - 5, theme.bg_top.lerp(violet, 110));
             r.draw_line(x + 45, y + 3, x + 65, y + hi - 5, theme.bg_top.lerp(violet, 80));
             for (sx, sy) in [(38, 8), (66, 12), (8, 6)] {
+=======
+            r.draw_line(x + 16, y + hi - 4, x + 44, y + 4, theme.bg_top.lerp(theme.accent, 120));
+            r.draw_line(x + 17, y + hi - 4, x + 45, y + 4, theme.bg_top.lerp(theme.accent, 90));
+            r.draw_line(x + 78, y + 3, x + 108, y + hi - 5, theme.bg_top.lerp(violet, 110));
+            r.draw_line(x + 79, y + 3, x + 109, y + hi - 5, theme.bg_top.lerp(violet, 80));
+            for (sx, sy) in [(60, 8), (124, 12), (10, 6)] {
+>>>>>>> arena/e8a29038-deix
                 r.put_pixel(x + sx, y + sy, theme.text_primary);
             }
         }
@@ -409,8 +470,12 @@ pub fn draw_display_settings(
 
         r.fill_rounded_rect(w.x + 12, ry, w.width - 24, 24, 4, bg);
         let res_str = format!("{} x {}", width, height);
+<<<<<<< HEAD
         r.draw_icon(w.x + 20, ry + 4, IconType::Display, fg);
         r.draw_text(w.x + 44, ry + 4, &res_str, fg, None);
+=======
+        r.draw_text(w.x + 24, ry + 4, &res_str, fg, None);
+>>>>>>> arena/e8a29038-deix
 
         if is_current {
             r.draw_text(w.x + w.width as i32 - 70, ry + 4, "[Active]", Color::GREEN, None);

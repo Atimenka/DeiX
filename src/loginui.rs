@@ -128,6 +128,7 @@ enum Focus {
     User,
     Pass,
     Confirm,
+<<<<<<< HEAD
     Totp,
 }
 
@@ -139,6 +140,8 @@ struct Mode {
     cloud: bool,
     totp: bool,
     disk: bool,
+=======
+>>>>>>> arena/e8a29038-deix
 }
 
 /// Перерисовывает экран входа целиком.
@@ -148,7 +151,10 @@ fn redraw(
     confirm: &Field,
     focus: Focus,
     setup: bool,
+<<<<<<< HEAD
     mode: Mode,
+=======
+>>>>>>> arena/e8a29038-deix
     status: &str,
     status_color: Color,
 ) {
@@ -158,16 +164,27 @@ fn redraw(
         r.clear(BG);
 
         let pw = 440u32;
+<<<<<<< HEAD
         let ph = if setup { 270u32 } else { 250u32 };
+=======
+        let ph = if setup { 270u32 } else { 215u32 };
+>>>>>>> arena/e8a29038-deix
         let px = (w - pw as i32) / 2;
         let py = (h - ph as i32) / 2;
 
         // Рисуем эмблему/логотип DeiX над панелью входа
         let logo_scale = 1;
+<<<<<<< HEAD
         let logo_dim = (crate::bootlogo::size() / 2) as i32 * logo_scale;
         let logo_y = py - logo_dim - 16;
         if logo_y >= 10 {
             crate::bootlogo::draw_logo_div(r, (w - logo_dim) / 2, logo_y, logo_scale, 2);
+=======
+        let logo_dim = 128 * logo_scale;
+        let logo_y = py - logo_dim - 16;
+        if logo_y >= 10 {
+            crate::bootlogo::draw_logo_at(r, (w - logo_dim) / 2, logo_y, logo_scale);
+>>>>>>> arena/e8a29038-deix
         }
 
         r.fill_rect(px, py, pw, ph, PANEL);
@@ -178,8 +195,11 @@ fn redraw(
 
         let sub = if setup {
             "first run: this password also unlocks the disk"
+<<<<<<< HEAD
         } else if mode.cloud {
             "cloud account: email + password"
+=======
+>>>>>>> arena/e8a29038-deix
         } else {
             "enter your credentials"
         };
@@ -206,14 +226,19 @@ fn redraw(
                 }
             };
 
+<<<<<<< HEAD
         // Первый row: USERNAME или EMAIL в облачном режиме.
         let user_label = if mode.cloud { "EMAIL" } else { "USERNAME" };
         draw_field(r, user_label, user, focus == Focus::User, fy);
+=======
+        draw_field(r, "USERNAME", user, focus == Focus::User, fy);
+>>>>>>> arena/e8a29038-deix
         fy += 50;
         draw_field(r, "PASSWORD", pass, focus == Focus::Pass, fy);
         if setup {
             fy += 50;
             draw_field(r, "CONFIRM PASSWORD", confirm, focus == Focus::Confirm, fy);
+<<<<<<< HEAD
         } else {
             // Третья строка: TOTP-код, пароль диска или переключатель.
             fy += 50;
@@ -236,6 +261,16 @@ fn redraw(
         text_center(
             r,
             py + ph as i32 - 14,
+=======
+        }
+
+        if !status.is_empty() {
+            text_center(r, py + ph as i32 - 44, status, status_color, 1);
+        }
+        text_center(
+            r,
+            py + ph as i32 - 24,
+>>>>>>> arena/e8a29038-deix
             "Tab/mouse - select field   Enter - confirm",
             HINT,
             1,
@@ -298,14 +333,21 @@ struct Layout {
     user_y: i32,
     pass_y: i32,
     confirm_y: i32,
+<<<<<<< HEAD
     third_y: i32,
+=======
+>>>>>>> arena/e8a29038-deix
 }
 
 fn layout(r: &crate::renderer::Renderer, setup: bool) -> Layout {
     let w = r.width() as i32;
     let h = r.height() as i32;
     let pw = 440u32;
+<<<<<<< HEAD
     let ph = if setup { 270u32 } else { 250u32 };
+=======
+    let ph = if setup { 270u32 } else { 215u32 };
+>>>>>>> arena/e8a29038-deix
     let px = (w - pw as i32) / 2;
     let py = (h - ph as i32) / 2;
     Layout {
@@ -314,12 +356,19 @@ fn layout(r: &crate::renderer::Renderer, setup: bool) -> Layout {
         user_y: py + 78 + 14,
         pass_y: py + 128 + 14,
         confirm_y: py + 178 + 14,
+<<<<<<< HEAD
         third_y: py + 178 + 14,
+=======
+>>>>>>> arena/e8a29038-deix
     }
 }
 
 /// Определяет, по какому полю кликнули.
+<<<<<<< HEAD
 fn hit_test(l: &Layout, setup: bool, mode: Mode, mx: i32, my: i32) -> Option<Focus> {
+=======
+fn hit_test(l: &Layout, setup: bool, mx: i32, my: i32) -> Option<Focus> {
+>>>>>>> arena/e8a29038-deix
     let inside = |y: i32| mx >= l.fx && mx < l.fx + l.fw as i32 && my >= y && my < y + 22;
     if inside(l.user_y) {
         Some(Focus::User)
@@ -327,6 +376,7 @@ fn hit_test(l: &Layout, setup: bool, mode: Mode, mx: i32, my: i32) -> Option<Foc
         Some(Focus::Pass)
     } else if setup && inside(l.confirm_y) {
         Some(Focus::Confirm)
+<<<<<<< HEAD
     } else if !setup && !mode.totp && !mode.disk && my >= l.third_y && my < l.third_y + 44 {
         // Третья строка в режиме переключателя — клик переключает
         // LOCAL/CLOUD (или переводит фокус, если это поле TOTP/диска).
@@ -335,11 +385,14 @@ fn hit_test(l: &Layout, setup: bool, mode: Mode, mx: i32, my: i32) -> Option<Foc
         Some(Focus::Totp)
     } else if !setup && mode.disk && inside(l.third_y) {
         Some(Focus::Pass)
+=======
+>>>>>>> arena/e8a29038-deix
     } else {
         None
     }
 }
 
+<<<<<<< HEAD
 /// Y-координата строки переключателя LOCAL/CLOUD (центр панели).
 fn mode_toggle_y(r: &crate::renderer::Renderer) -> i32 {
     let h = r.height() as i32;
@@ -347,6 +400,8 @@ fn mode_toggle_y(r: &crate::renderer::Renderer) -> i32 {
     py + 178
 }
 
+=======
+>>>>>>> arena/e8a29038-deix
 /// Читает байт из PS/2 или COM1. `None`, если ввода нет.
 fn poll_key() -> Option<u8> {
     if crate::serial::is_data_ready() {
@@ -356,6 +411,7 @@ fn poll_key() -> Option<u8> {
     }
 }
 
+<<<<<<< HEAD
 /// Статус диска после успешного облачного входа.
 enum CloudDisk {
     /// Диск зашифрован, разблокирован cloud-паролем (он уже в LUKS
@@ -385,6 +441,8 @@ fn cloud_disk_status(password: &str) -> CloudDisk {
     }
 }
 
+=======
+>>>>>>> arena/e8a29038-deix
 /// Экран входа / создания первой учётки.
 ///
 /// Возвращает имя пользователя. `None` — графики нет, вызывающий должен
@@ -410,6 +468,7 @@ pub fn run() -> Option<String> {
     let mut status = String::new();
     let mut status_color = HINT;
 
+<<<<<<< HEAD
     // Облачный режим: cloud_mode — активен переключатель,
     // totp_pending — ожидание 6-значного кода, disk_unlock —
     // ожидание пароля диска после облачного входа на зашифрованном
@@ -429,6 +488,9 @@ pub fn run() -> Option<String> {
         Mode { cloud: cloud_mode, totp: totp_pending, disk: disk_unlock },
         &status, status_color,
     );
+=======
+    redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
+>>>>>>> arena/e8a29038-deix
 
     // Предыдущее состояние мыши: перерисовываем экран только когда
     // курсор реально сдвинулся, иначе 60 кадров в секунду впустую.
@@ -436,8 +498,11 @@ pub fn run() -> Option<String> {
     let mut last_click = false;
 
     loop {
+<<<<<<< HEAD
         let mode = Mode { cloud: cloud_mode, totp: totp_pending, disk: disk_unlock };
 
+=======
+>>>>>>> arena/e8a29038-deix
         let c = match poll_key() {
             Some(c) => c,
             None => {
@@ -445,16 +510,25 @@ pub fn run() -> Option<String> {
                 let m = crate::mouse::snapshot();
                 let moved = (m.x, m.y) != last_mouse;
 
+<<<<<<< HEAD
                 // Клик по полю переводит на него фокус. Клик по строке
                 // переключателя (LOCAL/CLOUD) включает облачный режим.
                 if m.left_button && !last_click {
                     let hit = crate::renderer::with_renderer_ret(|r| {
                         let l = layout(r, setup);
                         hit_test(&l, setup, mode, m.x, m.y)
+=======
+                // Клик по полю переводит на него фокус.
+                if m.left_button && !last_click {
+                    let hit = crate::renderer::with_renderer_ret(|r| {
+                        let l = layout(r, setup);
+                        hit_test(&l, setup, m.x, m.y)
+>>>>>>> arena/e8a29038-deix
                     })
                     .flatten();
                     if let Some(f) = hit {
                         focus = f;
+<<<<<<< HEAD
                     } else {
                         // Клик на строке переключателя LOCAL/CLOUD.
                         let toggle_y = crate::renderer::with_renderer_ret(|r| mode_toggle_y(r))
@@ -469,18 +543,26 @@ pub fn run() -> Option<String> {
                             status = String::from("enter cloud email + password");
                             status_color = HINT;
                         }
+=======
+>>>>>>> arena/e8a29038-deix
                     }
                 }
                 last_click = m.left_button;
 
                 if moved || m.left_button {
                     last_mouse = (m.x, m.y);
+<<<<<<< HEAD
                     let mode = Mode { cloud: cloud_mode, totp: totp_pending, disk: disk_unlock };
                     redraw(&user, &pass, &confirm, focus, setup, mode, &status, status_color);
                 } else if !crate::bootchain::pump() {
                     // Порция отложенной сверки ядра обработана — сразу
                     // опрашиваем ввод снова. Если делать нечего: hlt, спим
                     // до прерывания, не жжём процессор впустую.
+=======
+                    redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
+                } else {
+                    // hlt: спим до прерывания, не жжём процессор впустую.
+>>>>>>> arena/e8a29038-deix
                     crate::sched::idle_wait();
                 }
                 continue;
@@ -490,6 +572,7 @@ pub fn run() -> Option<String> {
         let mut dirty = true;
         match c {
             b'\t' => {
+<<<<<<< HEAD
                 focus = match (focus, setup, totp_pending) {
                     (Focus::User, _, _) => Focus::Pass,
                     (Focus::Pass, true, _) => Focus::Confirm,
@@ -512,6 +595,21 @@ pub fn run() -> Option<String> {
                         (Focus::User, _, _) => Focus::Pass,
                         (Focus::Pass, true, _) => Focus::Confirm,
                         (Focus::Pass, false, true) => Focus::Totp,
+=======
+                focus = match (focus, setup) {
+                    (Focus::User, _) => Focus::Pass,
+                    (Focus::Pass, true) => Focus::Confirm,
+                    (Focus::Pass, false) => Focus::User,
+                    (Focus::Confirm, _) => Focus::User,
+                };
+            }
+            b'\n' | b'\r' => {
+                let last = if setup { Focus::Confirm } else { Focus::Pass };
+                if focus != last {
+                    focus = match (focus, setup) {
+                        (Focus::User, _) => Focus::Pass,
+                        (Focus::Pass, true) => Focus::Confirm,
+>>>>>>> arena/e8a29038-deix
                         _ => Focus::User,
                     };
                 } else if setup {
@@ -527,7 +625,10 @@ pub fn run() -> Option<String> {
                     } else {
                         match crate::auth::create_user(user.as_str(), pass.as_str()) {
                             Ok(()) => {
+<<<<<<< HEAD
                                 crate::bootprof::mark("login: account record created");
+=======
+>>>>>>> arena/e8a29038-deix
                                 // ПЕРВАЯ НАСТРОЙКА: включаем шифрование тома
                                 // паролем аккаунта. Без этого вызова том
                                 // оставался ОТКРЫТЫМ — USERS.DB и все файлы
@@ -535,7 +636,11 @@ pub fn run() -> Option<String> {
                                 // Текстовый auth::run_login_screen это делал,
                                 // а графический вход — нет.
                                 status = String::from("encrypting disk, wait...");
+<<<<<<< HEAD
                                 redraw(&user, &pass, &confirm, focus, setup, mode,
+=======
+                                redraw(&user, &pass, &confirm, focus, setup,
+>>>>>>> arena/e8a29038-deix
                                        &status, status_color);
                                 match crate::crypto_storage::enable_encryption(pass.as_str()) {
                                     Ok(()) => crate::serial_println!(
@@ -543,11 +648,18 @@ pub fn run() -> Option<String> {
                                     Err(_) => crate::serial_println!(
                                         "[loginui] ВНИМАНИЕ: шифрование НЕ включено (ошибка диска)"),
                                 }
+<<<<<<< HEAD
                                 crate::bootprof::mark("login: volume encryption enabled");
                                 status = String::from("account created, signing in...");
                                 status_color = OK_C;
                                 redraw(
                                     &user, &pass, &confirm, focus, setup, mode, &status, status_color,
+=======
+                                status = String::from("account created, signing in...");
+                                status_color = OK_C;
+                                redraw(
+                                    &user, &pass, &confirm, focus, setup, &status, status_color,
+>>>>>>> arena/e8a29038-deix
                                 );
                                 return Some(String::from(user.as_str()));
                             }
@@ -567,6 +679,7 @@ pub fn run() -> Option<String> {
                             }
                         }
                     }
+<<<<<<< HEAD
                 } else if cloud_mode && totp_pending {
                     // Второй этап 2FA: 6-значный код из приложения.
                     let code = String::from(pass.as_str());
@@ -681,6 +794,8 @@ pub fn run() -> Option<String> {
                             }
                         }
                     }
+=======
+>>>>>>> arena/e8a29038-deix
                 } else {
                     // Зашифрованный том сначала надо РАЗБЛОКИРОВАТЬ: пока
                     // XTS-движок не активирован верным паролем, ext2 читает
@@ -693,6 +808,7 @@ pub fn run() -> Option<String> {
                         pass.clear();
                         focus = Focus::Pass;
                         let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
+<<<<<<< HEAD
                         redraw(&user, &pass, &confirm, focus, setup, mode, &status, status_color);
                         continue;
                     }
@@ -703,6 +819,16 @@ pub fn run() -> Option<String> {
                             status = String::from("welcome!");
                             status_color = OK_C;
                             redraw(&user, &pass, &confirm, focus, setup, mode, &status, status_color);
+=======
+                        redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
+                        continue;
+                    }
+                    match crate::auth::verify_login(user.as_str(), pass.as_str()) {
+                        Ok(()) => {
+                            status = String::from("welcome!");
+                            status_color = OK_C;
+                            redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
+>>>>>>> arena/e8a29038-deix
                             return Some(String::from(user.as_str()));
                         }
                         Err(_) => {
@@ -721,23 +847,33 @@ pub fn run() -> Option<String> {
                 Focus::User => user.pop(),
                 Focus::Pass => pass.pop(),
                 Focus::Confirm => confirm.pop(),
+<<<<<<< HEAD
                 Focus::Totp => pass.pop(),
+=======
+>>>>>>> arena/e8a29038-deix
             },
             0x20..=0x7E => match focus {
                 Focus::User => user.push(c),
                 Focus::Pass => pass.push(c),
                 Focus::Confirm => confirm.push(c),
+<<<<<<< HEAD
                 Focus::Totp => pass.push(c),
+=======
+>>>>>>> arena/e8a29038-deix
             },
             _ => dirty = false,
         }
 
         if dirty {
+<<<<<<< HEAD
             redraw(
                 &user, &pass, &confirm, focus, setup,
                 Mode { cloud: cloud_mode, totp: totp_pending, disk: disk_unlock },
                 &status, status_color,
             );
+=======
+            redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
+>>>>>>> arena/e8a29038-deix
         }
     }
 }

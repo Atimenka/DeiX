@@ -6,6 +6,7 @@
 
 use crate::renderer::{Color, IconType, Rect, Renderer};
 use crate::ui::theme::UiTheme;
+<<<<<<< HEAD
 use crate::ui::widgets::icon_button;
 use crate::ui::window::{FileViewEntry, Window};
 use alloc::format;
@@ -18,6 +19,14 @@ pub const SIDEBAR_W: i32 = 110;
 /// Колонка превью выбранной картинки (.png/.bmp) справа от списка.
 pub const PREVIEW_W: i32 = 180;
 pub const PREVIEW_H: i32 = 140;
+=======
+use crate::ui::window::{FileViewEntry, Window};
+use alloc::format;
+use alloc::string::String;
+
+/// Ширина боковой панели разделов.
+pub const SIDEBAR_W: i32 = 110;
+>>>>>>> arena/e8a29038-deix
 /// Первая строка списка файлов (от верха содержимого):
 /// панель инструментов (36) + строка хлебных крошек (24) + зазор.
 pub const LIST_START_Y: i32 = 68;
@@ -67,6 +76,7 @@ pub fn breadcrumbs(
     out
 }
 
+<<<<<<< HEAD
 /// Левый край самой левой кнопки панели инструментов (Delete): строка поиска
 /// должна заканчиваться до него.
 const TOOLBAR_LEFT: i32 = 248;
@@ -85,6 +95,17 @@ pub fn new_folder_btn_rect(win_w: u32) -> Rect {
 /// Кнопка «Delete» (видна, когда на записываемом разделе выбран элемент).
 pub fn delete_btn_rect(win_w: u32) -> Rect {
     Rect::new(win_w as i32 - TOOLBAR_LEFT, 6, 80, 24)
+=======
+/// Кнопка «+File» (относительно области содержимого). Правый якорь —
+/// как и при отрисовке.
+pub fn new_file_btn_rect(win_w: u32) -> Rect {
+    Rect::new(win_w as i32 - 120, 6, 50, 24)
+}
+
+/// Кнопка «+Folder».
+pub fn new_folder_btn_rect(win_w: u32) -> Rect {
+    Rect::new(win_w as i32 - 64, 6, 55, 24)
+>>>>>>> arena/e8a29038-deix
 }
 
 /// Кнопка раздела в боковой панели.
@@ -92,6 +113,7 @@ pub fn sidebar_item_rect(i: usize) -> Rect {
     Rect::new(4, 8 + i as i32 * 36, 102, 28)
 }
 
+<<<<<<< HEAD
 /// Имя файла похоже на картинку, которую умеет показывать превью.
 fn is_image_name(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
@@ -146,6 +168,8 @@ fn decode_preview(data: &[u8]) -> Option<(Vec<u32>, usize, usize)> {
     Some((pixels, bw, bh))
 }
 
+=======
+>>>>>>> arena/e8a29038-deix
 pub fn draw_files(
     r: &mut Renderer,
     theme: &UiTheme,
@@ -169,22 +193,34 @@ pub fn draw_files(
         let bg = if is_sel { theme.titlebar_active } else { theme.titlebar_inactive };
         let fg = if is_sel { theme.accent } else { theme.text_secondary };
         r.fill_rounded_rect(w.x + item.x, content_y + item.y, item.w, item.h, 4, bg);
+<<<<<<< HEAD
         r.draw_icon(w.x + item.x + 4, content_y + item.y + 6, IconType::Drive, fg);
         r.draw_text(w.x + item.x + 24, content_y + item.y + 6, p, fg, None);
+=======
+        r.draw_text(w.x + item.x + 8, content_y + item.y + 6, p, fg, None);
+>>>>>>> arena/e8a29038-deix
     }
 
     r.fill_rect(w.x + SIDEBAR_W, content_y, w.width - SIDEBAR_W as u32, 36, theme.titlebar_active);
     r.draw_icon(w.x + SIDEBAR_W + 6, content_y + 10, IconType::Search, theme.text_secondary);
+<<<<<<< HEAD
     let query = format!("[{}]", search_query);
     let query_cells = ((w.width as i32 - TOOLBAR_LEFT - SIDEBAR_W - 34) / 8).max(4) as usize;
     r.draw_text(
         w.x + SIDEBAR_W + 26,
         content_y + 10,
         crate::ui::text::truncate_to_cells(&query, query_cells).0,
+=======
+    r.draw_text(
+        w.x + SIDEBAR_W + 26,
+        content_y + 10,
+        &format!("[{}]", search_query),
+>>>>>>> arena/e8a29038-deix
         theme.text_primary,
         None,
     );
 
+<<<<<<< HEAD
     // Создание файлов возможно только на записываемом разделе: на /system
     // кнопки есть, только если он ext2 и включён dev-режим (vfs::is_writable).
     let writable = crate::vfs::is_writable(current_partition);
@@ -208,6 +244,19 @@ pub fn draw_files(
                 IconType::Trash, "Delete",
             );
         }
+=======
+    // Создание файлов возможно только на записываемом разделе: на
+    // /system (EROFS, read-only) кнопки не рисуются и не кликаются.
+    let writable = current_partition == "/userdata";
+    if writable {
+        let fb = new_file_btn_rect(w.width);
+        r.fill_rounded_rect(w.x + fb.x, content_y + fb.y, fb.w, fb.h, 4, theme.accent);
+        r.draw_text(w.x + fb.x + 5, content_y + fb.y + 4, "+File", Color::WHITE, None);
+
+        let db = new_folder_btn_rect(w.width);
+        r.fill_rounded_rect(w.x + db.x, content_y + db.y, db.w, db.h, 4, theme.accent);
+        r.draw_text(w.x + db.x + 4, content_y + db.y + 4, "+Folder", Color::WHITE, None);
+>>>>>>> arena/e8a29038-deix
     }
 
     // Хлебные крошки: раздел и каждый каталог пути — кликабельные
@@ -226,6 +275,7 @@ pub fn draw_files(
         }
     }
 
+<<<<<<< HEAD
     // Превью выбранной картинки: список сужается на ширину колонки.
     let mut preview: Option<(Vec<u32>, usize, usize)> = None;
     if let Some(idx) = selected_idx {
@@ -245,6 +295,8 @@ pub fn draw_files(
     let list_w = w.width as i32 - SIDEBAR_W - 10
         - if preview.is_some() { PREVIEW_W + 10 } else { 0 };
 
+=======
+>>>>>>> arena/e8a29038-deix
     let list_start_y = content_y + LIST_START_Y;
     let mut ey = list_start_y;
     for (idx, entry) in entries.iter().enumerate() {
@@ -253,6 +305,7 @@ pub fn draw_files(
         }
         let is_selected = selected_idx == Some(idx);
         let bg = if is_selected { theme.titlebar_active } else { theme.window_bg };
+<<<<<<< HEAD
         r.fill_rect(w.x + SIDEBAR_W + 4, ey - 2, list_w.max(80) as u32, 20, bg);
 
         let (glyph, icon_color) = if entry.is_dir {
@@ -261,6 +314,12 @@ pub fn draw_files(
             (IconType::Document, theme.accent)
         };
         r.draw_icon(w.x + SIDEBAR_W + 8, ey, glyph, icon_color);
+=======
+        r.fill_rect(w.x + SIDEBAR_W + 4, ey - 2, w.width - (SIDEBAR_W as u32 + 10), 20, bg);
+
+        let icon_color = if entry.is_dir { Color::YELLOW } else { theme.accent };
+        r.draw_icon(w.x + SIDEBAR_W + 8, ey, IconType::Files, icon_color);
+>>>>>>> arena/e8a29038-deix
 
         let entry_str = if entry.is_dir {
             format!("{:<18} <DIR>", entry.name)
@@ -272,6 +331,7 @@ pub fn draw_files(
         ey += ROW_H;
     }
 
+<<<<<<< HEAD
     if let Some((pixels, iw, ih)) = preview {
         let px = w.x + w.width as i32 - PREVIEW_W - 8;
         let py = list_start_y;
@@ -297,6 +357,8 @@ pub fn draw_files(
         r.draw_text(px, py + PREVIEW_H + 6, &caption, theme.text_secondary, None);
     }
 
+=======
+>>>>>>> arena/e8a29038-deix
     // Нижняя строка: сообщение об операции, ошибка или текущий путь.
     let bottom_y = content_y + w.height as i32 - 20;
     if let Some(msg) = status_msg {
@@ -304,11 +366,16 @@ pub fn draw_files(
     } else if let Some(err) = error {
         r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, err, Color::RED, None);
     } else {
+<<<<<<< HEAD
         let mut loc = if current_path == "/" {
+=======
+        let loc = if current_path == "/" {
+>>>>>>> arena/e8a29038-deix
             String::from(current_partition)
         } else {
             format!("{}{}", current_partition, current_path)
         };
+<<<<<<< HEAD
         if !writable {
             if current_partition == "/system" && crate::vfs::system_is_ext2_mounted() {
                 loc.push_str("  [read-only: dev mode off]");
@@ -319,6 +386,9 @@ pub fn draw_files(
         let max_cells = ((w.width as i32 - SIDEBAR_W - 16) / 8).max(8) as usize;
         let shown = crate::ui::text::truncate_to_cells(&loc, max_cells).0;
         r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, shown, theme.text_secondary, None);
+=======
+        r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, &loc, theme.text_secondary, None);
+>>>>>>> arena/e8a29038-deix
     }
 }
 
@@ -423,12 +493,18 @@ pub fn draw_file_editor(
                 _ => theme.titlebar_inactive,
             };
             let fg = if i == 2 { theme.text_primary } else { Color::WHITE };
+<<<<<<< HEAD
             let icon = match i {
                 0 => IconType::Save,
                 1 => IconType::Trash,
                 _ => IconType::Cross,
             };
             icon_button(r, bx, by, b.w, b.h, 4, bg, fg, icon, label);
+=======
+            r.fill_rounded_rect(bx, by, b.w, b.h, 4, bg);
+            let tw = label.len() as i32 * 8;
+            r.draw_text(bx + (b.w as i32 - tw) / 2, by + 5, label, fg, None);
+>>>>>>> arena/e8a29038-deix
         }
     }
 }

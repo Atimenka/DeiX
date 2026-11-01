@@ -19,10 +19,13 @@ use crate::net::{dns, inflate, tcp, tls};
 
 const MAX_REDIRECTS: u32 = 3;
 const MAX_BODY: usize = 1024 * 1024;
+<<<<<<< HEAD
 /// Пауза данных, после которой ответ считается полным (обычные страницы).
 const IDLE_MS: u64 = 1500;
 /// Сколько ждать ответ на один запрос целиком.
 const RESPONSE_TIMEOUT_MS: u64 = 10_000;
+=======
+>>>>>>> arena/e8a29038-deix
 
 /// Ответ HTTP-запроса после всех redirect, байты тела как приняты
 /// (текстовые потребители сами делают from_utf8_lossy; бинарные —
@@ -62,6 +65,7 @@ pub fn parse_url(url: &str) -> Option<(String, u16, String, bool)> {
     Some((host, port, path.to_string(), https))
 }
 
+<<<<<<< HEAD
 /// Все адреса хоста: литерал и алиасы дают один адрес, DNS — до четырёх.
 pub fn resolve_all(host: &str) -> Vec<[u8; 4]> {
     let clean = host.trim().to_lowercase();
@@ -73,6 +77,8 @@ pub fn resolve_all(host: &str) -> Vec<[u8; 4]> {
     resolve(host).into_iter().collect()
 }
 
+=======
+>>>>>>> arena/e8a29038-deix
 /// Разбирает host: IPv4-литерал, локальные алиасы или настоящий DNS-запрос.
 pub fn resolve(host: &str) -> Option<[u8; 4]> {
     let clean = host.trim().to_lowercase();
@@ -117,6 +123,7 @@ impl Conn {
         }
     }
 
+<<<<<<< HEAD
     fn diagnosis(&self) -> String {
         match self {
             Conn::Plain => format!("{}; TCP принято {} байт", tcp::last_end(), tcp::rx_bytes()),
@@ -124,6 +131,8 @@ impl Conn {
         }
     }
 
+=======
+>>>>>>> arena/e8a29038-deix
     fn close(&mut self) {
         match self {
             Conn::Plain => tcp::close(),
@@ -134,6 +143,7 @@ impl Conn {
 
 /// Один HTTP GET без redirect: (status, reason, location, тело-байты, content-type).
 fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
+<<<<<<< HEAD
     request_once("GET", url, &[], &[], MAX_BODY, IDLE_MS)
 }
 
@@ -154,6 +164,11 @@ fn retryable(e: &str) -> bool {
 /// ретраями; redirect-цепочка захватывает его заново на каждый скачок.
 static NET_LOCK: crate::spinlock::SpinLock<()> = crate::spinlock::SpinLock::new(());
 
+=======
+    request_once("GET", url, &[], &[])
+}
+
+>>>>>>> arena/e8a29038-deix
 /// Один HTTP-запрос произвольным методом без redirect.
 /// `extra_headers` добавляются к базовым; `body` отправляется как есть
 /// (Content-Length ставится для любого метода, кроме GET без тела).
@@ -162,6 +177,7 @@ fn request_once(
     url: &str,
     extra_headers: &[(&str, &str)],
     body: &[u8],
+<<<<<<< HEAD
     max_body: usize,
     idle_ms: u64,
 ) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
@@ -211,6 +227,22 @@ fn attempt_once(
     } else {
         if let Err(why) = tcp::connect_any(&ips, port) {
             return Err(format!("Не удалось установить TCP-соединение с {} ({})", host, why));
+=======
+) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
+    let (host, port, path, https) = parse_url(url)
+        .ok_or_else(|| "Некорректный URL адрес".to_string())?;
+    let ip = resolve(&host)
+        .ok_or_else(|| format!("DNS: не удалось разрешить хост '{}'", host))?;
+
+    let mut conn = if https {
+        Conn::Tls(tls::connect(ip, port, &host)?)
+    } else {
+        if !tcp::connect(ip, port) {
+            return Err(format!(
+                "Не удалось установить TCP-соединение с {} ({}.{}.{}.{}:{})",
+                host, ip[0], ip[1], ip[2], ip[3], port
+            ));
+>>>>>>> arena/e8a29038-deix
         }
         Conn::Plain
     };
@@ -238,14 +270,18 @@ fn attempt_once(
 
     let mut raw: Vec<u8> = Vec::new();
     let t0 = crate::timer::uptime_ms();
+<<<<<<< HEAD
     let mut last = t0;
     // Крупным телам (payload обновлений) даём больше времени: суммарный
     // потолок растёт с лимитом, простой оцениваем по последним данным.
     let total_ms = if max_body > MAX_BODY { 120_000 } else { RESPONSE_TIMEOUT_MS };
+=======
+>>>>>>> arena/e8a29038-deix
     loop {
         let chunk = conn.recv(1000);
         if !chunk.is_empty() {
             raw.extend_from_slice(&chunk);
+<<<<<<< HEAD
             last = crate::timer::uptime_ms();
             if raw.len() > max_body {
                 break;
@@ -261,6 +297,17 @@ fn attempt_once(
             // простоя незачем (мы всегда работаем с Connection: close).
             break;
         }
+=======
+            if raw.len() > MAX_BODY {
+                break;
+            }
+        } else if !raw.is_empty() {
+            // Если получили данные и новые не поступают более 1500мс
+            if crate::timer::uptime_ms() - t0 > 1500 {
+                break;
+            }
+        }
+>>>>>>> arena/e8a29038-deix
         if let Some(he) = find_header_end(&raw) {
             let head = String::from_utf8_lossy(&raw[..he]).into_owned();
             if header_contains(&head, "transfer-encoding", "chunked") {
@@ -274,6 +321,7 @@ fn attempt_once(
                 }
             }
         }
+<<<<<<< HEAD
         if crate::timer::uptime_ms() - t0 > total_ms {
             break;
         }
@@ -283,6 +331,16 @@ fn attempt_once(
 
     if raw.is_empty() {
         return Err(format!("Сервер не прислал ответа: {}", diagnosis));
+=======
+        if crate::timer::uptime_ms() - t0 > 4000 {
+            break;
+        }
+    }
+    conn.close();
+
+    if raw.is_empty() {
+        return Err("Сервер не прислал ответа".into());
+>>>>>>> arena/e8a29038-deix
     }
 
     let body_offset = find_header_end(&raw).unwrap_or(0);
@@ -302,7 +360,11 @@ fn attempt_once(
                 "{} — ответ сжат gzip, но повреждён или обрезан (принято {} байт, лимит {} КиБ)",
                 e,
                 raw.len(),
+<<<<<<< HEAD
                 max_body / 1024
+=======
+                MAX_BODY / 1024
+>>>>>>> arena/e8a29038-deix
             )
         })?;
         body_bytes = data;
@@ -387,6 +449,7 @@ pub fn request_bytes(
     headers: &[(&str, &str)],
     body: &[u8],
 ) -> Result<HttpBytes, String> {
+<<<<<<< HEAD
     request_bytes_max(method, url, headers, body, MAX_BODY)
 }
 
@@ -401,6 +464,10 @@ pub fn request_bytes_max(
     let idle = if max_body > MAX_BODY { 5000 } else { IDLE_MS };
     let (status, reason, _location, resp_body, content_type) =
         request_once(method, url, headers, body, max_body, idle)?;
+=======
+    let (status, reason, _location, resp_body, content_type) =
+        request_once(method, url, headers, body)?;
+>>>>>>> arena/e8a29038-deix
     Ok(HttpBytes {
         status,
         reason,

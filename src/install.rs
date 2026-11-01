@@ -10,6 +10,7 @@
 //     прогресс по реально выполненной работе.
 //
 // Этапы установки:
+<<<<<<< HEAD
 //   1. ЭТАП 2 — перенос данных с загрузочного диска (если включён):
 //      /userdata обходится рекурсивно и переносится ЦЕЛИКОМ (аккаунты,
 //      обои, настройки, загрузки, медиапак). При установке на Master
@@ -37,6 +38,18 @@
 //  10. ЭТАП 3 — финальная проверка: USERS.DB перечитывается с нового
 //      диска (если том не зашифрован), а мастер предлагает немедленную
 //      перезагрузку (CLI спрашивает, в GUI — кнопка Reboot now).
+=======
+//   1. MBR с таблицей разделов (P1 /system EROFS, P2 /userdata ext2 —
+//      размер /userdata ВЫБИРАЕТСЯ при установке);
+//   2. stage2 + ramboot + сырой kernel.bin (копируется с загрузочного
+//      носителя посекторно) + дескриптор DEIXKIMG;
+//   3. образ /system (EROFS) посекторно;
+//   4. форматирование /userdata в ext2 (многогрупповый том под
+//      выбранный размер — см. ext2::plan_format_raw);
+//   5. USERS.DB с учётной записью пользователя;
+//   6. проверка (MBR, магии ФС, SHA-256 ядра);
+//   7. шифрование (XTS-AES-256) — только если цель = Master.
+>>>>>>> arena/e8a29038-deix
 
 use crate::ata::{self, Drive};
 use alloc::format;
@@ -46,17 +59,28 @@ use alloc::vec::Vec;
 
 // ==================== КОНСТАНТЫ УСТАНОВКИ ====================
 
+<<<<<<< HEAD
 /// Максимум секторов, заполняемых нулями в служебной области (MBR gap,
 /// карта загрузки, область дампа) до начала /system (LBA 4096). Карта
 /// загрузки (LBA 2047) записывается заново после заполнения.
 const KERNEL_AREA_SECTORS: u32 = 3500;
 
 /// Сектор карты загрузки DEIXKIMG (см. src/partition_map.rs, src/bootmap.rs).
+=======
+/// Максимум секторов, заполняемых нулями в служебной области
+/// (stage2 + ramboot + kernel + дескриптор + область дампа) до начала
+/// /system (LBA 4096). Дескриптор ядра (LBA 2047) записывается заново
+/// после заполнения.
+const KERNEL_AREA_SECTORS: u32 = 3500;
+
+/// Сектор дескриптора образа ядра DEIXKIMG (см. src/partition_map.rs).
+>>>>>>> arena/e8a29038-deix
 const KERNEL_IMAGE_INFO_LBA: u32 = 2047;
 
 /// Карта разделов: P1 /system фиксированный (совпадает с
 /// tools/make_deix_fs.py), P2 /userdata начинается сразу после него,
 /// а его РАЗМЕР выбирается при установке.
+<<<<<<< HEAD
 const PART_SYSTEM: (u32, u32) = (4096, 32768);
 /// Начало /userdata (ext2::FS_START_LBA).
 pub const USERDATA_START_LBA: u32 = 36864;
@@ -64,6 +88,15 @@ pub const USERDATA_START_LBA: u32 = 36864;
 pub const USERDATA_MIN_SECTORS: u32 = 32768;
 /// Варианты размера /userdata для установщика, МиБ.
 pub const USERDATA_PRESETS_MIB: [u32; 6] = [16, 32, 64, 128, 256, 512];
+=======
+const PART_SYSTEM: (u32, u32) = (4096, 20480);
+/// Начало /userdata (ext2::FS_START_LBA).
+pub const USERDATA_START_LBA: u32 = 24576;
+/// Минимальный размер /userdata: 8 МиБ (штатный образ).
+pub const USERDATA_MIN_SECTORS: u32 = 16384;
+/// Варианты размера /userdata для установщика, МиБ.
+pub const USERDATA_PRESETS_MIB: [u32; 6] = [8, 16, 32, 64, 128, 256];
+>>>>>>> arena/e8a29038-deix
 
 /// Максимальный размер /userdata на диске данной ёмкости.
 pub fn max_userdata_sectors(disk_sectors: u32) -> u32 {
@@ -74,6 +107,7 @@ pub fn max_userdata_sectors(disk_sectors: u32) -> u32 {
 /// достаточно мелко, чтобы графический установщик оставался отзывчивым.
 const COPY_CHUNK_SECTORS: u32 = 128;
 
+<<<<<<< HEAD
 /// Предел размера одного переносимого файла (обои и настройки заметно
 /// меньше; всё крупнее честно пропускается с заметкой).
 const MIGRATE_FILE_MAX_BYTES: usize = 1024 * 1024;
@@ -91,6 +125,16 @@ const FIRST_BOOT_FILE: &str = "config/first_boot";
 /// компиляции ядра). stage2 и ramboot в ядро не вшиваются: они приходят с
 /// копией /system.
 const BOOT_SECTOR: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/build/boot_sector.bin"));
+=======
+/// MBR-загрузчик, включённый в ядро (build.sh собирает boot_sector.bin ДО
+/// компиляции ядра; NUM_SECTORS = размер stage2).
+const BOOT_SECTOR: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/build/boot_sector.bin"));
+/// Загрузчик второй стадии (stage2.bin) — маленький; грузится boot_sector'ом.
+const STAGE2: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/build/stage2.bin"));
+/// RAM-диск загрузчик (ramboot.bin): дочитывает весь образ в RAM и передаёт
+/// управление stage2. Лежит сразу после stage2 (LBA 1+stage2_sectors).
+const RAMBOOT: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/build/ramboot.bin"));
+>>>>>>> arena/e8a29038-deix
 
 // Конец образа ядра (linker_kernel.ld: __image_end в конце .data, выровнен до 512).
 extern "C" {
@@ -100,8 +144,22 @@ extern "C" {
 /// База ядра в памяти (linker_kernel.ld): 0x100000 (1 МиБ).
 const KERNEL_BASE: usize = 0x100000;
 
+<<<<<<< HEAD
 /// Размер образа ядра в памяти: от базы 0x100000 до __image_end (для шкалы
 /// прогресса).
+=======
+fn stage2_sectors() -> u32 {
+    ((STAGE2.len() + 511) / 512) as u32
+}
+fn ramboot_sectors() -> u32 {
+    ((RAMBOOT.len() + 511) / 512) as u32
+}
+/// Стартовый LBA kernel.bin на диске: сразу после stage2 + ramboot.
+fn kernel_start_lba() -> u32 {
+    1 + stage2_sectors() + ramboot_sectors()
+}
+/// Размер образа ядра на диске: от базы 0x100000 до __image_end.
+>>>>>>> arena/e8a29038-deix
 fn kernel_size() -> usize {
     unsafe { (&__image_end as *const u8 as usize) - KERNEL_BASE }
 }
@@ -229,6 +287,7 @@ fn verify_install(target: Drive, userdata_sectors: u32) -> Vec<String> {
         problems.push(String::from("/userdata: суперблок не читается"));
     }
 
+<<<<<<< HEAD
     // 4. Карта загрузки: разбор, участки внутри /system и SHA-256 ядра,
     // прочитанного по участкам карты с целевого диска.
     if ata::read_sectors_from(target, KERNEL_IMAGE_INFO_LBA, 1, &mut sec).is_err() {
@@ -252,6 +311,37 @@ fn verify_install(target: Drive, userdata_sectors: u32) -> Vec<String> {
         }
         Ok(None) => problems.push(String::from("карта загрузки DEIXKIMG отсутствует")),
         Err(e) => problems.push(format!("карта загрузки: {}", e)),
+=======
+    // 4. Сырое ядро: SHA-256 по дескриптору DEIXKIMG (если он записан).
+    if ata::read_sectors_from(target, KERNEL_IMAGE_INFO_LBA, 1, &mut sec).is_ok()
+        && &sec[0..8] == b"DEIXKIMG"
+    {
+        let lba = u32::from_le_bytes([sec[8], sec[9], sec[10], sec[11]]);
+        let size = u32::from_le_bytes([sec[12], sec[13], sec[14], sec[15]]);
+        let mut expected = [0u8; 32];
+        expected.copy_from_slice(&sec[16..48]);
+
+        let mut hasher = crate::crypto::sha256::Sha256::new();
+        let mut left = size as usize;
+        let mut cur = lba;
+        let mut ok = true;
+        while left > 0 {
+            if ata::read_sectors_from(target, cur, 1, &mut sec).is_err() {
+                problems.push(String::from("ядро: сектор не читается при проверке"));
+                ok = false;
+                break;
+            }
+            let take = left.min(512);
+            hasher.update(&sec[..take]);
+            left -= take;
+            cur += 1;
+        }
+        if ok && hasher.finalize() != expected {
+            problems.push(String::from(
+                "ядро: SHA-256 сырого kernel.bin не совпадает с дескриптором DEIXKIMG",
+            ));
+        }
+>>>>>>> arena/e8a29038-deix
     }
 
     problems
@@ -262,6 +352,7 @@ fn verify_install(target: Drive, userdata_sectors: u32) -> Vec<String> {
 /// Текущий этап установки.
 enum Stage {
     Mbr,
+<<<<<<< HEAD
     ZeroFill { next: u32 },
     BootMap,
     System { next: u32 },
@@ -280,6 +371,18 @@ enum Stage {
     Encrypt,
     /// Этап 3: перечитывание записанного (если том не зашифрован).
     FinalCheck,
+=======
+    BootFiles,
+    Kernel { next: u32 },
+    ZeroFill { next: u32 },
+    KernelInfo,
+    System { next: u32 },
+    UserdataFormat { g: u32 },
+    UserdataFinish,
+    UserDb,
+    Verify,
+    Encrypt,
+>>>>>>> arena/e8a29038-deix
     Done,
     Failed,
 }
@@ -292,6 +395,7 @@ pub struct InstallJob {
     userdata_sectors: u32,
     username: String,
     password: String,
+<<<<<<< HEAD
     /// Этап 2: переносить ли аккаунты и обои с загрузочного диска.
     migrate: bool,
     /// Найденные на источнике файлы для переноса: (путь, размер).
@@ -303,6 +407,8 @@ pub struct InstallJob {
     /// Зашифрован ли целевой том в ходе установки (Master): если да,
     /// финальное перечитывание содержимого без ключа невозможно.
     encrypted_now: bool,
+=======
+>>>>>>> arena/e8a29038-deix
     stage: Stage,
     plan: crate::ext2::FormatPlan,
     /// Прогресс: выполнено/всего условных единиц (сектора записи).
@@ -314,16 +420,24 @@ pub struct InstallJob {
 }
 
 impl InstallJob {
+<<<<<<< HEAD
     /// Готовит установку. `userdata_sectors` — размер P2 (>= 32768,
     /// то есть 16 МиБ). `migrate` — этап 2: перенести аккаунты и обои
     /// с загрузочного диска. Ошибка — если размер не проходит
     /// планирование ext2.
+=======
+    /// Готовит установку. `userdata_sectors` — размер P2 (>= 16384).
+    /// Ошибка — если размер не проходит планирование ext2.
+>>>>>>> arena/e8a29038-deix
     pub fn new(
         target: Drive,
         userdata_sectors: u32,
         username: String,
         password: String,
+<<<<<<< HEAD
         migrate: bool,
+=======
+>>>>>>> arena/e8a29038-deix
     ) -> Result<InstallJob, String> {
         if userdata_sectors < USERDATA_MIN_SECTORS {
             return Err(format!(
@@ -335,6 +449,7 @@ impl InstallJob {
             .map_err(|e| format!("ext2 plan failed: {:?}", e))?;
 
         let ks = kernel_sectors();
+<<<<<<< HEAD
         let zero = KERNEL_AREA_SECTORS - 1;
         // ~524 сектора метаданных на группу ext2 (SB+GDT+карты+таблица
         // инодов) — оценка для шкалы прогресса; точность не критична.
@@ -344,12 +459,21 @@ impl InstallJob {
         // 2 = UserDb; ks = Verify (чтение ядра); 3 = FirstBoot + Encrypt +
         // FinalCheck (этап 3).
         let total_units = 2 + zero + 1 + PART_SYSTEM.1 + userdata_units + 2 + ks + 3;
+=======
+        let boot = stage2_sectors() + ramboot_sectors();
+        let zero = KERNEL_AREA_SECTORS.saturating_sub(boot + ks);
+        // ~524 сектора метаданных на группу ext2 (SB+GDT+карты+таблица
+        // инодов) — оценка для шкалы прогресса; точность не критична.
+        let userdata_units = plan.groups * 524 + 4;
+        let total_units = 2 + boot + ks + zero + 1 + PART_SYSTEM.1 + userdata_units + 2 + ks + 1;
+>>>>>>> arena/e8a29038-deix
 
         Ok(InstallJob {
             target,
             userdata_sectors,
             username,
             password,
+<<<<<<< HEAD
             migrate,
             migrate_list: Vec::new(),
             migrate_buf: Vec::new(),
@@ -358,6 +482,9 @@ impl InstallJob {
             // Этап 2 идёт ПЕРВЫМ: чтение данных источника должно
             // завершиться до перезаписи MBR/маркера шифрования.
             stage: if migrate { Stage::MigrateScan } else { Stage::Mbr },
+=======
+            stage: Stage::Mbr,
+>>>>>>> arena/e8a29038-deix
             plan,
             done_units: 0,
             total_units,
@@ -393,6 +520,7 @@ impl InstallJob {
     pub fn stage_label(&self) -> &'static str {
         match self.stage {
             Stage::Mbr => "Writing partition table (MBR)",
+<<<<<<< HEAD
             Stage::ZeroFill { .. } => "Clearing reserved boot area",
             Stage::BootMap => "Writing boot map",
             Stage::System { .. } => "Copying /system (EROFS)",
@@ -406,6 +534,18 @@ impl InstallJob {
             Stage::Verify => "Verifying installed system",
             Stage::Encrypt => "Enabling disk encryption",
             Stage::FinalCheck => "Final check of the new disk",
+=======
+            Stage::BootFiles => "Writing bootloader (stage2 + ramboot)",
+            Stage::Kernel { .. } => "Copying kernel image",
+            Stage::ZeroFill { .. } => "Clearing reserved boot area",
+            Stage::KernelInfo => "Writing kernel descriptor",
+            Stage::System { .. } => "Copying /system (EROFS)",
+            Stage::UserdataFormat { .. } => "Formatting /userdata (ext2)",
+            Stage::UserdataFinish => "Creating /userdata root directory",
+            Stage::UserDb => "Creating user account",
+            Stage::Verify => "Verifying installed system",
+            Stage::Encrypt => "Enabling disk encryption",
+>>>>>>> arena/e8a29038-deix
             Stage::Done => "Install complete",
             Stage::Failed => "Install failed",
         }
@@ -435,6 +575,7 @@ impl InstallJob {
                 ata::write_sectors_to(self.target, 4095, 1, &zero)
                     .map_err(|_| String::from("marker sector write failed"))?;
                 self.done_units += 2;
+<<<<<<< HEAD
                 self.stage = Stage::ZeroFill { next: 0 };
             }
             Stage::ZeroFill { next } => {
@@ -446,6 +587,41 @@ impl InstallJob {
                     self.stage = Stage::BootMap;
                 } else {
                     let n = COPY_CHUNK_SECTORS.min(area - next);
+=======
+                self.stage = Stage::BootFiles;
+            }
+            Stage::BootFiles => {
+                // stage2.bin — секторы 1..; ramboot.bin — сразу после.
+                write_embedded(self.target, 1, STAGE2)?;
+                write_embedded(self.target, 1 + stage2_sectors(), RAMBOOT)?;
+                self.done_units += stage2_sectors() + ramboot_sectors();
+                self.stage = Stage::Kernel { next: 0 };
+            }
+            Stage::Kernel { next } => {
+                // kernel.bin: читаем ФАЙЛОВЫЕ байты с загрузочного
+                // носителя (там точная копия kernel.bin с чистым .data)
+                // и пишем на целевой диск. НЕ из памяти: "живой" .data
+                // содержит указатели на кучу, недействительные на
+                // установленной системе.
+                let ks = kernel_sectors();
+                let kstart = kernel_start_lba();
+                let n = COPY_CHUNK_SECTORS.min(ks - next);
+                copy_sectors(self.target, kstart + next, n)?;
+                self.done_units += n;
+                if next + n >= ks {
+                    self.stage = Stage::ZeroFill { next: stage2_sectors() + ramboot_sectors() + ks };
+                } else {
+                    self.stage = Stage::Kernel { next: next + n };
+                }
+            }
+            Stage::ZeroFill { next } => {
+                // Дополняем область загрузчика+ядра нулями до границы
+                // раздела (включая область аварийного дампа).
+                if next >= KERNEL_AREA_SECTORS {
+                    self.stage = Stage::KernelInfo;
+                } else {
+                    let n = COPY_CHUNK_SECTORS.min(KERNEL_AREA_SECTORS - next);
+>>>>>>> arena/e8a29038-deix
                     let zeros = alloc::vec![0u8; n as usize * 512];
                     ata::write_sectors_to(self.target, 1 + next, n as u8, &zeros)
                         .map_err(|_| String::from("zero-fill write failed"))?;
@@ -453,10 +629,17 @@ impl InstallJob {
                     self.stage = Stage::ZeroFill { next: next + n };
                 }
             }
+<<<<<<< HEAD
             Stage::BootMap => {
                 // Карта загрузки (DEIXKIMG, LBA 2047) копируется с загрузочного
                 // носителя: /system копируется с теми же LBA, поэтому
                 // участки карты остаются верными.
+=======
+            Stage::KernelInfo => {
+                // Дескриптор образа ядра (DEIXKIMG, LBA 2047): копируем с
+                // загрузочного носителя — сырое ядро скопировано с тех же
+                // LBA, дескриптор остаётся верным.
+>>>>>>> arena/e8a29038-deix
                 copy_sectors(self.target, KERNEL_IMAGE_INFO_LBA, 1)?;
                 self.done_units += 1;
                 self.stage = Stage::System { next: 0 };
@@ -472,6 +655,7 @@ impl InstallJob {
                     self.stage = Stage::System { next: next + n };
                 }
             }
+<<<<<<< HEAD
             Stage::MigrateScan => {
                 self.migrate_list = scan_migrate_files();
                 // Чтение и запись каждого файла — единицы прогресса.
@@ -518,6 +702,8 @@ impl InstallJob {
                 self.done_units += 1;
                 self.stage = Stage::MigrateRead { idx: idx + 1 };
             }
+=======
+>>>>>>> arena/e8a29038-deix
             Stage::UserdataFormat { g } => {
                 crate::ext2::format_group(&self.plan, g)
                     .map_err(|e| format!("ext2 format (group {}): {:?}", g, e))?;
@@ -531,16 +717,20 @@ impl InstallJob {
             Stage::UserdataFinish => {
                 crate::ext2::format_finish(&self.plan)
                     .map_err(|e| format!("ext2 format (root dir): {:?}", e))?;
+<<<<<<< HEAD
                 // Новый /userdata создан записью мимо кеша тома: сбрасываем
                 // кеш, чтобы следующие этапы (шифрование при цели = Master)
                 // видели свежую ФС, а не блоки прежнего тома.
                 crate::ext2::invalidate_cache(crate::ext2::VolId::Userdata);
+=======
+>>>>>>> arena/e8a29038-deix
                 self.done_units += 4;
                 self.stage = Stage::UserDb;
             }
             Stage::UserDb => {
                 // USERS.DB тем же форматом, что auth.rs (username:salt:hash),
                 // ПРЯМО на целевой диск — create_user() писал бы на
+<<<<<<< HEAD
                 // ТЕКУЩИЙ (загрузочный) диск. Этап 2: к новому аккаунту
                 // добавляются перенесённые с загрузочного диска; при
                 // совпадении имён побеждает новый (его пароль только что
@@ -569,6 +759,10 @@ impl InstallJob {
                     self.notes
                         .push(format!("migrated {} account(s) from the boot disk", accounts));
                 }
+=======
+                // ТЕКУЩИЙ (загрузочный) диск.
+                let text = build_users_db(&self.username, &self.password);
+>>>>>>> arena/e8a29038-deix
                 crate::ext2::write_file_raw(
                     self.target,
                     USERDATA_START_LBA,
@@ -578,6 +772,7 @@ impl InstallJob {
                 )
                 .map_err(|e| format!("USERS.DB write failed: {:?}", e))?;
                 self.done_units += 2;
+<<<<<<< HEAD
                 // Этап 3 (маркер первой загрузки) выполняется всегда: даже
                 // без переноса новый диск должен поприветствовать пользователя
                 // при первом запуске. Пустой MigrateWrite пролистывается мгновенно.
@@ -660,6 +855,8 @@ impl InstallJob {
                     "first-boot marker written (welcome + encryption reminder)",
                 ));
                 self.done_units += 1;
+=======
+>>>>>>> arena/e8a29038-deix
                 self.stage = Stage::Verify;
             }
             Stage::Verify => {
@@ -678,6 +875,7 @@ impl InstallJob {
                 if self.target == Drive::Master {
                     if crate::crypto_storage::is_encryption_enabled() {
                         self.notes.push(String::from("encryption already enabled"));
+<<<<<<< HEAD
                         self.encrypted_now = true;
                     } else {
                         match crate::crypto_storage::enable_encryption(&self.password) {
@@ -686,6 +884,13 @@ impl InstallJob {
                                     .push(String::from("disk encryption enabled (XTS-AES-256)"));
                                 self.encrypted_now = true;
                             }
+=======
+                    } else {
+                        match crate::crypto_storage::enable_encryption(&self.password) {
+                            Ok(()) => self
+                                .notes
+                                .push(String::from("disk encryption enabled (XTS-AES-256)")),
+>>>>>>> arena/e8a29038-deix
                             Err(_) => self.notes.push(String::from(
                                 "encryption could not be enabled now (enable on first boot)",
                             )),
@@ -697,6 +902,7 @@ impl InstallJob {
                     ));
                 }
                 self.done_units += 1;
+<<<<<<< HEAD
                 self.stage = Stage::FinalCheck;
             }
             Stage::FinalCheck => {
@@ -726,6 +932,8 @@ impl InstallJob {
                     ));
                 }
                 self.done_units += 1;
+=======
+>>>>>>> arena/e8a29038-deix
                 self.stage = Stage::Done;
             }
             Stage::Done | Stage::Failed => {}
@@ -734,6 +942,23 @@ impl InstallJob {
     }
 }
 
+<<<<<<< HEAD
+=======
+/// Пишет встроенный бинарь (stage2/ramboot) на целевой диск по LBA.
+fn write_embedded(target: Drive, lba: u32, data: &[u8]) -> Result<(), String> {
+    let sectors = (data.len() + 511) / 512;
+    for i in 0..sectors {
+        let mut buf = [0u8; 512];
+        let start = i * 512;
+        let end = (start + 512).min(data.len());
+        buf[..end - start].copy_from_slice(&data[start..end]);
+        ata::write_sectors_to(target, lba + i as u32, 1, &buf)
+            .map_err(|_| String::from("bootloader write failed"))?;
+    }
+    Ok(())
+}
+
+>>>>>>> arena/e8a29038-deix
 /// Копирует n секторов с загрузочного носителя (ata::read_sectors —
 /// учитывает RAM-диск при загрузке с USB) на целевой диск, те же LBA.
 fn copy_sectors(target: Drive, lba: u32, n: u32) -> Result<(), String> {
@@ -745,6 +970,7 @@ fn copy_sectors(target: Drive, lba: u32, n: u32) -> Result<(), String> {
     Ok(())
 }
 
+<<<<<<< HEAD
 /// Этап 2: рекурсивно обходит текущий /userdata и собирает ВСЕ обычные
 /// файлы (пути без ведущего '/' — как их понимает ext2): аккаунты, обои,
 /// настройки, загрузки, медиапак — всё, что лежит на пользовательском
@@ -784,6 +1010,8 @@ fn scan_tree(dir: &str, depth: usize, out: &mut Vec<(String, u32)>) {
     }
 }
 
+=======
+>>>>>>> arena/e8a29038-deix
 /// Строит USERS.DB в формате auth.rs: `username:salt:sha256(salt+pass)`.
 fn build_users_db(username: &str, password: &str) -> String {
     let mut salt = [0u8; 16];
@@ -895,19 +1123,33 @@ pub fn cmd_install(arg: &str) {
     let userdata_sectors: u32;
     if test_mode {
         userdata_sectors = USERDATA_MIN_SECTORS;
+<<<<<<< HEAD
         crate::println!("  Step 2/6 - /userdata size: 16 MiB (test default)");
     } else {
         match max_mib {
             Some(m) => crate::println!("  Step 2/6 - /userdata size in MiB (16..{}), Enter = 16:", m),
             None => crate::println!("  Step 2/6 - /userdata size in MiB (>= 16), Enter = 16:"),
+=======
+        crate::println!("  Step 2/6 - /userdata size: 8 MiB (test default)");
+    } else {
+        match max_mib {
+            Some(m) => crate::println!("  Step 2/6 - /userdata size in MiB (8..{}), Enter = 8:", m),
+            None => crate::println!("  Step 2/6 - /userdata size in MiB (>= 8), Enter = 8:"),
+>>>>>>> arena/e8a29038-deix
         }
         loop {
             crate::print!("  Size [MiB]: ");
             let line = read_input_line();
             let trimmed = line.trim();
+<<<<<<< HEAD
             let mib = if trimmed.is_empty() { 16 } else { trimmed.parse::<u32>().unwrap_or(0) };
             if mib < 16 || mib > 2048 {
                 crate::println!("  Invalid size. Enter a number from 16 to 2048.");
+=======
+            let mib = if trimmed.is_empty() { 8 } else { trimmed.parse::<u32>().unwrap_or(0) };
+            if mib < 8 || mib > 2048 {
+                crate::println!("  Invalid size. Enter a number from 8 to 2048.");
+>>>>>>> arena/e8a29038-deix
                 continue;
             }
             if let Some(m) = max_mib {
@@ -981,6 +1223,7 @@ pub fn cmd_install(arg: &str) {
     }
     crate::println!();
 
+<<<<<<< HEAD
     // ---- Этап 2: перенос всех пользовательских файлов с загрузочного диска ----
     let migrate = if test_mode {
         crate::println!("  Migrate data: skipped (test mode).");
@@ -995,6 +1238,11 @@ pub fn cmd_install(arg: &str) {
     // ---- Шаг 6: установка (пошаговый job) ----
     crate::println!("  Step 6/6 - installing DeiX to disk...");
     let mut job = match InstallJob::new(target, userdata_sectors, username.clone(), password, migrate) {
+=======
+    // ---- Шаг 6: установка (пошаговый job) ----
+    crate::println!("  Step 6/6 - installing DeiX to disk...");
+    let mut job = match InstallJob::new(target, userdata_sectors, username.clone(), password) {
+>>>>>>> arena/e8a29038-deix
         Ok(j) => j,
         Err(e) => {
             crate::println!("  ERROR: {}", e);
@@ -1030,6 +1278,7 @@ pub fn cmd_install(arg: &str) {
     crate::println!("  User: {}", username);
     crate::println!("  /userdata: {} MiB (ext2)", userdata_sectors / 2048);
     crate::println!("  Disk is partitioned and ready to boot standalone.");
+<<<<<<< HEAD
     crate::println!("==================================================");
 
     // Этап 3: предложение немедленно перезагрузиться. Для Slave BIOS
@@ -1045,4 +1294,8 @@ pub fn cmd_install(arg: &str) {
             crate::cli::cmd_reboot();
         }
     }
+=======
+    crate::println!("  Reboot: 'reboot'");
+    crate::println!("==================================================");
+>>>>>>> arena/e8a29038-deix
 }

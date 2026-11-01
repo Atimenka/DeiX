@@ -102,7 +102,10 @@ pub fn ping(dst_ip: [u8; 4], id: u16, seq: u16, timeout_ms: u64) -> Option<u64> 
     }
 
     loop {
+<<<<<<< HEAD
         crate::rtl8139::poll_rx();
+=======
+>>>>>>> arena/e8a29038-deix
         let received = without_interrupts(|| PING_STATE.lock().reply_received);
         if received {
             return Some(timer::uptime_ms() - start);
