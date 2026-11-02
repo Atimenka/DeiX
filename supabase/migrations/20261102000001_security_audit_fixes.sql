@@ -435,3 +435,24 @@ GRANT ALL ON FUNCTION public.get_user_settings(uuid) TO service_role;
 GRANT ALL ON FUNCTION public.save_clipboard(uuid, text) TO service_role;
 GRANT ALL ON FUNCTION public.get_clipboard(uuid) TO service_role;
 GRANT ALL ON FUNCTION public.web_request_dev_unlock(uuid, text, text, text) TO service_role;
+
+-- ============================================================================
+-- 19. Trigger: Prevent role changes through direct UPDATE on profiles
+-- ============================================================================
+-- Only service_role (backend) can change roles. Direct UPDATE by authenticated
+-- users is blocked for the role field.
+
+CREATE OR REPLACE FUNCTION public.prevent_role_change() RETURNS trigger
+ LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public'
+AS $function$
+BEGIN
+  IF NEW.role IS DISTINCT FROM OLD.role AND auth.role() != 'service_role' THEN
+    RAISE EXCEPTION 'role changes are not allowed through direct updates';
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
+DROP TRIGGER IF EXISTS prevent_role_change ON public.profiles;
+CREATE TRIGGER prevent_role_change BEFORE UPDATE ON public.profiles
+  FOR EACH ROW EXECUTE FUNCTION public.prevent_role_change();
