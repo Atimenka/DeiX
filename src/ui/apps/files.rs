@@ -6,27 +6,6 @@
 
 use crate::renderer::{Color, IconType, Rect, Renderer};
 use crate::ui::theme::UiTheme;
-<<<<<<< HEAD
-use crate::ui::widgets::icon_button;
-use crate::ui::window::{FileViewEntry, Window};
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
-
-/// Ширина боковой панели разделов.
-pub const SIDEBAR_W: i32 = 110;
-
-/// Колонка превью выбранной картинки (.png/.bmp) справа от списка.
-pub const PREVIEW_W: i32 = 180;
-pub const PREVIEW_H: i32 = 140;
-=======
-use crate::ui::window::{FileViewEntry, Window};
-use alloc::format;
-use alloc::string::String;
-
-/// Ширина боковой панели разделов.
-pub const SIDEBAR_W: i32 = 110;
->>>>>>> arena/e8a29038-deix
 /// Первая строка списка файлов (от верха содержимого):
 /// панель инструментов (36) + строка хлебных крошек (24) + зазор.
 pub const LIST_START_Y: i32 = 68;
@@ -76,36 +55,6 @@ pub fn breadcrumbs(
     out
 }
 
-<<<<<<< HEAD
-/// Левый край самой левой кнопки панели инструментов (Delete): строка поиска
-/// должна заканчиваться до него.
-const TOOLBAR_LEFT: i32 = 248;
-
-/// Кнопка «File» (относительно области содержимого). Правый якорь —
-/// как и при отрисовке.
-pub fn new_file_btn_rect(win_w: u32) -> Rect {
-    Rect::new(win_w as i32 - 160, 6, 64, 24)
-}
-
-/// Кнопка «Folder».
-pub fn new_folder_btn_rect(win_w: u32) -> Rect {
-    Rect::new(win_w as i32 - 88, 6, 80, 24)
-}
-
-/// Кнопка «Delete» (видна, когда на записываемом разделе выбран элемент).
-pub fn delete_btn_rect(win_w: u32) -> Rect {
-    Rect::new(win_w as i32 - TOOLBAR_LEFT, 6, 80, 24)
-=======
-/// Кнопка «+File» (относительно области содержимого). Правый якорь —
-/// как и при отрисовке.
-pub fn new_file_btn_rect(win_w: u32) -> Rect {
-    Rect::new(win_w as i32 - 120, 6, 50, 24)
-}
-
-/// Кнопка «+Folder».
-pub fn new_folder_btn_rect(win_w: u32) -> Rect {
-    Rect::new(win_w as i32 - 64, 6, 55, 24)
->>>>>>> arena/e8a29038-deix
 }
 
 /// Кнопка раздела в боковой панели.
@@ -113,63 +62,6 @@ pub fn sidebar_item_rect(i: usize) -> Rect {
     Rect::new(4, 8 + i as i32 * 36, 102, 28)
 }
 
-<<<<<<< HEAD
-/// Имя файла похоже на картинку, которую умеет показывать превью.
-fn is_image_name(name: &str) -> bool {
-    let n = name.to_ascii_lowercase();
-    n.ends_with(".png") || n.ends_with(".bmp") || n.ends_with(".jpg") || n.ends_with(".jpeg")
-}
-
-/// Декодирует PNG (src/png.rs), baseline JPEG (src/jpeg.rs) или
-/// несжатый BMP 24/32 бит в пиксели RGB.
-fn decode_preview(data: &[u8]) -> Option<(Vec<u32>, usize, usize)> {
-    if crate::png::is_png(data) {
-        let img = crate::png::decode(data).ok()?;
-        if img.w == 0 || img.h == 0 || img.pixels.len() < img.w * img.h {
-            return None;
-        }
-        return Some((img.pixels, img.w, img.h));
-    }
-    if crate::jpeg::is_jpeg(data) {
-        let img = crate::jpeg::decode(data).ok()?;
-        if img.w == 0 || img.h == 0 || img.pixels.len() < img.w * img.h {
-            return None;
-        }
-        return Some((img.pixels, img.w, img.h));
-    }
-    if data.len() < 54 || &data[0..2] != b"BM" {
-        return None;
-    }
-    let off = u32::from_le_bytes([data[10], data[11], data[12], data[13]]) as usize;
-    let bw = i32::from_le_bytes([data[18], data[19], data[20], data[21]]);
-    let bh_raw = i32::from_le_bytes([data[22], data[23], data[24], data[25]]);
-    let bpp = u16::from_le_bytes([data[28], data[29]]);
-    let compression = u32::from_le_bytes([data[30], data[31], data[32], data[33]]);
-    if compression != 0 || (bpp != 24 && bpp != 32) || bw <= 0 || bh_raw == 0 {
-        return None;
-    }
-    let top_down = bh_raw < 0;
-    let bh = bh_raw.unsigned_abs() as usize;
-    let bw = bw as usize;
-    let bytes_pp = (bpp / 8) as usize;
-    let stride = (bw * bytes_pp).div_ceil(4) * 4;
-    if off + stride * bh > data.len() {
-        return None;
-    }
-    let mut pixels = Vec::with_capacity(bw * bh);
-    for y in 0..bh {
-        let srow = if top_down { y } else { bh - 1 - y };
-        let row = off + srow * stride;
-        for x in 0..bw {
-            let p = row + x * bytes_pp;
-            pixels.push(((data[p + 2] as u32) << 16) | ((data[p + 1] as u32) << 8) | data[p] as u32);
-        }
-    }
-    Some((pixels, bw, bh))
-}
-
-=======
->>>>>>> arena/e8a29038-deix
 pub fn draw_files(
     r: &mut Renderer,
     theme: &UiTheme,
@@ -185,78 +77,22 @@ pub fn draw_files(
 ) {
     r.fill_rect_alpha(w.x, content_y, w.width, w.height, theme.window_bg, theme.opacity);
 
-    r.fill_rect(w.x, content_y, SIDEBAR_W as u32, w.height, theme.titlebar_inactive);
+    r.fill_rect(w.x, content_y, SIDEBAR_W as u32, w.height, theme.surface_alt);
     let partitions = ["/userdata", "/system"];
     for (i, p) in partitions.iter().enumerate() {
         let item = sidebar_item_rect(i);
         let is_sel = current_partition == *p;
-        let bg = if is_sel { theme.titlebar_active } else { theme.titlebar_inactive };
+        let bg = if is_sel { theme.titlebar_active } else { theme.surface };
         let fg = if is_sel { theme.accent } else { theme.text_secondary };
         r.fill_rounded_rect(w.x + item.x, content_y + item.y, item.w, item.h, 4, bg);
-<<<<<<< HEAD
-        r.draw_icon(w.x + item.x + 4, content_y + item.y + 6, IconType::Drive, fg);
-        r.draw_text(w.x + item.x + 24, content_y + item.y + 6, p, fg, None);
-=======
-        r.draw_text(w.x + item.x + 8, content_y + item.y + 6, p, fg, None);
->>>>>>> arena/e8a29038-deix
     }
 
     r.fill_rect(w.x + SIDEBAR_W, content_y, w.width - SIDEBAR_W as u32, 36, theme.titlebar_active);
     r.draw_icon(w.x + SIDEBAR_W + 6, content_y + 10, IconType::Search, theme.text_secondary);
-<<<<<<< HEAD
-    let query = format!("[{}]", search_query);
-    let query_cells = ((w.width as i32 - TOOLBAR_LEFT - SIDEBAR_W - 34) / 8).max(4) as usize;
-    r.draw_text(
-        w.x + SIDEBAR_W + 26,
-        content_y + 10,
-        crate::ui::text::truncate_to_cells(&query, query_cells).0,
-=======
-    r.draw_text(
-        w.x + SIDEBAR_W + 26,
-        content_y + 10,
-        &format!("[{}]", search_query),
->>>>>>> arena/e8a29038-deix
         theme.text_primary,
         None,
     );
 
-<<<<<<< HEAD
-    // Создание файлов возможно только на записываемом разделе: на /system
-    // кнопки есть, только если он ext2 и включён dev-режим (vfs::is_writable).
-    let writable = crate::vfs::is_writable(current_partition);
-    if writable {
-        let fb = new_file_btn_rect(w.width);
-        icon_button(
-            r, w.x + fb.x, content_y + fb.y, fb.w, fb.h, 4, theme.accent, Color::WHITE,
-            IconType::Plus, "File",
-        );
-
-        let db = new_folder_btn_rect(w.width);
-        icon_button(
-            r, w.x + db.x, content_y + db.y, db.w, db.h, 4, theme.accent, Color::WHITE,
-            IconType::NewFolder, "Folder",
-        );
-
-        if selected_idx.is_some() {
-            let xb = delete_btn_rect(w.width);
-            icon_button(
-                r, w.x + xb.x, content_y + xb.y, xb.w, xb.h, 4, Color::RED, Color::WHITE,
-                IconType::Trash, "Delete",
-            );
-        }
-=======
-    // Создание файлов возможно только на записываемом разделе: на
-    // /system (EROFS, read-only) кнопки не рисуются и не кликаются.
-    let writable = current_partition == "/userdata";
-    if writable {
-        let fb = new_file_btn_rect(w.width);
-        r.fill_rounded_rect(w.x + fb.x, content_y + fb.y, fb.w, fb.h, 4, theme.accent);
-        r.draw_text(w.x + fb.x + 5, content_y + fb.y + 4, "+File", Color::WHITE, None);
-
-        let db = new_folder_btn_rect(w.width);
-        r.fill_rounded_rect(w.x + db.x, content_y + db.y, db.w, db.h, 4, theme.accent);
-        r.draw_text(w.x + db.x + 4, content_y + db.y + 4, "+Folder", Color::WHITE, None);
->>>>>>> arena/e8a29038-deix
     }
 
     // Хлебные крошки: раздел и каждый каталог пути — кликабельные
@@ -266,7 +102,7 @@ pub fn draw_files(
     for (i, (rect, label, _)) in crumbs.iter().enumerate() {
         let (cx, cy) = (w.x + rect.x, content_y + rect.y);
         let is_last = i == last;
-        let bg = if is_last { theme.titlebar_active } else { theme.titlebar_inactive };
+        let bg = if is_last { theme.titlebar_active } else { theme.surface };
         let fg = if is_last { theme.accent } else { theme.text_primary };
         r.fill_rounded_rect(cx, cy, rect.w, rect.h, 4, bg);
         r.draw_text(cx + 4, cy + 4, label, fg, None);
@@ -275,28 +111,6 @@ pub fn draw_files(
         }
     }
 
-<<<<<<< HEAD
-    // Превью выбранной картинки: список сужается на ширину колонки.
-    let mut preview: Option<(Vec<u32>, usize, usize)> = None;
-    if let Some(idx) = selected_idx {
-        if let Some(entry) = entries.get(idx) {
-            if !entry.is_dir && entry.size <= 400_000 && is_image_name(&entry.name) {
-                let full = if current_path == "/" {
-                    format!("/{}/{}", current_partition, entry.name)
-                } else {
-                    format!("{}{}/{}", current_partition, current_path, entry.name)
-                };
-                if let Ok(data) = crate::vfs::read_file(&full) {
-                    preview = decode_preview(&data);
-                }
-            }
-        }
-    }
-    let list_w = w.width as i32 - SIDEBAR_W - 10
-        - if preview.is_some() { PREVIEW_W + 10 } else { 0 };
-
-=======
->>>>>>> arena/e8a29038-deix
     let list_start_y = content_y + LIST_START_Y;
     let mut ey = list_start_y;
     for (idx, entry) in entries.iter().enumerate() {
@@ -304,22 +118,7 @@ pub fn draw_files(
             break;
         }
         let is_selected = selected_idx == Some(idx);
-        let bg = if is_selected { theme.titlebar_active } else { theme.window_bg };
-<<<<<<< HEAD
-        r.fill_rect(w.x + SIDEBAR_W + 4, ey - 2, list_w.max(80) as u32, 20, bg);
-
-        let (glyph, icon_color) = if entry.is_dir {
-            (IconType::Files, Color::YELLOW)
-        } else {
-            (IconType::Document, theme.accent)
-        };
-        r.draw_icon(w.x + SIDEBAR_W + 8, ey, glyph, icon_color);
-=======
-        r.fill_rect(w.x + SIDEBAR_W + 4, ey - 2, w.width - (SIDEBAR_W as u32 + 10), 20, bg);
-
-        let icon_color = if entry.is_dir { Color::YELLOW } else { theme.accent };
-        r.draw_icon(w.x + SIDEBAR_W + 8, ey, IconType::Files, icon_color);
->>>>>>> arena/e8a29038-deix
+        let _bg = if is_selected { theme.titlebar_active } else { theme.surface };
 
         let entry_str = if entry.is_dir {
             format!("{:<18} <DIR>", entry.name)
@@ -331,34 +130,6 @@ pub fn draw_files(
         ey += ROW_H;
     }
 
-<<<<<<< HEAD
-    if let Some((pixels, iw, ih)) = preview {
-        let px = w.x + w.width as i32 - PREVIEW_W - 8;
-        let py = list_start_y;
-        r.fill_rect(px - 2, py - 2, PREVIEW_W as u32 + 4, PREVIEW_H as u32 + 4, theme.titlebar_inactive);
-        // cover: заполняем колонку с обрезкой по центру, без искажений.
-        let (vx, vy, vw, vh) = if iw * PREVIEW_H as usize > ih * PREVIEW_W as usize {
-            let vw = (ih * PREVIEW_W as usize / PREVIEW_H as usize).max(1);
-            ((iw - vw) / 2, 0, vw, ih)
-        } else {
-            let vh = (iw * PREVIEW_H as usize / PREVIEW_W as usize).max(1);
-            (0, (ih - vh) / 2, iw, vh)
-        };
-        for y in 0..PREVIEW_H as usize {
-            let sy = vy + y * vh / PREVIEW_H as usize;
-            for x in 0..PREVIEW_W as usize {
-                let sx = vx + x * vw / PREVIEW_W as usize;
-                let p = pixels[sy * iw + sx];
-                r.put_pixel(px + x as i32, py + y as i32, Color::from_u32(p));
-            }
-        }
-        r.draw_rect(px - 2, py - 2, PREVIEW_W as u32 + 4, PREVIEW_H as u32 + 4, theme.accent);
-        let caption = format!("{}x{}", iw, ih);
-        r.draw_text(px, py + PREVIEW_H + 6, &caption, theme.text_secondary, None);
-    }
-
-=======
->>>>>>> arena/e8a29038-deix
     // Нижняя строка: сообщение об операции, ошибка или текущий путь.
     let bottom_y = content_y + w.height as i32 - 20;
     if let Some(msg) = status_msg {
@@ -366,29 +137,10 @@ pub fn draw_files(
     } else if let Some(err) = error {
         r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, err, Color::RED, None);
     } else {
-<<<<<<< HEAD
-        let mut loc = if current_path == "/" {
-=======
-        let loc = if current_path == "/" {
->>>>>>> arena/e8a29038-deix
             String::from(current_partition)
         } else {
             format!("{}{}", current_partition, current_path)
         };
-<<<<<<< HEAD
-        if !writable {
-            if current_partition == "/system" && crate::vfs::system_is_ext2_mounted() {
-                loc.push_str("  [read-only: dev mode off]");
-            } else {
-                loc.push_str("  [read-only]");
-            }
-        }
-        let max_cells = ((w.width as i32 - SIDEBAR_W - 16) / 8).max(8) as usize;
-        let shown = crate::ui::text::truncate_to_cells(&loc, max_cells).0;
-        r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, shown, theme.text_secondary, None);
-=======
-        r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, &loc, theme.text_secondary, None);
->>>>>>> arena/e8a29038-deix
     }
 }
 
@@ -493,18 +245,6 @@ pub fn draw_file_editor(
                 _ => theme.titlebar_inactive,
             };
             let fg = if i == 2 { theme.text_primary } else { Color::WHITE };
-<<<<<<< HEAD
-            let icon = match i {
-                0 => IconType::Save,
-                1 => IconType::Trash,
-                _ => IconType::Cross,
-            };
-            icon_button(r, bx, by, b.w, b.h, 4, bg, fg, icon, label);
-=======
-            r.fill_rounded_rect(bx, by, b.w, b.h, 4, bg);
-            let tw = label.len() as i32 * 8;
-            r.draw_text(bx + (b.w as i32 - tw) / 2, by + 5, label, fg, None);
->>>>>>> arena/e8a29038-deix
         }
     }
 }
