@@ -18,6 +18,10 @@ use crate::ui::taskbar::{
 };
 use crate::ui::theme::{get_theme, set_theme, UiTheme};
 use crate::ui::apps::installer as installer_ui;
+<<<<<<< HEAD
+use crate::ui::apps::updates as updates_ui;
+=======
+>>>>>>> arena/e8a29038-deix
 use crate::ui::window::{
     draw_window, load_partition_entries, maximized_geometry,
     BrowserTab, InstallerPage, Window, WindowContent, WindowFrame, MIN_WINDOW_H, MIN_WINDOW_W,
@@ -39,6 +43,10 @@ pub enum DesktopAction {
     OpenBrowser,
     OpenTaskManager,
     OpenThemeSettings,
+<<<<<<< HEAD
+    OpenGame2048,
+=======
+>>>>>>> arena/e8a29038-deix
 }
 
 pub fn desktop_shortcuts() -> Vec<DesktopShortcut> {
@@ -68,6 +76,14 @@ pub fn desktop_shortcuts() -> Vec<DesktopShortcut> {
             icon: IconType::Theme,
             action: DesktopAction::OpenThemeSettings,
         },
+<<<<<<< HEAD
+        DesktopShortcut {
+            name: "2048",
+            icon: IconType::Settings,
+            action: DesktopAction::OpenGame2048,
+        },
+=======
+>>>>>>> arena/e8a29038-deix
     ]
 }
 
@@ -122,6 +138,11 @@ pub struct Desktop {
     prev_start_menu_rect: Option<crate::renderer::Rect>,
     /// Область Центра управления прошлого кадра (если был открыт).
     prev_control_center_rect: Option<crate::renderer::Rect>,
+<<<<<<< HEAD
+    /// Область уведомлений прошлого кадра (ui::notify).
+    prev_toast_rect: Option<crate::renderer::Rect>,
+=======
+>>>>>>> arena/e8a29038-deix
     /// Курсор сдвинулся, но сцена не менялась — быстрый путь без
     /// полной перерисовки (save-under, см. update_cursor_only).
     cursor_moved: bool,
@@ -142,6 +163,19 @@ pub struct Desktop {
     /// Последнее увиденное поколение обоев (theme::wallpaper_epoch):
     /// при смене — кеш обоев сброшен (обои скачаны браузером/CLI).
     wallpaper_epoch_seen: u32,
+<<<<<<< HEAD
+    /// Последний увиденный seq видеокадра (pump_media: перерисовка
+    /// окна видеоплеера только когда движок реально выдал новый кадр).
+    last_frame_seq: u32,
+    /// Прогресс воспроизведения, квантованный до 250 мс — для перерисовки
+    /// транспортных панелей без сплошного рендера каждый тик.
+    last_progress_quant: u32,
+    /// Центр обновлений, общим для badge в Dock и окна Updates.
+    /// Окно Updates — view: рисует из этого центра, клики переключают
+    /// его stage. Автопроверка запускается при создании Desktop.
+    pub updates_center: Option<alloc::boxed::Box<crate::update::center::Center>>,
+=======
+>>>>>>> arena/e8a29038-deix
 }
 
 /// Запас вокруг окна под мягкую тень (4 px), blur-ореол (4 px) и
@@ -189,6 +223,10 @@ impl Desktop {
             prev_window_rects: Vec::new(),
             prev_start_menu_rect: None,
             prev_control_center_rect: None,
+<<<<<<< HEAD
+            prev_toast_rect: None,
+=======
+>>>>>>> arena/e8a29038-deix
             cursor_moved: false,
             prev_left_button: false,
             cursor_saved_pixels: Vec::new(),
@@ -197,6 +235,12 @@ impl Desktop {
             last_clock_key: u32::MAX,
             next_clock_check_ms: 0,
             wallpaper_epoch_seen: crate::ui::theme::wallpaper_epoch(),
+<<<<<<< HEAD
+            last_frame_seq: 0,
+            last_progress_quant: u32::MAX,
+            updates_center: Some(alloc::boxed::Box::new(crate::update::center::Center::new())),
+=======
+>>>>>>> arena/e8a29038-deix
         }
     }
 
@@ -287,7 +331,25 @@ impl Desktop {
     }
 
     pub fn open_theme_settings(&mut self, screen_w: i32, screen_h: i32) {
+<<<<<<< HEAD
+        self.open_placed(480, 506, screen_w, screen_h, Window::new_theme_settings);
+    }
+
+    pub fn open_game2048(&mut self, screen_w: i32, screen_h: i32) {
+        if let Some(i) = self
+            .windows
+            .iter()
+            .position(|w| matches!(w.content, WindowContent::Game2048 { .. }))
+        {
+            self.windows[i].minimized = false;
+            self.focus_window(i);
+            self.start_menu_open = false;
+            return;
+        }
+        self.open_placed(360, 380, screen_w, screen_h, Window::new_game2048);
+=======
         self.open_placed(480, 460, screen_w, screen_h, Window::new_theme_settings);
+>>>>>>> arena/e8a29038-deix
     }
 
     pub fn open_about(&mut self, screen_w: i32, screen_h: i32) {
@@ -310,6 +372,65 @@ impl Desktop {
         self.open_placed(520, 360, screen_w, screen_h, Window::new_installer);
     }
 
+<<<<<<< HEAD
+    pub fn open_updates(&mut self, screen_w: i32, screen_h: i32) {
+        if let Some(i) = self
+            .windows
+            .iter()
+            .position(|w| matches!(w.content, WindowContent::Updates))
+        {
+            self.windows[i].minimized = false;
+            self.focus_window(i);
+            self.start_menu_open = false;
+            return;
+        }
+        self.open_placed(480, 340, screen_w, screen_h, Window::new_updates);
+    }
+
+    pub fn open_photos(&mut self, screen_w: i32, screen_h: i32) {
+        if let Some(i) = self
+            .windows
+            .iter()
+            .position(|w| matches!(w.content, WindowContent::ImageViewer { .. }))
+        {
+            self.windows[i].minimized = false;
+            self.focus_window(i);
+            self.start_menu_open = false;
+            return;
+        }
+        self.open_placed(560, 400, screen_w, screen_h, Window::new_image_viewer);
+    }
+
+    pub fn open_video(&mut self, screen_w: i32, screen_h: i32) {
+        if let Some(i) = self
+            .windows
+            .iter()
+            .position(|w| matches!(w.content, WindowContent::VideoPlayer { .. }))
+        {
+            self.windows[i].minimized = false;
+            self.focus_window(i);
+            self.start_menu_open = false;
+            return;
+        }
+        self.open_placed(520, 380, screen_w, screen_h, Window::new_video_player);
+    }
+
+    pub fn open_music(&mut self, screen_w: i32, screen_h: i32) {
+        if let Some(i) = self
+            .windows
+            .iter()
+            .position(|w| matches!(w.content, WindowContent::MusicPlayer { .. }))
+        {
+            self.windows[i].minimized = false;
+            self.focus_window(i);
+            self.start_menu_open = false;
+            return;
+        }
+        self.open_placed(430, 380, screen_w, screen_h, Window::new_music_player);
+    }
+
+=======
+>>>>>>> arena/e8a29038-deix
     pub fn open_display_settings(&mut self, screen_w: i32, screen_h: i32) {
         let dh = RESOLUTION_PRESETS.len() as u32 * 28 + 40;
         self.open_placed(240, dh, screen_w, screen_h, |x, y| {
@@ -579,6 +700,15 @@ impl Desktop {
             }
             self.dirty = true;
 
+<<<<<<< HEAD
+            // Уведомление лежит поверх всего: клик по нему закрывает его
+            // и вниз не проваливается.
+            if crate::ui::notify::click(m.x, m.y, timer::uptime_ms()) {
+                return;
+            }
+
+=======
+>>>>>>> arena/e8a29038-deix
             // Overview поверх всего: клик по карточке активирует окно,
             // мимо карточек — закрывает обзор. Вниз клик не проваливается.
             if self.overview_open {
@@ -767,7 +897,11 @@ impl Desktop {
                                         tab.navigate(&new_url, true);
                                         *address_input = tab.url.clone();
                                     }
+<<<<<<< HEAD
+                                    *status_msg = Some(format!("Opening {}", new_url));
+=======
                                     *status_msg = Some(format!("Loaded {}", new_url));
+>>>>>>> arena/e8a29038-deix
                                 }
                                 0x08 => {
                                     address_input.pop();
@@ -954,6 +1088,101 @@ impl Desktop {
                             }
                         }
                     }
+<<<<<<< HEAD
+                    WindowContent::VideoPlayer { list, idx, .. } => {
+                        // Пробел — пауза/повтор, S — стоп.
+                        while let Some(byte) = keyboard::try_read_char() {
+                            self.dirty = true;
+                            match byte {
+                                b' ' => {
+                                    let st = crate::media::state();
+                                    if st == crate::media::ST_PLAYING
+                                        || st == crate::media::ST_PAUSED
+                                    {
+                                        crate::media::toggle_pause();
+                                    } else if let Some(i) = *idx {
+                                        if let Some(p) = list.get(i) {
+                                            let p = p.clone();
+                                            let _ = crate::media::play(&p);
+                                        }
+                                    }
+                                }
+                                b's' => crate::media::stop(),
+                                _ => {}
+                            }
+                        }
+                    }
+                    WindowContent::MusicPlayer { list, idx, .. } => {
+                        // Пробел — пауза/повтор, S — стоп, стрелки — треки.
+                        while let Some(byte) = keyboard::try_read_char() {
+                            self.dirty = true;
+                            match byte {
+                                b' ' => {
+                                    let st = crate::media::state();
+                                    if st == crate::media::ST_PLAYING
+                                        || st == crate::media::ST_PAUSED
+                                    {
+                                        crate::media::toggle_pause();
+                                    } else if let Some(i) = *idx {
+                                        if let Some(p) = list.get(i) {
+                                            let p = p.clone();
+                                            let _ = crate::media::play(&p);
+                                        }
+                                    }
+                                }
+                                b's' => crate::media::stop(),
+                                keyboard::ARROW_RIGHT | keyboard::ARROW_LEFT => {
+                                    if !list.is_empty() {
+                                        let cur = idx.unwrap_or(0);
+                                        let n = if byte == keyboard::ARROW_RIGHT {
+                                            (cur + 1) % list.len()
+                                        } else if cur == 0 {
+                                            list.len() - 1
+                                        } else {
+                                            cur - 1
+                                        };
+                                        let p = list[n].clone();
+                                        *idx = Some(n);
+                                        let _ = crate::media::play(&p);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    WindowContent::ImageViewer { library, selected, img, error, .. } => {
+                        // Стрелки листают библиотеку (когда она открыта).
+                        while let Some(byte) = keyboard::try_read_char() {
+                            if byte != keyboard::ARROW_UP && byte != keyboard::ARROW_DOWN {
+                                continue;
+                            }
+                            if library.is_empty() {
+                                continue;
+                            }
+                            let n = if byte == keyboard::ARROW_DOWN {
+                                (*selected + 1) % library.len()
+                            } else if *selected == 0 {
+                                library.len() - 1
+                            } else {
+                                *selected - 1
+                            };
+                            *selected = n;
+                            let p = library[n].clone();
+                            match crate::ui::apps::media::decode_image_file(&p) {
+                                Ok(v) => {
+                                    *img = Some(v);
+                                    *error = None;
+                                }
+                                Err(e) => {
+                                    *img = None;
+                                    *error = Some(e);
+                                }
+                            }
+                            self.dirty = true;
+                        }
+                    }
+=======
+>>>>>>> arena/e8a29038-deix
                     WindowContent::Installer { st } => {
                         while let Some(byte) = keyboard::try_read_char() {
                             self.dirty = true;
@@ -980,6 +1209,29 @@ impl Desktop {
                             }
                         }
                     }
+<<<<<<< HEAD
+                    WindowContent::Game2048 { game } => {
+                        // Стрелки/WASD — ход, R — новая игра.
+                        while let Some(byte) = keyboard::try_read_char() {
+                            self.dirty = true;
+                            let dir = match byte {
+                                keyboard::ARROW_UP | b'w' | b'W' => Some(crate::ui::apps::game2048::MoveDir::Up),
+                                keyboard::ARROW_DOWN | b's' | b'S' => Some(crate::ui::apps::game2048::MoveDir::Down),
+                                keyboard::ARROW_LEFT | b'a' | b'A' => Some(crate::ui::apps::game2048::MoveDir::Left),
+                                keyboard::ARROW_RIGHT | b'd' | b'D' => Some(crate::ui::apps::game2048::MoveDir::Right),
+                                b'r' | b'R' => {
+                                    game.new_game();
+                                    continue;
+                                }
+                                _ => None,
+                            };
+                            if let Some(d) = dir {
+                                game.handle_move(d);
+                            }
+                        }
+                    }
+=======
+>>>>>>> arena/e8a29038-deix
                     _ => {
                         while keyboard::try_read_char().is_some() {}
                     }
@@ -990,6 +1242,63 @@ impl Desktop {
         }
     }
 
+<<<<<<< HEAD
+    /// Перерисовка открытых плееров: кадр видео или квант прогресса
+    /// сменились — окно помечается грязным. Без открытых окон плееров
+    /// не делается ничего (движок может играть музыку и без окна).
+    fn pump_media(&mut self) {
+        if !self
+            .windows
+            .iter()
+            .any(|w| matches!(w.content, WindowContent::VideoPlayer { .. } | WindowContent::MusicPlayer { .. }))
+        {
+            return;
+        }
+        let seq = crate::media::with_frame(|f| f.seq);
+        let quant = crate::media::progress_ms() / 250;
+        if seq != self.last_frame_seq || quant != self.last_progress_quant {
+            self.last_frame_seq = seq;
+            self.last_progress_quant = quant;
+            self.dirty = true;
+        }
+    }
+
+    /// Подставляет страницы, загруженные фоновой задачей browser-net,
+    /// во вкладки браузера с совпавшим URL. Результаты, которым некуда
+    /// встать (вкладку успели увести на другой адрес или закрыть),
+    /// отбрасываются.
+    fn pump_browser_nav(&mut self) {
+        for page in crate::ui::window::take_nav_results() {
+            let mut applied = false;
+            for w in self.windows.iter_mut() {
+                let WindowContent::WebBrowser { tabs, active_tab, address_input, status_msg, .. } =
+                    &mut w.content
+                else {
+                    continue;
+                };
+                for (i, tab) in tabs.iter_mut().enumerate() {
+                    if tab.url != page.url {
+                        continue;
+                    }
+                    tab.title = page.title.clone();
+                    tab.content = page.content.clone();
+                    tab.links = page.links.clone();
+                    tab.scroll = 0;
+                    if i == *active_tab {
+                        *address_input = page.url.clone();
+                        *status_msg = Some(format!("Loaded {}", page.url));
+                    }
+                    applied = true;
+                }
+            }
+            if applied {
+                self.dirty = true;
+            }
+        }
+    }
+
+=======
+>>>>>>> arena/e8a29038-deix
     /// Выполняет шаги активной установки (страница Progress окна
     /// Install DeiX). До 4 шагов за кадр (~256 КиБ записи), чтобы
     /// рабочий стол оставался отзывчивым.
@@ -1021,6 +1330,21 @@ impl Desktop {
         }
     }
 
+<<<<<<< HEAD
+    /// Шаг фоновой работы центра обновлений: проверка сервера и
+    /// загрузка пакета идут по одному блокирующему вызову за кадр.
+    /// Центр живёт в Desktop — badge в Dock и окно Updates видят одно
+    /// состояние.
+    fn pump_update_centers(&mut self) {
+        if let Some(c) = self.updates_center.as_mut() {
+            if c.step() {
+                self.dirty = true;
+            }
+        }
+    }
+
+=======
+>>>>>>> arena/e8a29038-deix
     /// Закрывает меню Пуск, очищая поисковый запрос.
     fn close_start_menu(&mut self) {
         self.start_menu_open = false;
@@ -1049,6 +1373,14 @@ impl Desktop {
             StartMenuAction::OpenAbout => self.open_about(screen_w, screen_h),
             StartMenuAction::OpenDisplaySettings => self.open_display_settings(screen_w, screen_h),
             StartMenuAction::OpenInstaller => self.open_installer(screen_w, screen_h),
+<<<<<<< HEAD
+            StartMenuAction::OpenUpdates => self.open_updates(screen_w, screen_h),
+            StartMenuAction::OpenGame2048 => self.open_game2048(screen_w, screen_h),
+            StartMenuAction::OpenPhotos => self.open_photos(screen_w, screen_h),
+            StartMenuAction::OpenVideo => self.open_video(screen_w, screen_h),
+            StartMenuAction::OpenMusic => self.open_music(screen_w, screen_h),
+=======
+>>>>>>> arena/e8a29038-deix
         }
         self.menu_search.clear();
     }
@@ -1172,6 +1504,17 @@ impl Desktop {
 
 
     fn handle_desktop_click(&mut self, x: i32, y: i32, screen_w: i32, screen_h: i32) {
+<<<<<<< HEAD
+        // Виджет обновлений: клик → открыть Updates (та же область,
+        // что рисует draw_updates_widget).
+        let uw = updates_widget_rect(screen_w, screen_h);
+        if uw.contains(x, y) {
+            self.open_updates(screen_w, screen_h);
+            return;
+        }
+
+=======
+>>>>>>> arena/e8a29038-deix
         let shortcuts = desktop_shortcuts();
         for (idx, _) in shortcuts.iter().enumerate() {
             // Та же область, что подсветка в draw_desktop_icons:
@@ -1187,6 +1530,10 @@ impl Desktop {
                     DesktopAction::OpenBrowser => self.open_browser(screen_w, screen_h),
                     DesktopAction::OpenTaskManager => self.open_task_manager(screen_w, screen_h),
                     DesktopAction::OpenThemeSettings => self.open_theme_settings(screen_w, screen_h),
+<<<<<<< HEAD
+                    DesktopAction::OpenGame2048 => self.open_game2048(screen_w, screen_h),
+=======
+>>>>>>> arena/e8a29038-deix
                 }
                 return;
             }
@@ -1216,6 +1563,15 @@ impl Desktop {
         // `win` держит заём на список окон, поэтому арм кладёт параметры
         // сюда, а push происходит после match.
         let mut open_editor: Option<(i32, i32, String, String, bool)> = None;
+<<<<<<< HEAD
+        // То же для медиа-окон: (x, y, полный путь файла).
+        let mut open_image: Option<(i32, i32, String)> = None;
+        let mut open_video: Option<(i32, i32, String)> = None;
+        let mut open_music: Option<(i32, i32, String)> = None;
+        // Новый заголовок окна плеера (применяется после match).
+        let mut new_title: Option<String> = None;
+=======
+>>>>>>> arena/e8a29038-deix
         // Аналогично для закрытия текущего окна из диалога редактора.
         let mut close_after = false;
 
@@ -1237,7 +1593,11 @@ impl Desktop {
                     }
                 }
 
+<<<<<<< HEAD
+                if rel_x >= win.width as i32 - 130
+=======
                 if rel_x >= win.width as i32 - 110
+>>>>>>> arena/e8a29038-deix
                     && rel_x <= win.width as i32 - 10
                     && rel_y >= win.height as i32 - 32
                     && rel_y <= win.height as i32 - 8
@@ -1382,18 +1742,73 @@ impl Desktop {
                     return;
                 }
 
+<<<<<<< HEAD
+                let writable = crate::vfs::is_writable(current_partition.as_str());
+                if writable
+                    && selected_idx.is_some()
+                    && files_ui::delete_btn_rect(win.width).contains(rel_x, rel_y)
+                {
+                    if let Some(entry) = (*selected_idx).and_then(|i| entries.get(i)) {
+                        let name = entry.name.clone();
+                        let is_dir = entry.is_dir;
+                        let prompt = format!("Delete {}? Click Delete again", name);
+                        if name == "." || name == ".." {
+                            *status_msg = None;
+                            *error = Some(String::from("Delete failed: not a regular entry"));
+                        } else if status_msg.as_deref() != Some(prompt.as_str()) {
+                            *error = None;
+                            *status_msg = Some(prompt);
+                        } else {
+                            let path = format!("{}{}", current_partition, join_fs_path(current_path, &name));
+                            let result = if is_dir && dir_has_children(&path) {
+                                Err(String::from("folder is not empty"))
+                            } else {
+                                crate::vfs::remove(&path).map_err(|e| e.message())
+                            };
+                            match result {
+                                Ok(()) => {
+                                    *error = None;
+                                    *status_msg = Some(format!("Deleted {}", name));
+                                    *selected_idx = None;
+                                }
+                                Err(e) => {
+                                    *status_msg = None;
+                                    *error = Some(format!("Delete failed: {}", e));
+                                }
+                            }
+                            let (new_entries, err) = load_partition_entries(current_partition, current_path);
+                            *entries = new_entries;
+                            if err.is_some() {
+                                *error = err;
+                            }
+                        }
+                    }
+                    self.dirty = true;
+                    return;
+                }
+=======
                 let writable = current_partition == "/userdata";
+>>>>>>> arena/e8a29038-deix
                 if writable && files_ui::new_file_btn_rect(win.width).contains(rel_x, rel_y) {
                     // Свободное имя вместо повторяющихся по modulo uptime:
                     // существующий файл не перезаписывается.
                     match free_name(entries, "NEW_FILE_", ".TXT") {
                         Some(fname) => {
+<<<<<<< HEAD
+                            let path = format!("{}{}", current_partition, join_fs_path(current_path, &fname));
+                            match crate::vfs::write_file(&path, b"New file created in DeiX Files.\r\n") {
+                                Ok(()) => *status_msg = Some(format!("Created {}", fname)),
+                                Err(e) => {
+                                    *status_msg = None;
+                                    *error = Some(format!("Create failed: {}", e.message()));
+=======
                             let path = join_fs_path(current_path, &fname);
                             match ext2::write_file_path(&path, b"New file created in DeiX Files.\r\n") {
                                 Ok(()) => *status_msg = Some(format!("Created {}", fname)),
                                 Err(e) => {
                                     *status_msg = None;
                                     *error = Some(format!("Create failed: {:?}", e));
+>>>>>>> arena/e8a29038-deix
                                 }
                             }
                         }
@@ -1413,12 +1828,21 @@ impl Desktop {
                 if writable && files_ui::new_folder_btn_rect(win.width).contains(rel_x, rel_y) {
                     match free_name(entries, "FOLDER_", "") {
                         Some(dname) => {
+<<<<<<< HEAD
+                            let path = format!("{}{}", current_partition, join_fs_path(current_path, &dname));
+                            match crate::vfs::mkdir(&path) {
+                                Ok(()) => *status_msg = Some(format!("Created folder {}", dname)),
+                                Err(e) => {
+                                    *status_msg = None;
+                                    *error = Some(format!("Create failed: {}", e.message()));
+=======
                             let path = join_fs_path(current_path, &dname);
                             match ext2::mkdir(&path) {
                                 Ok(_) => *status_msg = Some(format!("Created folder {}", dname)),
                                 Err(e) => {
                                     *status_msg = None;
                                     *error = Some(format!("Create failed: {:?}", e));
+>>>>>>> arena/e8a29038-deix
                                 }
                             }
                         }
@@ -1462,6 +1886,30 @@ impl Desktop {
                     let idx = ((rel_y - files_ui::LIST_START_Y) / files_ui::ROW_H) as usize;
                     if idx < entries.len() {
                         // Повторный клик по уже выбранному элементу:
+<<<<<<< HEAD
+                        // каталог — переход внутрь, файл — редактор (на
+                        // разделе только для чтения — просмотр).
+                        if *selected_idx == Some(idx) {
+                            let name = entries[idx].name.clone();
+                            if entries[idx].is_dir {
+                                let new_path = match name.as_str() {
+                                    "." => current_path.clone(),
+                                    ".." => parent_path(current_path),
+                                    _ => join_fs_path(current_path, &name),
+                                };
+                                let (new_entries, err) =
+                                    load_partition_entries(current_partition, &new_path);
+                                match err {
+                                    Some(e) => *error = Some(e),
+                                    None => {
+                                        *current_path = new_path;
+                                        *entries = new_entries;
+                                        *selected_idx = None;
+                                        *error = None;
+                                        *status_msg = None;
+                                    }
+                                }
+=======
                         // каталог — переход внутрь, файл — редактор.
                         // /system смонтирован только для чтения.
                         if *selected_idx == Some(idx) {
@@ -1489,6 +1937,7 @@ impl Desktop {
                                 // /system: readdir поддерживает только
                                 // корень раздела — вход внутрь не
                                 // изображается работающим.
+>>>>>>> arena/e8a29038-deix
                             } else {
                                 let base = current_partition.trim_end_matches('/');
                                 let dir = current_path.trim_matches('/');
@@ -1497,8 +1946,28 @@ impl Desktop {
                                 } else {
                                     format!("{}/{}/{}", base, dir, name)
                                 };
+<<<<<<< HEAD
+                                // Медиа-файлы открываются своими приложениями
+                                // (лимит редактора на них не действует: видео
+                                // и фото бывают больше текстовых документов).
+                                let lower = name.to_ascii_lowercase();
+                                if crate::media::is_image_file(&lower) {
+                                    open_image = Some((win.x + 28, win.y + 28, full));
+                                } else if crate::media::is_video_file(&lower) {
+                                    open_video = Some((win.x + 28, win.y + 28, full));
+                                } else if crate::media::is_audio_file(&lower) {
+                                    open_music = Some((win.x + 28, win.y + 28, full));
+                                } else if entries[idx].size as usize > EDITOR_MAX_BYTES {
+                                    *status_msg = None;
+                                    *error = Some(format!("{}: too large for the editor (max {} KiB)", name, EDITOR_MAX_BYTES / 1024));
+                                } else {
+                                    let read_only = !crate::vfs::is_writable(current_partition.as_str());
+                                    open_editor = Some((win.x + 28, win.y + 28, name, full, read_only));
+                                }
+=======
                                 let read_only = current_partition != "/userdata";
                                 open_editor = Some((win.x + 28, win.y + 28, name, full, read_only));
+>>>>>>> arena/e8a29038-deix
                             }
                         } else {
                             *selected_idx = Some(idx);
@@ -1575,7 +2044,11 @@ impl Desktop {
                         Some(browser_ui::NavButton::Reload) => {
                             if let Some(tab) = tabs.get_mut(*active_tab) {
                                 tab.navigate(&cur_url, false);
+<<<<<<< HEAD
+                                *status_msg = Some(String::from("Reloading"));
+=======
                                 *status_msg = Some(String::from("Reloaded"));
+>>>>>>> arena/e8a29038-deix
                             }
                         }
                         Some(browser_ui::NavButton::Home) => {
@@ -1617,7 +2090,11 @@ impl Desktop {
                         if let Some(tab) = tabs.get_mut(*active_tab) {
                             tab.navigate(&target_url, true);
                         }
+<<<<<<< HEAD
+                        *status_msg = Some(format!("Opening {}", target_url));
+=======
                         *status_msg = Some(format!("Loaded {}", target_url));
+>>>>>>> arena/e8a29038-deix
                         self.dirty = true;
                     }
                     return;
@@ -1641,7 +2118,11 @@ impl Desktop {
                         if let Some(tab) = tabs.get_mut(*active_tab) {
                             tab.navigate(&url, true);
                             *address_input = tab.url.clone();
+<<<<<<< HEAD
+                            *status_msg = Some(format!("Opening {}", url));
+=======
                             *status_msg = Some(format!("Loaded {}", url));
+>>>>>>> arena/e8a29038-deix
                             self.dirty = true;
                         }
                     }
@@ -1734,9 +2215,47 @@ impl Desktop {
                             }
                         }
                     }
+<<<<<<< HEAD
+                    InstallerPage::Confirm => {
+                        // Строка этапа 2: клик переключает перенос всех
+                        // пользовательских файлов с загрузочного диска.
+                        if installer_ui::migrate_row_rect(ww).contains(rel_x, rel_y) {
+                            st.migrate = !st.migrate;
+                            st.note = None;
+                            self.dirty = true;
+                        }
+                    }
+                    InstallerPage::Done => {
+                        // Этап 3: кнопка немедленной перезагрузки — вход
+                        // в новую систему прямо из установщика.
+                        if installer_ui::done_reboot_rect(wh).contains(rel_x, rel_y) {
+                            crate::cli::cmd_reboot();
+                        }
+                    }
                     _ => {}
                 }
             }
+            WindowContent::Updates => {
+                let (ww, wh) = (win.width, win.height);
+                if let Some(center) = self.updates_center.as_mut() {
+                    if center.primary_label().is_some()
+                        && updates_ui::primary_btn_rect(ww, wh).contains(rel_x, rel_y)
+                    {
+                        center.primary();
+                        self.dirty = true;
+                    } else if center.secondary_label().is_some()
+                        && updates_ui::secondary_btn_rect(ww, wh).contains(rel_x, rel_y)
+                    {
+                        center.secondary();
+                        self.dirty = true;
+                    }
+                }
+            }
+=======
+                    _ => {}
+                }
+            }
+>>>>>>> arena/e8a29038-deix
             WindowContent::FileEditor {
                 full_path,
                 lines,
@@ -1778,9 +2297,140 @@ impl Desktop {
                     }
                 }
             }
+<<<<<<< HEAD
+            WindowContent::ImageViewer { library, selected, img, error, .. } => {
+                // Библиотечный режим: строки списка в левой колонке
+                // (геометрия — draw_list в apps/media.rs).
+                if rel_x < crate::ui::apps::media::LIB_W {
+                    if let Some(i) = crate::ui::apps::media::row_at(
+                        rel_y,
+                        library.len(),
+                        win.height as i32,
+                    ) {
+                        *selected = i;
+                        let p = library[i].clone();
+                        match crate::ui::apps::media::decode_image_file(&p) {
+                            Ok(v) => {
+                                *img = Some(v);
+                                *error = None;
+                            }
+                            Err(e) => {
+                                *img = None;
+                                *error = Some(e);
+                            }
+                        }
+                        self.dirty = true;
+                    }
+                }
+            }
+            WindowContent::VideoPlayer { list, idx, list_mode, status } => {
+                use crate::ui::apps::media as media_ui;
+                // Без return: новый заголовок применяется после match.
+                if *list_mode {
+                    if let Some(i) = media_ui::row_at(rel_y, list.len(), win.height as i32) {
+                        let p = list[i].clone();
+                        *status = crate::media::play(&p).err();
+                        *idx = Some(i);
+                        *list_mode = false;
+                        new_title =
+                            Some(format!("Video - {}", crate::media::file_name(&p)));
+                        self.dirty = true;
+                    }
+                } else if media_ui::list_btn_rect(win.width).contains(rel_x, rel_y) {
+                    *list_mode = true;
+                    self.dirty = true;
+                } else if let Some(b) = media_ui::transport_button_at(
+                    rel_x,
+                    rel_y,
+                    win.width,
+                    win.height,
+                    false,
+                ) {
+                    use media_ui::TransportButton as TB;
+                    match b {
+                        TB::PlayPause => {
+                            let st = crate::media::state();
+                            if st == crate::media::ST_PLAYING || st == crate::media::ST_PAUSED {
+                                crate::media::toggle_pause();
+                            } else if let Some(i) = *idx {
+                                if let Some(p) = list.get(i) {
+                                    let p = p.clone();
+                                    *status = crate::media::play(&p).err();
+                                }
+                            }
+                        }
+                        TB::Stop => crate::media::stop(),
+                        TB::VolDown => crate::media::volume_down(),
+                        TB::VolUp => crate::media::volume_up(),
+                        TB::Prev | TB::Next => {}
+                    }
+                    self.dirty = true;
+                }
+            }
+            WindowContent::MusicPlayer { list, idx, status } => {
+                use crate::ui::apps::media as media_ui;
+                // Без return: новый заголовок применяется после match.
+                if let Some(i) = media_ui::row_at(
+                    rel_y,
+                    list.len(),
+                    win.height as i32 - media_ui::TRANSPORT_H,
+                ) {
+                    let p = list[i].clone();
+                    *idx = Some(i);
+                    *status = crate::media::play(&p).err();
+                    new_title = Some(format!("Music - {}", crate::media::file_name(&p)));
+                    self.dirty = true;
+                } else if let Some(b) =
+                    media_ui::transport_button_at(rel_x, rel_y, win.width, win.height, true)
+                {
+                    use media_ui::TransportButton as TB;
+                    match b {
+                        TB::Prev | TB::Next => {
+                            if !list.is_empty() {
+                                let cur = idx.unwrap_or(0);
+                                let n = if matches!(b, TB::Next) {
+                                    (cur + 1) % list.len()
+                                } else if cur == 0 {
+                                    list.len() - 1
+                                } else {
+                                    cur - 1
+                                };
+                                let p = list[n].clone();
+                                *idx = Some(n);
+                                *status = crate::media::play(&p).err();
+                            }
+                        }
+                        TB::PlayPause => {
+                            let st = crate::media::state();
+                            if st == crate::media::ST_PLAYING || st == crate::media::ST_PAUSED {
+                                crate::media::toggle_pause();
+                            } else if let Some(i) = *idx {
+                                if let Some(p) = list.get(i) {
+                                    let p = p.clone();
+                                    *status = crate::media::play(&p).err();
+                                }
+                            }
+                        }
+                        TB::Stop => crate::media::stop(),
+                        TB::VolDown => crate::media::volume_down(),
+                        TB::VolUp => crate::media::volume_up(),
+                    }
+                    self.dirty = true;
+                }
+            }
             _ => {}
         }
 
+        // Новый заголовок окна плеера — до закрытия/открытия других окон
+        // (после match заём содержимого окна уже отпущен).
+        if let Some(t) = new_title {
+            win.title = t;
+        }
+=======
+            _ => {}
+        }
+
+>>>>>>> arena/e8a29038-deix
         if close_after {
             self.close_window(win_idx);
             return;
@@ -1788,6 +2438,18 @@ impl Desktop {
         if let Some((x, y, name, full, read_only)) = open_editor {
             self.push_focused(Window::new_file_editor(x, y, &name, &full, read_only));
         }
+<<<<<<< HEAD
+        if let Some((x, y, path)) = open_image {
+            self.push_focused(Window::new_image_viewer_file(x, y, &path));
+        }
+        if let Some((x, y, path)) = open_video {
+            self.push_focused(Window::new_video_player_file(x, y, &path));
+        }
+        if let Some((x, y, path)) = open_music {
+            self.push_focused(Window::new_music_player_file(x, y, &path));
+        }
+=======
+>>>>>>> arena/e8a29038-deix
     }
 
     pub fn render(&mut self, r: &mut Renderer) {
@@ -1810,6 +2472,15 @@ impl Desktop {
 
         draw_wallpaper(r, &theme, self, screen_w, screen_h);
         draw_desktop_icons(r, &theme, self.selected_icon);
+<<<<<<< HEAD
+        draw_clock_widget(r, screen_w, screen_h);
+        draw_metrics_widget(r, &theme, screen_w, screen_h);
+        let uw = updates_widget_rect(screen_w, screen_h);
+        let hover = uw.x <= mouse::snapshot().x && mouse::snapshot().x < uw.x + uw.w as i32
+            && uw.y <= mouse::snapshot().y && mouse::snapshot().y < uw.y + uw.h as i32;
+        draw_updates_widget(r, &theme, screen_w, screen_h, self, hover);
+=======
+>>>>>>> arena/e8a29038-deix
 
         let is_dragging = self.dragging_window.is_some();
 
@@ -1820,6 +2491,23 @@ impl Desktop {
             }
         }
 
+<<<<<<< HEAD
+        // Содержимое окна Updates: рисует desktop из общего центра
+        // обновлений (badge в Dock и окно видят одно состояние).
+        if let Some(center) = self.updates_center.as_ref() {
+            for w in self.windows.iter() {
+                if let WindowContent::Updates = w.content {
+                    if !w.minimized {
+                        let ui_m = crate::ui::metrics::UiMetrics::fluent();
+                        let content_y = w.y + ui_m.titlebar_height;
+                        updates_ui::draw_updates(r, &theme, w, center, content_y);
+                    }
+                }
+            }
+        }
+
+=======
+>>>>>>> arena/e8a29038-deix
         draw_dock(r, &theme, self, screen_w, screen_h);
         draw_top_panel(r, &theme, self, screen_w);
 
@@ -1835,6 +2523,11 @@ impl Desktop {
             draw_overview(r, &theme, self, screen_w, screen_h);
         }
 
+<<<<<<< HEAD
+        crate::ui::notify::draw(r, &theme);
+
+=======
+>>>>>>> arena/e8a29038-deix
         let m = mouse::snapshot();
         self.save_under_cursor(r, m.x, m.y);
         draw_cursor(r);
@@ -1898,6 +2591,20 @@ impl Desktop {
             r.add_damage(old);
         }
 
+<<<<<<< HEAD
+        // Уведомления: карточки двигаются и гаснут, поэтому каждый кадр
+        // в damage идёт объединение прошлой и текущей области.
+        let toast_rect = crate::ui::notify::region(screen_w, screen_h);
+        match (self.prev_toast_rect, toast_rect) {
+            (Some(old), Some(cur)) => r.add_damage(old.union(&cur)),
+            (Some(old), None) => r.add_damage(old),
+            (None, Some(cur)) => r.add_damage(cur),
+            (None, None) => {}
+        }
+        self.prev_toast_rect = toast_rect;
+
+=======
+>>>>>>> arena/e8a29038-deix
         // Dock: его ширина зависит от числа окон. Если область Dock
         // изменилась (окно открыли/закрыли), старую полосу надо
         // перерисовать, иначе по краям остаются куски прежнего Dock.
@@ -1997,6 +2704,28 @@ impl Desktop {
         // /userdata/config/desktop.cfg — один раз за загрузку.
         crate::ui::config::load_once();
 
+<<<<<<< HEAD
+        // Этап 3 установщика: маркер первой загрузки нового диска.
+        // Приветствуем, напоминаем о шифровании (экран входа или CLI
+        // `encrypt confirm <пароль>`) и удаляем маркер, чтобы уведомление
+        // не повторялось при следующих загрузках.
+        if crate::vfs::exists("/userdata/config/first_boot") {
+            let _ = crate::ext2::delete_file_path("config/first_boot");
+            crate::ui::notify::push(
+                crate::ui::notify::Kind::Success,
+                "DeiX installed",
+                "First boot from the new disk. Your files were migrated. To encrypt /userdata: the login screen offers it, or run `encrypt confirm <password>` in the CLI.",
+            );
+        }
+
+        // Автоустановка некритичного на /userdata: демо-пакеты (.mex)
+        // пишутся синхронно (они крошечные), медиапак (обои, демо-видео,
+        // музыка, голоса) — фоновой задачей, чтобы не держать вход.
+        crate::pkg::auto_install_bundled();
+        crate::mediapack::auto_once();
+
+=======
+>>>>>>> arena/e8a29038-deix
         if !preserve_windows {
             self.push_focused(Window::new_browser(40, 40, "deix://home"));
             self.push_focused(Window::new_files(380, 50));
@@ -2066,6 +2795,10 @@ impl Desktop {
             // Квант супервизора: детект упавших служб и политика
             // перезапуска. Без этого вызова RestartPolicy не работает.
             crate::dinit::tick();
+<<<<<<< HEAD
+            crate::devauth::poll_pending();
+=======
+>>>>>>> arena/e8a29038-deix
             crate::diag::persist::flush();
 
             self.handle_input(screen_w, screen_h);
@@ -2074,6 +2807,23 @@ impl Desktop {
             // работы за кадр, прогресс перерисовывается честно.
             self.pump_installer_jobs();
 
+<<<<<<< HEAD
+            // Фоновая загрузка браузера: подставляем готовые страницы
+            // во вкладки, пока остальной рабочий стол не блокируется.
+            self.pump_browser_nav();
+            self.pump_update_centers();
+            self.pump_media();
+
+            // Уведомления: шаг анимации раз в ~33 мс, пока есть карточки.
+            {
+                let m = mouse::snapshot();
+                if crate::ui::notify::frame(timer::uptime_ms(), screen_w, screen_h, m.x, m.y) {
+                    self.dirty = true;
+                }
+            }
+
+=======
+>>>>>>> arena/e8a29038-deix
             // Часы панели: RTC опрашивается ~раз в секунду, перерисовка —
             // только когда реально сменилась минута (а не каждую секунду).
             let now_ms = timer::uptime_ms();
@@ -2083,6 +2833,10 @@ impl Desktop {
                 if key != self.last_clock_key {
                     self.last_clock_key = key;
                     self.dirty = true;
+<<<<<<< HEAD
+                    r.add_damage(clock_widget_rect(screen_w, screen_h));
+=======
+>>>>>>> arena/e8a29038-deix
                 }
             }
 
@@ -2117,6 +2871,17 @@ pub fn run_desktop_session(mut on_resolution_change: impl FnMut(u32, u32) -> boo
     let mut desktop = Desktop::new();
     let mut preserve_windows = false;
 
+<<<<<<< HEAD
+    // Автопроверка обновлений при загрузке desktop: badge в Dock
+    // появляется сам, когда сервер предлагает новый билд. Если нет
+    // ключа или запрос упирается в сеть — state остаётся Idle/Failed,
+    // badge не показывается.
+    if let Some(c) = desktop.updates_center.as_mut() {
+        c.primary();
+    }
+
+=======
+>>>>>>> arena/e8a29038-deix
     // Если прошлая сессия завершилась отказом ядра, Error Center
     // открывается сразу: пользователь должен узнать о сбое, даже если
     // пропустил текстовое уведомление при загрузке.
@@ -2281,17 +3046,92 @@ fn blend_into(pixels: &mut [u32], idx: usize, fg: Color, alpha: u8) {
     }
 }
 
+<<<<<<< HEAD
+=======
 /// Генерация обоев выбранного стиля в пиксели кеша. Четыре стиля дают
 /// действительно разные картины; все цвета берутся из активной темы.
+>>>>>>> arena/e8a29038-deix
 /// Пытается загрузить пользовательские обои из /userdata/wallpaper.bmp:
 /// несжатый BMP 24/32 бит (BI_RGB), любой размер в пределах лимита файла
 /// ext2 (268 КБ, например 320x240x24); картинка растягивается на экран
 /// ближайшим соседом. false — файла нет или формат не поддержан.
 fn load_bmp_wallpaper(pixels: &mut [u32], w: i32, h: i32) -> bool {
+<<<<<<< HEAD
+    match ext2::read_file_path("/wallpaper.bmp") {
+        Ok(data) => draw_bmp(pixels, w, h, &data, false),
+        Err(_) => false,
+    }
+}
+
+/// Встроенные обои стилей `SYSTEM_WALLPAPER_FIRST..`: медиапак хранит их
+/// в /userdata/media/wallpapers (автоустановка, см. src/mediapack.rs);
+/// старые образы ОС несли их в /system/media/wallpapers — этот путь
+/// остаётся запасным. Форматы: JPEG (baseline), PNG с палитрой, BMP 24.
+fn load_system_wallpaper(pixels: &mut [u32], w: i32, h: i32, style: u8) -> bool {
+    let Some(index) = usize::from(style).checked_sub(crate::ui::theme::SYSTEM_WALLPAPER_FIRST) else {
+        return false;
+    };
+    let Some(file) = crate::ui::theme::SYSTEM_WALLPAPER_FILES.get(index) else {
+        return false;
+    };
+    let data = match crate::vfs::read_file(&format!("/userdata/media/wallpapers/{}", file)) {
+        Ok(d) => d,
+        Err(_) => match crate::vfs::read_file(&format!("/system/media/wallpapers/{}", file)) {
+            Ok(d) => d,
+            Err(_) => return false,
+        },
+    };
+    if crate::png::is_png(&data) {
+        match crate::png::decode(&data) {
+            Ok(img) => draw_image_cover(pixels, w, h, &img),
+            Err(_) => false,
+        }
+    } else if crate::jpeg::is_jpeg(&data) {
+        match crate::jpeg::decode(&data) {
+            Ok(img) => draw_image_cover(pixels, w, h, &img),
+            Err(_) => false,
+        }
+    } else {
+        draw_bmp(pixels, w, h, &data, true)
+    }
+}
+
+/// Рисует декодированный PNG в кеш обоев с обрезкой по центру (cover),
+/// без искажения пропорций.
+fn draw_image_cover(pixels: &mut [u32], w: i32, h: i32, img: &crate::png::Image) -> bool {
+    let (bw, bh) = (img.w, img.h);
+    if bw == 0 || bh == 0 || img.pixels.len() < bw.saturating_mul(bh) {
+        return false;
+    }
+    let (w, h) = (w.max(1) as usize, h.max(1) as usize);
+    let (vx, vy, vw, vh) = if bw * h > bh * w {
+        let vw = (bh * w / h).max(1);
+        ((bw - vw) / 2, 0, vw, bh)
+    } else {
+        let vh = (bw * h / w).max(1);
+        (0, (bh - vh) / 2, bw, vh)
+    };
+    let columns: Vec<usize> = (0..w).map(|x| vx + x * vw / w).collect();
+    for y in 0..h {
+        let sy = vy + y * vh / h;
+        if let Some(dst_row) = pixels.get_mut(y * w..(y + 1) * w) {
+            for (dst, sx) in dst_row.iter_mut().zip(columns.iter()) {
+                *dst = img.pixels[sy * bw + *sx];
+            }
+        }
+    }
+    true
+}
+
+/// Рисует несжатый BMP 24/32 бит в кеш обоев. `cover` — заполнить экран с
+/// обрезкой по центру без искажения пропорций, иначе картинка растягивается.
+fn draw_bmp(pixels: &mut [u32], w: i32, h: i32, data: &[u8], cover: bool) -> bool {
+=======
     let data = match ext2::read_file_path("/wallpaper.bmp") {
         Ok(d) => d,
         Err(_) => return false,
     };
+>>>>>>> arena/e8a29038-deix
     if data.len() < 54 || &data[0..2] != b"BM" {
         return false;
     }
@@ -2318,6 +3158,27 @@ fn load_bmp_wallpaper(pixels: &mut [u32], w: i32, h: i32) -> bool {
     }
 
     let (w, h) = (w.max(1) as usize, h.max(1) as usize);
+<<<<<<< HEAD
+    let (vx, vy, vw, vh) = if !cover {
+        (0, 0, bw, bh)
+    } else if bw * h > bh * w {
+        let vw = (bh * w / h).max(1);
+        ((bw - vw) / 2, 0, vw, bh)
+    } else {
+        let vh = (bw * h / w).max(1);
+        (0, (bh - vh) / 2, bw, vh)
+    };
+    // Столбцы источника считаются один раз, а не делением на каждый пиксель.
+    let columns: Vec<usize> = (0..w).map(|x| (vx + x * vw / w) * bytes_pp).collect();
+    for y in 0..h {
+        let sy = vy + y * vh / h;
+        let srow = if top_down { sy } else { bh - 1 - sy };
+        let row_off = off + srow * stride;
+        if let Some(dst_row) = pixels.get_mut(y * w..(y + 1) * w) {
+            for (dst, col) in dst_row.iter_mut().zip(columns.iter()) {
+                let p = row_off + col;
+                *dst = ((data[p + 2] as u32) << 16) | ((data[p + 1] as u32) << 8) | data[p] as u32;
+=======
     for y in 0..h {
         let sy = y * bh / h;
         let srow = if top_down { sy } else { bh - 1 - sy };
@@ -2328,12 +3189,19 @@ fn load_bmp_wallpaper(pixels: &mut [u32], w: i32, h: i32) -> bool {
             let (b, g, r) = (data[p], data[p + 1], data[p + 2]);
             if let Some(dst) = pixels.get_mut(y * w + x) {
                 *dst = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
+>>>>>>> arena/e8a29038-deix
             }
         }
     }
     true
 }
 
+<<<<<<< HEAD
+/// Генерация обоев выбранного стиля в пиксели кеша. Процедурные стили
+/// берут цвета из активной темы, стили Custom и со встроенной картинкой
+/// читают BMP; без файла рисуется Aurora.
+=======
+>>>>>>> arena/e8a29038-deix
 fn generate_wallpaper(pixels: &mut [u32], w: i32, h: i32, theme: &UiTheme) {
     let (w, h) = (w.max(1), h.max(1));
     let wu = w as usize;
@@ -2343,6 +3211,14 @@ fn generate_wallpaper(pixels: &mut [u32], w: i32, h: i32, theme: &UiTheme) {
     if theme.wallpaper_style == 4 && load_bmp_wallpaper(pixels, w, h) {
         return;
     }
+<<<<<<< HEAD
+    if usize::from(theme.wallpaper_style) >= crate::ui::theme::SYSTEM_WALLPAPER_FIRST
+        && load_system_wallpaper(pixels, w, h, theme.wallpaper_style)
+    {
+        return;
+    }
+=======
+>>>>>>> arena/e8a29038-deix
 
     // База: вертикальный градиент (у каждого стиля свои опорные цвета).
     let (top, bottom) = match theme.wallpaper_style {
@@ -2519,6 +3395,21 @@ fn draw_desktop_icons(r: &mut Renderer, theme: &UiTheme, selected_idx: Option<us
             r.fill_rounded_rect_alpha(ix - 6, iy - 4, 64, 60, 6, theme.accent, 100);
         }
 
+<<<<<<< HEAD
+        let glyph = match sc.icon {
+            IconType::Terminal => IconType::Terminal,
+            IconType::Files => IconType::Files,
+            IconType::Browser => IconType::Browser,
+            IconType::TaskManager => IconType::TaskManager,
+            IconType::Theme => IconType::Theme,
+            IconType::Settings => IconType::Settings,
+            _ => IconType::Terminal,
+        };
+        if !crate::ui::appicons::draw(r, ix + 8, iy + 2, 32, glyph) {
+            r.fill_rounded_rect(ix, iy, 48, 36, 8, theme.titlebar_active);
+            r.draw_icon(ix + 16, iy + 10, glyph, theme.accent);
+        }
+=======
         r.fill_rounded_rect(ix, iy, 48, 36, 8, theme.titlebar_active);
         r.draw_icon(
             ix + 16,
@@ -2533,11 +3424,245 @@ fn draw_desktop_icons(r: &mut Renderer, theme: &UiTheme, selected_idx: Option<us
             },
             theme.accent,
         );
+>>>>>>> arena/e8a29038-deix
 
         r.draw_text(ix, iy + 40, sc.name, theme.text_primary, None);
     }
 }
 
+<<<<<<< HEAD
+const WEEKDAYS: [&str; 7] =
+    ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS: [&str; 12] = [
+    "January", "February", "March", "April", "May", "June", "July", "August", "September",
+    "October", "November", "December",
+];
+
+/// Ширина и высота виджета часов на рабочем столе.
+const CLOCK_W: i32 = 200;
+const CLOCK_H: u32 = 92;
+
+/// Виджет системных метрик: CPU (топ-задача, idle) + RAM с полосой.
+const METRICS_W: i32 = 200;
+const METRICS_H: u32 = 96;
+
+/// Виджет обновлений: статус центра + клик → открыть Updates.
+const UPDATES_W: i32 = 200;
+const UPDATES_H: u32 = 72;
+/// Масштаб цифр и шаг между ними (глиф 8x16 увеличивается в целое число раз).
+const CLOCK_SCALE: i32 = 4;
+const CLOCK_ADVANCE: i32 = 7 * CLOCK_SCALE;
+
+/// Область виджета часов: правый верх рабочей области.
+fn clock_widget_rect(screen_w: i32, screen_h: i32) -> Rect {
+    let wa = work_area(screen_w, screen_h);
+    Rect::new(screen_w - 20 - CLOCK_W, wa.y + 12, CLOCK_W as u32, CLOCK_H)
+}
+
+/// Область виджета метрик: под часами, справа.
+fn metrics_widget_rect(screen_w: i32, screen_h: i32) -> Rect {
+    let cw = clock_widget_rect(screen_w, screen_h);
+    let x = cw.x;
+    let y = cw.y + cw.h as i32 + 12;
+    Rect::new(x, y, METRICS_W as u32, METRICS_H)
+}
+
+/// Область виджета обновлений: под метриками, справа.
+fn updates_widget_rect(screen_w: i32, screen_h: i32) -> Rect {
+    let mw = metrics_widget_rect(screen_w, screen_h);
+    let x = mw.x;
+    let y = mw.y + mw.h as i32 + 12;
+    Rect::new(x, y, UPDATES_W as u32, UPDATES_H)
+}
+
+/// День недели по григорианскому календарю, 0 = воскресенье (Сакамото).
+fn weekday_index(year: i32, month: u8, day: u8) -> usize {
+    const OFFSET: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let m = (month.clamp(1, 12) - 1) as usize;
+    let y = if month < 3 { year - 1 } else { year };
+    ((y + y / 4 - y / 100 + y / 400 + OFFSET[m] + day as i32).rem_euclid(7)) as usize
+}
+
+/// Рисует строку глифами шрифта 8x16, увеличенными в `scale` раз.
+fn draw_scaled_text(r: &mut Renderer, x: i32, y: i32, text: &str, scale: i32, color: Color) {
+    let mut cx = x;
+    for ch in text.chars() {
+        crate::ui::text::glyph_cells(ch, &mut |code| {
+            let glyph = crate::font::read_glyph(code);
+            for (row, bits) in glyph.iter().enumerate() {
+                for col in 0..8 {
+                    if (bits >> (7 - col)) & 1 == 0 {
+                        continue;
+                    }
+                    for dy in 0..scale {
+                        for dx in 0..scale {
+                            r.put_pixel(
+                                cx + col * scale + dx,
+                                y + row as i32 * scale + dy,
+                                color,
+                            );
+                        }
+                    }
+                }
+            }
+            cx += CLOCK_ADVANCE;
+        });
+    }
+}
+
+/// Часы и дата на обоях. Рисуются только когда RTC показывает правдоподобное
+/// время: по аптайму часы не изображаются. Пиксели непрозрачные, поэтому
+/// повторная отрисовка поверх прежней ничего не накапливает.
+fn draw_clock_widget(r: &mut Renderer, screen_w: i32, screen_h: i32) {
+    if !crate::rtc::is_plausible() {
+        return;
+    }
+    let t = crate::rtc::now();
+    let area = clock_widget_rect(screen_w, screen_h);
+    let shadow = Color::rgb(8, 10, 24);
+
+    let time = format!("{:02}:{:02}", t.hour, t.minute);
+    let time_w = time.chars().count() as i32 * CLOCK_ADVANCE;
+    let tx = area.x + area.w as i32 - time_w;
+    draw_scaled_text(r, tx + 2, area.y + 2, &time, CLOCK_SCALE, shadow);
+    draw_scaled_text(r, tx, area.y, &time, CLOCK_SCALE, Color::WHITE);
+
+    let date = format!(
+        "{}, {} {}",
+        WEEKDAYS[weekday_index(t.year as i32, t.month, t.day)],
+        t.day,
+        MONTHS[(t.month.clamp(1, 12) - 1) as usize]
+    );
+    let dx = area.x + area.w as i32 - crate::ui::text::text_cells(&date) as i32 * 8;
+    let dy = area.y + CLOCK_SCALE * 16 + 6;
+    r.draw_text(dx + 1, dy + 1, &date, shadow, None);
+    r.draw_text(dx, dy, &date, Color::WHITE, None);
+
+    r.add_damage(area);
+}
+
+/// Системные метрики: CPU (топ-задача, idle) + RAM с полосой.
+/// Реальные данные из планировщика, альлокатора и ATA- counters.
+fn draw_metrics_widget(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_h: i32) {
+    let area = metrics_widget_rect(screen_w, screen_h);
+    let (x, y) = (area.x, area.y);
+
+    r.fill_rounded_rect_alpha(x, y, area.w, area.h, 10, theme.window_bg, 225);
+    r.draw_rounded_rect_outline(x, y, area.w, area.h, 10, Color::BLACK, 80);
+
+    r.draw_text(x + 12, y + 8, "METRICS", theme.accent, None);
+
+    // CPU: доля самой загруженной задачи + idle.
+    let tasks = crate::sched::list();
+    let ticks_total = crate::sched::ticks_total();
+    let busiest = tasks.iter().max_by_key(|t| t.runtime_ticks);
+    let idle_ticks = crate::sched::idle_ticks();
+    let (busy_name, busy_pct) = match busiest {
+        Some(t) if ticks_total > 0 => {
+            let pct = ((t.runtime_ticks * 100) / ticks_total as u64) as i32;
+            (short_name(&t.name), pct.min(100))
+        }
+        _ => (String::from("-"), 0),
+    };
+    let idle_pct = if ticks_total > 0 {
+        ((idle_ticks * 100) / ticks_total) as i32
+    } else {
+        0
+    };
+    r.draw_text(
+        x + 12, y + 26,
+        &format!("CPU top: {:>2}% ({})  idle {}%", busy_pct, busy_name, idle_pct),
+        theme.text_primary, None,
+    );
+
+    // Полоса загрузки CPU.
+    let bar_w: u32 = 120;
+    r.fill_rounded_rect(x + 12, y + 42, bar_w, 8, 2, theme.titlebar_inactive);
+    r.fill_rounded_rect(x + 12, y + 42, (busy_pct as u32 * bar_w / 100).max(1), 8, 2, theme.accent);
+
+    // RAM: использовано / общее + процент.
+    let allocated = crate::allocator::allocated_heap_bytes();
+    let total = crate::allocator::total_heap_bytes();
+    let ram_pct = if total > 0 { (allocated * 100) / total } else { 0 };
+    r.draw_text(
+        x + 12, y + 58,
+        &format!("RAM: {} KB / {} KB ({}%)", allocated / 1024, total / 1024, ram_pct),
+        theme.text_secondary, None,
+    );
+    r.fill_rounded_rect(x + 12, y + 72, bar_w, 6, 2, theme.titlebar_inactive);
+    r.fill_rounded_rect(x + 12, y + 72, (ram_pct as u32 * bar_w / 100).max(1), 6, 2, theme.accent);
+
+    r.add_damage(area);
+}
+
+/// Краткое имя задачи: первые 8 символов.
+fn short_name(name: &str) -> String {
+    let mut s = String::new();
+    for c in name.chars().take(8) {
+        s.push(c);
+    }
+    s
+}
+
+/// Виджет обновлений: статус центра + клик → открыть Updates.
+/// Hover — подсветка области, клик — open_updates.
+fn draw_updates_widget(
+    r: &mut Renderer,
+    theme: &UiTheme,
+    screen_w: i32,
+    screen_h: i32,
+    desktop: &Desktop,
+    hover: bool,
+) {
+    let area = updates_widget_rect(screen_w, screen_h);
+    let (x, y) = (area.x, area.y);
+
+    if hover {
+        r.fill_rounded_rect_alpha(x, y, area.w, area.h, 10, theme.surface_alt, 230);
+    }
+    r.fill_rounded_rect_alpha(x, y, area.w, area.h, 10, theme.window_bg, 225);
+    r.draw_rounded_rect_outline(x, y, area.w, area.h, 10, Color::BLACK, 80);
+
+    r.draw_icon(x + 12, y + 8, IconType::Reload, theme.accent);
+    r.draw_text(x + 34, y + 8, "UPDATES", theme.accent, None);
+
+    // Статус из общего центра обновлений.
+    let status_line = match desktop.updates_center.as_ref() {
+        Some(c) if c.blocked().is_some() => "unavailable",
+        Some(c) => match c.stage() {
+            crate::update::center::Stage::Idle => "ready to check",
+            crate::update::center::Stage::Checking => "checking…",
+            crate::update::center::Stage::UpToDate => "up to date",
+            crate::update::center::Stage::Available => "update available",
+            crate::update::center::Stage::Downloading => "downloading…",
+            crate::update::center::Stage::Ready => "ready to install",
+            crate::update::center::Stage::Scheduled => "scheduled",
+            crate::update::center::Stage::Failed => "check failed",
+        },
+        None => "no center",
+    };
+    let color = match desktop.updates_center.as_ref().map(|c| c.stage()) {
+        Some(crate::update::center::Stage::Available)
+        | Some(crate::update::center::Stage::Ready)
+        | Some(crate::update::center::Stage::Downloading) => Color::rgb(230, 160, 60),
+        Some(crate::update::center::Stage::Failed) => Color::rgb(220, 60, 60),
+        Some(crate::update::center::Stage::UpToDate)
+        | Some(crate::update::center::Stage::Scheduled) => Color::rgb(80, 200, 120),
+        _ => theme.text_secondary,
+    };
+    r.draw_text(x + 12, y + 28, status_line, color, None);
+    r.draw_text(
+        x + 12, y + 44,
+        &format!("{}  |  {}", crate::OS_RELEASE, desktop.updates_center.as_ref().map(|c| c.installed_line()).unwrap_or_default()),
+        theme.text_secondary, None,
+    );
+    r.draw_text(x + 12, y + 56, "click to open", theme.text_secondary, None);
+
+    r.add_damage(area);
+}
+
+=======
+>>>>>>> arena/e8a29038-deix
 /// Прижимает геометрию окна к доступной области экрана: окно не шире
 /// экрана, не ниже панели задач, заголовок с кнопками всегда достижим.
 fn clamp_window_geometry(
@@ -2567,6 +3692,21 @@ fn clamp_window_geometry(
 
 /// Первое свободное имя вида `{prefix}{n}{suffix}` среди текущих записей
 /// каталога. Существующие файлы не перезаписываются.
+<<<<<<< HEAD
+/// Файлы больше этого размера редактор не открывает (текст строится в куче целиком).
+const EDITOR_MAX_BYTES: usize = 256 * 1024;
+
+/// В каталоге есть содержимое (или его не удалось прочитать — тогда
+/// удалять нельзя): `delete_file_path` у ext2 не рекурсивен.
+fn dir_has_children(path: &str) -> bool {
+    match crate::vfs::readdir(path) {
+        Ok(list) => list.iter().any(|e| e.name != "." && e.name != ".."),
+        Err(_) => true,
+    }
+}
+
+=======
+>>>>>>> arena/e8a29038-deix
 fn free_name(
     entries: &[crate::ui::window::FileViewEntry],
     prefix: &str,

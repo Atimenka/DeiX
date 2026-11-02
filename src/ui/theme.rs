@@ -172,8 +172,27 @@ impl UiTheme {
 /// в `desktop::generate_wallpaper` — декоративных пунктов здесь нет.
 /// "Custom" читает /userdata/wallpaper.bmp (BMP 24/32 бит, до 268 КБ —
 /// предел файла ext2-тома); без валидного файла рисуется Aurora.
+<<<<<<< HEAD
+/// Имена не длиннее 8 символов: они подписываются на миниатюре в Personalization.
+pub const WALLPAPER_STYLES: [&str; 18] = [
+    "Aurora", "Midnight", "Plasma", "Minimal", "Custom", "Nebula", "Horizon", "Crystal", "Forest",
+    "Dunes", "Neon", "Savanna", "Glacier", "Canyon", "Reef", "Galaxy", "Mono", "Lavender",
+];
+
+/// Первый стиль со встроенной картинкой; остальные идут подряд по
+/// `SYSTEM_WALLPAPER_FILES` — это обои медиапака
+/// (/userdata/media/wallpapers, JPEG 1280x720, см. src/mediapack.rs).
+/// Если файла нет (пак ещё не установлен), рисуется процедурная Aurora.
+pub const SYSTEM_WALLPAPER_FIRST: usize = 5;
+pub const SYSTEM_WALLPAPER_FILES: [&str; 13] = [
+    "nebula.jpg", "horizon.jpg", "crystal.jpg", "forest.jpg", "dunes.jpg", "neon.jpg",
+    "savanna.jpg", "glacier.jpg", "canyon.jpg", "reef.jpg", "galaxy.jpg", "mono.jpg",
+    "lavender.jpg",
+];
+=======
 pub const WALLPAPER_STYLES: [&str; 5] =
     ["Aurora", "Midnight", "Plasma Flow", "Minimal", "Custom"];
+>>>>>>> arena/e8a29038-deix
 
 static mut CURRENT_THEME: Option<UiTheme> = None;
 
@@ -209,3 +228,31 @@ pub fn set_theme(theme: UiTheme) {
         CURRENT_THEME = Some(theme);
     }
 }
+<<<<<<< HEAD
+
+/// Creates a theme from a preset token (same tokens as desktop.cfg).
+pub fn preset_from_token(token: &str) -> Option<UiTheme> {
+    match token {
+        "catppuccin" => Some(UiTheme::catppuccin()),
+        "nord_light" => Some(UiTheme::nord_light()),
+        "cyberpunk" => Some(UiTheme::cyberpunk()),
+        "aero_glass" => Some(UiTheme::aero_glass()),
+        "emerald" => Some(UiTheme::emerald_forest()),
+        "sunset_gold" => Some(UiTheme::sunset_gold()),
+        _ => None,
+    }
+}
+
+/// Token for a preset (same tokens as desktop.cfg).
+pub fn preset_token(p: ThemePreset) -> &'static str {
+    match p {
+        ThemePreset::DarkCatppuccin => "catppuccin",
+        ThemePreset::NordLight => "nord_light",
+        ThemePreset::CyberpunkNeon => "cyberpunk",
+        ThemePreset::AeroGlass => "aero_glass",
+        ThemePreset::EmeraldForest => "emerald",
+        ThemePreset::SunsetGold => "sunset_gold",
+    }
+}
+=======
+>>>>>>> arena/e8a29038-deix

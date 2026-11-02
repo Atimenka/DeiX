@@ -1,0 +1,71 @@
+{
+  "backup_date": "2026-11-01T17:40:00Z",
+  "project_ref": "xtsrvmwfnsxunvwuaplz",
+  "note": "Full backup before feature flags implementation. User will be testing/hacking.",
+  "tables": {
+    "dev_mode": [
+      { "id": 1, "enabled": false, "updated_at": "2026-11-01 17:35:57.622114+00", "updated_by": null }
+    ],
+    "feature_flags": [
+      { "name": "2048", "enabled": true, "description": "Пасхалка 2048" },
+      { "name": "cloud_clipboard", "enabled": true, "description": "Общий буфер обмена между устройствами" },
+      { "name": "cloud_sync", "enabled": true, "description": "Облачная синхронизация настроек" },
+      { "name": "dev_mode", "enabled": false, "description": "Dev-режим на всех устройствах" },
+      { "name": "media_player", "enabled": true, "description": "Медиаплеер (Photos/Video/Music)" },
+      { "name": "os_updates", "enabled": true, "description": "Обновления ОС" },
+      { "name": "wallpapers", "enabled": true, "description": "Встроенные обои" },
+      { "name": "widgets", "enabled": true, "description": "Виджеты рабочего стола" }
+    ],
+    "roles": [
+      { "name": "owner", "description": "Superuser — полный доступ", "rank": 100 },
+      { "name": "admin", "description": "Администратор — управление всем", "rank": 50 },
+      { "name": "moderator", "description": "Модератор — управление заявками", "rank": 20 },
+      { "name": "tester", "description": "Тестировщик — тестирование dev-режима", "rank": 10 }
+    ],
+    "user_roles": [
+      { "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "role_name": "owner", "assigned_at": "2026-11-01 17:35:57.622114+00", "assigned_by": "system" }
+    ],
+    "dev_keys": [
+      { "id": 2, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "created_at": "2026-10-25 11:03:29.101639+00" },
+      { "id": 3, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "created_at": "2026-10-25 11:11:58.771166+00" }
+    ],
+    "mfa_backup_codes": [
+      { "id": 1, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "c6e41e922709d4d270a18ef277752e04d0e94dcd446325daf22f53437609ae65", "used_at": null, "created_at": "2026-10-18 05:06:16.699702+00" },
+      { "id": 2, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "115dffc7b844d8b9568c97f2648e6e47207df4b937dae39ceaca0be63e9e85fc", "used_at": null, "created_at": "2026-10-18 05:06:16.699702+00" },
+      { "id": 3, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "add66cb3f4419b33df64d93bcff879e4b9ee1bd542470056ecee457647c3492a", "used_at": null, "created_at": "2026-10-18 05:06:16.699702+00" },
+      { "id": 4, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "82f08f244e85f71e44631cb8d2524bbc84dd458f1bd445be593918e0eda62e1e", "used_at": null, "created_at": "2026-10-18 05:06:16.699702+00" },
+      { "id": 5, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "7642ad0969f6fed075e6570883dde3cf68c1c9d2d66c1e5e604b822ddf4248c0", "used_at": null, "created_at": "2026-10-18 05:06:16.699702+00" },
+      { "id": 6, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "6c710270be9fb39f4ba45494816dcd8d22e00f42490c9c3517418eb6a526f66c", "used_at": null, "created_at": "2026-10-18 05:06:16.699702+00" },
+      { "id": 7, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "6d54df44a86302d3396f4473c17817df8edf102082ee7facfa30847b8af52a26", "used_at": null, "created_at": "2026-10-18 05:06:16.699702+00" },
+      { "id": 8, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "3d582410c2de62ec733fc9dc838227c617414e6bbf686ac17688ba501e7db2a5", "used_at": null, "created_at": "2026-10-18 05:06:16.699702+00" }
+    ],
+    "os_releases": [
+      {
+        "id": "3ff77d79-f714-4b65-a123-b784cd89001d",
+        "version": "0.3.0",
+        "title": "",
+        "notes": "",
+        "file_path": "0.3.0/deix-0.3.0.zip",
+        "file_name": "deix-0.3.0.zip",
+        "size_bytes": 609072,
+        "sha256": "167d8bf60903b1aacc3e414b497f9e9f5e5b5a1cd62606574eb8e8ab8a042b3d",
+        "ready": true,
+        "published": true,
+        "downloads": 1,
+        "created_by": "Atimenka",
+        "created_at": "2026-10-27 18:08:48.91031+00",
+        "published_at": "2026-10-27 18:09:21.684+00"
+      }
+    ],
+    "profiles": [
+      { "id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "username": "Atimenka", "role": "owner", "created_at": "2026-10-18 04:37:48.11524+00", "email_verified": false },
+      { "id": "ac244dd6-9615-49df-8353-69a8e8c29c79", "username": "123", "role": "user", "created_at": "2026-10-17 17:43:06.855458+00", "email_verified": true }
+    ],
+    "dev_unlocks": [],
+    "cloud_clipboard": [],
+    "device_links": [],
+    "email_verifications": [],
+    "os_updates": [],
+    "user_settings": []
+  }
+}

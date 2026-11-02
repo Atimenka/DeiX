@@ -169,10 +169,25 @@ fn resolve_program_path(name: &str) -> alloc::string::String {
     alloc::format!("/userdata/{}", name)
 }
 
+<<<<<<< HEAD
+=======
+/// Максимальный размер файла для чтения через MEX API.
+/// 128 КиБ — достаточно для конфигов, логи, USERS.DB.
+/// Большие файлы читаются по частям через offset (когда будет API).
+const MEX_MAX_READ: usize = 128 * 1024;
+
+>>>>>>> arena/e8a29038-deix
 extern "C" fn api_read_file(name_ptr: *const u8, name_len: usize, out_ptr: *mut u8, out_cap: usize) -> i64 {
     if name_ptr.is_null() || name_len == 0 || name_len > 64 {
         return -1;
     }
+<<<<<<< HEAD
+=======
+    // Лимит размера — защита от OOM при чтении больших файлов.
+    if out_cap > MEX_MAX_READ {
+        return -1;
+    }
+>>>>>>> arena/e8a29038-deix
     let name_slice = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
     let name = match core::str::from_utf8(name_slice) {
         Ok(s) => s,
@@ -183,6 +198,7 @@ extern "C" fn api_read_file(name_ptr: *const u8, name_len: usize, out_ptr: *mut 
     // Если программа исполняется как процесс — чтение идёт через её own
     // таблицу дескрипторов, иначе (запуск из CLI) — напрямую через VFS.
     let path = resolve_program_path(name);
+<<<<<<< HEAD
     let opened = match crate::process::current_pid() {
         Some(pid) => crate::process::open(pid, &path, false).and_then(|fd| {
             crate::process::read_fd(pid, fd).map(|d| (fd, d))
@@ -197,6 +213,21 @@ extern "C" fn api_read_file(name_ptr: *const u8, name_len: usize, out_ptr: *mut 
             Ok(data)
         }
         Err(_) => crate::vfs::read_file(&path),
+=======
+    // При вызове из процесса — строго через process::open (проверка капс).
+    // Fallback в vfs::read_file только для CLI-контекста (без PID), где
+    // капсы не применимы — вызывающий код управляет доступом сам.
+    let result = match crate::process::current_pid() {
+        Some(pid) => match crate::process::open(pid, &path, false).and_then(|fd| {
+            let data = crate::process::read_fd(pid, fd);
+            let _ = crate::process::close(pid, fd);
+            data
+        }) {
+            Ok(data) => Ok(data),
+            Err(_) => Err(()),
+        },
+        None => crate::vfs::read_file(&path).map_err(|_| ()),
+>>>>>>> arena/e8a29038-deix
     };
     match result {
         Ok(data) => {
@@ -212,10 +243,25 @@ extern "C" fn api_read_file(name_ptr: *const u8, name_len: usize, out_ptr: *mut 
     }
 }
 
+<<<<<<< HEAD
+=======
+/// Максимальный размер данных для записи через MEX API.
+/// 256 КиБ за один вызов — достаточно для конфигов и лога.
+/// Большие данные идут по частям.
+const MEX_MAX_WRITE: usize = 256 * 1024;
+
+>>>>>>> arena/e8a29038-deix
 extern "C" fn api_write_file(name_ptr: *const u8, name_len: usize, data_ptr: *const u8, data_len: usize) -> i64 {
     if name_ptr.is_null() || name_len == 0 || name_len > 64 || data_ptr.is_null() {
         return -1;
     }
+<<<<<<< HEAD
+=======
+    // Лимит размера — защита от заполнения диска.
+    if data_len > MEX_MAX_WRITE {
+        return -1;
+    }
+>>>>>>> arena/e8a29038-deix
     let name_slice = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
     let name = match core::str::from_utf8(name_slice) {
         Ok(s) => s,
@@ -228,6 +274,7 @@ extern "C" fn api_write_file(name_ptr: *const u8, name_len: usize, data_ptr: *co
     }
 
     let path = resolve_program_path(name);
+<<<<<<< HEAD
     // Запись идёт через таблицу дескрипторов процесса, если программа
     // исполняется как процесс: только там проверяется возможность записи.
     let written = match crate::process::current_pid() {
@@ -244,6 +291,24 @@ extern "C" fn api_write_file(name_ptr: *const u8, name_len: usize, data_ptr: *co
             Ok(()) => 0,
             Err(_) => -1,
         },
+=======
+    // Запись из процесса — строго через process::open (проверка WRITE_USERDATA).
+    // Fallback в vfs::write_file только для CLI-контекста (без PID).
+    let written = match crate::process::current_pid() {
+        Some(pid) => match crate::process::open(pid, &path, true).and_then(|fd| {
+            let r = crate::process::write_fd(pid, fd, data);
+            let _ = crate::process::close(pid, fd);
+            r
+        }) {
+            Ok(()) => Ok(()),
+            Err(_) => Err(()),
+        },
+        None => crate::vfs::write_file(&path, data).map_err(|_| ()),
+    };
+    match written {
+        Ok(()) => 0,
+        Err(_) => -1,
+>>>>>>> arena/e8a29038-deix
     }
 }
 

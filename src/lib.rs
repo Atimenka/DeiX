@@ -11,9 +11,18 @@ mod ramdisk;
 mod auth;
 mod autostart;
 mod bootlogo;
+<<<<<<< HEAD
+mod bootprof;
+mod bootchain;
+mod bootmap;
+mod bugreport;
+mod cli;
+mod cloudauth;
+=======
 mod bootchain;
 mod bugreport;
 mod cli;
+>>>>>>> arena/e8a29038-deix
 mod cp866;
 mod cpuid;
 mod crypto;
@@ -21,11 +30,18 @@ mod crypto_storage;
 mod devauth;
 mod devmode;
 mod diag;
+<<<<<<< HEAD
+=======
 mod dialog;
+>>>>>>> arena/e8a29038-deix
 mod dinit;
 mod ds;
 mod duil;
 mod erofs;
+<<<<<<< HEAD
+mod erofs_disk;
+=======
+>>>>>>> arena/e8a29038-deix
 mod ext2;
 mod font;
 mod font_cyrillic;
@@ -37,11 +53,20 @@ mod drivers;
 mod init_parser;
 mod install;
 mod interrupts;
+<<<<<<< HEAD
+mod jpeg;
+=======
+>>>>>>> arena/e8a29038-deix
 mod keyboard;
 mod lang;
 mod linux;
 mod loginui;
 mod luks;
+<<<<<<< HEAD
+mod media;
+mod mediapack;
+=======
+>>>>>>> arena/e8a29038-deix
 mod mex;
 mod mm;
 mod module;
@@ -68,6 +93,10 @@ mod sync;
 mod sysfs;
 mod timer;
 mod ui;
+<<<<<<< HEAD
+mod update;
+=======
+>>>>>>> arena/e8a29038-deix
 mod userfs;
 mod usermode;
 mod vault;
@@ -163,12 +192,20 @@ pub extern "C" fn kernel_main() -> ! {
     allocator::init();
     println!("Heap allocator (16 MiB): OK");
     crate::serial_println!("[deix] I: heap ok");
+<<<<<<< HEAD
+    bootprof::mark("heap ready");
+=======
+>>>>>>> arena/e8a29038-deix
 
     // Система диагностики: с этого момента каждое существенное событие
     // регистрируется в кольцевом буфере и уходит в serial. Постоянное
     // хранилище подключается позже (diag::storage_ready), когда /userdata
     // доступен — буфер до тех пор ничего не теряет.
     diag::init();
+<<<<<<< HEAD
+    bootprof::mark("diag ring ready");
+=======
+>>>>>>> arena/e8a29038-deix
 
     println!("PS/2 keyboard: OK (handled via IRQ1)");
 
@@ -176,12 +213,26 @@ pub extern "C" fn kernel_main() -> ! {
     println!("PS/2 mouse: OK (handled via IRQ12)");
 
     if ata::is_present() {
+<<<<<<< HEAD
+        match ata::enable_multiple() {
+            0 => crate::serial_println!("[ata] READ MULTIPLE недоступен — чтение по одному сектору"),
+            n => crate::serial_println!("[ata] READ MULTIPLE включён: {} секторов за один DRQ", n),
+        }
+        ata::enable_irq_wait();
+=======
+>>>>>>> arena/e8a29038-deix
         println!("ATA disk: OK (PIO mode)");
     } else {
         println!("ATA disk: not detected");
     }
 
+<<<<<<< HEAD
+    bootprof::mark("ata probe");
     let net_ok = rtl8139::init();
+    bootprof::mark("rtl8139 init");
+=======
+    let net_ok = rtl8139::init();
+>>>>>>> arena/e8a29038-deix
     if net_ok {
         println!(
             "Network: IP {}.{}.{}.{} (type 'ifconfig' for details)",
@@ -194,6 +245,10 @@ pub extern "C" fn kernel_main() -> ! {
 
     let gpu_info = gpu::detect();
     let gpu_ok = gpu_info.is_some();
+<<<<<<< HEAD
+    bootprof::mark("gpu detect");
+=======
+>>>>>>> arena/e8a29038-deix
     match gpu_info {
         Some(info) => {
             println!(
@@ -206,6 +261,10 @@ pub extern "C" fn kernel_main() -> ! {
     }
 
     let audio_ok = hda::init();
+<<<<<<< HEAD
+    bootprof::mark("hda init");
+=======
+>>>>>>> arena/e8a29038-deix
     if audio_ok {
         println!("Audio: Intel High Definition Audio (HDA) ready");
     } else {
@@ -215,6 +274,10 @@ pub extern "C" fn kernel_main() -> ! {
     println!("Default language: English. Type 'lang ru' to switch to Russian.");
 
     bootlogo::show("starting system...");
+<<<<<<< HEAD
+    bootprof::mark("boot logo shown");
+=======
+>>>>>>> arena/e8a29038-deix
 
     bootlogo::set_status("verifying boot partitions...");
     match crate::bootchain::run_boot_chain() {
@@ -224,11 +287,19 @@ pub extern "C" fn kernel_main() -> ! {
         }
     }
 
+<<<<<<< HEAD
+    bootprof::mark("bootchain done");
+=======
+>>>>>>> arena/e8a29038-deix
     bootlogo::set_status("initializing memory...");
     // Инициализируем менеджер памяти (физический + виртуальный).
     mm::phys::init();
     println!("  [mm] Physical page allocator: OK");
     mm::print_stats();
+<<<<<<< HEAD
+    bootprof::mark("mm phys init");
+=======
+>>>>>>> arena/e8a29038-deix
 
     // Полнодисковое шифрование (XTS-AES-256). ЕДИНЫЙ ПАРОЛЬ: пароль учётной
     // записи пользователя является ключом шифрования диска.
@@ -250,7 +321,17 @@ pub extern "C" fn kernel_main() -> ! {
     // Загружаем модули ядра (.kmod файлы) с ext2-диска.
     // Модули расширяют функциональность ядра: сеть, графика, криптография.
     // Если модуль не найден на диске — система продолжает работу без него.
+<<<<<<< HEAD
+    bootprof::mark("crypto state check");
+    if update::pending() {
+        crate::println!("  [update] an update is waiting: kernel modules are not loaded, /system is about to be replaced.");
+    } else {
+        module::load_boot_modules();
+    }
+    bootprof::mark("kmod load");
+=======
     module::load_boot_modules();
+>>>>>>> arena/e8a29038-deix
 
     // GDT/TSS ставим ПЕРВЫМИ: планировщик кладёт в начальный кадр задачи
     // SS=0x10 (kernel data), а в GDT загрузчика есть только null и
@@ -259,6 +340,10 @@ pub extern "C" fn kernel_main() -> ! {
 
     // ПЛАНИРОВЩИК: включаем вытесняющую многозадачность.
     sched::start();
+<<<<<<< HEAD
+    bootprof::mark("usermode+sched start");
+=======
+>>>>>>> arena/e8a29038-deix
 
     // Самопроверки sched/ring3 из загрузки УБРАНЫ: они своё отработали
     // (результаты зафиксированы в REFACTOR_REPORT.md), а kernel.bin
@@ -269,9 +354,18 @@ pub extern "C" fn kernel_main() -> ! {
     // /system (EROFS RO) + /userdata (EXT2 RW) и разбор скрипта init.deix
     // процессом PID 1 (Dinit).
     partition_map::validate_partition_map_report();
+<<<<<<< HEAD
+    bootprof::mark("partition map validate");
+    init_parser::boot_report(init_parser::INIT_DEIX_SCRIPT);
+    security_monitor::boot_selfcheck();
+    bootprof::mark("init script + security selfcheck");
+    crate::dinit::init();
+    bootprof::mark("dinit init");
+=======
     init_parser::boot_report(init_parser::INIT_DEIX_SCRIPT);
     security_monitor::boot_selfcheck();
     crate::dinit::init();
+>>>>>>> arena/e8a29038-deix
     crate::serial_println!("[deix] Dinit (PID 1, Ring 0) запущен");
 
     // ВНИМАНИЕ: autostart::run() ПЕРЕНЕСЁН за экран входа (см. ниже).
@@ -283,6 +377,10 @@ pub extern "C" fn kernel_main() -> ! {
     // Контрольный список загрузки: каждая строка — реальная проверка
     // подсистемы, сбой регистрируется в журнале со своим кодом DX-*.
     diag::boot::screen(net_ok, audio_ok, gpu_ok);
+<<<<<<< HEAD
+    bootprof::mark("diag boot screen");
+=======
+>>>>>>> arena/e8a29038-deix
 
     // Если прошлая сессия завершилась отказом ядра (дамп в сырых секторах,
     // LBA 2048), сообщаем об этом до входа. Плановая перезагрузка дампа
@@ -290,6 +388,10 @@ pub extern "C" fn kernel_main() -> ! {
     diag::cli::announce_previous_failure();
 
     bootlogo::set_status("system ready");
+<<<<<<< HEAD
+    bootprof::mark("system ready, waiting at login");
+=======
+>>>>>>> arena/e8a29038-deix
 
     // Экран входа — до первого запуска создаёт первый аккаунт, при
     // последующих запусках требует ввод логина/пароля (сверяется с
@@ -307,12 +409,26 @@ pub extern "C" fn kernel_main() -> ! {
         }
         None => auth::run_login_screen(),
     };
+<<<<<<< HEAD
+    bootprof::mark("login finished (includes the time the user spent typing)");
+    bootchain::finish();
+    update::run_apply_mode();
+=======
+>>>>>>> arena/e8a29038-deix
     cli::set_current_user(&username);
     let uid = if username == "root" { 0 } else { 1000 };
     if let Some(dinit) = crate::dinit::DINIT.lock().as_mut() {
         dinit.register_user(uid, &username);
     }
 
+<<<<<<< HEAD
+    // Все записи первого входа (профиль, журналы, каталоги, autostart) идут
+    // одним пакетом: кеш диска сбрасывается один раз в конце, а не после
+    // каждой мелкой операции (каждый сброс — fsync образа на хосте).
+    let first_login_writes = ata::FlushBatch::begin();
+
+=======
+>>>>>>> arena/e8a29038-deix
     // Профиль пользователя: /userdata/home/<имя>/{files,configs}.
     if let Err(e) = userfs::init_profile(&username) {
         crate::println!("  [userfs] профиль не создан: {}", e.message());
@@ -321,7 +437,13 @@ pub extern "C" fn kernel_main() -> ! {
     // /userdata доступен (и расшифрован, если включено шифрование) —
     // подключаем постоянные журналы и сбрасываем в них всё, что накопил
     // кольцевой буфер с начала загрузки. События до этой точки не теряются.
+<<<<<<< HEAD
+    bootprof::mark("user profile init");
     diag::storage_ready();
+    bootprof::mark("diag storage_ready");
+=======
+    diag::storage_ready();
+>>>>>>> arena/e8a29038-deix
     crate::serial_println!("[deix] J: storage_ready done ({} ms)", timer::uptime_ms());
 
     // Канонический layout /userdata: недостающие каталоги создаются
@@ -335,24 +457,54 @@ pub extern "C" fn kernel_main() -> ! {
 
     // Базовый /userdata/config/autostart.cfg — создаём при первом входе.
     autostart::ensure_default();
+<<<<<<< HEAD
+    bootprof::mark("userdata dirs + autostart defaults");
+    drop(first_login_writes);
+    bootprof::mark("first login writes flushed");
+=======
+>>>>>>> arena/e8a29038-deix
     crate::serial_println!("[deix] K: autostart ensure_default done ({} ms)", timer::uptime_ms());
 
     // Автозапуск ТОЛЬКО после успешного входа: команды выполняются от
     // имени вошедшего пользователя, а не анонимно до аутентификации.
     autostart::run();
+<<<<<<< HEAD
+    bootprof::mark("autostart run");
+=======
+>>>>>>> arena/e8a29038-deix
     crate::serial_println!("[deix] L: autostart run done ({} ms)", timer::uptime_ms());
 
     // UI-звуки (PC speaker, src/sound.rs; файлы *.dps в /system/media/audio/ui —
     // если в образе их нет, просто играем в тишине, как раньше).
     // Загрузка шла с USB-флешки (RAM-диск) — сигнал «носитель подключён»,
+<<<<<<< HEAD
+    // затем общий стартовый сигнал «система готова». Играет отдельная
+    // задача: звук идёт секунды, и ждать его до приглашения незачем.
+    if sched::spawn("boot-sound", boot_sound_task).is_none() {
+        boot_sound_task();
+    }
+
+    bootprof::mark("boot sound + cli prompt");
+    cli::run();
+}
+
+/// Стартовые UI-звуки; выполняется в фоновой задаче планировщика.
+extern "C" fn boot_sound_task() {
+=======
     // затем общий стартовый сигнал «система готова».
+>>>>>>> arena/e8a29038-deix
     if crate::ramdisk::is_active() {
         let _ = sound::play_ui(sound::UiSound::UsbConnect);
     }
     let _ = sound::play_ui(sound::UiSound::Startup);
+<<<<<<< HEAD
+    let _ = sound::play_ui(sound::UiSound::Welcome);
+    crate::serial_println!("[deix] M: startup sound done ({} ms)", timer::uptime_ms());
+=======
     crate::serial_println!("[deix] M: startup sound done ({} ms)", timer::uptime_ms());
 
     cli::run();
+>>>>>>> arena/e8a29038-deix
 }
 
 /// Полный сброс глобальных структур состояния (.data/.bss) перед переносом

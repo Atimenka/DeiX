@@ -39,8 +39,13 @@ pub fn enable_dev_mode() {
         }
         Err(reason) => {
             crate::println!("  [dev] Активация НЕ пройдена: {}", reason);
+<<<<<<< HEAD
+            crate::println!("  [dev] Порядок: ключ с сайта -> 'dev unlock <ключ>' -> 'dev on'");
+            crate::println!("  [dev] (или 'dev request' -> одобрение владельцем, docs/DEVAUTH.md).");
+=======
             crate::println!("  [dev] Порядок: 'dev request' -> одобрение владельцем");
             crate::println!("  [dev] проекта (docs/DEVAUTH.md) -> 'dev on'.");
+>>>>>>> arena/e8a29038-deix
             return;
         }
     }
@@ -73,7 +78,22 @@ pub fn dev_status() {
     for line in crate::devauth::status_lines() {
         crate::println!("{}", line);
     }
-    crate::println!("  команды: dev request | dev on | dev off | dev revoke");
+<<<<<<< HEAD
+    crate::println!("  команды: dev id | dev unlock | dev link | dev request | dev on | dev off | dev revoke");
+=======
+    // Feature flags с сервера (если доступен)
+    match crate::devauth::fetch_feature_flags() {
+        Ok(flags) if !flags.is_empty() => {
+            crate::println!("  feature flags:");
+            for (name, enabled) in flags {
+                let state = if enabled { "ON" } else { "off" };
+                crate::println!("    {}: {}", name, state);
+            }
+        }
+        _ => {}
+    }
+    crate::println!("  команды: dev request | dev on | dev off | dev revoke | dev flags");
+>>>>>>> arena/e8a29038-deix
 }
 
 /// Чтение строки с клавиатуры или COM1.

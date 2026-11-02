@@ -607,6 +607,24 @@ pub fn open(pid: u32, path: &str, write: bool) -> Result<usize, ProcessError> {
         if caps & cap::WRITE_USERDATA == 0 {
             return Err(ProcessError::Vfs(String::from("нет права записи (cap WRITE_USERDATA)")));
         }
+<<<<<<< HEAD
+=======
+    } else {
+        // Чтение с read-only раздела (/system) требует READ_ANY капса.
+        // Чтение из /userdata (read-write том) разрешено любому процессу —
+        // это пользовательские данные.
+        if st.read_only {
+            let caps = {
+                let table = PROCS.lock();
+                table.iter().find(|p| p.pid == pid).map(|p| p.caps).unwrap_or(0)
+            };
+            if caps & cap::READ_ANY == 0 {
+                return Err(ProcessError::Vfs(String::from(
+                    "нет права чтения (cap READ_ANY требуется для /system)",
+                )));
+            }
+        }
+>>>>>>> arena/e8a29038-deix
     }
 
     let fd = Fd {

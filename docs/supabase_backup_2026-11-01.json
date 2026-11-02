@@ -1,0 +1,58 @@
+# DeiX Supabase Database Backup
+# Date: 2026-11-01
+# Project: xtsrvmwfnsxunvwuaplz
+# Format: JSON dumps of all table data
+
+## Tables with data
+
+### dev_keys (2 rows)
+```json
+[
+  {"id": 2, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "created_at": "2026-10-25T11:03:29.101639+00:00"},
+  {"id": 3, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "created_at": "2026-10-25T11:11:58.771166+00:00"}
+]
+```
+
+### dev_settings (1 row)
+```json
+[
+  {"key": "requests_open", "value": false}
+]
+```
+
+### mfa_backup_codes (8 rows)
+```json
+[
+  {"id": 1, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "c6e41e922709d4d270a18ef277752e04d0e94dcd446325daf22f53437609ae65", "used_at": null, "created_at": "2026-10-18T05:06:16.699702+00:00"},
+  {"id": 2, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "115dffc7b844d8b9568c97f2648e6e47207df4b937dae39ceaca0be63e9e85fc", "used_at": null, "created_at": "2026-10-18T05:06:16.699702+00:00"},
+  {"id": 3, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "add66cb3f4419b33df64d93bcff879e4b9ee1bd542470056ecee457647c3492a", "used_at": null, "created_at": "2026-10-18T05:06:16.699702+00:00"},
+  {"id": 4, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "82f08f244e85f71e44631cb8d2524bbc84dd458f1bd445be593918e0eda62e1e", "used_at": null, "created_at": "2026-10-18T05:06:16.699702+00:00"},
+  {"id": 5, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "7642ad0969f6fed075e6570883dde3cf68c1c9d2d66c1e5e604b822ddf4248c0", "used_at": null, "created_at": "2026-10-18T05:06:16.699702+00:00"},
+  {"id": 6, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "6c710270be9fb39f4ba45494816dcd8d22e00f42490c9c3517418eb6a526f66c", "used_at": null, "created_at": "2026-10-18T05:06:16.699702+00:00"},
+  {"id": 7, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "6d54df44a86302d3396f4473c17817df8edf102082ee7facfa30847b8af52a26", "used_at": null, "created_at": "2026-10-18T05:06:16.699702+00:00"},
+  {"id": 8, "user_id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "code_hash": "3d582410c2de62ec733fc9dc838227c617414e6bbf686ac17688ba501e7db2a5", "used_at": null, "created_at": "2026-10-18T05:06:16.699702+00:00"}
+]
+```
+
+### os_releases (1 row)
+```json
+[
+  {"id": "3ff77d79-f714-4b65-a123-b784cd89001d", "version": "0.3.0", "title": "", "notes": "", "file_path": "0.3.0/deix-0.3.0.zip", "file_name": "deix-0.3.0.zip", "size_bytes": 609072, "sha256": "167d8bf60903b1aacc3e414b497f9e9f5e5b5a1cd62606574eb8e8ab8a042b3d", "ready": true, "published": true, "downloads": 1, "created_by": "Atimenka", "created_at": "2026-10-27T18:08:48.91031+00:00", "published_at": "2026-10-27T18:09:21.684+00:00"}
+]
+```
+
+### profiles (2 rows)
+```json
+[
+  {"id": "0c9bf8b3-b772-444c-9cbd-b89b5ab06378", "username": "Atimenka", "role": "owner", "created_at": "2026-10-18T04:37:48.11524+00:00", "email_verified": false},
+  {"id": "ac244dd6-9615-49df-8353-69a8e8c29c79", "username": "123", "role": "user", "created_at": "2026-10-17T17:43:06.85545+00:00", "email_verified": true}
+]
+```
+
+## Empty tables
+- cloud_clipboard: 0 rows
+- dev_unlocks: 0 rows
+- device_links: 0 rows
+- email_verifications: 0 rows
+- os_updates: 0 rows
+- user_settings: 0 rows
