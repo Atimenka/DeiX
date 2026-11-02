@@ -381,6 +381,18 @@ async function requireOwner(req, res) {
   return user;
 }
 
+/** Owner или Curator: допуск к панели управления ролями. */
+async function requireManager(req, res) {
+  const user = await requireUser(req, res);
+  if (user.role !== 'owner' && user.role !== 'curator') {
+    throw new HttpError(403, 'Нужны права Owner или Curator');
+  }
+  if (user.aal !== 'aal2') {
+    throw new HttpError(403, 'Для панели нужна двухфакторная аутентификация: включите её в аккаунте и войдите заново.', 'mfa_required');
+  }
+  return user;
+}
+
 /** Без подтверждённой почты ключи и заявки недоступны — но только если сервер умеет слать письма. */
 function requireVerified(user) {
   if (mailConfigured() && !user.emailVerified) {
@@ -413,6 +425,7 @@ module.exports = {
   overLimit,
   readBody,
   recordHit,
+  requireManager,
   requireOwner,
   requireUser,
   rpc,

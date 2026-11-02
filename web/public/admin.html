@@ -126,7 +126,8 @@
 
         <div class="panel rel-panel">
           <h3>Роли пользователей</h3>
-          <p class="hint">Роли: owner (полный доступ), admin (управление всем), moderator (заявки), tester (тестирование).</p>
+          <p class="hint">Роли: owner (100) → curator (60) → admin (50) → moderator (20) → tester (10) → user (1). Куратор может назначать роли ниже своей (admin, moderator, tester), но не curator и не owner.</p>
+          <p class="hint">Вы вошли как <strong id="mg-user-role">—</strong></p>
           <form id="mg-role-form" class="stack" autocomplete="off">
             <label>Пользователь
               <input id="mg-user-id" name="user_id" type="text" placeholder="UUID или username" required>
@@ -136,6 +137,7 @@
                 <option value="admin">admin</option>
                 <option value="moderator">moderator</option>
                 <option value="tester">tester</option>
+                <option value="curator">curator</option>
               </select>
             </label>
             <button class="btn primary" id="mg-role-submit" type="submit">Назначить роль</button>

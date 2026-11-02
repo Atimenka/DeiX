@@ -487,6 +487,7 @@ const FLAG_LABELS = {
 
 const ROLE_LABELS = {
   owner: tr('Owner'),
+  curator: tr('Куратор'),
   admin: tr('Администратор'),
   moderator: tr('Модератор'),
   tester: tr('Тестировщик'),
@@ -508,6 +509,18 @@ async function loadManage() {
     $('mg-dev-mode-label').textContent = data.dev_mode ? tr('Dev-режим активен') : tr('Dev-режим выключен');
     renderFlags(data.flags);
     renderRoles(data.user_roles);
+    if (data.user) {
+      $('mg-user-role').textContent = `${data.user.username} · ${roleLabel(data.user.role)}`;
+      const roleSelect = $('mg-role-select');
+      Array.from(roleSelect.options).forEach((opt) => {
+        opt.disabled = false;
+      });
+      if (data.user.role === 'curator') {
+        Array.from(roleSelect.options).forEach((opt) => {
+          if (opt.value === 'curator' || opt.value === 'owner') opt.disabled = true;
+        });
+      }
+    }
   } catch (err) {
     if (err.code === 'mfa_required') {
       denyMfa(await fetchMe());

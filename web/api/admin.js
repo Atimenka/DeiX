@@ -1,6 +1,6 @@
 'use strict';
 
-const { DEVICE_ID_RE, HttpError, fail, guardPost, readBody, requireOwner, rpc, sb, send, storage, storageBytes, storageUrl, auth } = require('./_lib');
+const { DEVICE_ID_RE, HttpError, fail, guardPost, readBody, requireManager, requireOwner, rpc, sb, send, storage, storageBytes, storageUrl, auth } = require('./_lib');
 const crypto = require('node:crypto');
 const { BUCKET, EXT_RE, MAX_SIZE, UUID_RE, VERSION_RE, objectPath } = require('./_releases');
 const { parseManifestFile, payloadPath } = require('./_updates');
@@ -39,11 +39,11 @@ async function list(res) {
   return send(res, 200, { ok: true, requests, counts, requests_open: open, users_total: users.length });
 }
 
-async function decide(res, owner, body) {
+async function decide(res, manager, body) {
   const id = deviceId(body);
   const name = body.decision === 'approve' ? 'approve_dev_unlock' : body.decision === 'deny' ? 'deny_dev_unlock' : '';
   if (!name) throw new HttpError(400, 'Неизвестное решение');
-  const row = await rpc(name, { p_device_id: id, p_by: owner.username });
+  const row = await rpc(name, { p_device_id: id, p_by: manager.username });
   return send(res, 200, { ok: true, status: row.status });
 }
 
@@ -83,7 +83,7 @@ async function releasesList(res) {
   return send(res, 200, { ok: true, releases });
 }
 
-async function releasePrepare(res, owner, body) {
+async function releasePrepare(res, manager, body) {
   const version = String(body.version || '').trim();
   if (!VERSION_RE.test(version)) {
     throw new HttpError(400, 'Версия: до 32 символов, латинские буквы, цифры, точка, дефис и _');
@@ -114,7 +114,7 @@ async function releasePrepare(res, owner, body) {
     const rows = await sb('os_releases', {
       method: 'POST',
       headers: { Prefer: 'return=representation' },
-      body: { version, created_by: owner.username, ...fields },
+      body: { version, created_by: manager.username, ...fields },
     });
     id = rows[0].id;
   }
@@ -180,7 +180,7 @@ async function updatesList(res) {
   return send(res, 200, { ok: true, updates });
 }
 
-async function updatePrepare(res, owner, body) {
+async function updatePrepare(res, manager, body) {
   const { manifest, signature, doc } = parseManifestFile(body.manifest_file);
   const path = payloadPath(doc.build);
   const fields = {
@@ -203,7 +203,7 @@ async function updatePrepare(res, owner, body) {
     const rows = await sb('os_updates', {
       method: 'POST',
       headers: { Prefer: 'return=representation' },
-      body: { build: doc.build, created_by: owner.username, ...fields },
+      body: { build: doc.build, created_by: manager.username, ...fields },
     });
     id = rows[0].id;
   }
@@ -272,7 +272,7 @@ async function updateRemove(res, body) {
   return send(res, 200, { ok: true });
 }
 
-async function devModeList(res) {
+async function devModeList(res, manager) {
   const [mode, flags, roles, userRoles] = await Promise.all([
     sb('dev_mode?id=eq.1&select=enabled'),
     sb('feature_flags?select=name,enabled,description&order=name'),
@@ -292,15 +292,16 @@ async function devModeList(res) {
     flags,
     roles,
     user_roles: userRoles,
+    user: { id: manager.id, username: manager.username, email: manager.email, role: manager.role, aal: manager.aal },
   });
 }
 
-async function devModeSet(res, body) {
+async function devModeSet(res, manager, body) {
   if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'Нужно значение enabled: true или false');
   await sb('dev_mode?id=eq.1', {
     method: 'PATCH',
     headers: { Prefer: 'return=minimal' },
-    body: { enabled: body.enabled, updated_by: 'owner' },
+    body: { enabled: body.enabled, updated_by: manager.username },
   });
   return send(res, 200, { ok: true, enabled: body.enabled });
 }
@@ -310,7 +311,7 @@ async function flagsList(res) {
   return send(res, 200, { ok: true, flags });
 }
 
-async function flagsSet(res, body) {
+async function flagsSet(res, manager, body) {
   const name = String(body.name || '').trim();
   if (!name) throw new HttpError(400, 'Нужно имя флага');
   if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'Нужно значение enabled: true или false');
@@ -319,7 +320,7 @@ async function flagsSet(res, body) {
   await sb(`feature_flags?id=eq.${rows[0].id}`, {
     method: 'PATCH',
     headers: { Prefer: 'return=minimal' },
-    body: { enabled: body.enabled, updated_by: 'owner' },
+    body: { enabled: body.enabled, updated_by: manager.username },
   });
   return send(res, 200, { ok: true, name, enabled: body.enabled });
 }
@@ -338,21 +339,40 @@ async function rolesList(res) {
   return send(res, 200, { ok: true, roles, user_roles: userRoles });
 }
 
-async function rolesAssign(res, owner, body) {
+/** Ranking — чем больше, тем выше в иерархии. Уточняется из roles таблицы. */
+const RANK_DEFAULT = { owner: 100, curator: 60, admin: 50, moderator: 20, tester: 10, user: 1 };
+
+async function getRoleRanks() {
+  const rows = await sb('roles?select=role_name,rank');
+  const ranks = { ...RANK_DEFAULT };
+  for (const r of rows) {
+    if (r.role_name) ranks[r.role_name] = r.rank ?? RANK_DEFAULT[r.role_name] ?? 0;
+  }
+  return ranks;
+}
+
+async function rolesAssign(res, manager, body) {
   const userId = String(body.user_id || '').trim();
   const roleName = String(body.role_name || '').trim();
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(userId)) {
     throw new HttpError(400, 'Некорректный идентификатор пользователя');
   }
-  const validRoles = ['owner', 'admin', 'moderator', 'tester'];
+  const validRoles = ['owner', 'curator', 'admin', 'moderator', 'tester'];
   if (!validRoles.includes(roleName)) throw new HttpError(400, 'Недопустимая роль');
   // Проверяем, что пользователь существует
   const userRows = await sb(`profiles?id=eq.${userId}&select=id`);
   if (!userRows[0]) throw new HttpError(404, 'Пользователь не найден');
+  // Иерархия: менеджер (owner/curator) может назначить роль, строго ниже своей.
+  const ranks = await getRoleRanks();
+  const mgrRank = ranks[manager.role] ?? 0;
+  const targetRank = ranks[roleName] ?? 0;
+  if (mgrRank <= targetRank) {
+    throw new HttpError(403, 'Нельзя назначить роль равную или выше своей');
+  }
   await sb('user_roles?on_conflict=user_id', {
     method: 'POST',
     headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-    body: { user_id: userId, role_name: roleName, assigned_by: owner.username },
+    body: { user_id: userId, role_name: roleName, assigned_by: manager.username },
   });
   // Обновляем profiles.role для совместимости старого UI
   await sb(`profiles?id=eq.${userId}`, {
@@ -363,10 +383,18 @@ async function rolesAssign(res, owner, body) {
   return send(res, 200, { ok: true, user_id: userId, role_name: roleName });
 }
 
-async function rolesRemove(res, owner, body) {
+async function rolesRemove(res, manager, body) {
   const userId = String(body.user_id || '').trim();
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(userId)) {
     throw new HttpError(400, 'Некорректный идентификатор пользователя');
+  }
+  // Иерархия: менеджер может забрать роль, строго ниже своей.
+  const ranks = await getRoleRanks();
+  const mgrRank = ranks[manager.role] ?? 0;
+  const currentRole = (await sb(`profiles?id=eq.${userId}&select=role`))[0]?.role || 'user';
+  const targetRank = ranks[currentRole] ?? 0;
+  if (mgrRank <= targetRank) {
+    throw new HttpError(403, 'Нельзя забрать роль равную или выше своей');
   }
   await sb(`user_roles?user_id=eq.${userId}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
   await sb(`profiles?id=eq.${userId}`, {
@@ -380,13 +408,13 @@ async function rolesRemove(res, owner, body) {
 module.exports = async function handler(req, res) {
   try {
     guardPost(req, res);
-    const owner = await requireOwner(req, res);
+    const manager = await requireManager(req, res);
     const body = readBody(req);
     switch (body.action) {
       case 'list':
         return await list(res);
       case 'decide':
-        return await decide(res, owner, body);
+        return await decide(res, manager, body);
       case 'remove':
         return await remove(res, body);
       case 'set_open':
@@ -394,7 +422,7 @@ module.exports = async function handler(req, res) {
       case 'releases':
         return await releasesList(res);
       case 'release_prepare':
-        return await releasePrepare(res, owner, body);
+        return await releasePrepare(res, manager, body);
       case 'release_finalize':
         return await releaseFinalize(res, body);
       case 'release_publish':
@@ -404,7 +432,7 @@ module.exports = async function handler(req, res) {
       case 'updates':
         return await updatesList(res);
       case 'update_prepare':
-        return await updatePrepare(res, owner, body);
+        return await updatePrepare(res, manager, body);
       case 'update_finalize':
         return await updateFinalize(res, body);
       case 'update_publish':
@@ -412,19 +440,19 @@ module.exports = async function handler(req, res) {
       case 'update_remove':
         return await updateRemove(res, body);
       case 'dev_mode_list':
-        return await devModeList(res);
+        return await devModeList(res, manager);
       case 'dev_mode_set':
-        return await devModeSet(res, body);
+        return await devModeSet(res, manager, body);
       case 'flags_list':
         return await flagsList(res);
       case 'flags_set':
-        return await flagsSet(res, body);
+        return await flagsSet(res, manager, body);
       case 'roles_list':
         return await rolesList(res);
       case 'roles_assign':
-        return await rolesAssign(res, owner, body);
+        return await rolesAssign(res, manager, body);
       case 'roles_remove':
-        return await rolesRemove(res, owner, body);
+        return await rolesRemove(res, manager, body);
       default:
         throw new HttpError(400, 'Неизвестное действие');
     }
