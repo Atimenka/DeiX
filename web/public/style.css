@@ -565,6 +565,10 @@ tbody tr { transition: background 0.2s; }
 tbody tr:hover { background: var(--glass); }
 tr:last-child td { border-bottom: 0; }
 .devcell small, td small { display: block; color: var(--muted); }
+.input-row { display: flex; gap: 8px; align-items: center; }
+.input-row input { flex: 1; }
+.uuid-row { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
+.uuid-row .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
 .note-text { max-width: 260px; color: var(--muted); }
 td.actions { white-space: nowrap; }
 td.actions .btn { margin: 2px 4px 2px 0; }

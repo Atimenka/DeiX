@@ -129,8 +129,11 @@
           <p class="hint">Роли: owner (100) → curator (60) → admin (50) → moderator (20) → tester (10) → user (1). Куратор может назначать роли ниже своей (admin, moderator, tester), но не curator и не owner.</p>
           <p class="hint">Вы вошли как <strong id="mg-user-role">—</strong></p>
           <form id="mg-role-form" class="stack" autocomplete="off">
-            <label>Пользователь
-              <input id="mg-user-id" name="user_id" type="text" placeholder="UUID или username" required>
+            <label>Пользователь (UUID или username)
+              <div class="input-row">
+                <input id="mg-user-id" name="user_id" type="text" placeholder="UUID или username" required>
+                <button class="btn small" id="mg-user-lookup" type="button">Найти</button>
+              </div>
             </label>
             <label>Роль
               <select id="mg-role-select" name="role" required>

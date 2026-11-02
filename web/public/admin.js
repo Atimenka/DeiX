@@ -570,7 +570,16 @@ function renderRoles(userRoles) {
     body.append(
       el('tr', null, [
         el('td', { class: 'devcell' }, [
-          el('span', { class: 'mono', text: row.profiles ? row.profiles.username : row.user_id.slice(0, 8) + '…' }),
+          el('span', { class: 'mono', text: row.profiles ? row.profiles.username : '—' }),
+          el('div', { class: 'uuid-row' }, [
+            el('small', { class: 'hint mono', text: row.user_id }),
+            el('button', {
+              class: 'btn tiny',
+              type: 'button',
+              text: '⧉',
+              onclick: () => { navigator.clipboard?.writeText(row.user_id); toast(tr('UUID скопирован'), 'ok'); },
+            }),
+          ]),
         ]),
         el('td', null, [el('span', { text: row.profiles ? row.profiles.email || '—' : '—' })]),
         el('td', null, [el('span', { class: 'badge', text: roleLabel(row.role_name) })]),
@@ -605,16 +614,13 @@ async function submitRoleForm(event) {
   const input = $('mg-user-id');
   let userId = input.value.trim();
   const role = $('mg-role-select').value;
-  // If it's not a UUID, try to look up by username
+  // Если это не UUID, ищем по username
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(userId)) {
     try {
-      const users = await api({ action: 'list' });
-      // Can't look up by username from list, need a different approach
-      // Let's just show error for non-UUID
-      showResult(result, 'err', tr('Введите корректный UUID пользователя'));
-      return;
-    } catch {
-      showResult(result, 'err', tr('Введите корректный UUID пользователя'));
+      const lookup = await api({ action: 'roles_lookup', username: userId });
+      userId = lookup.user_id;
+    } catch (err) {
+      showResult(result, 'err', err.message);
       return;
     }
   }
@@ -634,6 +640,23 @@ async function submitRoleForm(event) {
 
 $('mg-role-form').addEventListener('submit', submitRoleForm);
 $('mg-refresh-btn').addEventListener('click', loadManage);
+$('mg-user-lookup').addEventListener('click', lookupUser);
+
+async function lookupUser() {
+  const input = $('mg-user-id');
+  const username = input.value.trim();
+  const result = $('mg-role-result');
+  if (!username) {
+    showResult(result, 'err', tr('Введите username для поиска'));
+    return;
+  }
+  try {
+    const lookup = await api({ action: 'roles_lookup', username });
+    showResult(result, 'ok', tr('Пользователь: {user} (UUID: {uuid})', { user: lookup.username, uuid: lookup.user_id }));
+  } catch (err) {
+    showResult(result, 'err', err.message);
+  }
+}
 $('mg-dev-mode').addEventListener('change', async (event) => {
   const enabled = event.target.checked;
   try {

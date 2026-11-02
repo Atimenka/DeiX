@@ -325,6 +325,14 @@ async function flagsSet(res, manager, body) {
   return send(res, 200, { ok: true, name, enabled: body.enabled });
 }
 
+async function rolesLookup(res, body) {
+  const username = String(body.username || '').trim();
+  if (!username) throw new HttpError(400, 'Нужно имя пользователя');
+  const rows = await sb(`profiles?username=eq.${username}&select=id,username`);
+  if (!rows[0]) throw new HttpError(404, `Пользователь не найден: ${username}`);
+  return send(res, 200, { ok: true, user_id: rows[0].id, username: rows[0].username });
+}
+
 async function rolesList(res) {
   const [roles, userRoles] = await Promise.all([
     sb('roles?select=name,description,rank&order=rank.desc'),
@@ -449,6 +457,8 @@ module.exports = async function handler(req, res) {
         return await flagsSet(res, manager, body);
       case 'roles_list':
         return await rolesList(res);
+      case 'roles_lookup':
+        return await rolesLookup(res, body);
       case 'roles_assign':
         return await rolesAssign(res, manager, body);
       case 'roles_remove':
