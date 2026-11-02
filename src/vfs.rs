@@ -179,19 +179,23 @@ fn split_mount(path: &str) -> Result<(&'static str, String), VfsError> {
 }
 
 /// Приводит остаток пути к виду, который понимают драйверы разделов:
-/// без ведущих и повторяющихся слэшей. Пустая строка означает корень.
+/// без ведущих и повторяющихся слэшей, с обработкой `.` и `..`.
+/// `..` в корневом каталоге игнорируется (нельзя выйти за пределы тома).
 fn normalize(rest: &str) -> String {
-    let mut out = String::new();
+    let mut parts: Vec<&str> = Vec::new();
     for part in rest.split('/') {
         if part.is_empty() || part == "." {
             continue;
         }
-        if !out.is_empty() {
-            out.push('/');
+        if part == ".." {
+            // Попфер на уровень вверх: pop последний компонент,
+            // если есть. В корне — игнорируем (не выйти за пределы).
+            parts.pop();
+            continue;
         }
-        out.push_str(part);
+        parts.push(part);
     }
-    out
+    parts.join("/")
 }
 // ==================== Операции ====================
 

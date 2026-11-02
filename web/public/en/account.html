@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Account — DeiX OS</title>
+  <meta name="theme-color" content="#0b0b0c">
+  <link rel="alternate" hreflang="ru" href="/account">
+  <link rel="alternate" hreflang="en" href="/en/account">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="preload" href="/vendor/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-page="account">
+  <main class="page wrap">
+    <div class="account" id="account-view" hidden>
+      <aside class="panel side">
+        <div class="avatar" id="avatar"></div>
+        <h2 id="acc-name"></h2>
+        <div class="mail" id="acc-email"></div>
+        <div class="badges" id="acc-badges"></div>
+        <nav class="menu" id="menu" aria-label="Account sections">
+          <button type="button" data-tab="overview"><svg class="icon"><use href="/icons.svg#user"/></svg>Overview</button>
+          <button type="button" data-tab="devices"><svg class="icon"><use href="/icons.svg#laptop"/></svg>Devices</button>
+          <button type="button" data-tab="key"><svg class="icon"><use href="/icons.svg#key"/></svg>Dev key</button>
+          <button type="button" data-tab="security"><svg class="icon"><use href="/icons.svg#shield"/></svg>Security</button>
+          <div class="sep"></div>
+          <button type="button" id="logout-btn"><svg class="icon"><use href="/icons.svg#logout"/></svg>Sign out</button>
+        </nav>
+      </aside>
+
+      <div>
+        <div class="panel vault-box" id="vault-box" hidden>
+          <h3 id="vault-title"></h3>
+          <p class="hint" id="vault-text"></p>
+          <form id="vault-form" class="inline-form" autocomplete="off">
+            <input id="vault-password" name="password" type="password" required autocomplete="current-password" placeholder="Password" aria-label="Password">
+            <button class="btn primary" type="submit">Unlock</button>
+          </form>
+          <div class="row-gap"><button class="btn small bad" id="vault-reset" type="button" hidden>Reset local data</button></div>
+          <div class="result" id="vault-result" hidden></div>
+        </div>
+
+        <section class="tabpane" data-pane="overview">
+          <div class="panel">
+            <h3>Profile</h3>
+            <p class="hint">This is how the project owner sees you.</p>
+            <div class="kv">
+              <div><span>Username</span><b id="ov-name"></b></div>
+              <div><span>Email</span><b id="ov-email"></b></div>
+              <div><span>Role</span><b id="ov-role"></b></div>
+            </div>
+            <div class="row-gap">
+              <a class="btn primary" href="/en/request">Token requests</a>
+              <a class="btn" id="admin-link" href="/en/admin" hidden>Owner panel</a>
+            </div>
+          </div>
+          <div class="panel" id="mail-panel">
+            <div class="sec-row">
+              <div>
+                <h3><svg class="icon"><use href="/icons.svg#mail"/></svg>Email verification <span class="badge" id="mail-badge"></span></h3>
+                <p class="hint" id="mail-text"></p>
+              </div>
+              <button class="btn" id="mail-resend" type="button" hidden>Send the email</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="tabpane" data-pane="devices" hidden>
+          <div class="panel">
+            <h3>My devices</h3>
+            <p class="hint">Run <code>dev link</code> in DeiX: the system shows a code like XXXX-XXXX, valid for 10 minutes. A token request can only be filed for a linked device.</p>
+            <form id="link-form" class="inline-form" autocomplete="off">
+              <input id="link-code" name="code" required maxlength="9" spellcheck="false" placeholder="XXXX-XXXX" aria-label="Link code">
+              <button class="btn primary" type="submit">Link</button>
+            </form>
+            <div class="result" id="link-result" hidden></div>
+            <div id="devices"></div>
+          </div>
+        </section>
+
+        <section class="tabpane" data-pane="key" hidden>
+          <div class="panel">
+            <h3>Dev-mode unlock key</h3>
+            <p class="hint">A one-time key for a specific device. Run <code>dev id</code> in DeiX, paste the Device ID here, get the key and enter it in DeiX with <code>dev unlock KEY</code>, then <code>dev on</code>. No network is needed when you enter it. The key is shown once and is not stored on the site.</p>
+            <form id="key-form" class="inline-form" autocomplete="off">
+              <input id="key-device" name="device" required maxlength="32" spellcheck="false" placeholder="Device ID (32 characters)" aria-label="Device ID" list="key-devices">
+              <datalist id="key-devices"></datalist>
+              <button class="btn primary" type="submit">Get key</button>
+            </form>
+            <div class="result" id="key-result" hidden></div>
+            <pre class="keybox mono" id="key-out" hidden></pre>
+            <div class="row-gap"><button class="btn small" id="key-copy" type="button" hidden>Copy</button></div>
+            <p class="hint" id="vault-note">The history of issued keys and device names are stored only in this browser, encrypted with your password (AES-256-GCM). The server does not have them.</p>
+            <div id="key-history"></div>
+          </div>
+        </section>
+
+        <section class="tabpane" data-pane="security" hidden>
+          <div class="panel">
+            <div class="sec-row">
+              <div>
+                <h3><svg class="icon"><use href="/icons.svg#qr"/></svg>Two-factor authentication <span class="badge" id="mfa-badge"></span></h3>
+                <p class="hint" id="mfa-text"></p>
+              </div>
+              <button class="btn primary" id="mfa-start" type="button" hidden>Turn on 2FA</button>
+            </div>
+
+            <div id="mfa-setup" hidden>
+              <div class="qr">
+                <div id="mfa-qr" class="qr-box" role="img" aria-label="QR code for the authenticator app"></div>
+                <div>
+                  <b>1. Scan the code</b>
+                  <p class="hint">Google Authenticator, Aegis, 1Password, Authy or any TOTP app. If you cannot scan, enter the key manually:</p>
+                  <code class="secret mono" id="mfa-secret"></code>
+                  <b>2. Enter the six digits from the app</b>
+                  <form id="mfa-finish" class="inline-form" autocomplete="off">
+                    <input id="mfa-code" inputmode="numeric" maxlength="6" placeholder="123456" aria-label="App code" required>
+                    <button class="btn primary" type="submit">Confirm</button>
+                    <button class="btn" id="mfa-cancel" type="button">Cancel</button>
+                  </form>
+                </div>
+              </div>
+            </div>
+
+            <div id="mfa-codes" hidden>
+              <b>Backup codes</b>
+              <p class="hint">Save them now: the codes are not shown again. Each works once and turns 2FA off at sign-in, in case you lose your phone.</p>
+              <div class="codes" id="mfa-codes-list"></div>
+              <div class="row-gap">
+                <button class="btn small" id="codes-copy" type="button">Copy</button>
+                <button class="btn small" id="codes-save" type="button">Download .txt</button>
+                <button class="btn small primary" id="codes-done" type="button">I saved the codes</button>
+              </div>
+            </div>
+
+            <div id="mfa-manage" hidden>
+              <div class="row-gap">
+                <button class="btn" id="mfa-regen" type="button">New backup codes</button>
+                <button class="btn bad" id="mfa-off" type="button">Turn off 2FA</button>
+              </div>
+              <form id="mfa-confirm" class="inline-form" autocomplete="off" hidden>
+                <input id="mfa-confirm-code" inputmode="numeric" maxlength="6" placeholder="App code" aria-label="App code" required>
+                <button class="btn primary" id="mfa-confirm-btn" type="submit">Confirm</button>
+                <button class="btn" id="mfa-confirm-cancel" type="button">Cancel</button>
+              </form>
+            </div>
+            <div class="result" id="mfa-result" hidden></div>
+          </div>
+
+          <div class="panel">
+            <h3><svg class="icon"><use href="/icons.svg#lock"/></svg>Change password</h3>
+            <form id="password-form" class="stack">
+              <label>Current password <input id="pw-current" type="password" autocomplete="current-password" required></label>
+              <label>New password (8+ characters) <input id="pw-next" type="password" autocomplete="new-password" minlength="8" maxlength="72" required></label>
+              <label>Repeat the new password <input id="pw-next2" type="password" autocomplete="new-password" minlength="8" maxlength="72" required></label>
+              <div><button class="btn primary" type="submit">Change password</button></div>
+            </form>
+            <div class="result" id="pw-result" hidden></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+  <script src="/i18n.js"></script>
+  <script src="/site.js"></script>
+  <script src="/motion.js" defer></script>
+  <script src="/vault.js"></script>
+  <script src="/qr.js"></script>
+  <script src="/account.js"></script>
+</body>
+</html>

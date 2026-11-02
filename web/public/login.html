@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход — DeiX OS</title>
+  <meta name="theme-color" content="#0b0b0c">
+  <link rel="alternate" hreflang="ru" href="/login">
+  <link rel="alternate" hreflang="en" href="/en/login">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme.js"></script>
+  <link rel="preload" href="/vendor/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/vendor/fonts/inter-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-page="login">
+  <main class="wrap auth">
+    <div class="auth-art">
+      <span class="chip"><span class="dot"></span>Аккаунт DeiX</span>
+      <h2>С возвращением в <span class="grad">DeiX</span></h2>
+      <p>Один аккаунт для устройств, ключей dev-режима и заявок.</p>
+      <ul class="auth-points">
+        <li><svg class="icon"><use href="/icons.svg#shield"/></svg>Вход защищён паролем и кодом из приложения, если вы включили 2FA</li>
+        <li><svg class="icon"><use href="/icons.svg#laptop"/></svg>Привязанные устройства и выданные ключи — в одном месте</li>
+        <li><svg class="icon"><use href="/icons.svg#lock"/></svg>Сессия хранится в HttpOnly-cookie, а не в браузерном хранилище</li>
+      </ul>
+    </div>
+
+    <div class="panel auth-card">
+      <div id="step-password">
+        <h1>Вход</h1>
+        <p class="hint lead">Введите имя пользователя или почту и пароль.</p>
+        <form id="login-form" class="stack">
+          <label>Имя пользователя или почта <input id="identifier" autocomplete="username" required autofocus></label>
+          <label>Пароль <input id="password" type="password" autocomplete="current-password" required></label>
+          <div id="captcha"></div>
+          <button class="btn primary block large" id="login-btn" type="submit">Войти</button>
+        </form>
+        <p class="hint foot-link">Нет аккаунта? <a id="to-register" href="/register">Зарегистрироваться</a></p>
+      </div>
+
+      <div id="step-code" hidden>
+        <div class="step-title"><span class="ico"><svg class="icon"><use href="/icons.svg#shield"/></svg></span><h1>Код из приложения</h1></div>
+        <p class="hint lead" id="code-hint">Откройте приложение-аутентификатор и введите шесть цифр для DeiX.</p>
+        <form id="code-form" class="stack">
+          <input id="code" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="······" aria-label="Код подтверждения" required>
+          <button class="btn primary block large" id="code-btn" type="submit">Подтвердить</button>
+          <div class="row-gap">
+            <button class="link-btn" id="code-mode" type="button">Использовать резервный код</button>
+            <button class="link-btn" id="code-back" type="button">Назад</button>
+          </div>
+        </form>
+      </div>
+      <div class="result" id="login-result" hidden></div>
+    </div>
+  </main>
+  <script src="/i18n.js"></script>
+  <script src="/site.js"></script>
+  <script src="/motion.js" defer></script>
+  <script src="/vault.js"></script>
+  <script src="/login.js"></script>
+</body>
+</html>
