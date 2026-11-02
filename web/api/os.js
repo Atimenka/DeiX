@@ -1,6 +1,16 @@
 'use strict';
 
-const { DEVICE_ID_RE, HttpError, clientIp, overLimit, readBody, recordHit, rpc, send, sb, auth, verifiedTotp } = require('./_lib');
+const { DEVICE_ID_RE, HttpError, clientIp, overLimit, readBody, recordHit, send, sb, auth, verifiedTotp } = require('./_lib');
+
+/**
+ * Проверяет, что устройство привязано к указанному пользователю.
+ * Используется для защиты cloud-функций от доступа к чужим данным.
+ */
+async function verifyDeviceOwnership(deviceId, userId) {
+  if (!userId) return false;
+  const rows = await sb(`device_links?device_id=eq.${deviceId}&select=user_id`);
+  return Array.isArray(rows) && rows[0] && rows[0].user_id === userId;
+}
 
 /**
  * Gateway for the OS: DeiX talks here, not to supabase.co directly
@@ -74,25 +84,31 @@ async function loadProfileByToken(token) {
 // Called by OS `cloud sync`; the OS sends its cloud user_id from the
 // link file. Settings are a flat JSON object with theme preset,
 // accent, wallpaper style, perf profile, and language.
-async function cloudSyncPush(body) {
+async function cloudSyncPush(deviceId, body) {
   const user_id = String(body.p_user_id || '');
   if (!user_id) throw new HttpError(400, 'user_id required');
+  if (!(await verifyDeviceOwnership(deviceId, user_id))) {
+    throw new HttpError(403, 'device not linked to this user');
+  }
   const settings = body.p_settings;
   if (!settings || typeof settings !== 'object') {
     throw new HttpError(400, 'settings must be a JSON object');
   }
-  const result = await rpc('save_user_settings', {
-    p_user_id: user_id,
-    p_settings: settings,
+  const result = await sb('rpc/save_user_settings', {
+    method: 'POST',
+    body: { p_user_id: user_id, p_settings: settings },
   });
   return { status: 200, body: { status: 'ok', result: result.result, updated_at: result.updated_at } };
 }
 
 // cloud_sync_pull — return saved settings. Called by OS `cloud pull`.
-async function cloudSyncPull(body) {
+async function cloudSyncPull(deviceId, body) {
   const user_id = String(body.p_user_id || '');
   if (!user_id) throw new HttpError(400, 'user_id required');
-  const result = await rpc('get_user_settings', { p_user_id: user_id });
+  if (!(await verifyDeviceOwnership(deviceId, user_id))) {
+    throw new HttpError(403, 'device not linked to this user');
+  }
+  const result = await sb('rpc/get_user_settings', { method: 'POST', body: { p_user_id: user_id } });
   if (result.result === 'none') {
     return { status: 200, body: { status: 'none' } };
   }
@@ -100,10 +116,13 @@ async function cloudSyncPull(body) {
 }
 
 // cloud_clip_get — return clipboard text. Called by OS `cloud clip get`.
-async function cloudClipGet(body) {
+async function cloudClipGet(deviceId, body) {
   const user_id = String(body.p_user_id || '');
   if (!user_id) throw new HttpError(400, 'user_id required');
-  const result = await rpc('get_clipboard', { p_user_id: user_id });
+  if (!(await verifyDeviceOwnership(deviceId, user_id))) {
+    throw new HttpError(403, 'device not linked to this user');
+  }
+  const result = await sb('rpc/get_clipboard', { method: 'POST', body: { p_user_id: user_id } });
   if (result.result === 'none') {
     return { status: 200, body: { status: 'none' } };
   }
@@ -111,12 +130,15 @@ async function cloudClipGet(body) {
 }
 
 // cloud_clip_set — save clipboard text. Called by OS `cloud clip set`.
-async function cloudClipSet(body) {
+async function cloudClipSet(deviceId, body) {
   const user_id = String(body.p_user_id || '');
   if (!user_id) throw new HttpError(400, 'user_id required');
+  if (!(await verifyDeviceOwnership(deviceId, user_id))) {
+    throw new HttpError(403, 'device not linked to this user');
+  }
   const content = String(body.p_content || '');
   if (!content) throw new HttpError(400, 'content required');
-  const result = await rpc('save_clipboard', { p_user_id: user_id, p_content: content });
+  const result = await sb('rpc/save_clipboard', { method: 'POST', body: { p_user_id: user_id, p_content: content } });
   return { status: 200, body: { status: 'ok', created_at: result.created_at } };
 }
 
@@ -131,10 +153,10 @@ const FUNCTIONS = {
   }),
   cloud_login: (id, body) => cloudLogin(body),
   cloud_verify: (id, body) => cloudVerify(body),
-  cloud_sync_push: (id, body) => cloudSyncPush(body),
-  cloud_sync_pull: (id, body) => cloudSyncPull(body),
-  cloud_clip_get: (id, body) => cloudClipGet(body),
-  cloud_clip_set: (id, body) => cloudClipSet(body),
+  cloud_sync_push: (id, body) => cloudSyncPush(id, body),
+  cloud_sync_pull: (id, body) => cloudSyncPull(id, body),
+  cloud_clip_get: (id, body) => cloudClipGet(id, body),
+  cloud_clip_set: (id, body) => cloudClipSet(id, body),
 };
 
 function reject(res, status, message) {
@@ -169,7 +191,8 @@ module.exports = async function handler(req, res) {
     if (out && out.body) return send(res, out.status, out.body);
     if (out && out.message) return reject(res, out.status, out.message);
     // dev functions: out — PostgREST call body.
-    const result = await rpc(name, out);
+    // Set x-device-id header so RPC functions can verify device identity.
+    const result = await sb(`rpc/${name}`, { method: 'POST', body: out, headers: { 'x-device-id': id } });
     return send(res, 200, result);
   } catch (err) {
     if (err instanceof HttpError) return reject(res, err.status, err.message);
