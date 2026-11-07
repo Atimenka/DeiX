@@ -588,6 +588,15 @@ pub fn init_global() {
     }
 }
 
+/// Run the nano-core boot sequence on the global orchestrator.
+pub fn boot() {
+    init_global();
+    let mut guard = ORCHESTRATOR.lock();
+    if let Some(orch) = guard.as_mut() {
+        orch.boot();
+    }
+}
+
 /// Get a reference to the global orchestrator inside a closure.
 /// If not initialized, the closure is called with a fresh instance.
 pub fn with_orchestrator<F: FnOnce(&Orchestrator)>(f: F) {

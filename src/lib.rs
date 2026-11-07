@@ -220,6 +220,12 @@ pub extern "C" fn kernel_main() -> ! {
         }
     }
 
+    // Nano-Core: distributed Stage 2 boot orchestrator.
+    // Загружает ~50 микро-процессов через DAG-манифесты.
+    bootlogo::set_status("launching nano-core processes...");
+    crate::nanocore::boot();
+    crate::serial_println!("[deix] Nano-Core orchestrator booted");
+
     bootlogo::set_status("initializing memory...");
     // Инициализируем менеджер памяти (физический + виртуальный).
     mm::phys::init();
