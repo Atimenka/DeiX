@@ -432,6 +432,7 @@ pub fn run_login_screen() -> String {
         }
     }
 
+    loop {
         print!("Username: ");
         let username = read_line(false);
 
