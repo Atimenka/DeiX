@@ -20,7 +20,6 @@ panic = "abort"
 opt-level = "z"
 lto = true
 codegen-units = 1
-<<<<<<< HEAD
 
 # Быстрый профиль для отладки: DEIX_PROFILE=fast ./build.sh. Размер ядра
 # проверяется теми же лимитами, что и у release.
@@ -29,5 +28,3 @@ inherits = "release"
 lto = false
 codegen-units = 16
 incremental = true
-=======
->>>>>>> arena/e8a29038-deix
