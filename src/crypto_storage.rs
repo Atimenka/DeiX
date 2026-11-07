@@ -122,6 +122,7 @@ fn set_engine_mk(mk: &[u8; 32]) {
     key[..32].copy_from_slice(mk);
     let tweak = sha512::sha512(mk);
     key[32..].copy_from_slice(&tweak[..32]);
+    *ENGINE.lock() = Some(XtsAes256::new(&key));
     for b in key.iter_mut() {
         *b = 0;
     }
@@ -157,6 +158,7 @@ pub fn try_unlock(password: &str) -> bool {
                     return true;
                 }
                 clear_master_key();
+                *ENGINE.lock() = None;
                 return false;
             }
             None => return false,
@@ -166,6 +168,11 @@ pub fn try_unlock(password: &str) -> bool {
     // Совместимость со СТАРЫМИ томами (ключ = SHA-512(пароль), без
     // заголовка). Проверяем по сигнатуре ext2, как раньше.
     let key = derive_key(password);
+    *ENGINE.lock() = Some(XtsAes256::new(&key));
+    let ok = crate::ext2::is_formatted();
+    if !ok {
+        clear_master_key();
+        *ENGINE.lock() = None;
     }
     ok
 }
@@ -245,6 +252,8 @@ pub fn lock() {
     // важно и почему одного присвоения `None` недостаточно с точки
     // зрения гарантий компилятора.
     clear_master_key();
+    set_engine(None);
+    *ENGINE.lock() = None;
 }
 
 /// Шифрует один 512-байтный физический сектор (на месте) для записи на
@@ -299,8 +308,7 @@ fn clear_master_key() {
     *MASTER_KEY.lock() = None;
 }
 
-// ==================== Как проверить (честно) ====================
-//
+////
 // В песочнице агента, где разрабатывался этот код, отсутствует
 // возможность загрузить kernel-модуль dm_mod/dm_crypt (нет root-доступа
 // к ядру самой песочницы, только к пользовательскому окружению) — то

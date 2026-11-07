@@ -93,6 +93,13 @@ impl Sha512 {
     pub fn finalize(mut self) -> [u8; DIGEST_LEN] {
         let bit_len = self.total_len * 8;
 
+        self.update_no_len_track(&[0x80]);
+        while self.buffer_len != 112 {
+            self.update_no_len_track(&[0x00]);
+        }
+        // 128-битная длина в битах, big-endian (SHA-512 использует
+        // 128-битное поле длины, а не 64-битное, как SHA-256).
+        self.update_no_len_track(&bit_len.to_be_bytes());
 
         let mut out = [0u8; DIGEST_LEN];
         for (i, word) in self.state.iter().enumerate() {
@@ -101,10 +108,90 @@ impl Sha512 {
         out
     }
 
+    fn update_no_len_track(&mut self, mut data: &[u8]) {
+        if self.buffer_len > 0 {
+            let need = 128 - self.buffer_len;
+            let take = need.min(data.len());
+            self.buffer[self.buffer_len..self.buffer_len + take].copy_from_slice(&data[..take]);
+            self.buffer_len += take;
+            data = &data[take..];
+
+            if self.buffer_len == 128 {
+                let block = self.buffer;
+                self.process_block(&block);
+                self.buffer_len = 0;
+            }
+        }
+
+        while data.len() >= 128 {
+            let mut block = [0u8; 128];
+            block.copy_from_slice(&data[..128]);
+            self.process_block(&block);
+            data = &data[128..];
+        }
+
+        if !data.is_empty() {
+            self.buffer[..data.len()].copy_from_slice(data);
+            self.buffer_len = data.len();
         }
     }
 
     fn process_block(&mut self, block: &[u8; 128]) {
+        let mut w = [0u64; 80];
+        for i in 0..16 {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&block[i * 8..i * 8 + 8]);
+            w[i] = u64::from_be_bytes(bytes);
+        }
+        for i in 16..80 {
+            let s0 = w[i - 15].rotate_right(1) ^ w[i - 15].rotate_right(8) ^ (w[i - 15] >> 7);
+            let s1 = w[i - 2].rotate_right(19) ^ w[i - 2].rotate_right(61) ^ (w[i - 2] >> 6);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+
+        let mut a = self.state[0];
+        let mut b = self.state[1];
+        let mut c = self.state[2];
+        let mut d = self.state[3];
+        let mut e = self.state[4];
+        let mut f = self.state[5];
+        let mut g = self.state[6];
+        let mut h = self.state[7];
+
+        for i in 0..80 {
+            let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = h
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+
+        self.state[0] = self.state[0].wrapping_add(a);
+        self.state[1] = self.state[1].wrapping_add(b);
+        self.state[2] = self.state[2].wrapping_add(c);
+        self.state[3] = self.state[3].wrapping_add(d);
+        self.state[4] = self.state[4].wrapping_add(e);
+        self.state[5] = self.state[5].wrapping_add(f);
+        self.state[6] = self.state[6].wrapping_add(g);
+        self.state[7] = self.state[7].wrapping_add(h);
+    }
 }
 
 pub fn sha512(data: &[u8]) -> [u8; DIGEST_LEN] {
@@ -144,6 +231,24 @@ mod tests {
             write!(s, "{:02x}", b).unwrap();
         }
         s
+    }
+
+    #[test]
+    fn test_digest_of_words_matches_update() {
+        let mut base = Sha512::new();
+        base.update(&[0x36u8; 128]);
+        let words = [1u64, 2, 3, 4, 5, 6, 7, 0xffff_ffff_ffff_fffe];
+        let mut bytes = [0u8; 64];
+        for (i, word) in words.iter().enumerate() {
+            bytes[i * 8..i * 8 + 8].copy_from_slice(&word.to_be_bytes());
+        }
+        let mut full = base.clone();
+        full.update(&bytes);
+        let expected = full.finalize();
+        let got = base.digest_of_words(&words);
+        for (i, word) in got.iter().enumerate() {
+            assert_eq!(word.to_be_bytes(), expected[i * 8..i * 8 + 8]);
+        }
     }
 
     #[test]

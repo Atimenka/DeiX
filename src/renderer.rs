@@ -100,72 +100,6 @@ impl Color {
     pub const TITLEBAR_INACTIVE: Color = Color::rgb(15, 23, 42);
     pub const YELLOW: Color = Color::rgb(245, 158, 11);
     pub const CYAN: Color = Color::rgb(6, 182, 212);
-    pub const ACCENT: Color = Color::rgb(99, 102, 241); // Indigo
-
-    pub fn palette() -> [Color; 6] {
-        [Color::DARK_GRAY, Color::LIGHT_GRAY, Color::DESKTOP_BLUE, Color::TITLEBAR_ACTIVE, Color::TITLEBAR_INACTIVE, Color::ACCENT]
-    }
-
-    pub fn lerp(self, other: Color, t: u8) -> Color {
-        let t = t as i32;
-        let (r1, g1, b1) = self.components();
-        let (r2, g2, b2) = other.components();
-        let r = r1 + (r2 - r1) * t / 255;
-        let g = g1 + (g2 - g1) * t / 255;
-        let b = b1 + (b2 - b1) * t / 255;
-        Color::rgb(r as u8, g as u8, b as u8)
-    }
-
-    pub fn alpha_blend(self, bg: Color, alpha: u8) -> Color {
-        if alpha == 255 {
-            return self;
-        }
-        if alpha == 0 {
-            return bg;
-        }
-    }
-
-    #[inline]
-    fn components(self) -> (i32, i32, i32) {
-        (
-            ((self.0 >> 16) & 0xFF) as i32,
-            ((self.0 >> 8) & 0xFF) as i32,
-            (self.0 & 0xFF) as i32,
-        )
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IconType {
-    Terminal,
-    Files,
-    TaskManager,
-    Display,
-    About,
-    Power,
-    Restart,
-    Settings,
-    Check,
-    Browser,
-    Theme,
-    Wifi,
-    Volume,
-    Search,
-    /// Обзор окон (Overview): четыре плитки.
-    Grid,
-    Bookmark,
-    Home,
-    Reload,
-    ArrowLeft,
-    ArrowRight,
-    /// Установщик: стрелка вниз в диск.
-    Install,
-}
-
-pub struct Renderer {
-    fb: Framebuffer,
-    pub back_buffer: Vec<u32>,
-    pub damage: crate::ui::surface::DamageList,
 }
 
 impl Renderer {
@@ -221,6 +155,8 @@ impl Renderer {
             self.back_buffer[idx] = color.0;
             return;
         }
+        let bg = Color(self.back_buffer[idx]);
+        self.back_buffer[idx] = color.alpha_blend(bg, alpha).0;
     }
 
     /// Быстрый `memcpy` из RAM back buffer в MMIO Framebuffer только по списку повреждённых областей DamageList.
@@ -303,11 +239,14 @@ impl Renderer {
             let start = row as usize * row_width + x0 as usize;
             let end = start + (x1 - x0) as usize;
             for px in &mut self.back_buffer[start..end] {
+                let bg = Color(*px);
+                *px = color.alpha_blend(bg, alpha).0;
             }
         }
         self.add_damage(Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32));
     }
 
+    /// Оптимизированный акриловый эффекта размытия фонового изображения (Acrylic Box Blur)
     pub fn apply_blur_rect(&mut self, x: i32, y: i32, w: u32, h: u32, radius: usize) {
         let x0 = x.max(0) as usize;
         let y0 = y.max(0) as usize;
@@ -317,6 +256,36 @@ impl Renderer {
             return;
         }
         let stride = self.fb.width as usize;
+        let r = radius.min(3);
+
+        for row in (y0..y1).step_by(2) {
+            for col in (x0..x1).step_by(2) {
+                let mut sum_r = 0u32;
+                let mut sum_g = 0u32;
+                let mut sum_b = 0u32;
+                let mut count = 0u32;
+
+                let nr_start = row.saturating_sub(r);
+                let nr_end = (row + r + 1).min(y1);
+                let nc_start = col.saturating_sub(r);
+                let nc_end = (col + r + 1).min(x1);
+
+                for nr in nr_start..nr_end {
+                    for nc in nc_start..nc_end {
+                        let px = self.back_buffer[nr * stride + nc];
+                        sum_r += (px >> 16) & 0xFF;
+                        sum_g += (px >> 8) & 0xFF;
+                        sum_b += px & 0xFF;
+                        count += 1;
+                    }
+                }
+                if count > 0 {
+                    let avg = ((sum_r / count) << 16) | ((sum_g / count) << 8) | (sum_b / count);
+                    self.back_buffer[row * stride + col] = avg;
+                    if col + 1 < x1 { self.back_buffer[row * stride + col + 1] = avg; }
+                    if row + 1 < y1 { self.back_buffer[(row + 1) * stride + col] = avg; }
+                    if row + 1 < y1 && col + 1 < x1 { self.back_buffer[(row + 1) * stride + col + 1] = avg; }
+                }
             }
         }
         self.add_damage(Rect::new(x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32));
@@ -343,42 +312,49 @@ impl Renderer {
     }
 
     pub fn fill_rounded_rect(&mut self, x: i32, y: i32, w: u32, h: u32, radius: i32, color: Color) {
+        let r = radius.min(w as i32 / 2).min(h as i32 / 2).max(0);
+        if r == 0 {
+            self.fill_rect(x, y, w, h, color);
+            return;
+        }
+        self.fill_rect(x, y + r, w, h - (2 * r) as u32, color);
+        for row in 0..r {
+            let dy = r - row;
+            let dx = isqrt((r * r - dy * dy).max(0));
+            let line_w = (w as i32 - 2 * (r - dx)).max(0) as u32;
+            self.draw_hline(x + (r - dx), y + row, line_w, color);
+            self.draw_hline(x + (r - dx), y + h as i32 - 1 - row, line_w, color);
+        }
+    }
+
+    pub fn fill_rounded_rect_alpha(&mut self, x: i32, y: i32, w: u32, h: u32, radius: i32, color: Color, alpha: u8) {
+        let r = radius.min(w as i32 / 2).min(h as i32 / 2).max(0);
+        if r == 0 {
+            self.fill_rect_alpha(x, y, w, h, color, alpha);
+            return;
+        }
+        self.fill_rect_alpha(x, y + r, w, h - (2 * r) as u32, color, alpha);
+        for row in 0..r {
+            let dy = r - row;
+            let dx = isqrt((r * r - dy * dy).max(0));
+            let line_w = (w as i32 - 2 * (r - dx)).max(0) as u32;
+            for px in (x + (r - dx))..(x + (r - dx) + line_w as i32) {
+                self.put_pixel_alpha(px, y + row, color, alpha);
+                self.put_pixel_alpha(px, y + h as i32 - 1 - row, color, alpha);
+            }
+        }
     }
 
     pub fn draw_drop_shadow(&mut self, x: i32, y: i32, w: u32, h: u32, radius: u32) {
         let shadow_color = Color::rgb(0, 0, 0);
-        let layers = (radius as i32 * 2).max(6);
-        // Внешний размытый ореол: широкий, с мягким квадратичным спадом.
+        let layers = radius as i32;
         for i in 1..=layers {
-            let t = i as f32 / layers as f32;
-            let alpha = ((1.0 - t) * (1.0 - t) * 90.0) as u8;
-            if alpha == 0 {
-                continue;
-            }
-            let off = i;
-            let sx = x - off;
-            let sy = y - off + 2;
-            let sw = w + (off * 2) as u32;
-            let sh = h + (off * 2) as u32;
+            let alpha = (50 * (layers - i + 1) / layers) as u8;
+            let sx = x - i;
+            let sy = y - i + 2;
+            let sw = w + (i * 2) as u32;
+            let sh = h + (i * 2) as u32;
             self.draw_rect_outline_alpha(sx, sy, sw, sh, shadow_color, alpha);
-        }
-        // Темный ядро тени под окном: умеренная непрозрачность у основания.
-        let core_alpha = 70u8;
-        let core_y = y + h as i32 + 1;
-        for i in 0..3i32 {
-            let a = (core_alpha * (3 - i) / 3) as u8;
-            if a == 0 {
-                continue;
-            }
-            let sx = x + i;
-            let sy = core_y + i;
-            let sw = w - (i * 2) as u32;
-            if sw <= 0 {
-                break;
-            }
-            for px in sx..(sx + sw) {
-                self.put_pixel_alpha(px, sy, shadow_color, a);
-            }
         }
     }
 
@@ -500,6 +476,10 @@ impl Renderer {
     }
 
     pub fn fill_circle(&mut self, cx: i32, cy: i32, radius: i32, color: Color) {
+        for y in -radius..=radius {
+            let dx = isqrt((radius * radius - y * y).max(0));
+            self.draw_hline(cx - dx, cy + y, (dx * 2 + 1) as u32, color);
+        }
     }
 
     pub fn draw_icon(&mut self, x: i32, y: i32, icon: IconType, color: Color) {
@@ -627,6 +607,23 @@ impl Renderer {
             self.fill_rect(x, y, 8, 16, bg);
         }
         let glyph = crate::font::read_glyph(ch);
+        let (fw, fh) = (self.fb.width as i32, self.fb.height as i32);
+        if x >= 0 && y >= 0 && x + 8 <= fw && y + 16 <= fh {
+            let stride = fw as usize;
+            for (row, &byte) in glyph.iter().enumerate() {
+                if byte == 0 {
+                    continue;
+                }
+                let base = (y as usize + row) * stride + x as usize;
+                let line = &mut self.back_buffer[base..base + 8];
+                for (col, px) in line.iter_mut().enumerate() {
+                    if (byte >> (7 - col)) & 1 != 0 {
+                        *px = fg.0;
+                    }
+                }
+            }
+            return;
+        }
         for (row, &byte) in glyph.iter().enumerate() {
             if byte == 0 {
                 continue;

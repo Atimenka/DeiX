@@ -21,6 +21,7 @@
 //! Live-диск.
 
 use crate::port::{inb, insw, outb, outsw};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Накопленный дисковой I/O в секторах. Считается только успешные
 /// операции: счётчик увеличивается после завершения передачи данных.
@@ -138,6 +139,22 @@ pub fn read_sectors_from(drive: Drive, lba: u32, count: u8, buffer: &mut [u8]) -
         outb(LBA_LOW_PORT, (lba & 0xFF) as u8);
         outb(LBA_MID_PORT, ((lba >> 8) & 0xFF) as u8);
         outb(LBA_HIGH_PORT, ((lba >> 16) & 0xFF) as u8);
+        outb(COMMAND_PORT, CMD_READ_SECTORS);
+    }
+
+    let sectors = if count == 0 { 256 } else { count as usize };
+    for i in 0..sectors {
+        if wait_drq_or_err().is_err() {
+            crate::diag::error(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Disk, 2),
+                &alloc::format!("ATA: ошибка чтения LBA {} (сектор {} из {})", lba, i + 1, sectors),
+            );
+            return Err(());
+        }
+        let offset = i * SECTOR_SIZE;
+        unsafe {
+            insw(DATA_PORT, &mut buffer[offset..offset + SECTOR_SIZE]);
+        }
     }
 
     SECTORS_READ.fetch_add(sectors as u64, Ordering::Relaxed);
@@ -193,9 +210,49 @@ pub fn write_sectors_to(drive: Drive, lba: u32, count: u8, data: &[u8]) -> Resul
         }
     }
 
+    unsafe {
+        outb(COMMAND_PORT, CMD_CACHE_FLUSH);
+    }
+    wait_bsy_clear();
 
     SECTORS_WRITTEN.fetch_add(sectors as u64, Ordering::Relaxed);
     Ok(())
+}
+
+/// Включает на Master чтение блоками (SET MULTIPLE MODE + READ MULTIPLE).
+///
+/// READ SECTORS отдаёт сектор за сектором: эмулятор (и часть реальных
+/// контроллеров) обрабатывает каждый сектор отдельным обращением к
+/// носителю. READ MULTIPLE переносит до `MAX_MULTIPLE` секторов за одно
+/// ожидание DRQ. Если диск команду не поддерживает или отказал, остаётся
+/// прежний READ SECTORS. Возвращает выбранный размер блока (0 — не включено).
+pub fn enable_multiple() -> u8 {
+    let Some(id) = identify(Drive::Master) else {
+        return 0;
+    };
+    // Слово 47, биты 7:0 — максимум секторов на блок (0 — не поддерживается).
+    let max = id[94] as u32;
+    let mut block = 1u32;
+    while block * 2 <= max && block * 2 <= MAX_MULTIPLE {
+        block *= 2;
+    }
+    if block < 2 {
+        return 0;
+    }
+    unsafe {
+        outb(DRIVE_HEAD_PORT, 0xE0);
+        outb(SECTOR_COUNT_PORT, block as u8);
+        outb(COMMAND_PORT, CMD_SET_MULTIPLE);
+    }
+    if !wait_bsy_clear() {
+        return 0;
+    }
+    let status = unsafe { inb(STATUS_PORT) };
+    if status & STATUS_ERR != 0 {
+        return 0;
+    }
+    MULTIPLE.store(block as u8, Ordering::Relaxed);
+    block as u8
 }
 
 /// Простая проверка "диск отвечает вообще хоть как-то" — читаем сектор 0

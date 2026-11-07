@@ -56,6 +56,13 @@ const RCON: [u8; 15] = [
     0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c, 0xd8, 0xab, 0x4d,
 ];
 
+/// Ключевой расписание (key schedule) для AES-256: NR+1 = 15 раундовых
+/// ключей по 16 байт каждый (240 байт всего).
+pub struct Aes256 {
+    round_keys: [[u8; 16]; NR + 1],
+}
+
+fn xtime(x: u8) -> u8 {
     if x & 0x80 != 0 {
         (x << 1) ^ 0x1b
     } else {
@@ -63,6 +70,11 @@ const RCON: [u8; 15] = [
     }
 }
 
+fn gmul(a: u8, b: u8) -> u8 {
+    let mut a = a;
+    let mut b = b;
+    let mut p = 0u8;
+    for _ in 0..8 {
         if b & 1 != 0 {
             p ^= a;
         }
@@ -102,6 +114,7 @@ impl Aes256 {
             }
         }
 
+        Aes256 { round_keys }
     }
 
     /// Шифрует ровно один 16-байтный блок на месте (ECB-уровня примитив
@@ -109,6 +122,18 @@ impl Aes256 {
     /// без режима сцепления это уязвимо; см. xts.rs для настоящего
     /// шифрования секторов).
     pub fn encrypt_block(&self, block: &mut [u8; 16]) {
+        add_round_key(block, &self.round_keys[0]);
+
+        for round in 1..NR {
+            sub_bytes(block);
+            shift_rows(block);
+            mix_columns(block);
+            add_round_key(block, &self.round_keys[round]);
+        }
+
+        sub_bytes(block);
+        shift_rows(block);
+        add_round_key(block, &self.round_keys[NR]);
     }
 
     /// Затирает ключевое расписание (round keys, производные от
@@ -117,11 +142,26 @@ impl Aes256 {
     /// обычного присваивания), см. использование в
     /// crypto_storage.rs::clear_master_key.
     pub fn zeroize(&mut self) {
+        for round_key in self.round_keys.iter_mut() {
+            for byte in round_key.iter_mut() {
+                unsafe { core::ptr::write_volatile(byte, 0) };
             }
         }
     }
 
     pub fn decrypt_block(&self, block: &mut [u8; 16]) {
+        add_round_key(block, &self.round_keys[NR]);
+        inv_shift_rows(block);
+        inv_sub_bytes(block);
+
+        for round in (1..NR).rev() {
+            add_round_key(block, &self.round_keys[round]);
+            inv_mix_columns(block);
+            inv_shift_rows(block);
+            inv_sub_bytes(block);
+        }
+
+        add_round_key(block, &self.round_keys[0]);
     }
 }
 
@@ -130,6 +170,7 @@ impl Aes256 {
 /// (TLS_AES_128_GCM_SHA256, RFC 8446 §9.1). Переиспользует SBOX и
 /// преобразования раунда AES-256 выше.
 pub struct Aes128 {
+    round_keys: [[u8; 16]; 11],
 }
 
 impl Aes128 {
@@ -160,6 +201,22 @@ impl Aes128 {
             }
         }
 
+        Aes128 { round_keys }
+    }
+
+    pub fn encrypt_block(&self, block: &mut [u8; 16]) {
+        add_round_key(block, &self.round_keys[0]);
+
+        for round in 1..10 {
+            sub_bytes(block);
+            shift_rows(block);
+            mix_columns(block);
+            add_round_key(block, &self.round_keys[round]);
+        }
+
+        sub_bytes(block);
+        shift_rows(block);
+        add_round_key(block, &self.round_keys[10]);
     }
 }
 
@@ -169,6 +226,65 @@ fn sub_word(word: [u8; 4]) -> [u8; 4] {
 
 fn rot_word(word: [u8; 4]) -> [u8; 4] {
     [word[1], word[2], word[3], word[0]]
+}
+
+fn add_round_key(block: &mut [u8; 16], round_key: &[u8; 16]) {
+    for i in 0..16 {
+        block[i] ^= round_key[i];
+    }
+}
+
+fn sub_bytes(block: &mut [u8; 16]) {
+    for b in block.iter_mut() {
+        *b = SBOX[*b as usize];
+    }
+}
+
+fn inv_sub_bytes(block: &mut [u8; 16]) {
+    for b in block.iter_mut() {
+        *b = INV_SBOX[*b as usize];
+    }
+}
+
+/// Состояние AES хранится как массив байт в column-major порядке:
+/// state[r + 4*c] соответствует строке r, столбцу c. ShiftRows сдвигает
+/// строку r влево на r позиций.
+fn shift_rows(block: &mut [u8; 16]) {
+    let s = *block;
+    for r in 1..4 {
+        for c in 0..4 {
+            block[r + 4 * c] = s[r + 4 * ((c + r) % 4)];
+        }
+    }
+}
+
+fn inv_shift_rows(block: &mut [u8; 16]) {
+    let s = *block;
+    for r in 1..4 {
+        for c in 0..4 {
+            block[r + 4 * c] = s[r + 4 * ((c + 4 - r) % 4)];
+        }
+    }
+}
+
+fn mix_columns(block: &mut [u8; 16]) {
+    for c in 0..4 {
+        let col = [block[4 * c], block[4 * c + 1], block[4 * c + 2], block[4 * c + 3]];
+        block[4 * c] = gmul(col[0], 2) ^ gmul(col[1], 3) ^ col[2] ^ col[3];
+        block[4 * c + 1] = col[0] ^ gmul(col[1], 2) ^ gmul(col[2], 3) ^ col[3];
+        block[4 * c + 2] = col[0] ^ col[1] ^ gmul(col[2], 2) ^ gmul(col[3], 3);
+        block[4 * c + 3] = gmul(col[0], 3) ^ col[1] ^ col[2] ^ gmul(col[3], 2);
+    }
+}
+
+fn inv_mix_columns(block: &mut [u8; 16]) {
+    for c in 0..4 {
+        let col = [block[4 * c], block[4 * c + 1], block[4 * c + 2], block[4 * c + 3]];
+        block[4 * c] = gmul(col[0], 0x0e) ^ gmul(col[1], 0x0b) ^ gmul(col[2], 0x0d) ^ gmul(col[3], 0x09);
+        block[4 * c + 1] = gmul(col[0], 0x09) ^ gmul(col[1], 0x0e) ^ gmul(col[2], 0x0b) ^ gmul(col[3], 0x0d);
+        block[4 * c + 2] = gmul(col[0], 0x0d) ^ gmul(col[1], 0x09) ^ gmul(col[2], 0x0e) ^ gmul(col[3], 0x0b);
+        block[4 * c + 3] = gmul(col[0], 0x0b) ^ gmul(col[1], 0x0d) ^ gmul(col[2], 0x09) ^ gmul(col[3], 0x0e);
+    }
 }
 
 #[cfg(test)]

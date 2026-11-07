@@ -287,6 +287,7 @@ impl Desktop {
     }
 
     pub fn open_theme_settings(&mut self, screen_w: i32, screen_h: i32) {
+        self.open_placed(480, 460, screen_w, screen_h, Window::new_theme_settings);
     }
 
     pub fn open_about(&mut self, screen_w: i32, screen_h: i32) {
@@ -766,6 +767,7 @@ impl Desktop {
                                         tab.navigate(&new_url, true);
                                         *address_input = tab.url.clone();
                                     }
+                                    *status_msg = Some(format!("Loaded {}", new_url));
                                 }
                                 0x08 => {
                                     address_input.pop();
@@ -1235,6 +1237,7 @@ impl Desktop {
                     }
                 }
 
+                if rel_x >= win.width as i32 - 110
                     && rel_x <= win.width as i32 - 10
                     && rel_y >= win.height as i32 - 32
                     && rel_y <= win.height as i32 - 8
@@ -1379,11 +1382,18 @@ impl Desktop {
                     return;
                 }
 
+                let writable = current_partition == "/userdata";
                 if writable && files_ui::new_file_btn_rect(win.width).contains(rel_x, rel_y) {
                     // Свободное имя вместо повторяющихся по modulo uptime:
                     // существующий файл не перезаписывается.
                     match free_name(entries, "NEW_FILE_", ".TXT") {
                         Some(fname) => {
+                            let path = join_fs_path(current_path, &fname);
+                            match ext2::write_file_path(&path, b"New file created in DeiX Files.\r\n") {
+                                Ok(()) => *status_msg = Some(format!("Created {}", fname)),
+                                Err(e) => {
+                                    *status_msg = None;
+                                    *error = Some(format!("Create failed: {:?}", e));
                                 }
                             }
                         }
@@ -1403,6 +1413,12 @@ impl Desktop {
                 if writable && files_ui::new_folder_btn_rect(win.width).contains(rel_x, rel_y) {
                     match free_name(entries, "FOLDER_", "") {
                         Some(dname) => {
+                            let path = join_fs_path(current_path, &dname);
+                            match ext2::mkdir(&path) {
+                                Ok(_) => *status_msg = Some(format!("Created folder {}", dname)),
+                                Err(e) => {
+                                    *status_msg = None;
+                                    *error = Some(format!("Create failed: {:?}", e));
                                 }
                             }
                         }
@@ -1446,6 +1462,33 @@ impl Desktop {
                     let idx = ((rel_y - files_ui::LIST_START_Y) / files_ui::ROW_H) as usize;
                     if idx < entries.len() {
                         // Повторный клик по уже выбранному элементу:
+                        // каталог — переход внутрь, файл — редактор.
+                        // /system смонтирован только для чтения.
+                        if *selected_idx == Some(idx) {
+                            let name = entries[idx].name.clone();
+                            if entries[idx].is_dir {
+                                if current_partition == "/userdata" {
+                                    let new_path = match name.as_str() {
+                                        "." => current_path.clone(),
+                                        ".." => parent_path(current_path),
+                                        _ => join_fs_path(current_path, &name),
+                                    };
+                                    let (new_entries, err) =
+                                        load_partition_entries(current_partition, &new_path);
+                                    match err {
+                                        Some(e) => *error = Some(e),
+                                        None => {
+                                            *current_path = new_path;
+                                            *entries = new_entries;
+                                            *selected_idx = None;
+                                            *error = None;
+                                            *status_msg = None;
+                                        }
+                                    }
+                                }
+                                // /system: readdir поддерживает только
+                                // корень раздела — вход внутрь не
+                                // изображается работающим.
                             } else {
                                 let base = current_partition.trim_end_matches('/');
                                 let dir = current_path.trim_matches('/');
@@ -1454,6 +1497,8 @@ impl Desktop {
                                 } else {
                                     format!("{}/{}/{}", base, dir, name)
                                 };
+                                let read_only = current_partition != "/userdata";
+                                open_editor = Some((win.x + 28, win.y + 28, name, full, read_only));
                             }
                         } else {
                             *selected_idx = Some(idx);
@@ -1530,6 +1575,7 @@ impl Desktop {
                         Some(browser_ui::NavButton::Reload) => {
                             if let Some(tab) = tabs.get_mut(*active_tab) {
                                 tab.navigate(&cur_url, false);
+                                *status_msg = Some(String::from("Reloaded"));
                             }
                         }
                         Some(browser_ui::NavButton::Home) => {
@@ -1571,6 +1617,7 @@ impl Desktop {
                         if let Some(tab) = tabs.get_mut(*active_tab) {
                             tab.navigate(&target_url, true);
                         }
+                        *status_msg = Some(format!("Loaded {}", target_url));
                         self.dirty = true;
                     }
                     return;
@@ -1594,6 +1641,7 @@ impl Desktop {
                         if let Some(tab) = tabs.get_mut(*active_tab) {
                             tab.navigate(&url, true);
                             *address_input = tab.url.clone();
+                            *status_msg = Some(format!("Loaded {}", url));
                             self.dirty = true;
                         }
                     }
@@ -1686,6 +1734,9 @@ impl Desktop {
                             }
                         }
                     }
+                    _ => {}
+                }
+            }
             WindowContent::FileEditor {
                 full_path,
                 lines,
@@ -1727,6 +1778,9 @@ impl Desktop {
                     }
                 }
             }
+            _ => {}
+        }
+
         if close_after {
             self.close_window(win_idx);
             return;
@@ -2227,11 +2281,10 @@ fn blend_into(pixels: &mut [u32], idx: usize, fg: Color, alpha: u8) {
     }
 }
 
-/// Пытается загрузить пользовательские обои из /userdata/wallpaper.bmp:
-/// несжатый BMP 24/32 бит (BI_RGB), любой размер в пределах лимита файла
-/// ext2 (268 КБ, например 320x240x24); картинка растягивается на экран
-/// ближайшим соседом. false — файла нет или формат не поддержан.
-fn load_bmp_wallpaper(pixels: &mut [u32], w: i32, h: i32) -> bool {
+    let data = match ext2::read_file_path("/wallpaper.bmp") {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
     if data.len() < 54 || &data[0..2] != b"BM" {
         return false;
     }
@@ -2258,6 +2311,16 @@ fn load_bmp_wallpaper(pixels: &mut [u32], w: i32, h: i32) -> bool {
     }
 
     let (w, h) = (w.max(1) as usize, h.max(1) as usize);
+    for y in 0..h {
+        let sy = y * bh / h;
+        let srow = if top_down { sy } else { bh - 1 - sy };
+        let row_off = off + srow * stride;
+        for x in 0..w {
+            let sx = x * bw / w;
+            let p = row_off + sx * bytes_pp;
+            let (b, g, r) = (data[p], data[p + 1], data[p + 2]);
+            if let Some(dst) = pixels.get_mut(y * w + x) {
+                *dst = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
             }
         }
     }
@@ -2449,6 +2512,20 @@ fn draw_desktop_icons(r: &mut Renderer, theme: &UiTheme, selected_idx: Option<us
             r.fill_rounded_rect_alpha(ix - 6, iy - 4, 64, 60, 6, theme.accent, 100);
         }
 
+        r.fill_rounded_rect(ix, iy, 48, 36, 8, theme.titlebar_active);
+        r.draw_icon(
+            ix + 16,
+            iy + 10,
+            match sc.icon {
+                IconType::Terminal => IconType::Terminal,
+                IconType::Files => IconType::Files,
+                IconType::Browser => IconType::Browser,
+                IconType::TaskManager => IconType::TaskManager,
+                IconType::Theme => IconType::Theme,
+                _ => IconType::Terminal,
+            },
+            theme.accent,
+        );
 
         r.draw_text(ix, iy + 40, sc.name, theme.text_primary, None);
     }
@@ -2483,6 +2560,18 @@ fn clamp_window_geometry(
 
 /// Первое свободное имя вида `{prefix}{n}{suffix}` среди текущих записей
 /// каталога. Существующие файлы не перезаписываются.
+/// Файлы больше этого размера редактор не открывает (текст строится в куче целиком).
+const EDITOR_MAX_BYTES: usize = 256 * 1024;
+
+/// В каталоге есть содержимое (или его не удалось прочитать — тогда
+/// удалять нельзя): `delete_file_path` у ext2 не рекурсивен.
+fn dir_has_children(path: &str) -> bool {
+    match crate::vfs::readdir(path) {
+        Ok(list) => list.iter().any(|e| e.name != "." && e.name != ".."),
+        Err(_) => true,
+    }
+}
+
 fn free_name(
     entries: &[crate::ui::window::FileViewEntry],
     prefix: &str,

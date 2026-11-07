@@ -75,6 +75,11 @@ const MAX_FILE_BLOCKS: usize =
     MAX_DIRECT_BLOCKS + PTRS_PER_INDIRECT_BLOCK + PTRS_PER_INDIRECT_BLOCK * PTRS_PER_INDIRECT_BLOCK;
 
 /// Начало тома ext2 /userdata на диске (раздел P2).
+pub const FS_START_LBA: u32 = 24576;
+/// Размер тома /userdata по умолчанию (штатный образ: 16384 секторов =
+/// 8 МиБ). Реальный размер читается из таблицы разделов MBR; эта
+/// константа — запасной вариант, когда MBR не читается.
+const TOTAL_SECTORS_DEFAULT: u32 = 16384;
 
 /// Номер блока суперблока (при блоке 1024 суперблок лежит в блоке 1).
 const SB_BLOCK: u32 = 1;
@@ -101,8 +106,7 @@ pub struct FileEntry {
     pub is_directory: bool,
 }
 
-// ==================== тома ====================
-
+//
 /// Какой из смонтированных томов использовать.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VolId {
@@ -249,8 +253,7 @@ fn vol(id: VolId) -> Result<Vol, Ext2Error> {
     Ok(v)
 }
 
-// ==================== геометрия группы ====================
-
+//
 /// Первый блок группы g (в группе 0 это суперблок, блок 1).
 fn group_base(v: &Vol, g: u32) -> u32 {
     1 + g * v.bpg
@@ -730,8 +733,7 @@ fn remove_dirent(v: &Vol, dir_ino: u32, name: &str) -> Result<bool, Ext2Error> {
     Ok(false)
 }
 
-// ==================== форматирование ====================
-
+//
 /// Текущее "время" ядра в секундах — RTC-драйвера для таймстампов нет,
 /// используется аптайм с момента загрузки. e2fsck не проверяет
 /// правдоподобность значений времени, только их наличие.
@@ -1006,6 +1008,9 @@ pub fn plan_format_raw(drive: Drive, start_lba: u32, total_sectors: u32) -> Resu
 pub fn write_file_raw(drive: Drive, start_lba: u32, max_sectors: u32, name: &str, data: &[u8]) -> Result<(), Ext2Error> {
     let v = load_vol(VolIo::Raw(drive), false, start_lba, max_sectors)?;
     validate_name(name)?;
+    write_file_at(&v, ROOT_INO, name, data)
+}
+
 // ---------------- имена файлов ----------------
 
 /// ext2 не требует формата 8.3 — имена произвольной длины (до 55
@@ -1021,8 +1026,7 @@ fn validate_name(name: &str) -> Result<(), Ext2Error> {
     Ok(())
 }
 
-// ==================== операции внутри тома ====================
-
+//
 fn list_dir_ino(v: &Vol, dir_ino: u32, skip_lost_found: bool) -> Result<Vec<FileEntry>, Ext2Error> {
     let dir_inode = read_inode(v, dir_ino)?;
     let mut entries = Vec::new();
@@ -1202,8 +1206,7 @@ fn write_file_at(v: &Vol, dir_ino: u32, name: &str, data: &[u8]) -> Result<(), E
     Ok(())
 }
 
-// ==================== каталоги и пути ====================
-//
+////
 // ext2 поддерживает иерархию с самого начала: lost+found (inode 11,
 // режим 0o040700) создаёт уже format(). Здесь — создание каталогов в
 // рантайме и разбор путей вида "/users/ivan/files".
@@ -1342,8 +1345,7 @@ fn delete_file_path_at(v: &Vol, path: &str) -> Result<(), Ext2Error> {
     Ok(())
 }
 
-// ==================== публичное API: /userdata ====================
-
+//
 pub fn list_root() -> Result<Vec<FileEntry>, Ext2Error> {
     let v = vol(VolId::Userdata)?;
     list_dir_ino(&v, ROOT_INO, true)
@@ -1379,32 +1381,10 @@ pub fn mkdir_p(path: &str) -> Result<u32, Ext2Error> {
     mkdir_at(&v, parent, &last)
 }
 
-/// Список содержимого каталога по пути (`"/"` — корень).
-pub fn list_dir_path(path: &str) -> Result<Vec<FileEntry>, Ext2Error> {
-    let v = vol(VolId::Userdata)?;
-    list_dir_path_at(&v, path)
-}
-
-/// Записывает файл по пути, создавая недостающие каталоги (mkdir -p).
-pub fn write_file_path(path: &str, data: &[u8]) -> Result<(), Ext2Error> {
-    let v = vol(VolId::Userdata)?;
-    write_file_path_at(&v, path, data)
-}
-
-/// Читает файл по пути.
-pub fn read_file_path(path: &str) -> Result<Vec<u8>, Ext2Error> {
-    let v = vol(VolId::Userdata)?;
-    read_file_path_at(&v, path)
-}
-
-/// Удаляет файл по пути.
-pub fn delete_file_path(path: &str) -> Result<(), Ext2Error> {
-    let v = vol(VolId::Userdata)?;
     delete_file_path_at(&v, path)
 }
 
-// ==================== публичное API: произвольный том ====================
-
+//
 pub fn list_dir_path_vol(id: VolId, path: &str) -> Result<Vec<FileEntry>, Ext2Error> {
     let v = vol(id)?;
     list_dir_path_at(&v, path)
@@ -1429,6 +1409,30 @@ pub fn mkdir_p_vol(id: VolId, path: &str) -> Result<u32, Ext2Error> {
     let v = vol(id)?;
     let (parent, last) = resolve_parent_at(&v, path, true)?;
     mkdir_at(&v, parent, &last)
+}
+
+/// Участки диска `(LBA, секторов)`, занятые данными файла, в порядке байтов
+/// файла; соседние блоки склеены. По ним загрузчик читает файлы (карта
+/// загрузки, src/bootmap.rs), когда /system — ext2.
+pub fn file_extents_vol(id: VolId, path: &str) -> Result<Vec<(u32, u32)>, Ext2Error> {
+    let v = vol(id)?;
+    let (dir_ino, name) = resolve_parent_at(&v, path, false)?;
+    let (_, _, ino) = find_in_dir(&v, dir_ino, &name)?.ok_or(Ext2Error::FileNotFound)?;
+    let inode = read_inode(&v, ino)?;
+    let blocks_used = (inode.size as usize).div_ceil(BLOCK_SIZE);
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    for block in file_block_list(&v, &inode)?.into_iter().take(blocks_used) {
+        let lba = v.start_lba + block * SECTORS_PER_BLOCK;
+        let extends = matches!(runs.last(), Some(&(start, sectors)) if start + sectors == lba);
+        if extends {
+            if let Some(last) = runs.last_mut() {
+                last.1 += SECTORS_PER_BLOCK;
+            }
+        } else {
+            runs.push((lba, SECTORS_PER_BLOCK));
+        }
+    }
+    Ok(runs)
 }
 
 /// Сводка тома: (всего блоков, свободных блоков, групп). Для `sysfs

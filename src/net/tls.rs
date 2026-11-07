@@ -209,6 +209,9 @@ fn open_record(keys: &mut Keys, payload: &[u8]) -> Result<(u8, Vec<u8>), String>
         .open(&nonce, &aad, payload)
         .ok_or_else(|| String::from("TLS: AEAD-тег записи не сошёлся"))?;
     keys.seq += 1;
+    // В TLS 1.3 внутренний plaintext = data || content_type (ровно один
+    // байт типа в конце). Обрезка нулей НЕ допустима — если данные
+    // закончены нулями, они будут съедены. Убираем только тип.
     let itype = plain
         .pop()
         .ok_or_else(|| String::from("TLS: пустой inner plaintext"))?;
@@ -259,6 +262,8 @@ fn build_client_hello(
     // supported_versions: только 1.3
     push_ext(&mut ext, 0x002b, &[2, 0x03, 0x04]);
 
+    // psk_key_exchange_modes: psk_dhe_ke
+    push_ext(&mut ext, 0x002d, &[1, 1]);
 
     // key_share: X25519
     let mut ks = Vec::with_capacity(38);
@@ -359,6 +364,18 @@ fn parse_server_hello(msg: &[u8]) -> Result<[u8; 32], String> {
 }
 
 /// Устанавливает TLS 1.3 соединение (TCP + рукопожатие).
+pub fn connect(ip: [u8; 4], port: u16, host: &str) -> Result<TlsStream, String> {
+    if !tcp::connect(ip, port) {
+        return Err(format!(
+            "Не удалось установить TCP-соединение с {} ({}.{}.{}.{}:{})",
+            host, ip[0], ip[1], ip[2], ip[3], port
+        ));
+    }
+    match handshake(host) {
+        Ok(stream) => Ok(stream),
+        Err(e) => {
+            tcp::close();
+            Err(e)
         }
     }
 }
@@ -400,6 +417,7 @@ fn parse_certificate_msg(msg: &[u8]) -> Result<Vec<Vec<u8>>, String> {
 }
 
 fn handshake(host: &str) -> Result<TlsStream, String> {
+    let deadline = crate::timer::uptime_ms() + HANDSHAKE_TIMEOUT_MS;
 
     let mut priv_key = [0u8; 32];
     crate::rng::fill_random(&mut priv_key);
@@ -412,6 +430,7 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
     let ch = build_client_hello(host, &random, &session_id, &pubkey);
     let mut transcript = Sha256::new();
     transcript.update(&ch);
+    send_record(CONTENT_HANDSHAKE, 1, &ch)?;
 
     let mut rx: Vec<u8> = Vec::new();
 
@@ -438,6 +457,7 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
     transcript.update(&sh);
 
     // --- ключевое расписание (RFC 8446 §7.1) ---
+    let shared = x25519(&priv_key, &server_pub);
     if shared.iter().all(|&b| b == 0) {
         return Err("TLS: X25519 дал нулевой общий секрет".into());
     }
@@ -582,6 +602,7 @@ impl TlsStream {
     }
 
     /// Возвращает очередную порцию расшифрованных данных приложения.
+    /// Пустой Vec — таймаут либо соединение закрыто (как у tcp::recv).
     pub fn recv(&mut self, timeout_ms: u64) -> Vec<u8> {
         if self.closed {
             return Vec::new();
@@ -590,6 +611,8 @@ impl TlsStream {
         loop {
             let (rtype, payload) = match read_record(&mut self.rx, deadline) {
                 Ok(r) => r,
+                Err(_) => return Vec::new(), // таймаут/обрыв
+            };
             match rtype {
                 CONTENT_APPDATA => match open_record(&mut self.server, &payload) {
                     Ok((CONTENT_APPDATA, plain)) => {
@@ -604,6 +627,9 @@ impl TlsStream {
                             continue;
                         }
                     }
+                    // alert (включая close_notify), неизвестный тип или
+                    // ошибка расшифровки — соединение закрывается.
+                    _ => {
                         self.closed = true;
                         return Vec::new();
                     }
@@ -613,11 +639,27 @@ impl TlsStream {
                     return Vec::new();
                 }
                 CONTENT_CCS => {}
+                _ => {
                     self.closed = true;
                     return Vec::new();
                 }
             }
         }
+    }
+
+    /// Человекочитаемая причина отсутствия данных.
+    pub fn diagnosis(&self) -> String {
+        let why = match &self.last_error {
+            Some(e) => e.clone(),
+            None => String::from(tcp::last_end()),
+        };
+        format!(
+            "{}; TCP принято {} байт, TLS-записей после рукопожатия {}; {}",
+            why,
+            tcp::rx_bytes(),
+            self.records,
+            tcp::link_stats()
+        )
     }
 
     /// Отправляет close_notify и закрывает TCP.

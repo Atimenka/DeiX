@@ -70,6 +70,24 @@ fn page_title(page: InstallerPage) -> (&'static str, &'static str) {
 
 fn draw_button(r: &mut Renderer, theme: &UiTheme, x: i32, y: i32, rect: Rect, label: &str, primary: bool) {
     let bg = if primary { theme.accent } else { theme.titlebar_inactive };
+    let fg = if primary { Color::WHITE } else { theme.text_primary };
+    crate::ui::widgets::icon_button(
+        r,
+        x + rect.x,
+        y + rect.y,
+        rect.w,
+        rect.h,
+        6,
+        bg,
+        fg,
+        crate::ui::widgets::icon_for_label(label),
+        label,
+    );
+    r.fill_rounded_rect(x + rect.x, y + rect.y, rect.w, rect.h, 6, bg);
+    let tx = x + rect.x + (rect.w as i32 - label.len() as i32 * 8) / 2;
+    let ty = y + rect.y + (rect.h as i32 - 16) / 2 + 4;
+    let fg = if primary { Color::WHITE } else { theme.text_primary };
+    r.draw_text(tx, ty, label, fg, None);
 }
 
 /// Строка списка: выделение + текст (и приглушённый текст для
@@ -149,6 +167,9 @@ pub fn draw_installer(r: &mut Renderer, theme: &UiTheme, w: &Window, st: &Instal
         }
         InstallerPage::Size => {
             let options = st.size_options_mib();
+            for (i, mib) in options.iter().enumerate() {
+                let line = if *mib == 8 {
+                    String::from("8 MiB (minimum, stock layout)")
                 } else {
                     format!("{} MiB", mib)
                 };
@@ -198,6 +219,10 @@ pub fn draw_installer(r: &mut Renderer, theme: &UiTheme, w: &Window, st: &Instal
             r.draw_text(x + 16, ly, &format!("/userdata size: {} MiB (ext2)", mib), theme.text_primary, None);
             ly += 20;
             r.draw_text(x + 16, ly, &format!("User:           {}", st.username.trim()), theme.text_primary, None);
+            ly += 28;
+            r.draw_text(
+                x + 16,
+                ly,
                 "WARNING: ALL DATA ON THE TARGET DISK WILL BE ERASED!",
                 Color::rgb(220, 60, 60),
                 None,
@@ -225,10 +250,12 @@ pub fn draw_installer(r: &mut Renderer, theme: &UiTheme, w: &Window, st: &Instal
             r.draw_icon(x + 16, y + BODY_Y + 24, IconType::Check, Color::rgb(80, 200, 120));
             r.draw_text(x + 40, y + BODY_Y + 26, "Install complete.", theme.text_primary, None);
             let mut ly = y + BODY_Y + 50;
+            for note in st.result_notes.iter().take(3) {
                 r.draw_text(x + 16, ly, note, theme.text_secondary, None);
                 ly += 18;
             }
             ly += 6;
+            r.draw_text(x + 16, ly, "Close this window and reboot to use the new disk.", theme.text_primary, None);
         }
         InstallerPage::Failed => {
             r.draw_text(x + 16, y + BODY_Y + 26, "Installation failed:", Color::rgb(220, 60, 60), None);

@@ -60,7 +60,7 @@ start:
     call serial_byte
 
     ; ---- читаем ramboot (RAM-диск загрузчик, RAMBOOT_SECTORS секторов)
-    ; в 0x7E00 (низкая память: org=0x7E00, DS=0, PM-сегменты плоские).
+    ; в 0x9000 (низкая память: org=0x9000, DS=0, PM-сегменты плоские).
     ; kernel.bin НЕ читаем здесь — ramboot сам скопирует его из RAM-диска
     ; (читает весь образ через int13 в 0x2000000). ----
     mov word [sectors_left], RAMBOOT_SECTORS

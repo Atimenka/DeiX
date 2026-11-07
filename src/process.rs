@@ -35,8 +35,7 @@ const MAX_PROCS: usize = 32;
 /// Максимум открытых дескрипторов на процесс.
 const MAX_FDS: usize = 16;
 
-// ==================== Состояния и возможности ====================
-
+//
 /// Состояние процесса.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {
@@ -96,8 +95,7 @@ pub mod cap {
         | INSTALL;
 }
 
-// ==================== Файловые дескрипторы ====================
-
+//
 /// Открытый дескриптор. Чтение/запись через дескриптор со смещением
 /// не реализованы, поэтому дескриптор хранит только путь и режим.
 #[derive(Debug, Clone)]
@@ -149,8 +147,7 @@ impl FdTable {
     }
 }
 
-// ==================== Процесс ====================
-
+//
 /// Процесс DeiX.
 pub struct Process {
     pub pid: u32,
@@ -206,8 +203,7 @@ impl Process {
     }
 }
 
-// ==================== Таблица процессов ====================
-
+//
 static PROCS: SpinLock<[Process; MAX_PROCS]> = SpinLock::new([const { Process::blank(0) }; MAX_PROCS]);
 static NEXT_PID: SpinLock<u32> = SpinLock::new(2);
 
@@ -539,8 +535,7 @@ pub fn info(pid: u32) -> Result<ProcInfo, ProcessError> {
     })
 }
 
-// ==================== Доступ из кода процесса ====================
-
+//
 /// PID процесса, исполняющегося сейчас, если он известен.
 pub fn current_pid() -> Option<u32> {
     let sid = crate::sched::current_id();
@@ -580,8 +575,7 @@ pub fn record_crash(pid: u32, code: crate::diag::ErrorCode, detail: &str) {
         p.last_error = String::from(detail);
     }
 }
-// ==================== Файловые операции процесса ====================
-
+//
 /// Открывает файл от имени процесса: проверяет возможность и
 /// регистрирует дескриптор.
 pub fn open(pid: u32, path: &str, write: bool) -> Result<usize, ProcessError> {
@@ -606,6 +600,21 @@ pub fn open(pid: u32, path: &str, write: bool) -> Result<usize, ProcessError> {
         };
         if caps & cap::WRITE_USERDATA == 0 {
             return Err(ProcessError::Vfs(String::from("нет права записи (cap WRITE_USERDATA)")));
+        }
+    } else {
+        // Чтение с read-only раздела (/system) требует READ_ANY капса.
+        // Чтение из /userdata (read-write том) разрешено любому процессу —
+        // это пользовательские данные.
+        if st.read_only {
+            let caps = {
+                let table = PROCS.lock();
+                table.iter().find(|p| p.pid == pid).map(|p| p.caps).unwrap_or(0)
+            };
+            if caps & cap::READ_ANY == 0 {
+                return Err(ProcessError::Vfs(String::from(
+                    "нет права чтения (cap READ_ANY требуется для /system)",
+                )));
+            }
         }
     }
 
@@ -667,8 +676,7 @@ pub fn write_fd(pid: u32, num: usize, data: &[u8]) -> Result<(), ProcessError> {
     crate::vfs::write_file(&path, data).map_err(|e| ProcessError::Vfs(e.message()))
 }
 
-// ==================== CLI ====================
-
+//
 /// `ps` — список процессов.
 pub fn cmd_ps() {
     let procs = list();

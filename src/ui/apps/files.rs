@@ -6,6 +6,12 @@
 
 use crate::renderer::{Color, IconType, Rect, Renderer};
 use crate::ui::theme::UiTheme;
+use crate::ui::window::{FileViewEntry, Window};
+use alloc::format;
+use alloc::string::String;
+
+/// Ширина боковой панели разделов.
+pub const SIDEBAR_W: i32 = 110;
 /// Первая строка списка файлов (от верха содержимого):
 /// панель инструментов (36) + строка хлебных крошек (24) + зазор.
 pub const LIST_START_Y: i32 = 68;
@@ -55,6 +61,15 @@ pub fn breadcrumbs(
     out
 }
 
+/// Кнопка «+File» (относительно области содержимого). Правый якорь —
+/// как и при отрисовке.
+pub fn new_file_btn_rect(win_w: u32) -> Rect {
+    Rect::new(win_w as i32 - 120, 6, 50, 24)
+}
+
+/// Кнопка «+Folder».
+pub fn new_folder_btn_rect(win_w: u32) -> Rect {
+    Rect::new(win_w as i32 - 64, 6, 55, 24)
 }
 
 /// Кнопка раздела в боковой панели.
@@ -77,22 +92,38 @@ pub fn draw_files(
 ) {
     r.fill_rect_alpha(w.x, content_y, w.width, w.height, theme.window_bg, theme.opacity);
 
-    r.fill_rect(w.x, content_y, SIDEBAR_W as u32, w.height, theme.surface_alt);
+    r.fill_rect(w.x, content_y, SIDEBAR_W as u32, w.height, theme.titlebar_inactive);
     let partitions = ["/userdata", "/system"];
     for (i, p) in partitions.iter().enumerate() {
         let item = sidebar_item_rect(i);
         let is_sel = current_partition == *p;
-        let bg = if is_sel { theme.titlebar_active } else { theme.surface };
+        let bg = if is_sel { theme.titlebar_active } else { theme.titlebar_inactive };
         let fg = if is_sel { theme.accent } else { theme.text_secondary };
         r.fill_rounded_rect(w.x + item.x, content_y + item.y, item.w, item.h, 4, bg);
+        r.draw_text(w.x + item.x + 8, content_y + item.y + 6, p, fg, None);
     }
 
     r.fill_rect(w.x + SIDEBAR_W, content_y, w.width - SIDEBAR_W as u32, 36, theme.titlebar_active);
     r.draw_icon(w.x + SIDEBAR_W + 6, content_y + 10, IconType::Search, theme.text_secondary);
+    r.draw_text(
+        w.x + SIDEBAR_W + 26,
+        content_y + 10,
+        &format!("[{}]", search_query),
         theme.text_primary,
         None,
     );
 
+    // Создание файлов возможно только на записываемом разделе: на
+    // /system (EROFS, read-only) кнопки не рисуются и не кликаются.
+    let writable = current_partition == "/userdata";
+    if writable {
+        let fb = new_file_btn_rect(w.width);
+        r.fill_rounded_rect(w.x + fb.x, content_y + fb.y, fb.w, fb.h, 4, theme.accent);
+        r.draw_text(w.x + fb.x + 5, content_y + fb.y + 4, "+File", Color::WHITE, None);
+
+        let db = new_folder_btn_rect(w.width);
+        r.fill_rounded_rect(w.x + db.x, content_y + db.y, db.w, db.h, 4, theme.accent);
+        r.draw_text(w.x + db.x + 4, content_y + db.y + 4, "+Folder", Color::WHITE, None);
     }
 
     // Хлебные крошки: раздел и каждый каталог пути — кликабельные
@@ -102,7 +133,7 @@ pub fn draw_files(
     for (i, (rect, label, _)) in crumbs.iter().enumerate() {
         let (cx, cy) = (w.x + rect.x, content_y + rect.y);
         let is_last = i == last;
-        let bg = if is_last { theme.titlebar_active } else { theme.surface };
+        let bg = if is_last { theme.titlebar_active } else { theme.titlebar_inactive };
         let fg = if is_last { theme.accent } else { theme.text_primary };
         r.fill_rounded_rect(cx, cy, rect.w, rect.h, 4, bg);
         r.draw_text(cx + 4, cy + 4, label, fg, None);
@@ -118,7 +149,11 @@ pub fn draw_files(
             break;
         }
         let is_selected = selected_idx == Some(idx);
-        let _bg = if is_selected { theme.titlebar_active } else { theme.surface };
+        let bg = if is_selected { theme.titlebar_active } else { theme.window_bg };
+        r.fill_rect(w.x + SIDEBAR_W + 4, ey - 2, w.width - (SIDEBAR_W as u32 + 10), 20, bg);
+
+        let icon_color = if entry.is_dir { Color::YELLOW } else { theme.accent };
+        r.draw_icon(w.x + SIDEBAR_W + 8, ey, IconType::Files, icon_color);
 
         let entry_str = if entry.is_dir {
             format!("{:<18} <DIR>", entry.name)
@@ -137,10 +172,13 @@ pub fn draw_files(
     } else if let Some(err) = error {
         r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, err, Color::RED, None);
     } else {
+        let mut loc = if current_path == "/" {
+        let loc = if current_path == "/" {
             String::from(current_partition)
         } else {
             format!("{}{}", current_partition, current_path)
         };
+        r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, &loc, theme.text_secondary, None);
     }
 }
 
@@ -245,6 +283,9 @@ pub fn draw_file_editor(
                 _ => theme.titlebar_inactive,
             };
             let fg = if i == 2 { theme.text_primary } else { Color::WHITE };
+            r.fill_rounded_rect(bx, by, b.w, b.h, 4, bg);
+            let tw = label.len() as i32 * 8;
+            r.draw_text(bx + (b.w as i32 - tw) / 2, by + 5, label, fg, None);
         }
     }
 }

@@ -85,6 +85,7 @@ pub fn screen(net_ok: bool, audio_ok: bool, gpu_ok: bool) {
     );
     report(
         "/userdata",
+        if crate::ext2::is_formatted() {
             Check::Ok
         } else {
             Check::Warn(

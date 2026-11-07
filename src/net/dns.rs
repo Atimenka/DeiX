@@ -1,6 +1,11 @@
 //! DNS-клиент (RFC 1035): настоящий резолвинг A-записей по UDP/53.
 //!
 //! Запрос уходит на сервер из NetConfig (по умолчанию 10.0.2.3 — DNS,
+//! который QEMU slirp предоставляет гостю). Ответы кешируются с учётом
+//! TTL записи — по его истечении имя резолвится заново.
+//!
+//! Ограничения (честно): только IPv4 (QTYPE=A), только UDP (без TCP
+//! fallback для ответов >512 байт), без DNSSEC.
 
 use crate::net::udp;
 use crate::spinlock::SpinLock;
@@ -10,15 +15,32 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 
 const DNS_PORT: u16 = 53;
+const ATTEMPTS: u32 = 2;
+const ATTEMPT_TIMEOUT_MS: u64 = 2000;
 /// TTL кеша ограничиваем сверху 10 минутами, снизу — 5 секундами.
 const TTL_MAX_MS: u64 = 600_000;
 const TTL_MIN_MS: u64 = 5_000;
 const CACHE_CAP: usize = 16;
 
+struct CacheEntry {
+    name: String,
+    ip: [u8; 4],
     expires_ms: u64,
 }
 
 static CACHE: SpinLock<Vec<CacheEntry>> = SpinLock::new(Vec::new());
+static QUERY_SEQ: SpinLock<u16> = SpinLock::new(0);
+
+fn cache_get(name: &str) -> Option<[u8; 4]> {
+    let now = crate::timer::uptime_ms();
+    without_interrupts(|| {
+        let mut c = CACHE.lock();
+        c.retain(|e| e.expires_ms > now);
+        c.iter().find(|e| e.name == name).map(|e| e.ip)
+    })
+}
+
+fn cache_put(name: &str, ip: [u8; 4], ttl_ms: u64) {
     let now = crate::timer::uptime_ms();
     let ttl = ttl_ms.clamp(TTL_MIN_MS, TTL_MAX_MS);
     without_interrupts(|| {
@@ -29,6 +51,7 @@ static CACHE: SpinLock<Vec<CacheEntry>> = SpinLock::new(Vec::new());
         }
         c.push(CacheEntry {
             name: name.to_string(),
+            ip,
             expires_ms: now + ttl,
         });
     });
@@ -82,6 +105,10 @@ fn skip_name(msg: &[u8], mut pos: usize) -> Option<usize> {
     }
 }
 
+/// Разбирает ответ: возвращает (ip, ttl_ms) первой A-записи из секции
+/// ответов. CNAME-записи пропускаются — сервер кладёт A каноничного
+/// имени в тот же ответ.
+fn parse_response(msg: &[u8], expect_id: u16) -> Option<([u8; 4], u64)> {
     if msg.len() < 12 {
         return None;
     }
@@ -91,6 +118,7 @@ fn skip_name(msg: &[u8], mut pos: usize) -> Option<usize> {
         return None; // не наш ответ или это не ответ вовсе
     }
     if flags & 0x000F != 0 {
+        return None; // RCODE != 0: NXDOMAIN, SERVFAIL и т.д.
     }
     let qdcount = u16::from_be_bytes([msg[4], msg[5]]) as usize;
     let ancount = u16::from_be_bytes([msg[6], msg[7]]) as usize;
@@ -115,11 +143,119 @@ fn skip_name(msg: &[u8], mut pos: usize) -> Option<usize> {
         }
         if rtype == 1 && rclass == 1 && rdlen == 4 {
             let ip = [msg[pos], msg[pos + 1], msg[pos + 2], msg[pos + 3]];
+            if ips.len() < MAX_ADDRS && !ips.contains(&ip) {
+                ips.push(ip);
+            }
+            min_ttl_ms = min_ttl_ms.min(ttl as u64 * 1000);
+        }
+        pos += rdlen; // CNAME и прочие типы пропускаем
+    }
+    if ips.is_empty() {
+        if flags & 0x0200 != 0 {
+            return Some(Parsed::Truncated); // TC: A-записи не влезли в UDP-ответ
+        }
+        return Some(Parsed::Reject(String::from("ответ без A-записей")));
+    }
+    Some(Parsed::Answer(ips, min_ttl_ms))
+}
+
+fn set_error(msg: String) {
+    without_interrupts(|| *LAST_ERROR.lock() = msg);
+}
+
+/// Причина последней неудачи резолвинга.
+pub fn last_error() -> String {
+    without_interrupts(|| (*LAST_ERROR.lock()).clone())
+}
+
+/// Резолвит первую A-запись `host`.
+pub fn resolve_a(host: &str) -> Option<[u8; 4]> {
+    resolve_all(host).first().copied()
+}
+
+/// Резолвит все A-записи `host` (до MAX_ADDRS) через настроенный
+/// DNS-сервер. Пустой список — имя не разрешилось (нет сети, таймаут
+/// или NXDOMAIN).
+pub fn resolve_all(host: &str) -> Vec<[u8; 4]> {
+    let name = host.trim().to_lowercase();
+    if !valid_hostname(&name) {
+        set_error(format!("недопустимое имя '{}'", name));
+        return Vec::new();
+    }
+    if let Some(ips) = cache_get(&name) {
+        return ips;
+    }
+    if !crate::rtl8139::is_ready() {
+        set_error(String::from("сетевая карта не готова"));
+        return Vec::new();
+    }
+
+    let servers = server_list();
+    let mut report = String::new();
+    for (si, server) in servers.iter().enumerate() {
+            return Some((ip, ttl as u64 * 1000));
+        }
+        pos += rdlen; // CNAME и прочие типы пропускаем
+    }
+    None
+}
+
+/// Резолвит A-запись `host` через настроенный DNS-сервер.
+/// None — имя не разрешилось (нет сети, таймаут или NXDOMAIN).
+pub fn resolve_a(host: &str) -> Option<[u8; 4]> {
+    let name = host.trim().to_lowercase();
+    if !valid_hostname(&name) {
+        return None;
+    }
+    if let Some(ip) = cache_get(&name) {
+        return Some(ip);
+    }
+    if !crate::rtl8139::is_ready() {
+        return None;
+    }
+
+    let server = crate::net::dns_ip();
+    for _ in 0..ATTEMPTS {
         let seq = without_interrupts(|| {
             let mut s = QUERY_SEQ.lock();
             *s = s.wrapping_add(1);
             *s
         });
+        // ID из тиков таймера + счётчика + случайный XOR.
+        // Локальный порт — случайный из эфемерального диапазона
+        // через ГСЧ ядра (ранее был предсказуем: 49152 + seq).
+        let mut rnd = [0u8; 2];
+        crate::rng::fill_random(&mut rnd);
+        let sport = 49152 + (((rnd[0] as u16) << 8 | rnd[1] as u16) & 0x3FFF);
+        let id = (crate::timer::uptime_ms() as u16) ^ (seq.rotate_left(7)) ^ (rnd[0] as u16) ^ 0x5A17;
+        let query = build_query(id, &name);
+        if !udp::send_to(server, DNS_PORT, sport, &query) {
+            continue;
+        }
+
+        let deadline = crate::timer::uptime_ms() + ATTEMPT_TIMEOUT_MS;
+        loop {
+            let left = deadline.saturating_sub(crate::timer::uptime_ms());
+            if left == 0 {
+                break;
+            }
+            match udp::recv_from(sport, left) {
+                Some((sip, sp, data)) => {
+                    if sip != server || sp != DNS_PORT {
+                        continue; // чужая датаграмма — ждём дальше
+                    }
+                    if let Some((ip, ttl_ms)) = parse_response(&data, id) {
+                        cache_put(&name, ip, ttl_ms);
+                        return Some(ip);
+                    }
+                    // Ответ сервера с ошибкой (NXDOMAIN и т.п.) —
+                    // повторять бессмысленно.
+                    return None;
+                }
+                None => break, // таймаут попытки
+            }
+        }
+    }
     None
 }
 

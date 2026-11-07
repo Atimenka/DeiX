@@ -136,7 +136,7 @@ fi
 
 echo "==> [4/8] Линкуем kernel.bin (long_mode_init + ядро, база 0x100000)"
 # Права сегментов (text R+X, rodata R, data/bss R+W) заданы в PHDRS
-# линкер-скрипта — RWX-сегментов нет, предупреждать ld не очем.
+# линкер-скрипта — RWX-сегментов нет, предупреждать ld не о чем.
 ld -n --gc-sections -T boot/linker_kernel.ld -o "$BUILD/kernel.elf" \
     "$BUILD/long_mode_init.o" \
     "$KERNEL_LIB"
@@ -202,6 +202,7 @@ echo "==> [6b/8] Сверяем карту разделов (partition_map, make
 python3 tools/check_partition_map.py
 
 echo "==> [7/8] Склеиваем итоговый образ диска"
+
 DISK_IMG="$BUILD/deix_disk.img"
 # Выравниваем stage2 до целого числа секторов (иначе kernel.bin в склейке
 # смещается на невыровненный байт, и stage2 читает его со сдвигом -> мусор).
@@ -211,7 +212,7 @@ if [ "$STAGE2_PAD_BYTES" -gt 0 ]; then
     python3 -c "
 data = open('$BUILD/stage2.bin','rb').read()
 pad = (512 - len(data) % 512) % 512
-open('$BUILD/stage2.pad.bin','wb').write(data + b'\\x00' * pad)
+open('$BUILD/stage2.pad.bin','wb').write(data + b'\x00' * pad)
 "
 else
     cp "$BUILD/stage2.bin" "$BUILD/stage2.pad.bin"

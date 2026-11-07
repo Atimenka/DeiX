@@ -6,6 +6,14 @@
 //                    в ext2 (чтение/запись) — ТОЛЬКО в dev-режиме.
 //
 // Как работает конверсия:
+//   1. Содержимое EROFS перечисляется и читается через кеш vfs — весь
+//      образ раздела уже лежит в куче (см. vfs::system_image), поэтому
+//      диск можно переформатировать, не потеряв исходные данные.
+//   2. Раздел форматируется в ext2 (ext2::format_system, без
+//      шифрования — загрузчик читает раздел открытым).
+//   3. Файлы пишутся на новый том напрямую через драйвер ext2 (vfs в
+//      этот момент всё ещё отдаёт /system из кеша EROFS).
+//   4. vfs::remount_system() сбрасывает кеш и определение типа ФС —
 //      дальше /system читается драйвером ext2; запись разрешена только
 //      в dev-режиме (vfs::system_writable).
 //
@@ -15,6 +23,8 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+
+use crate::println;
 
 pub fn cmd_sysfs(arg: &str) {
     match arg.trim() {
@@ -55,6 +65,8 @@ fn status() {
     }
 }
 
+/// Рекурсивно собирает пути всех обычных файлов /system (через vfs —
+/// то есть из кеша EROFS-образа).
 fn collect_paths(dir: &str, out: &mut Vec<String>) -> Result<(), String> {
     let entries = crate::vfs::readdir(dir).map_err(|e| e.message())?;
     for e in entries {
@@ -82,15 +94,67 @@ fn convert() {
         return;
     }
 
+    // Без читаемой карты загрузки после форматирования система не загрузится,
+    // поэтому проверяем её и файлы загрузчика ДО любых записей.
+    let old_map = match crate::bootmap::read_boot_map() {
+        Ok(Some(map)) => map,
+        Ok(None) => {
+            println!("  [sysfs] ERROR: the boot map (LBA 2047) is missing. /system was not modified.");
+            return;
+        }
+        Err(e) => {
+            println!("  [sysfs] ERROR: the boot map is not usable: {}. /system was not modified.", e);
+            return;
+        }
+    };
+
+    println!("  [sysfs] WARNING: /system will be reformatted to ext2 IN PLACE.");
+    println!("  [sysfs] Verified-boot style integrity of /system will be VOID.");
+
+    // 1. Список файлов и их содержимое: после форматирования читать
+    //    EROFS будет неоткуда, поэтому всё нужно держать в памяти.
+    println!("  [sysfs] 1/5 reading EROFS files into memory...");
+    println!("  [sysfs] WARNING: /system will be reformatted to ext2 IN PLACE.");
+    println!("  [sysfs] Verified-boot style integrity of /system will be VOID.");
+
+    // 1. Список файлов (образ EROFS при этом попадает в кеш vfs и
+    //    переживёт переформатирование раздела).
+    println!("  [sysfs] 1/4 reading EROFS file list...");
     let mut paths: Vec<String> = Vec::new();
     if let Err(e) = collect_paths("/system", &mut paths) {
         println!("  [sysfs] ERROR: cannot read /system: {}", e);
         return;
     }
+    println!("  [sysfs]     {} files found", paths.len());
+
+    // 2. Форматирование раздела в ext2.
+    println!("  [sysfs] 2/4 formatting /system as ext2...");
+    if crate::ext2::format_system().is_err() {
+        println!("  [sysfs] ERROR: ext2 format failed. /system partition state is");
+        println!("  [sysfs] undefined on disk; files remain readable from cache");
         println!("  [sysfs] until reboot. Re-run 'sysfs convert' or reflash /system.");
         return;
     }
 
+    // 3. Перенос файлов: читаем из кеша EROFS (vfs всё ещё считает
+    //    /system EROFS-ом), пишем напрямую драйвером ext2.
+    println!("  [sysfs] 3/4 copying files to the ext2 volume...");
+    let mut copied = 0usize;
+    let mut bytes: u64 = 0;
+    let mut failed = 0usize;
+    for path in &paths {
+        let data = match crate::vfs::read_file(path) {
+            Ok(d) => d,
+            Err(e) => {
+                println!("  [sysfs]     SKIP {}: {}", path, e.message());
+                failed += 1;
+                continue;
+            }
+        };
+        // Путь внутри тома: без префикса /system.
+        let key = path.strip_prefix("/system").unwrap_or(path).trim_start_matches('/');
+        if let Err(e) =
+            crate::ext2::write_file_path_vol(crate::ext2::VolId::System, key, &data)
         {
             println!("  [sysfs]     FAIL {}: {:?}", path, e);
             failed += 1;
@@ -101,6 +165,9 @@ fn convert() {
     }
     println!("  [sysfs]     {} files, {} KiB copied, {} failed", copied, bytes / 1024, failed);
 
+    // 4. Перемонтирование: vfs начинает читать /system как ext2,
+    //    кеш EROFS-образа освобождается.
+    println!("  [sysfs] 4/4 remounting /system...");
     crate::vfs::remount_system();
 
     match crate::vfs::readdir("/system") {

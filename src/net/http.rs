@@ -112,6 +112,9 @@ impl Conn {
 
 /// Один HTTP GET без redirect: (status, reason, location, тело-байты, content-type).
 fn fetch_once(url: &str) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
+    request_once("GET", url, &[], &[])
+}
+
 /// Один HTTP-запрос произвольным методом без redirect.
 /// `extra_headers` добавляются к базовым; `body` отправляется как есть
 /// (Content-Length ставится для любого метода, кроме GET без тела).
@@ -120,6 +123,20 @@ fn request_once(
     url: &str,
     extra_headers: &[(&str, &str)],
     body: &[u8],
+) -> Result<(u16, String, Option<String>, Vec<u8>, String), String> {
+    let (host, port, path, https) = parse_url(url)
+        .ok_or_else(|| "Некорректный URL адрес".to_string())?;
+    let ip = resolve(&host)
+        .ok_or_else(|| format!("DNS: не удалось разрешить хост '{}'", host))?;
+
+    let mut conn = if https {
+        Conn::Tls(tls::connect(ip, port, &host)?)
+    } else {
+        if !tcp::connect(ip, port) {
+            return Err(format!(
+                "Не удалось установить TCP-соединение с {} ({}.{}.{}.{}:{})",
+                host, ip[0], ip[1], ip[2], ip[3], port
+            ));
         }
         Conn::Plain
     };
@@ -151,6 +168,30 @@ fn request_once(
         let chunk = conn.recv(1000);
         if !chunk.is_empty() {
             raw.extend_from_slice(&chunk);
+            last = crate::timer::uptime_ms();
+            if raw.len() > max_body {
+                break;
+            }
+        } else if !raw.is_empty() {
+            // Данные пришли, но новых нет дольше idle_ms — конец ответа.
+            if crate::timer::uptime_ms().saturating_sub(last) > idle_ms {
+                break;
+            }
+        }
+        if tcp::peer_fin() {
+            // Сервер прислал FIN — ответ целиком доставлен, ждать
+            // простоя незачем (мы всегда работаем с Connection: close).
+            break;
+        }
+            if raw.len() > MAX_BODY {
+                break;
+            }
+        } else if !raw.is_empty() {
+            // Если получили данные и новые не поступают более 1500мс
+            if crate::timer::uptime_ms() - t0 > 1500 {
+                break;
+            }
+        }
         if let Some(he) = find_header_end(&raw) {
             let head = String::from_utf8_lossy(&raw[..he]).into_owned();
             if header_contains(&head, "transfer-encoding", "chunked") {
@@ -164,6 +205,14 @@ fn request_once(
                 }
             }
         }
+        if crate::timer::uptime_ms() - t0 > 4000 {
+            break;
+        }
+    }
+    conn.close();
+
+    if raw.is_empty() {
+        return Err("Сервер не прислал ответа".into());
     }
 
     let body_offset = find_header_end(&raw).unwrap_or(0);
@@ -183,6 +232,7 @@ fn request_once(
                 "{} — ответ сжат gzip, но повреждён или обрезан (принято {} байт, лимит {} КиБ)",
                 e,
                 raw.len(),
+                MAX_BODY / 1024
             )
         })?;
         body_bytes = data;
@@ -267,6 +317,8 @@ pub fn request_bytes(
     headers: &[(&str, &str)],
     body: &[u8],
 ) -> Result<HttpBytes, String> {
+    let (status, reason, _location, resp_body, content_type) =
+        request_once(method, url, headers, body)?;
     Ok(HttpBytes {
         status,
         reason,

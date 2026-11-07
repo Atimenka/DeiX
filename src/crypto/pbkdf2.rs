@@ -29,6 +29,53 @@ const BLOCK_LEN: usize = 128;
 /// Размер выхода SHA-512.
 const DIGEST_LEN: usize = 64;
 
+/// HMAC-SHA512 (RFC 2104).
+///
+/// `HMAC(K, m) = H((K' ^ opad) || H((K' ^ ipad) || m))`, где `K'` — ключ,
+/// дополненный нулями до размера блока (или сначала хешированный, если
+/// он длиннее блока).
+pub fn hmac_sha512(key: &[u8], message: &[u8]) -> [u8; DIGEST_LEN] {
+    let mut k = [0u8; BLOCK_LEN];
+
+    if key.len() > BLOCK_LEN {
+        // Слишком длинный ключ сначала сжимаем хешем — так требует RFC.
+        let h = sha512::sha512(key);
+        k[..DIGEST_LEN].copy_from_slice(&h);
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+
+    let mut ipad = [0x36u8; BLOCK_LEN];
+    let mut opad = [0x5Cu8; BLOCK_LEN];
+    for i in 0..BLOCK_LEN {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
+    }
+
+    // Внутренний хеш: H((K ^ ipad) || message)
+    let mut inner = sha512::Sha512::new();
+    inner.update(&ipad);
+    inner.update(message);
+    let inner_digest = inner.finalize();
+
+    // Внешний хеш: H((K ^ opad) || inner)
+    let mut outer = sha512::Sha512::new();
+    outer.update(&opad);
+    outer.update(&inner_digest);
+    let result = outer.finalize();
+
+    // Затираем копию ключа: она лежала на стеке в открытом виде.
+    for b in k.iter_mut() {
+        *b = 0;
+    }
+    for b in ipad.iter_mut() {
+        *b = 0;
+    }
+    for b in opad.iter_mut() {
+        *b = 0;
+    }
+
+    result
 }
 
 /// PBKDF2-HMAC-SHA512, выход ровно 64 байта (один блок).
@@ -42,12 +89,19 @@ pub fn pbkdf2_sha512(password: &[u8], salt: &[u8], iterations: u32) -> [u8; DIGE
     salt_block.extend_from_slice(salt);
     salt_block.extend_from_slice(&1u32.to_be_bytes());
 
+    let mut u = hmac_sha512(password, &salt_block);
     let mut result = u;
 
     // T = U1 ^ U2 ^ ... ^ Uc, где Ui = HMAC(password, U(i-1))
     for _ in 1..iterations.max(1) {
+        u = hmac_sha512(password, &u);
+        for i in 0..DIGEST_LEN {
             result[i] ^= u[i];
         }
     }
 
+    for b in u.iter_mut() {
+        *b = 0;
+    }
+    result
 }

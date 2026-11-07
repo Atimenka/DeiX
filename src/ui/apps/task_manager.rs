@@ -9,6 +9,8 @@
 //! Скорости (сект/с, байт/с) считаются как приращение счётчика между
 //! двумя отрисовками кадра, делённое на прошедшее время.
 
+use crate::renderer::{Color, Renderer};
+use crate::ui::theme::UiTheme;
 use crate::ui::window::Window;
 use alloc::format;
 use alloc::string::String;
@@ -186,6 +188,8 @@ pub fn draw_task_manager(
         r.draw_text(w.x + 12, content_y + w.height as i32 - 16, msg, theme.accent, None);
     }
 
+    r.fill_rounded_rect(w.x + w.width as i32 - 110, content_y + w.height as i32 - 32, 100, 24, 4, Color::RED);
+    r.draw_text(w.x + w.width as i32 - 100, content_y + w.height as i32 - 28, "Kill Task", Color::WHITE, None);
 }
 
 fn name_short(name: &str) -> String {

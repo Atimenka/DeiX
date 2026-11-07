@@ -47,8 +47,8 @@ impl UiTheme {
             accent_hover: Color::rgb(129, 140, 248),
             text_primary: Color::rgb(205, 214, 244),
             text_secondary: Color::rgb(148, 163, 184),
-            surface: Color::rgb(36, 38, 58),
-            surface_alt: Color::rgb(46, 44, 70),
+            surface: Color::rgb(30, 30, 46),
+            surface_alt: Color::rgb(40, 40, 60),
             opacity: 235,
             corner_radius: 10,
             wallpaper_style: 0,
@@ -172,6 +172,8 @@ impl UiTheme {
 /// в `desktop::generate_wallpaper` — декоративных пунктов здесь нет.
 /// "Custom" читает /userdata/wallpaper.bmp (BMP 24/32 бит, до 268 КБ —
 /// предел файла ext2-тома); без валидного файла рисуется Aurora.
+pub const WALLPAPER_STYLES: [&str; 5] =
+    ["Aurora", "Midnight", "Plasma Flow", "Minimal", "Custom"];
 
 static mut CURRENT_THEME: Option<UiTheme> = None;
 
@@ -205,5 +207,30 @@ pub fn wallpaper_epoch() -> u32 {
 pub fn set_theme(theme: UiTheme) {
     unsafe {
         CURRENT_THEME = Some(theme);
+    }
+}
+
+/// Creates a theme from a preset token (same tokens as desktop.cfg).
+pub fn preset_from_token(token: &str) -> Option<UiTheme> {
+    match token {
+        "catppuccin" => Some(UiTheme::catppuccin()),
+        "nord_light" => Some(UiTheme::nord_light()),
+        "cyberpunk" => Some(UiTheme::cyberpunk()),
+        "aero_glass" => Some(UiTheme::aero_glass()),
+        "emerald" => Some(UiTheme::emerald_forest()),
+        "sunset_gold" => Some(UiTheme::sunset_gold()),
+        _ => None,
+    }
+}
+
+/// Token for a preset (same tokens as desktop.cfg).
+pub fn preset_token(p: ThemePreset) -> &'static str {
+    match p {
+        ThemePreset::DarkCatppuccin => "catppuccin",
+        ThemePreset::NordLight => "nord_light",
+        ThemePreset::CyberpunkNeon => "cyberpunk",
+        ThemePreset::AeroGlass => "aero_glass",
+        ThemePreset::EmeraldForest => "emerald",
+        ThemePreset::SunsetGold => "sunset_gold",
     }
 }

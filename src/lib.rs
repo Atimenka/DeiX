@@ -11,6 +11,9 @@ mod ramdisk;
 mod auth;
 mod autostart;
 mod bootlogo;
+mod bootchain;
+mod bugreport;
+mod cli;
 mod cp866;
 mod cpuid;
 mod crypto;
@@ -18,10 +21,6 @@ mod crypto_storage;
 mod devauth;
 mod devmode;
 mod diag;
-mod dinit;
-mod ds;
-mod duil;
-mod erofs;
 mod ext2;
 mod font;
 mod font_cyrillic;
@@ -40,7 +39,6 @@ mod loginui;
 mod luks;
 mod mex;
 mod mm;
-mod nanocore;
 mod module;
 mod mouse;
 mod microcode;
@@ -178,6 +176,7 @@ pub extern "C" fn kernel_main() -> ! {
         println!("ATA disk: not detected");
     }
 
+    let net_ok = rtl8139::init();
     if net_ok {
         println!(
             "Network: IP {}.{}.{}.{} (type 'ifconfig' for details)",
@@ -220,12 +219,6 @@ pub extern "C" fn kernel_main() -> ! {
         }
     }
 
-    // Nano-Core: distributed Stage 2 boot orchestrator.
-    // Загружает ~50 микро-процессов через DAG-манифесты.
-    bootlogo::set_status("launching nano-core processes...");
-    crate::nanocore::boot();
-    crate::serial_println!("[deix] Nano-Core orchestrator booted");
-
     bootlogo::set_status("initializing memory...");
     // Инициализируем менеджер памяти (физический + виртуальный).
     mm::phys::init();
@@ -252,6 +245,7 @@ pub extern "C" fn kernel_main() -> ! {
     // Загружаем модули ядра (.kmod файлы) с ext2-диска.
     // Модули расширяют функциональность ядра: сеть, графика, криптография.
     // Если модуль не найден на диске — система продолжает работу без него.
+    module::load_boot_modules();
 
     // GDT/TSS ставим ПЕРВЫМИ: планировщик кладёт в начальный кадр задачи
     // SS=0x10 (kernel data), а в GDT загрузчика есть только null и
@@ -270,6 +264,9 @@ pub extern "C" fn kernel_main() -> ! {
     // /system (EROFS RO) + /userdata (EXT2 RW) и разбор скрипта init.deix
     // процессом PID 1 (Dinit).
     partition_map::validate_partition_map_report();
+    init_parser::boot_report(init_parser::INIT_DEIX_SCRIPT);
+    security_monitor::boot_selfcheck();
+    crate::dinit::init();
     crate::serial_println!("[deix] Dinit (PID 1, Ring 0) запущен");
 
     // ВНИМАНИЕ: autostart::run() ПЕРЕНЕСЁН за экран входа (см. ниже).
@@ -319,6 +316,7 @@ pub extern "C" fn kernel_main() -> ! {
     // /userdata доступен (и расшифрован, если включено шифрование) —
     // подключаем постоянные журналы и сбрасываем в них всё, что накопил
     // кольцевой буфер с начала загрузки. События до этой точки не теряются.
+    diag::storage_ready();
     crate::serial_println!("[deix] J: storage_ready done ({} ms)", timer::uptime_ms());
 
     // Канонический layout /userdata: недостающие каталоги создаются
@@ -337,15 +335,20 @@ pub extern "C" fn kernel_main() -> ! {
     // Автозапуск ТОЛЬКО после успешного входа: команды выполняются от
     // имени вошедшего пользователя, а не анонимно до аутентификации.
     autostart::run();
+    bootprof::mark("autostart run");
     crate::serial_println!("[deix] L: autostart run done ({} ms)", timer::uptime_ms());
 
     // UI-звуки (PC speaker, src/sound.rs; файлы *.dps в /system/media/audio/ui —
     // если в образе их нет, просто играем в тишине, как раньше).
     // Загрузка шла с USB-флешки (RAM-диск) — сигнал «носитель подключён»,
+    // затем общий стартовый сигнал «система готова».
     if crate::ramdisk::is_active() {
         let _ = sound::play_ui(sound::UiSound::UsbConnect);
     }
     let _ = sound::play_ui(sound::UiSound::Startup);
+    crate::serial_println!("[deix] M: startup sound done ({} ms)", timer::uptime_ms());
+
+    cli::run();
 }
 
 /// Полный сброс глобальных структур состояния (.data/.bss) перед переносом

@@ -108,8 +108,7 @@ pub fn alert() {
     beep(1320, 300);
 }
 
-// ==================== UI-звуки (DPS1 через ШИМ) ====================
-//
+////
 // Зачем: assets/*.wav (44.1 кГц/16-бит/стерео) — это десятки КБ чистого
 // сигнала, который в kernel.bin не влезает (лимит размера ядра), а PC
 // speaker не умеет DMA/PCM. Выход:
@@ -182,6 +181,7 @@ impl UiSound {
 }
 
 /// Все эффекты реестра (для перечисления в CLI).
+pub const UI_SOUNDS: [UiSound; 6] = [
     UiSound::Startup,
     UiSound::Error,
     UiSound::BatteryLow,
@@ -313,6 +313,30 @@ pub fn play_ui(sound: UiSound) -> Result<(), &'static str> {
     let (rate, samples) = parse_dps(&raw)?;
     play_pcm8(samples, rate);
     Ok(())
+}
+
+static BACKGROUND_PENDING: AtomicU8 = AtomicU8::new(0);
+
+extern "C" fn background_task() {
+    let pending = BACKGROUND_PENDING.swap(0, Ordering::AcqRel);
+    if let Some(sound) = (pending as usize).checked_sub(1).and_then(|i| UI_SOUNDS.get(i)) {
+        let _ = play_ui(*sound);
+    }
+}
+
+/// Играет эффект в отдельной задаче планировщика, не блокируя вызывающего
+/// (GUI). Если предыдущий фоновый эффект ещё не стартовал или свободных
+/// слотов задач нет — звук пропускается.
+pub fn play_ui_background(sound: UiSound) {
+    if BACKGROUND_PENDING
+        .compare_exchange(0, sound as u8 + 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    if crate::sched::spawn("ui-voice", background_task).is_none() {
+        BACKGROUND_PENDING.store(0, Ordering::Release);
+    }
 }
 
 /// Играет эффект по имени/псевдониму (для CLI `sound play <имя>`).

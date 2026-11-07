@@ -146,11 +146,16 @@ fn redraw(
         r.clear(BG);
 
         let pw = 440u32;
+        let ph = if setup { 270u32 } else { 215u32 };
         let px = (w - pw as i32) / 2;
         let py = (h - ph as i32) / 2;
 
         // Рисуем эмблему/логотип DeiX над панелью входа
         let logo_scale = 1;
+        let logo_dim = 128 * logo_scale;
+        let logo_y = py - logo_dim - 16;
+        if logo_y >= 10 {
+            crate::bootlogo::draw_logo_at(r, (w - logo_dim) / 2, logo_y, logo_scale);
         }
 
         r.fill_rect(px, py, pw, ph, PANEL);
@@ -187,11 +192,20 @@ fn redraw(
                 }
             };
 
+        draw_field(r, "USERNAME", user, focus == Focus::User, fy);
         fy += 50;
         draw_field(r, "PASSWORD", pass, focus == Focus::Pass, fy);
         if setup {
             fy += 50;
             draw_field(r, "CONFIRM PASSWORD", confirm, focus == Focus::Confirm, fy);
+        }
+
+        if !status.is_empty() {
+            text_center(r, py + ph as i32 - 44, status, status_color, 1);
+        }
+        text_center(
+            r,
+            py + ph as i32 - 24,
             "Tab/mouse - select field   Enter - confirm",
             HINT,
             1,
@@ -260,6 +274,7 @@ fn layout(r: &crate::renderer::Renderer, setup: bool) -> Layout {
     let w = r.width() as i32;
     let h = r.height() as i32;
     let pw = 440u32;
+    let ph = if setup { 270u32 } else { 215u32 };
     let px = (w - pw as i32) / 2;
     let py = (h - ph as i32) / 2;
     Layout {
@@ -272,6 +287,7 @@ fn layout(r: &crate::renderer::Renderer, setup: bool) -> Layout {
 }
 
 /// Определяет, по какому полю кликнули.
+fn hit_test(l: &Layout, setup: bool, mx: i32, my: i32) -> Option<Focus> {
     let inside = |y: i32| mx >= l.fx && mx < l.fx + l.fw as i32 && my >= y && my < y + 22;
     if inside(l.user_y) {
         Some(Focus::User)
@@ -318,6 +334,7 @@ pub fn run() -> Option<String> {
     let mut status = String::new();
     let mut status_color = HINT;
 
+    redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
 
     // Предыдущее состояние мыши: перерисовываем экран только когда
     // курсор реально сдвинулся, иначе 60 кадров в секунду впустую.
@@ -332,6 +349,11 @@ pub fn run() -> Option<String> {
                 let m = crate::mouse::snapshot();
                 let moved = (m.x, m.y) != last_mouse;
 
+                // Клик по полю переводит на него фокус.
+                if m.left_button && !last_click {
+                    let hit = crate::renderer::with_renderer_ret(|r| {
+                        let l = layout(r, setup);
+                        hit_test(&l, setup, m.x, m.y)
                     })
                     .flatten();
                     if let Some(f) = hit {
@@ -342,6 +364,9 @@ pub fn run() -> Option<String> {
 
                 if moved || m.left_button {
                     last_mouse = (m.x, m.y);
+                    redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
+                } else {
+                    // hlt: спим до прерывания, не жжём процессор впустую.
                     crate::sched::idle_wait();
                 }
                 continue;
@@ -351,6 +376,19 @@ pub fn run() -> Option<String> {
         let mut dirty = true;
         match c {
             b'\t' => {
+                focus = match (focus, setup) {
+                    (Focus::User, _) => Focus::Pass,
+                    (Focus::Pass, true) => Focus::Confirm,
+                    (Focus::Pass, false) => Focus::User,
+                    (Focus::Confirm, _) => Focus::User,
+                };
+            }
+            b'\n' | b'\r' => {
+                let last = if setup { Focus::Confirm } else { Focus::Pass };
+                if focus != last {
+                    focus = match (focus, setup) {
+                        (Focus::User, _) => Focus::Pass,
+                        (Focus::Pass, true) => Focus::Confirm,
                         _ => Focus::User,
                     };
                 } else if setup {
@@ -373,6 +411,7 @@ pub fn run() -> Option<String> {
                                 // Текстовый auth::run_login_screen это делал,
                                 // а графический вход — нет.
                                 status = String::from("encrypting disk, wait...");
+                                redraw(&user, &pass, &confirm, focus, setup,
                                        &status, status_color);
                                 match crate::crypto_storage::enable_encryption(pass.as_str()) {
                                     Ok(()) => crate::serial_println!(
@@ -380,6 +419,10 @@ pub fn run() -> Option<String> {
                                     Err(_) => crate::serial_println!(
                                         "[loginui] ВНИМАНИЕ: шифрование НЕ включено (ошибка диска)"),
                                 }
+                                status = String::from("account created, signing in...");
+                                status_color = OK_C;
+                                redraw(
+                                    &user, &pass, &confirm, focus, setup, &status, status_color,
                                 );
                                 return Some(String::from(user.as_str()));
                             }
@@ -411,6 +454,14 @@ pub fn run() -> Option<String> {
                         pass.clear();
                         focus = Focus::Pass;
                         let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
+                        redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
+                        continue;
+                    }
+                    match crate::auth::verify_login(user.as_str(), pass.as_str()) {
+                        Ok(()) => {
+                            status = String::from("welcome!");
+                            status_color = OK_C;
+                            redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
                             return Some(String::from(user.as_str()));
                         }
                         Err(_) => {
@@ -434,11 +485,13 @@ pub fn run() -> Option<String> {
                 Focus::User => user.push(c),
                 Focus::Pass => pass.push(c),
                 Focus::Confirm => confirm.push(c),
+                Focus::Totp => pass.push(c),
             },
             _ => dirty = false,
         }
 
         if dirty {
+            redraw(&user, &pass, &confirm, focus, setup, &status, status_color);
         }
     }
 }

@@ -12,6 +12,7 @@
 //! Декодера PNG в ядре нет, а сырой RGB не влезает: `kernel.bin`
 //! физически ограничен (буфер загрузчика упирается в память).
 //! Поэтому лого хранится в собственном формате `DXLG`: палитра до 255
+//! цветов + RLE. 128x128 из 5 цветов занимает ~2.3 КиБ вместо 48 КиБ сырого RGB.
 //!
 //! ```text
 //!   0   4   магия "DXLG"
@@ -24,6 +25,8 @@
 //! ```
 
 use crate::renderer::Color;
+
+/// Встроенное лого (собирается из assets/logo.png шагом [2d/8] build.sh).
 static LOGO: &[u8] = include_bytes!("../build/logo.dxlg");
 
 const MAGIC: &[u8; 4] = b"DXLG";
@@ -86,8 +89,8 @@ pub fn draw_logo_at(r: &mut crate::renderer::Renderer, ox: i32, oy: i32, scale: 
         None => return oy,
     };
     let scale = scale.max(1);
-    let total = logo.w * logo.h;
     let sh = logo.h as i32 * scale;
+    let total = logo.w * logo.h;
 
     let mut pos: u32 = 0;
     let mut i = 0usize;
@@ -100,24 +103,23 @@ pub fn draw_logo_at(r: &mut crate::renderer::Renderer, ox: i32, oy: i32, scale: 
             continue;
         }
 
-        // Индекс 0 — фон (прозрачный), не закрашиваем.
-        if idx == 0 {
-            pos += count;
-            continue;
-        }
-
-        let color = logo.color(idx);
         let mut rem = count;
         while rem > 0 && pos < total {
-            let chunk = rem.min(total - pos);
-            let end = pos + chunk;
-            while pos < end {
-                let px = ox + ((pos % logo.w) as i32) * scale;
-                let py = oy + ((pos / logo.w) as i32) * scale;
-                r.fill_rect(px, py, scale as u32, scale as u32, color);
-                pos += 1;
+            let px = (pos % logo.w) as i32;
+            let py = (pos / logo.w) as i32;
+            let chunk = core::cmp::min(rem, logo.w - px as u32);
+            if idx != 0 {
+                let color = logo.color(idx);
+                r.fill_rect(
+                    ox + px * scale,
+                    oy + py * scale,
+                    chunk * scale as u32,
+                    scale as u32,
+                    color,
+                );
             }
             rem -= chunk;
+            pos += chunk;
         }
     }
     oy + sh
@@ -146,6 +148,16 @@ pub fn draw_text_scaled(
             if bits == 0 {
                 continue;
             }
+            for col in 0..8i32 {
+                if (bits >> (7 - col)) & 1 != 0 {
+                    r.fill_rect(
+                        x + col * scale,
+                        y + row as i32 * scale,
+                        scale as u32,
+                        scale as u32,
+                        color,
+                    );
+                }
             }
         }
         x += 8 * scale;
@@ -208,6 +220,9 @@ pub fn set_status(status: &str) {
         // Затираем область статуса и пишем новую строку
         r.fill_rect(0, y - 4, r.width(), 44, BG);
         draw_text_scaled(r, status, y, FG, 2);
+        let step = (BOOT_STEP.load(Ordering::Relaxed) + 1).min(BOOT_STEPS);
+        BOOT_STEP.store(step, Ordering::Relaxed);
+        draw_progress(r, bottom, step);
         r.present();
     });
 }
@@ -234,6 +249,7 @@ pub fn cmd_logo(arg: &str) {
             }
         }
         _ => {
+            show("Press Esc, Enter or Space to return");
             loop {
                 if let Some(ch) = crate::keyboard::try_read_char() {
                     if ch == 0x1b || ch == b'\n' || ch == b'\r' || ch == b' ' || ch == b'q' || ch == b'Q' {

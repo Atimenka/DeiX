@@ -45,6 +45,12 @@ pub fn accent_rect(i: usize) -> Rect {
     Rect::new(12 + i as i32 * 34, 180, 26, 26)
 }
 
+/// Свотч-превью стиля обоев `i`: 3 в ряд, 2 ряда (5 стилей).
+pub fn wallpaper_rect(i: usize) -> Rect {
+    Rect::new(
+        12 + (i % 3) as i32 * 152,
+        232 + (i / 3) as i32 * 46,
+        144,
         40,
     )
 }
@@ -58,6 +64,7 @@ pub const PROFILE_CHOICES: [(&str, PerfProfile); 3] = [
 
 /// Прямоугольник кнопки профиля производительности `i`.
 pub fn profile_rect(i: usize) -> Rect {
+    Rect::new(12 + i as i32 * 152, 346, 144, 26)
 }
 
 /// Тема по пресету — для построения карточек-превью.
@@ -126,6 +133,7 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
 
     // Профиль производительности: каждый пункт реально меняет путь
     // отрисовки (blur/тени/прозрачность — см. ui::effects).
+    r.draw_text(w.x + 12, content_y + 328, "EFFECTS", theme.text_secondary, None);
     let current_profile = crate::ui::effects::current();
     for (i, (name, profile)) in PROFILE_CHOICES.iter().enumerate() {
         let rect = profile_rect(i);
@@ -141,6 +149,11 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
         PerfProfile::Balanced => "Blur disabled; shadows and translucency kept.",
         PerfProfile::Performance => "Blur and shadows off, surfaces opaque.",
     };
+    r.draw_text(w.x + 12, content_y + 380, hint, theme.text_secondary, None);
+
+    r.draw_text(
+        w.x + 12,
+        content_y + 398,
         "Custom wallpaper: /userdata/wallpaper.bmp (24/32-bit, <= 268 KB)",
         theme.text_secondary,
         None,
@@ -153,6 +166,10 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
     } else {
         "Sound: PC speaker (no volume control)"
     };
+    r.draw_text(w.x + 12, content_y + 416, audio, theme.text_secondary, None);
+    r.draw_text(
+        w.x + 12,
+        content_y + 434,
         "Display resolution: Start menu > Display Settings",
         theme.text_secondary,
         None,
@@ -160,6 +177,7 @@ pub fn draw_theme_settings(r: &mut Renderer, theme: &UiTheme, w: &Window, conten
 }
 
 /// Миниатюра стиля обоев: та же палитра и мотив, что у настоящего
+/// генератора (desktop::generate_wallpaper), в масштабе кнопки.
 fn draw_wallpaper_swatch(
     r: &mut Renderer,
     theme: &UiTheme,
@@ -174,6 +192,16 @@ fn draw_wallpaper_swatch(
         // Midnight: тёмное небо, луна, звёзды.
         1 => {
             r.fill_rounded_rect(x, y, w, h, 8, theme.bg_top.lerp(Color::BLACK, 120));
+            r.fill_circle(x + wi - 22, y + 11, 6, Color::rgb(226, 232, 240));
+            for (sx, sy) in [(14, 8), (40, 16), (70, 7), (96, 20)] {
+                r.put_pixel(x + sx, y + sy, theme.text_primary);
+            }
+        }
+        // Plasma Flow: встречный градиент и круги.
+        2 => {
+            r.fill_rounded_rect(x, y, w, h, 8, theme.bg_bottom);
+            r.fill_circle(x + 30, y + 12, 10, theme.bg_top.lerp(theme.accent, 90));
+            r.fill_circle(x + wi - 34, y + hi - 14, 12, theme.bg_top.lerp(theme.accent_hover, 70));
         }
         // Minimal: светлая поверхность с акцентной полосой.
         3 => {
@@ -183,11 +211,17 @@ fn draw_wallpaper_swatch(
         // Custom: пользовательский BMP.
         4 => {
             r.fill_rounded_rect(x, y, w, h, 8, theme.surface_alt);
+            r.draw_icon(x + wi - 24, y + 5, IconType::Files, theme.accent);
         }
         // Aurora: графит и две ленты сияния.
         _ => {
             r.fill_rounded_rect(x, y, w, h, 8, theme.bg_top);
             let violet = Color::rgb(138, 123, 240);
+            r.draw_line(x + 16, y + hi - 4, x + 44, y + 4, theme.bg_top.lerp(theme.accent, 120));
+            r.draw_line(x + 17, y + hi - 4, x + 45, y + 4, theme.bg_top.lerp(theme.accent, 90));
+            r.draw_line(x + 78, y + 3, x + 108, y + hi - 5, theme.bg_top.lerp(violet, 110));
+            r.draw_line(x + 79, y + 3, x + 109, y + hi - 5, theme.bg_top.lerp(violet, 80));
+            for (sx, sy) in [(60, 8), (124, 12), (10, 6)] {
                 r.put_pixel(x + sx, y + sy, theme.text_primary);
             }
         }
@@ -214,6 +248,7 @@ pub fn draw_display_settings(
 
         r.fill_rounded_rect(w.x + 12, ry, w.width - 24, 24, 4, bg);
         let res_str = format!("{} x {}", width, height);
+        r.draw_text(w.x + 24, ry + 4, &res_str, fg, None);
 
         if is_current {
             r.draw_text(w.x + w.width as i32 - 70, ry + 4, "[Active]", Color::GREEN, None);

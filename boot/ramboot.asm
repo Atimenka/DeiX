@@ -5,7 +5,7 @@
 ; образ (20 МиБ) через int13 и кладём его в RAM по адресу RAMDISK_DST, а ядро
 ; обращается к разделам как к памяти (см. src/ramdisk.rs).
 ;
-; РАЗМЕЩЕНИЕ: код в НИЗКОЙ памяти 0x7E00 (org 0x7E00, DS=0). Это позволяет
+; РАЗМЕЩЕНИЕ: код в НИЗКОЙ памяти 0x9000 (org 0x7E00, DS=0). Это позволяет
 ; использовать ПЛОСКИЕ 32-битные сегменты в protected mode (linear = IP),
 ; т.к. ramboot < 1 МиБ и адреса влезают в imm16.
 ;
@@ -253,12 +253,6 @@ DATA16_SEG equ gdt_data16 - gdt_start  ; 0x20 data16
 
 ; ---------------- данные (DS=0, адреса 0x9000+off) ----------------
 boot_drive:    db 0
-hexdig:        db "0123456789ABCDEF"
-sectors_left:  dw 0
-cur_lba_lo:    dw 0
-cur_lba_hi:    dw 0
-ram_dst_phys:  dd 0
-chunk_bytes:   dd 0
 
 disk_error:
     ; Раньше здесь был молчаливый вечный цикл: на реальном железе это
@@ -297,5 +291,6 @@ dap_lba_lo:
 dap_lba_hi:
     dw 0, 0
 
+align 512, db 0
 times 510-($-$$) db 0
 dw 0xAA55

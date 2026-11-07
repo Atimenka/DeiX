@@ -38,12 +38,24 @@ pub unsafe fn inl(port: u16) -> u32 {
 
 /// Читает buf.len()/2 слов (16 бит) подряд из порта в буфер — используется
 /// для быстрого чтения сектора диска через ATA PIO (256 слов = 512 байт).
+#[inline]
+pub unsafe fn insw(port: u16, buf: &mut [u8]) {
+    let words = buf.len() / 2;
+    for i in 0..words {
+        let value = inw(port);
+        buf[i * 2] = (value & 0xFF) as u8;
+        buf[i * 2 + 1] = (value >> 8) as u8;
+    }
 }
 
 /// Пишет buf.len()/2 слов (16 бит) подряд в порт — парная функция к insw.
 #[inline]
 pub unsafe fn outsw(port: u16, buf: &[u8]) {
     let words = buf.len() / 2;
+    for i in 0..words {
+        let value = (buf[i * 2] as u16) | ((buf[i * 2 + 1] as u16) << 8);
+        outw(port, value);
+    }
 }
 
 #[inline]

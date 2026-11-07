@@ -15,6 +15,7 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::arch::asm;
 
+const MAX_LINE: usize = 120;
 const MAX_HISTORY: usize = 32;
 
 pub fn run() -> ! {
@@ -48,6 +49,7 @@ pub fn run() -> ! {
         } else {
             match keyboard::try_read_char() {
                 Some(c) => c,
+                None => continue,
             }
         };
         match c {
@@ -258,19 +260,11 @@ pub fn execute(line: &str) {
         "uptime" => cmd_uptime(),
         "color" => cmd_color(rest),
         "cpuid" => cmd_cpuid(),
-        "lang" => cmd_lang(rest),
-        "ifconfig" => cmd_ifconfig(rest),
-        "arp" => cmd_arp(),
-        "ping" => cmd_ping(rest),
-        "dns" => cmd_dns(rest),
-        "gpu" => cmd_gpu(rest),
-        "sound" => cmd_sound(rest),
-        "ls" => cmd_ls(),
-        "cat" => cmd_cat(rest),
-        "write" => cmd_write(rest),
-        "mkdir" => cmd_mkdir(rest),
-        "rm" => cmd_rm(rest),
-        "pkg" => cmd_pkg(rest),
+        "dialog" => cmd_dialog_test(),
+        "erofs" => cmd_erofs_test(),
+        "run" => cmd_run(rest),
+        "install" => crate::install::cmd_install(rest),
+        "bigfile" => cmd_bigfile(rest),
         "useradd" => cmd_useradd(rest),
         "passwd" => cmd_passwd(rest),
         "whoami" => cmd_whoami(),
@@ -302,6 +296,13 @@ pub fn execute(line: &str) {
         "error" => crate::diag::cli::cmd_error(rest),
         "panic" => crate::diag::cli::cmd_panic(rest),
         "diagnostics" => crate::diag::cli::cmd_diagnostics(rest),
+        "dev" => {
+            match rest.trim() {
+                "on" => crate::devmode::enable_dev_mode(),
+                "off" => crate::devmode::disable_dev_mode(),
+                "request" => crate::devauth::cmd_request(),
+                "revoke" => crate::devauth::cmd_revoke(),
+                "flags" => crate::devauth::cmd_flags(),
                 _ => crate::devmode::dev_status(),
             }
         }
@@ -309,17 +310,14 @@ pub fn execute(line: &str) {
         "nvidia" => crate::drivers::nvidia::cmd_nvidia(rest),
         "microcode" => crate::microcode::cmd_microcode(rest),
         "hal" => crate::drivers::hal_selftest(),
+        "crypt" => crate::luks::cmd_crypt(rest),
+        "dinit" => crate::dinit::cmd_dinit(rest),
+        "logo" => crate::bootlogo::cmd_logo(rest),
         "wallpaper" => cmd_wallpaper(rest),
         "linux" => crate::linux::cmd_linux(rest),
         "profile" => crate::userfs::cmd_profile(rest, &current_user().unwrap_or_default()),
         "lock" => crate::loginui::cmd_lock(&current_user().unwrap_or_default()),
         "threads" => crate::sched::cmd_threads(rest),
-        "nanocore" => {
-            let parts: alloc::vec::Vec<&str> = rest.split_whitespace().collect();
-            let mut all = alloc::vec!["nanocore"];
-            all.extend(parts);
-            crate::nanocore::cli::execute(&all);
-        }
         "su" | "sudo" | "root" => {
             if crate::devmode::sudo_allowed() {
                 // Dev-режим: sudo доступен, гарантии целостности сняты.
@@ -336,7 +334,7 @@ pub fn execute(line: &str) {
         }
         _ => println_t!(
             en: "Unknown command: '{}'. Type 'help'.",
-            ru: "Неизвестная команда: '{}'. Введи 'help'.";
+            ru: "Неизвестная команда: '{}'. Введи 'help'.",
             cmd
         ),
     }
@@ -363,6 +361,7 @@ fn cmd_sound(rest: &str) {
             if media.is_empty() {
                 println!("{}", t!(en: "  (image has no sounds: rebuild with build.sh step [2e/8])", ru: "  (в образе звуков нет: пересоберите — шаг build.sh [2e/8])"));
             }
+            println!("{}", t!(en: "play: sound play <start|error|lowbat|fullbat|usbcon|usbdisc>", ru: "играть: sound play <start|error|lowbat|fullbat|usbcon|usbdisc>"));
             println!("{}", t!(en: "mode: sound mode [auto|hda|speaker] - select sound output device", ru: "режим: sound mode [auto|hda|speaker] - выбор устройства вывода звука"));
             println!("{}", t!(en: "HDA:  sound hda [test|play <name>] - Intel High Definition Audio status & test", ru: "HDA:  sound hda [test|play <имя>] - статус и тест Intel High Definition Audio"));
             println!("{}", t!(en: "PC:   sound speaker [beep|play <name>] - direct PC speaker (PWM port 0x61)", ru: "PC:   sound speaker [beep|play <имя>] - прямой вывод на PC speaker (ШИМ порт 0x61)"));
@@ -481,6 +480,8 @@ fn cmd_help() {
     println!("  color <name>            - {}", t!(en: "change text color", ru: "сменить цвет текста"));
     println!("                            (green/white/red/cyan/yellow)");
     println!("  cpuid                   - {}", t!(en: "print CPU vendor string", ru: "вывести vendor string процессора"));
+    println!("  mem <n>                 - {}", t!(en: "heap allocator test (Vec<u32> of n elements)", ru: "тест heap-аллокатора (Vec<u32> на n элементов)"));
+    println!("  lang <en|ru>            - {}", t!(en: "switch interface language", ru: "переключить язык интерфейса"));
     println!("  ifconfig [ip|dns <ip>]  - {}", t!(en: "show/change network config (IP, DNS server)", ru: "показать/сменить сетевую конфигурацию (IP, DNS-сервер)"));
     println!("  arp                     - {}", t!(en: "show ARP cache", ru: "показать ARP-кэш"));
     println!("  ping <ip>               - {}", t!(en: "send ICMP echo request", ru: "отправить ICMP echo request"));
@@ -488,7 +489,6 @@ fn cmd_help() {
     println!("  threads [list|test]     - {}", t!(en: "preemptive multitasking: task list / selftest", ru: "вытесняющая многозадачность: список задач / самопроверка"));
     println!("  crypt <status|addpass|delpass|iter> - {}", t!(en: "volume password slots (LUKS-style)", ru: "пароли тома: слоты, как в LUKS"));
     println!("  dinit [status|services|mounts|users|audit|security|stage|reload] - {}", t!(en: "PID 1 supervisor: services, mounts, users, audit, secmon", ru: "супервизор PID 1: службы, монтирования, пользователи, аудит, монитор"));
-    println!("  nanocore [status|logs|trace|restart|graph|mode|help] - {}", t!(en: "Nano-Core orchestrator: split Stage 2 micro-processes", ru: "оркестратор Nano-Core: разбитый Stage 2 микро-процессы"));
     println!("  hal                     - {}", t!(en: "driver layer selftest on RTL8139", ru: "самопроверка прослойки драйверов на RTL8139"));
     println!("  nvidia                  - {}", t!(en: "NVIDIA hardware detection: probe and identify GPU (not an acceleration driver)", ru: "детект NVIDIA-железа: поиск и опознание карты (не драйвер ускорения)"));
     println!("  logo [show|info]        - {}", t!(en: "boot logo: show / info", ru: "загрузочное лого: показать / инфо"));
@@ -503,6 +503,11 @@ fn cmd_help() {
     println!("  write <file> <text>     - {}", t!(en: "create/overwrite a text file", ru: "создать/перезаписать текстовый файл"));
     println!("  rm <file>               - {}", t!(en: "delete a file", ru: "удалить файл"));
     println!("  pkg <list|install|remove|info> - {}", t!(en: "local package manager (see 'pkg list')", ru: "локальный пакетный менеджер (см. 'pkg list')"));
+    println!("  run <program.mex>       - {}", t!(en: "run a .mex program", ru: "запустить .mex программу"));
+    println!("  install                 - {}", t!(en: "clone this disk onto a second physical disk (real HDD install)", ru: "клонировать этот диск на второй физический диск (установка на реальный HDD)"));
+    println!("  sysfs [status|convert]  - {}", t!(en: "convert /system from EROFS to ext2 (dev mode only)", ru: "конвертировать /system из EROFS в ext2 (только dev-режим)"));
+    println!("  dev [request|on|off|revoke] - {}", t!(en: "developer mode (server-side activation, see docs/DEVAUTH.md)", ru: "режим разработчика (серверная активация, см. docs/DEVAUTH.md)"));
+    println!("  bigfile <size_kb>       - {}", t!(en: "test ext2 indirect blocks with a large file", ru: "проверить indirect-блоки ext2 большим файлом"));
     println!("  useradd <user> <pass>   - {}", t!(en: "create a new user account", ru: "создать новый аккаунт пользователя"));
     println!("  passwd <u> <old> <new>  - {}", t!(en: "change a user's password", ru: "сменить пароль пользователя"));
     println!("  whoami                  - {}", t!(en: "show the currently logged-in user", ru: "показать текущего пользователя"));
@@ -629,199 +634,13 @@ fn cmd_cpuid() {
     println!("CPU: {}", crate::cpuid::describe());
 }
 
-/// `wallpaper <url|/userdata/путь>` — скачивает PNG/BMP по http(s) или
-/// берёт файл с диска, уменьшает до лимита ext2 (268 КиБ), пишет в
-/// /userdata/wallpaper.bmp и переключает тему на стиль Custom.
-/// Вся логика — в ui::wallpaper (общая с браузером).
-fn cmd_wallpaper(arg: &str) {
-    let a = arg.trim();
-    if a.is_empty() {
-        let t = crate::ui::theme::get_theme();
-        let style = crate::ui::theme::WALLPAPER_STYLES
-            .get(t.wallpaper_style as usize)
-            .copied()
-            .unwrap_or("?");
-    let result = if a.starts_with("http://") || a.starts_with("https://") {
-        println!("  {} {}", t!(en: "Downloading", ru: "Скачиваю"), a);
-        crate::ui::wallpaper::set_from_url(a)
-    } else {
-        match crate::vfs::read_file(a) {
-            Ok(data) => crate::ui::wallpaper::set_from_bytes(&data),
-            Err(e) => Err(e.message()),
-        }
-    };
-    match result {
-        Ok(msg) => println!("  [wallpaper] {}", msg),
-        Err(e) => println!("  [wallpaper] {}: {}", t!(en: "error", ru: "ошибка"), e),
-    }
-}
-
-fn cmd_lang(arg: &str) {
-    match arg {
-        "en" => {
-            crate::lang::set(Lang::En);
-            println!("Language switched to English.");
-        }
-        "ru" => {
-            crate::lang::set(Lang::Ru);
-            println!("Язык переключён на русский.");
-        }
-        "" => {
-            let current = t!(en: "English", ru: "русский");
-            println_t!(
-                en: "Current language: {}. Usage: lang <en|ru>",
-                ru: "Текущий язык: {}. Использование: lang <en|ru>";
-                current
-            );
-        }
-        _ => println_t!(
-            en: "Unknown language '{}'. Available: en, ru",
-            ru: "Неизвестный язык '{}'. Доступно: en, ru";
-            arg
+    match crate::net::dns::resolve_a(host) {
+        Some(ip) => println!("{}: {}.{}.{}.{}", host, ip[0], ip[1], ip[2], ip[3]),
+        None => println_t!(
+            en: "Could not resolve '{}' (timeout, NXDOMAIN or no network).",
+            ru: "Не удалось разрешить '{}' (таймаут, NXDOMAIN или нет сети).";
+            host
         ),
-    }
-}
-
-fn parse_ipv4(s: &str) -> Option<[u8; 4]> {
-    let mut result = [0u8; 4];
-    let mut parts = s.split('.');
-    for slot in result.iter_mut() {
-        let part = parts.next()?;
-        *slot = part.parse().ok()?;
-    }
-    if parts.next().is_some() {
-        return None; // лишние части — не валидный адрес
-    }
-    Some(result)
-}
-
-fn cmd_ifconfig(arg: &str) {
-    if !rtl8139::is_ready() {
-        println!(
-            "{}",
-            t!(
-                en: "No network card detected. Run QEMU with '-net nic,model=rtl8139 -net user'.",
-                ru: "Сетевая карта не найдена. Запусти QEMU с '-net nic,model=rtl8139 -net user'."
-            )
-        );
-        return;
-    }
-
-    if !arg.is_empty() {
-        // `ifconfig dns <ip>` — сменить DNS-сервер, `ifconfig <ip>` — свой адрес.
-        if let Some(dns_arg) = arg.strip_prefix("dns ") {
-            match parse_ipv4(dns_arg.trim()) {
-                Some(ip) => {
-                    net::set_dns_ip(ip);
-                    println!("{}", t!(en: "DNS server changed.", ru: "DNS-сервер изменён."));
-                }
-                None => {
-                    println!(
-                        "{}",
-                        t!(
-                            en: "Invalid IP address. Format: ifconfig dns 10.0.2.3",
-                            ru: "Неверный IP-адрес. Формат: ifconfig dns 10.0.2.3"
-                        )
-                    );
-                    return;
-                }
-            }
-        } else {
-            match parse_ipv4(arg) {
-                Some(ip) => {
-                    net::set_my_ip(ip);
-                    println!("{}", t!(en: "IP address changed.", ru: "IP-адрес изменён."));
-                }
-                None => {
-                    println!(
-                        "{}",
-                        t!(
-                            en: "Invalid IP address. Format: ifconfig 192.168.1.10",
-                            ru: "Неверный IP-адрес. Формат: ifconfig 192.168.1.10"
-                        )
-                    );
-                    return;
-                }
-            }
-        }
-    }
-
-    let mac = rtl8139::mac_address();
-    let ip = net::my_ip();
-    let gw = net::gateway_ip();
-
-    println!(
-        "MAC:     {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-    );
-    println!("IP:      {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
-    println!("Gateway: {}.{}.{}.{}", gw[0], gw[1], gw[2], gw[3]);
-    let dns = net::dns_ip();
-    println!("DNS:     {}.{}.{}.{}", dns[0], dns[1], dns[2], dns[3]);
-
-    // Реальные счётчики драйвера, а не «оценка нагрузки».
-    let (rxp, rxb, txp, txb) = rtl8139::traffic_counters();
-    println!("RX:      {} пакетов, {} байт", rxp, rxb);
-    println!("TX:      {} пакетов, {} байт", txp, txb);
-    let drops = rtl8139::rx_drops();
-    if drops > 0 {
-        println_t!(
-            en: "RX drops: {} (ring overflow — worker did not keep up)",
-            ru: "Потери RX: {} (переполнение кольца — рабочий поток не успевал)";
-            drops
-        );
-    } else {
-        println!("RX drops: 0");
-    }
-}
-
-fn cmd_arp() {
-    if !rtl8139::is_ready() {
-        println!(
-            "{}",
-            t!(en: "No network card detected.", ru: "Сетевая карта не найдена.")
-        );
-        return;
-    }
-    println!("{}", t!(en: "ARP cache:", ru: "ARP-кэш:"));
-    crate::net::arp::print_cache();
-}
-
-fn cmd_dns(arg: &str) {
-    if !rtl8139::is_ready() {
-        println!(
-            "{}",
-            t!(en: "No network card detected.", ru: "Сетевая карта не найдена.")
-        );
-        return;
-    }
-    let host = arg.trim();
-    if host.is_empty() {
-        println!(
-            "{}",
-            t!(
-                en: "Usage: dns <hostname> — resolve an A record via UDP/53",
-                ru: "Использование: dns <имя хоста> — разрешить A-запись по UDP/53"
-            )
-        );
-        return;
-    }
-    if parse_ipv4(host).is_some() {
-        println!(
-            "{}",
-            t!(
-                en: "This is already an IPv4 address, nothing to resolve.",
-                ru: "Это уже IPv4-адрес, разрешать нечего."
-            )
-        );
-        return;
-    }
-    let server = net::dns_ip();
-    println_t!(
-        en: "Querying DNS server {}.{}.{}.{} ...",
-        ru: "Запрос к DNS-серверу {}.{}.{}.{} ...";
-        server[0], server[1], server[2], server[3]
-    );
     }
 }
 
@@ -1249,456 +1068,6 @@ fn cmd_write(arg: &str) {
     }
 }
 
-// ==================== Авторизация (auth.rs) ====================
-
-/// Имя пользователя, вошедшего в текущем сеансе — None до успешного
-/// login (или до создания первого аккаунта при первом запуске, см.
-/// run_login_screen() в lib.rs). Простое глобальное состояние
-/// достаточно для однопользовательской ОС без параллельных сессий.
-static CURRENT_USER: crate::spinlock::SpinLock<Option<String>> = crate::spinlock::SpinLock::new(None);
-
-pub fn set_current_user(username: &str) {
-    if username.is_empty() {
-        // Пустое имя = сброс в None (безопасное состояние для install).
-        *CURRENT_USER.lock() = None;
-    } else {
-        *CURRENT_USER.lock() = Some(username.to_string());
-    }
-}
-
-pub fn current_user() -> Option<String> {
-    CURRENT_USER.lock().clone()
-}
-
-/// `useradd <username> <password>` — создаёт новый аккаунт. Пароль
-/// передаётся аргументом команды (не через отдельный скрытый
-/// ввод) — то же ограничение, что и у команды `write`: наш простой
-/// построчный CLI не поддерживает эхо-маскировку ввода посимвольно
-/// внутри одной команды. Полноценный экран входа при загрузке (см.
-/// lib.rs::run_login_screen) вводит пароль отдельным полем с маскировкой
-/// звёздочками — именно там, а не в этой команде, обеспечена приватность
-/// набора пароля.
-fn cmd_useradd(arg: &str) {
-    let mut parts = arg.splitn(2, ' ');
-    let username = parts.next().unwrap_or("").trim();
-    let password = parts.next().unwrap_or("").trim();
-
-    if username.is_empty() || password.is_empty() {
-        println!(
-            "{}",
-            t!(
-                en: "Usage: useradd <username> <password>",
-                ru: "Использование: useradd <имя_пользователя> <пароль>"
-            )
-        );
-        return;
-    }
-
-    match crate::auth::create_user(username, password) {
-        Ok(()) => {
-            println_t!(
-                en: "User '{}' created. Password is stored only as a salted SHA-256 hash.",
-                ru: "Пользователь '{}' создан. Пароль хранится только как хэш SHA-256 с солью.";
-                username
-            );
-            // Новому пользователю нужен СВОЙ слот в заголовке тома,
-            // иначе он не сможет разблокировать зашифрованный диск при
-            // загрузке: аккаунт будет, а ключа к данным — нет.
-            if crate::luks::exists() {
-                // Пароль текущего пользователя мы не знаем, но мастер-ключ
-                // уже в памяти — том разблокирован. Пользуемся этим.
-                match crate::luks::add_password_with_master(password) {
-                    Ok(slot) => println!(
-                        "  Пароль добавлен в слот {} — этот пользователь сможет открыть диск.",
-                        slot
-                    ),
-                    Err(e) => println!("  ВНИМАНИЕ: слот не добавлен ({}). Пользователь не сможет разблокировать диск.", e),
-                }
-            }
-        }
-        Err(crate::auth::AuthError::UserAlreadyExists) => println_t!(
-            en: "User '{}' already exists.",
-            ru: "Пользователь '{}' уже существует.";
-            username
-        ),
-        Err(crate::auth::AuthError::InvalidUsername) => println!(
-            "{}",
-            t!(
-                en: "Invalid username (must be 1-32 alphanumeric/underscore/dash characters).",
-                ru: "Недопустимое имя пользователя (1-32 символа: буквы/цифры/подчёркивание/дефис)."
-            )
-        ),
-        Err(_) => println!("{}", t!(en: "Failed to create user (disk error).", ru: "Не удалось создать пользователя (ошибка диска).")),
-    }
-}
-
-/// `passwd <username> <old_password> <new_password>` — смена пароля.
-/// Требует знания текущего пароля (как в настоящих Unix-системах) —
-/// не позволяет сменить чужой пароль без него.
-fn cmd_passwd(arg: &str) {
-    let parts: Vec<&str> = arg.split_whitespace().collect();
-    if parts.len() != 3 {
-        println!(
-            "{}",
-            t!(
-                en: "Usage: passwd <username> <old_password> <new_password>",
-                ru: "Использование: passwd <имя_пользователя> <старый_пароль> <новый_пароль>"
-            )
-        );
-        return;
-    }
-
-    match crate::auth::change_password(parts[0], parts[1], parts[2]) {
-        Ok(()) => println!("{}", t!(en: "Password changed.", ru: "Пароль изменён.")),
-        Err(crate::auth::AuthError::WrongPassword) => println!("{}", t!(en: "Wrong current password.", ru: "Неверный текущий пароль.")),
-        Err(crate::auth::AuthError::UserNotFound) => println!("{}", t!(en: "User not found.", ru: "Пользователь не найден.")),
-        Err(_) => println!("{}", t!(en: "Failed to change password.", ru: "Не удалось сменить пароль.")),
-    }
-}
-
-fn cmd_whoami() {
-    match current_user() {
-        Some(name) => println!("{}", name),
-        None => println!("{}", t!(en: "Not logged in.", ru: "Вход не выполнен.")),
-    }
-}
-
-fn cmd_users() {
-    match crate::auth::list_usernames() {
-        Ok(names) if names.is_empty() => println!("{}", t!(en: "No users registered yet.", ru: "Пользователи ещё не зарегистрированы.")),
-        Ok(names) => {
-            for name in names {
-                println!("  {}", name);
-            }
-        }
-        Err(_) => println!("{}", t!(en: "Failed to read user database.", ru: "Не удалось прочитать базу пользователей.")),
-    }
-}
-
-/// `encrypt confirm <password>` — включает сквозное AES-256-XTS
-/// шифрование диска (byte-совместимое с `cryptsetup --type plain
-/// --cipher aes-xts-plain64 --key-size 512 --hash sha512`, см.
-/// crypto_storage.rs). Требует явного слова "confirm" перед паролем —
-/// это НЕОБРАТИМАЯ операция, которая переформатирует диск и УНИЧТОЖАЕТ
-/// все текущие файлы (они были записаны в открытом виде и не могут быть
-/// "переупакованы" в зашифрованный вид без полной перезаписи), поэтому
-/// требуется осознанное подтверждение, а не просто ввод пароля.
-fn cmd_encrypt(arg: &str) {
-    if crate::crypto_storage::is_encryption_enabled() {
-        println!(
-            "{}",
-            t!(
-                en: "Encryption is already enabled on this disk.",
-                ru: "Шифрование уже включено на этом диске."
-            )
-        );
-        return;
-    }
-
-    let mut parts = arg.splitn(2, ' ');
-    let confirm = parts.next().unwrap_or("");
-    let password = parts.next().unwrap_or("").trim();
-
-    if confirm != "confirm" || password.is_empty() {
-        println!(
-            "{}",
-            t!(
-                en: "This PERMANENTLY erases all current files and enables full-disk \\
-                     AES-256-XTS encryption (compatible with Linux 'cryptsetup --type plain \\
-                     --cipher aes-xts-plain64 --key-size 512 --hash sha512'). This cannot be \\
-                     undone from within the running session. If you understand and want to \\
-                     proceed, run: encrypt confirm <password>",
-                ru: "Это НЕОБРАТИМО стирает все текущие файлы и включает полное шифрование \\
-                     диска AES-256-XTS (совместимо с Linux 'cryptsetup --type plain --cipher \\
-                     aes-xts-plain64 --key-size 512 --hash sha512'). Отменить это в рамках \\
-                     текущей сессии нельзя. Если понимаешь это и хочешь продолжить, выполни: \\
-                     encrypt confirm <пароль>"
-            )
-        );
-        return;
-    }
-
-    println!(
-        "{}",
-        t!(
-            en: "Encrypting disk and reformatting ext2 (all previous files are now gone)...",
-            ru: "Шифруем диск и переформатируем ext2 (все прежние файлы теперь стёрты)..."
-        )
-    );
-
-    match crate::crypto_storage::enable_encryption(password) {
-        Ok(()) => println!(
-            "{}",
-            t!(
-                en: "Disk encryption enabled. You will need this password to unlock the disk \\
-                     on every future boot (in addition to your normal user login).",
-                ru: "Шифрование диска включено. Этот пароль нужно будет вводить для разблокировки \\
-                     диска при каждой загрузке (в дополнение к обычному входу пользователя)."
-            )
-        ),
-        Err(_) => println!(
-            "{}",
-            t!(en: "Failed to enable encryption (disk error).", ru: "Не удалось включить шифрование (ошибка диска).")
-        ),
-    }
-}
-
-fn cmd_rm(name: &str) {
-    if name.is_empty() {
-        println!("{}", t!(en: "Usage: rm <path>", ru: "Использование: rm <путь>"));
-        return;
-    }
-    let path = resolve_user_path(name);
-    match crate::vfs::remove(&path) {
-        Ok(()) => println_t!(en: "Deleted '{}'.", ru: "Удалено '{}'."; path),
-        Err(crate::vfs::VfsError::NotFound { .. }) => {
-            println!("{}", t!(en: "File not found.", ru: "Файл не найден."))
-        }
-        Err(e) => println!("{}", e.message()),
-    }
-}
-
-/// Приводит путь к абсолютному пути VFS. Относительные имена считаются
-/// от `/userdata` — единственного раздела, доступного на запись.
-fn resolve_user_path(name: &str) -> String {
-    let name = name.trim();
-    if name.starts_with('/') {
-        return String::from(name);
-    }
-    alloc::format!("/userdata/{}", name)
-}
-
-fn cmd_mkdir(name: &str) {
-    if name.is_empty() {
-        println!("{}", t!(en: "Usage: mkdir <path>", ru: "Использование: mkdir <путь>"));
-        return;
-    }
-    let path = resolve_user_path(name);
-    match crate::vfs::mkdir(&path) {
-        Ok(()) => println_t!(en: "Created '{}'.", ru: "Создано '{}'."; path),
-        Err(e) => println!("{}", e.message()),
-    }
-}
-
-/// `lsmod` — реально загруженные модули ядра.
-///
-/// Показывает только то, что действительно прошло загрузчик `.kmod`.
-/// Встроенные подсистемы ядра сюда не попадают: они не являются
-/// загруженными модулями, и выдавать их за таковые нельзя.
-fn cmd_lsmod() {
-    let mods = crate::module::get_loaded_modules();
-    if mods.is_empty() {
-        println!(
-            "{}",
-            t!(
-                en: "No kernel modules loaded (none found on /system).",
-                ru: "Модули ядра не загружены (на /system ничего не найдено)."
-            )
-        );
-        return;
-    }
-    println!("  NAME        VER    ADDR       SIZE      STATUS");
-    for m in mods.iter() {
-        let status = match m.status {
-            crate::module::ModuleStatus::Initialized => "работает",
-            crate::module::ModuleStatus::Failed => "сбой init()",
-            crate::module::ModuleStatus::Quarantined => "в карантине",
-        };
-        println!(
-            "  {:<11} {}.{}   {:#010x} {:>7} B {}",
-            m.name,
-            m.version.0,
-            m.version.1,
-            m.load_addr,
-            m.body_size,
-            status
-        );
-    }
-    println!("  Всего: {}", mods.len());
-}
-
-/// `kmod load <path>` — загрузить модуль вручную.
-fn cmd_kmod(arg: &str) {
-    let mut parts = arg.splitn(2, ' ');
-    let action = parts.next().unwrap_or("").trim();
-    let rest = parts.next().unwrap_or("").trim();
-    match action {
-        "" | "help" => println!(
-            "{}",
-            t!(
-                en: "Usage: kmod load <path> | lsmod",
-                ru: "Использование: kmod load <путь> | lsmod"
-            )
-        ),
-        "load" => {
-            if rest.is_empty() {
-                println!("{}", t!(en: "Usage: kmod load <path>", ru: "Использование: kmod load <путь>"));
-                return;
-            }
-            match crate::module::load_module(rest) {
-                Ok(()) => println_t!(en: "Module '{}' loaded.", ru: "Модуль '{}' загружен."; rest),
-                Err(e) => println!("{}", module_error_str(&e)),
-            }
-        }
-        "list" => cmd_lsmod(),
-        _ => println!(
-            "{}",
-            t!(
-                en: "Unknown action. Available: load, list",
-                ru: "Неизвестное действие. Доступно: load, list"
-            )
-        ),
-    }
-}
-
-fn module_error_str(e: &crate::module::ModuleError) -> String {
-    use crate::module::ModuleError as E;
-    match e {
-        E::NotFound => String::from("модуль не найден"),
-        E::BadFormat => String::from("неверный формат .kmod"),
-        E::InitFailed(code) => alloc::format!("init() вернул код {}", code),
-        E::TooLarge => String::from("модуль слишком большой"),
-    }
-}
-
-fn cmd_pkg(arg: &str) {
-    let (subcmd, rest) = match arg.find(char::is_whitespace) {
-        Some(idx) => (&arg[..idx], arg[idx..].trim_start()),
-        None => (arg, ""),
-    };
-
-    match subcmd {
-        "list" => pkg::cmd_list(),
-        "install" => pkg::cmd_install(rest),
-        "remove" => pkg::cmd_remove(rest),
-        "info" => pkg::cmd_info(rest),
-        "" => println!(
-            "{}",
-            t!(
-                en: "Usage: pkg <list|install|remove|info> [name]",
-                ru: "Использование: pkg <list|install|remove|info> [имя]"
-            )
-        ),
-        _ => println_t!(
-            en: "Unknown pkg subcommand '{}'. Available: list, install, remove, info",
-            ru: "Неизвестная подкоманда '{}'. Доступно: list, install, remove, info";
-            subcmd
-        ),
-    }
-}
-
-fn cmd_run(arg: &str) {
-    if arg.is_empty() {
-        println!(
-            "{}",
-            t!(
-                en: "Usage: run <program.mex> [args...]",
-                ru: "Использование: run <программа.mex> [аргументы...]"
-            )
-        );
-        return;
-    }
-    let mut parts = arg.splitn(2, ' ');
-    let name = parts.next().unwrap_or("");
-    let prog_args = parts.next().unwrap_or("");
-    crate::mex::run(name, prog_args);
-}
-
-fn cmd_crash(kind: &str) {
-    // Команда намеренно вызывает исключения CPU (вплоть до отказа ядра) —
-    // доступна только в dev-режиме, чтобы не уронить систему случайно.
-    if !crate::devmode::sudo_allowed() {
-        println!(
-            "{}",
-            t!(
-                en: "'crash' intentionally triggers CPU faults and is available only in dev mode ('dev on').",
-                ru: "'crash' намеренно вызывает исключения CPU и доступна только в dev-режиме ('dev on')."
-            )
-        );
-        return;
-    }
-    match kind {
-        "divzero" => {
-            println!("{}", t!(en: "Triggering division by zero...", ru: "Вызываем деление на ноль..."));
-            unsafe {
-                let a: u64 = 42;
-                let b: u64 = 0;
-                let _result: u64;
-                asm!("div {0}", in(reg) b, inout("rax") a => _result, options(nostack));
-            }
-        }
-        "bp" => {
-            println!("{}", t!(en: "Triggering breakpoint (int3)...", ru: "Вызываем breakpoint (int3)..."));
-            unsafe { asm!("int3") };
-            println!(
-                "{}",
-                t!(
-                    en: "Returned after breakpoint - handler worked correctly.",
-                    ru: "Вернулись после breakpoint - обработчик отработал корректно."
-                )
-            );
-        }
-        "inv" => {
-            println!("{}", t!(en: "Triggering invalid opcode (ud2)...", ru: "Вызываем неверный опкод (ud2)..."));
-            unsafe { asm!("ud2") };
-        }
-        "panic" => {
-            println!("{}", t!(en: "Triggering kernel panic!()...", ru: "Вызываем kernel panic!()..."));
-            panic!("user-triggered crash (debugger test)");
-        }
-        "" => println!("{}", t!(en: "Usage: crash <divzero|bp|inv>", ru: "Укажи тип: crash <divzero|bp|inv>")),
-        _ => println_t!(
-            en: "Unknown type '{}'. Available: divzero, bp, inv",
-            ru: "Неизвестный тип '{}'. Доступно: divzero, bp, inv";
-            kind
-        ),
-    }
-}
-
-pub fn cmd_reboot() {
-    println!("{}", t!(en: "Rebooting...", ru: "Перезагрузка..."));
-    // Затираем мастер-ключ шифрования диска (если оно включено) через
-    // write_volatile ПЕРЕД остановкой процессора — см. подробное
-    // объяснение в crypto_storage.rs::lock()/clear_master_key(), почему
-    // это не то же самое, что просто "перестать использовать" ключ.
-    crate::crypto_storage::lock();
-    unsafe {
-        // 1) Классический сброс через контроллер клавиатуры 8042 (0xFE),
-        //    но с ТАЙМАУТОМ: на некоторых машинах/QEMU бит 0x02 порта 0x64
-        //    (input buffer full) не сбрасывается, и прежний цикл без
-        //    таймаута вешал систему навсегда.
-        let mut tries: u32 = 0;
-        loop {
-            let status = crate::port::inb(0x64);
-            if status & 0x02 == 0 {
-                break;
-            }
-            tries += 1;
-            if tries > 1_000_000 {
-                break;
-            }
-        }
-        crate::port::outb(0x64, 0xFE);
-
-        // Небольшая пауза, чтобы контроллер успел принять команду.
-        for _ in 0..200_000 {
-            core::hint::spin_loop();
-        }
-
-        // 2) Аппаратный reset через порт 0xCF9 (legacy/ACPI reset control):
-        //    0x06 = hard reset + CPU reset. Работает в QEMU и на подавляющем
-        //    большинстве PC — надёжнее 8042.
-        crate::port::outb(0xCF9, 0x06);
-
-        // 3) Если и это не помогло — бесконечный hlt (машина уже в пути).
-        loop {
-            asm!("hlt");
-        }
-    }
-}
-
-pub fn cmd_poweroff() {
-    println!("{}", t!(en: "Powering off system...", ru: "Выключение системы..."));
     crate::crypto_storage::lock();
     unsafe {
         crate::port::outw(0x604, 0x2000);
@@ -1708,6 +1077,26 @@ pub fn cmd_poweroff() {
         loop {
             asm!("hlt");
         }
+    }
+}
+
+pub fn cmd_dialog_test() {
+    let ok = crate::dialog::confirm("Continue?");
+    println!("confirm: {}", ok);
+    let line = crate::dialog::prompt_line("Enter text");
+    println!("prompt_line: {}", line);
+    let masked = crate::dialog::prompt_masked("Enter password");
+    println!("prompt_masked length: {}", masked.len());
+    let items = [String::from("Option 1"), String::from("Option 2")];
+    if let Some(idx) = crate::dialog::choose("Select item", &items) {
+        println!("selected: {}", idx);
+    }
+}
+
+pub fn cmd_erofs_test() {
+    let dummy = crate::erofs::build_image(&[("hello.txt", b"hello world\n")]);
+    if crate::erofs::is_erofs(&dummy) {
+        println!("  [erofs] build_image and is_erofs OK ({} bytes)", dummy.len());
     }
 }
 
@@ -1731,8 +1120,7 @@ pub const VALID_COMMANDS: &[&str] = &[
     "bigfile", "useradd", "passwd", "whoami", "users", "encrypt", "crash",
     "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",
     "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "dev", "profile",
-    "ps", "kill", "log", "error", "panic", "diagnostics", "wallpaper", "sysfs",
-    "nvidia", "microcode", "logo", "linux", "lock", "su", "sudo", "root", "nanocore",
+    "ps", "kill", "log", "error", "panic", "diagnostics", "wallpaper", "sysfs"
 ];
 
 pub fn is_valid_command(name: &str) -> bool {
