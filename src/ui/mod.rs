@@ -1,27 +1,15 @@
 //! UI-драйвер: композитор окон и графическая оболочка DeiX OS.
 
-<<<<<<< HEAD
-pub mod appicons;
-=======
->>>>>>> arena/e8a29038-deix
 pub mod apps;
 pub mod config;
 pub mod desktop;
 pub mod effects;
 pub mod metrics;
-<<<<<<< HEAD
-pub mod notify;
-=======
->>>>>>> arena/e8a29038-deix
 pub mod surface;
 pub mod taskbar;
 pub mod text;
 pub mod theme;
 pub mod wallpaper;
-<<<<<<< HEAD
-pub mod widgets;
-=======
->>>>>>> arena/e8a29038-deix
 pub mod window;
 
 pub use desktop::run_desktop_session;

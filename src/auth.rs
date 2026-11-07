@@ -283,42 +283,6 @@ pub fn change_password(username: &str, old_password: &str, new_password: &str) -
     Ok(())
 }
 
-<<<<<<< HEAD
-/// ПЕРЕЗАПИСЫВАЕТ пароль аккаунта БЕЗ проверки старого пароля и
-/// БЕЗ перестановки LUKS-слотов. Используется облачной
-/// синхронизацией (см. cloudauth): после успешного входа через
-/// Supabase пароль сайта — авторитетный, и локальный хэш должен
-/// совпадать с ним — иначе офлайн-вход с этим паролем не пройдёт.
-/// change_password() тут НЕ подходит: он требует старый пароль
-/// (только что проверен сервером) и синхронизирует слоты
-/// шифрования диска — неприемлемо для входа с экрана.
-pub fn force_set_password(username: &str, password: &str) -> Result<(), AuthError> {
-    validate_username(username)?;
-
-    let mut users = load_users()?;
-    let mut salt = [0u8; SALT_LEN];
-    rng::fill_random(&mut salt);
-    let hash = hash_password(&salt, password);
-
-    match users.iter_mut().find(|u| u.username == username) {
-        Some(u) => {
-            u.salt = salt;
-            u.hash = hash;
-        }
-        None => {
-            users.push(UserRecord {
-                username: username.to_string(),
-                salt,
-                hash,
-            });
-        }
-    }
-
-    save_users(&users)
-}
-
-=======
->>>>>>> arena/e8a29038-deix
 /// true, если хотя бы один аккаунт уже создан — используется CLI, чтобы
 /// решить, нужно ли при загрузке предлагать "создать первый аккаунт"
 /// или сразу "войти в систему".
@@ -468,27 +432,6 @@ pub fn run_login_screen() -> String {
         }
     }
 
-<<<<<<< HEAD
-    loop {
-=======
-    let mut attempts = 0u32;
-    let max_attempts: u32 = 5;
-
-    loop {
-        if attempts >= max_attempts {
-            println!("Too many failed attempts. System halting in 30 seconds.");
-            // Пауза перед halt — блокирует brute-force.
-            let deadline = crate::timer::uptime_ms() + 30_000;
-            while crate::timer::uptime_ms() < deadline {
-                unsafe { core::arch::asm!("hlt") };
-            }
-            // Halt CPU — следующая загрузка с нуля.
-            unsafe { core::arch::asm!("cli; hlt"); }
-            // Если hlt не сработал (не должен), выходим.
-            return String::new();
-        }
-
->>>>>>> arena/e8a29038-deix
         print!("Username: ");
         let username = read_line(false);
 
@@ -498,12 +441,6 @@ pub fn run_login_screen() -> String {
         // Если диск зашифрован — пароль должен сначала разблокировать том.
         if crate::crypto_storage::is_encryption_enabled() {
             if !crate::crypto_storage::try_unlock(&password) {
-<<<<<<< HEAD
-                println!("Invalid username or password. Try again.");
-=======
-                attempts += 1;
-                println!("Invalid username or password. Attempts: {}/{}", attempts, max_attempts);
->>>>>>> arena/e8a29038-deix
                 let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
                 continue;
             }
@@ -515,12 +452,6 @@ pub fn run_login_screen() -> String {
                 return username.trim().to_string();
             }
             Err(AuthError::WrongPassword) | Err(AuthError::UserNotFound) => {
-<<<<<<< HEAD
-                println!("Invalid username or password. Try again.");
-=======
-                attempts += 1;
-                println!("Invalid username or password. Attempts: {}/{}", attempts, max_attempts);
->>>>>>> arena/e8a29038-deix
                 let _ = crate::sound::play_ui(crate::sound::UiSound::Error);
             }
             Err(_) => {

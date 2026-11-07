@@ -9,10 +9,6 @@
 use crate::mouse;
 use crate::renderer::{Color, IconType, Rect, Renderer};
 use crate::timer;
-<<<<<<< HEAD
-use crate::ui::appicons;
-=======
->>>>>>> arena/e8a29038-deix
 use crate::ui::desktop::Desktop;
 use crate::ui::metrics::UiMetrics;
 use crate::ui::text::truncate_to_cells;
@@ -31,44 +27,11 @@ pub enum StartMenuAction {
     OpenAbout,
     OpenDisplaySettings,
     OpenInstaller,
-<<<<<<< HEAD
-    OpenUpdates,
-    OpenPhotos,
-    OpenVideo,
-    OpenMusic,
-    OpenGame2048,
-}
-
-/// Сторона цветной иконки приложения в плитке Dock.
-const DOCK_APP_ICON: i32 = 32;
-
-/// Приложения меню Пуск и закреплённая часть Dock.
-pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 14] = [
-    ("Terminal", StartMenuAction::OpenTerminal, IconType::Terminal),
-    ("Files", StartMenuAction::OpenFiles, IconType::Files),
-    ("Browser", StartMenuAction::OpenBrowser, IconType::Browser),
-    ("Photos", StartMenuAction::OpenPhotos, IconType::Image),
-    ("Music", StartMenuAction::OpenMusic, IconType::Music),
-    ("Video", StartMenuAction::OpenVideo, IconType::Video),
-=======
-}
-
-/// Приложения меню Пуск и закреплённая часть Dock.
-pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 9] = [
-    ("Terminal", StartMenuAction::OpenTerminal, IconType::Terminal),
-    ("Files", StartMenuAction::OpenFiles, IconType::Files),
-    ("Browser", StartMenuAction::OpenBrowser, IconType::Browser),
->>>>>>> arena/e8a29038-deix
     ("Task Mgr", StartMenuAction::OpenTaskManager, IconType::TaskManager),
     ("Errors", StartMenuAction::OpenErrorCenter, IconType::Settings),
     ("Personalize", StartMenuAction::OpenThemeSettings, IconType::Theme),
     ("Display", StartMenuAction::OpenDisplaySettings, IconType::Display),
     ("Install DeiX", StartMenuAction::OpenInstaller, IconType::Install),
-<<<<<<< HEAD
-    ("Updates", StartMenuAction::OpenUpdates, IconType::Reload),
-    ("2048", StartMenuAction::OpenGame2048, IconType::Settings),
-=======
->>>>>>> arena/e8a29038-deix
     ("About", StartMenuAction::OpenAbout, IconType::About),
 ];
 
@@ -84,14 +47,6 @@ pub fn launch_matches(action: StartMenuAction, content: &WindowContent) -> bool 
         (StartMenuAction::OpenAbout, WindowContent::About) => true,
         (StartMenuAction::OpenDisplaySettings, WindowContent::DisplaySettings { .. }) => true,
         (StartMenuAction::OpenInstaller, WindowContent::Installer { .. }) => true,
-<<<<<<< HEAD
-        (StartMenuAction::OpenUpdates, WindowContent::Updates) => true,
-        (StartMenuAction::OpenGame2048, WindowContent::Game2048 { .. }) => true,
-        (StartMenuAction::OpenPhotos, WindowContent::ImageViewer { .. }) => true,
-        (StartMenuAction::OpenVideo, WindowContent::VideoPlayer { .. }) => true,
-        (StartMenuAction::OpenMusic, WindowContent::MusicPlayer { .. }) => true,
-=======
->>>>>>> arena/e8a29038-deix
         _ => false,
     }
 }
@@ -282,15 +237,6 @@ pub fn draw_dock(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen_w:
                 if hovered {
                     r.fill_rounded_rect_alpha(rc.x, rc.y, rc.w, rc.h, 10, theme.surface_alt, 230);
                 }
-<<<<<<< HEAD
-                if !appicons::draw(r, rc.x + 2, rc.y + 2, DOCK_APP_ICON, START_MENU_APPS[i].2) {
-                    let fg = if hovered { theme.accent_hover } else { theme.accent };
-                    r.draw_icon(rc.x + 10, rc.y + 10, START_MENU_APPS[i].2, fg);
-                }
-=======
-                let fg = if hovered { theme.accent_hover } else { theme.accent };
-                r.draw_icon(rc.x + 10, rc.y + 10, START_MENU_APPS[i].2, fg);
->>>>>>> arena/e8a29038-deix
                 // Точка «запущено» — только если такое окно реально открыто.
                 let running = desktop
                     .windows
@@ -299,24 +245,6 @@ pub fn draw_dock(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen_w:
                 if running {
                     r.fill_circle(rc.x + rc.w as i32 / 2, dot_y, 2, theme.accent);
                 }
-<<<<<<< HEAD
-                // Badge «есть обновление» на иконке Updates: красный круг
-                // с цифрой, когда центр обновлений на стадии Available.
-                if START_MENU_APPS[i].1 == StartMenuAction::OpenUpdates {
-                    let badge_stage = desktop
-                        .updates_center
-                        .as_ref()
-                        .map(|c| c.stage())
-                        .unwrap_or(crate::update::center::Stage::Idle);
-                    if badge_stage == crate::update::center::Stage::Available {
-                        let bx = rc.x + rc.w as i32 - 7;
-                        let by = rc.y - 2;
-                        r.fill_circle(bx, by, 7, Color::RED);
-                        r.draw_text(bx - 3, by - 5, "1", Color::WHITE, None);
-                    }
-                }
-=======
->>>>>>> arena/e8a29038-deix
             }
             DockAction::Window(id) => {
                 if !seen_window_item {
@@ -333,13 +261,6 @@ pub fn draw_dock(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen_w:
                         r.fill_rounded_rect_alpha(rc.x, rc.y, rc.w, rc.h, 10, theme.surface_alt, 230);
                     }
                     let fg = if w.minimized { Color::GRAY } else { theme.text_primary };
-<<<<<<< HEAD
-                    if !appicons::draw(r, rc.x + 2, rc.y + 2, DOCK_APP_ICON, w.content.icon()) {
-                        r.draw_icon(rc.x + 10, rc.y + 10, w.content.icon(), fg);
-                    }
-=======
-                    r.draw_icon(rc.x + 10, rc.y + 10, w.content.icon(), fg);
->>>>>>> arena/e8a29038-deix
                     if focused {
                         r.fill_rounded_rect(rc.x + 10, dot_y - 1, rc.w - 20, 3, 1, theme.accent);
                     }
@@ -373,13 +294,6 @@ pub fn start_menu_layout(screen_h: i32) -> StartMenuLayout {
     // 640x480. На больших экранах шаг — штатные 34 px.
     let n = START_MENU_APPS.len() as i32;
     let avail = screen_h - m.dock_height - m.dock_margin - 2 - my;
-<<<<<<< HEAD
-    // Нижний порог 20 (не 26): при 13 пунктах меню и экране 640x480
-    // строки ужмутся, но не вылезут за нижний край панели.
-    let step = ((avail - 66 - 44) / n).clamp(20, 34);
-=======
-    let step = ((avail - 66 - 44) / n).clamp(26, 34);
->>>>>>> arena/e8a29038-deix
     let menu_h = 66 + step * n + 44;
 
     let mut app_items = [Rect::new(0, 0, 0, 0); START_MENU_APPS.len()];
@@ -483,15 +397,6 @@ pub fn draw_start_menu(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, scr
             r.draw_rounded_rect_outline(item.x - 2, item.y - 2, item.w + 4, item.h + 4, 10, theme.accent, 36);
         }
         // Иконка в собственном чипе, подпись — без обрезки до 1 колонки.
-<<<<<<< HEAD
-        if !appicons::draw(r, item.x + 6, item.y + 5, 20, icon) {
-            r.fill_rounded_rect(item.x + 5, item.y + 4, 22, 22, 6, theme.surface);
-            r.draw_icon(item.x + 8, item.y + 7, icon, theme.accent);
-        }
-=======
-        r.fill_rounded_rect(item.x + 5, item.y + 4, 22, 22, 6, theme.surface);
-        r.draw_icon(item.x + 8, item.y + 7, icon, theme.accent);
->>>>>>> arena/e8a29038-deix
         let fg = if is_sel { theme.text_primary } else { theme.text_secondary };
         let max_cells = ((item.w as i32 - 44) / 8).max(4) as usize;
         r.draw_text(item.x + 36, item.y + 7, truncate_to_cells(label, max_cells).0, fg, None);
@@ -654,13 +559,6 @@ pub fn draw_overview(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, scree
             r.draw_rounded_rect_outline(card.x, card.y, card.w, card.h, 10, Color::WHITE, 30);
         }
 
-<<<<<<< HEAD
-        if !appicons::draw(r, card.x + 8, card.y + 6, 20, w.content.icon()) {
-            r.draw_icon(card.x + 10, card.y + 10, w.content.icon(), theme.accent);
-        }
-=======
-        r.draw_icon(card.x + 10, card.y + 10, w.content.icon(), theme.accent);
->>>>>>> arena/e8a29038-deix
         let title = truncate_to_cells(&w.title, ((card.w as i32 - 40) / 8).max(4) as usize).0;
         r.draw_text(card.x + 32, card.y + 12, title, theme.text_primary, None);
         if w.minimized {

@@ -60,27 +60,6 @@ pub fn init() {
 /// события живут в кольцевом буфере и ничего не теряется — они будут
 /// сброшены на диск первым же `persist::flush()`.
 pub fn storage_ready() {
-<<<<<<< HEAD
-    crate::bootprof::mark("storage_ready: start");
-    persist::init();
-    crate::bootprof::mark("storage_ready: log directories");
-    crate::serial_println!("[diag] persist init done ({} ms)", crate::timer::uptime_ms());
-    let session = persist::next_boot_session();
-    crate::serial_println!("[diag] boot session #{} ({} ms)", session, crate::timer::uptime_ms());
-    crate::bootprof::mark("storage_ready: boot counter");
-    ring::set_boot_session(session);
-    info(NONE, &alloc::format!("журналы на диске готовы (сессия загрузки #{})", session));
-    let written = persist::flush();
-    crate::bootprof::mark("storage_ready: first log flush");
-=======
-    persist::init();
-    crate::serial_println!("[diag] persist init done ({} ms)", crate::timer::uptime_ms());
-    let session = persist::next_boot_session();
-    crate::serial_println!("[diag] boot session #{} ({} ms)", session, crate::timer::uptime_ms());
-    ring::set_boot_session(session);
-    info(NONE, &alloc::format!("журналы на диске готовы (сессия загрузки #{})", session));
-    let written = persist::flush();
->>>>>>> arena/e8a29038-deix
     crate::serial_println!(
         "[diag] первый сброс журналов: {} строк ({} ms)",
         written,

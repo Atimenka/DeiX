@@ -15,11 +15,6 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::arch::asm;
 
-<<<<<<< HEAD
-const MAX_LINE: usize = 256;
-=======
-const MAX_LINE: usize = 120;
->>>>>>> arena/e8a29038-deix
 const MAX_HISTORY: usize = 32;
 
 pub fn run() -> ! {
@@ -53,14 +48,6 @@ pub fn run() -> ! {
         } else {
             match keyboard::try_read_char() {
                 Some(c) => c,
-<<<<<<< HEAD
-                None => {
-                    crate::devauth::poll_pending();
-                    continue;
-                }
-=======
-                None => continue,
->>>>>>> arena/e8a29038-deix
             }
         };
         match c {
@@ -271,10 +258,6 @@ pub fn execute(line: &str) {
         "uptime" => cmd_uptime(),
         "color" => cmd_color(rest),
         "cpuid" => cmd_cpuid(),
-<<<<<<< HEAD
-=======
-        "mem" => cmd_mem(rest),
->>>>>>> arena/e8a29038-deix
         "lang" => cmd_lang(rest),
         "ifconfig" => cmd_ifconfig(rest),
         "arp" => cmd_arp(),
@@ -288,17 +271,6 @@ pub fn execute(line: &str) {
         "mkdir" => cmd_mkdir(rest),
         "rm" => cmd_rm(rest),
         "pkg" => cmd_pkg(rest),
-<<<<<<< HEAD
-        "media" => crate::mediapack::cmd_media(rest),
-        "run" => cmd_run(rest),
-        "install" => crate::install::cmd_install(rest),
-=======
-        "dialog" => cmd_dialog_test(),
-        "erofs" => cmd_erofs_test(),
-        "run" => cmd_run(rest),
-        "install" => crate::install::cmd_install(rest),
-        "bigfile" => cmd_bigfile(rest),
->>>>>>> arena/e8a29038-deix
         "useradd" => cmd_useradd(rest),
         "passwd" => cmd_passwd(rest),
         "whoami" => cmd_whoami(),
@@ -330,33 +302,6 @@ pub fn execute(line: &str) {
         "error" => crate::diag::cli::cmd_error(rest),
         "panic" => crate::diag::cli::cmd_panic(rest),
         "diagnostics" => crate::diag::cli::cmd_diagnostics(rest),
-<<<<<<< HEAD
-        "notify" => cmd_notify(rest),
-        "curl" => cmd_curl(rest),
-        "update" => crate::update::cmd_update(rest),
-        "dev" => {
-            let sub = rest.trim();
-            let (word, arg) = match sub.find(char::is_whitespace) {
-                Some(i) => (&sub[..i], sub[i..].trim()),
-                None => (sub, ""),
-            };
-            match word {
-                "unlock" => crate::devauth::cmd_unlock(arg),
-                "on" => crate::devmode::enable_dev_mode(),
-                "off" => crate::devmode::disable_dev_mode(),
-                "link" => crate::devauth::cmd_link(),
-                "request" => crate::devauth::cmd_request(),
-                "id" => crate::devauth::cmd_id(),
-                "revoke" => crate::devauth::cmd_revoke(),
-=======
-        "dev" => {
-            match rest.trim() {
-                "on" => crate::devmode::enable_dev_mode(),
-                "off" => crate::devmode::disable_dev_mode(),
-                "request" => crate::devauth::cmd_request(),
-                "revoke" => crate::devauth::cmd_revoke(),
-                "flags" => crate::devauth::cmd_flags(),
->>>>>>> arena/e8a29038-deix
                 _ => crate::devmode::dev_status(),
             }
         }
@@ -364,36 +309,17 @@ pub fn execute(line: &str) {
         "nvidia" => crate::drivers::nvidia::cmd_nvidia(rest),
         "microcode" => crate::microcode::cmd_microcode(rest),
         "hal" => crate::drivers::hal_selftest(),
-<<<<<<< HEAD
-        "cloud" => match rest.trim() {
-            "status" => crate::cloudauth::cmd_status(),
-            "unlink" => crate::cloudauth::cmd_unlink(),
-            "sync" => crate::cloudauth::cmd_sync(),
-            "pull" => crate::cloudauth::cmd_pull(),
-            "clip get" => crate::cloudauth::cmd_clip_get(),
-            "clip" => crate::cloudauth::cmd_clip_get(),
-            _ => {
-                if let Some(text) = rest.trim().strip_prefix("clip set ") {
-                    crate::cloudauth::cmd_clip_set(text.trim().trim_matches('"'));
-                } else {
-                    crate::cloudauth::cmd_status();
-                }
-            }
-        },
-        "crypt" => crate::luks::cmd_crypt(rest),
-        "dinit" => crate::dinit::cmd_dinit(rest),
-        "logo" => crate::bootlogo::cmd_logo(rest),
-        "bootprof" => crate::bootprof::report(),
-=======
-        "crypt" => crate::luks::cmd_crypt(rest),
-        "dinit" => crate::dinit::cmd_dinit(rest),
-        "logo" => crate::bootlogo::cmd_logo(rest),
->>>>>>> arena/e8a29038-deix
         "wallpaper" => cmd_wallpaper(rest),
         "linux" => crate::linux::cmd_linux(rest),
         "profile" => crate::userfs::cmd_profile(rest, &current_user().unwrap_or_default()),
         "lock" => crate::loginui::cmd_lock(&current_user().unwrap_or_default()),
         "threads" => crate::sched::cmd_threads(rest),
+        "nanocore" => {
+            let parts: alloc::vec::Vec<&str> = rest.split_whitespace().collect();
+            let mut all = alloc::vec!["nanocore"];
+            all.extend(parts);
+            crate::nanocore::cli::execute(&all);
+        }
         "su" | "sudo" | "root" => {
             if crate::devmode::sudo_allowed() {
                 // Dev-режим: sudo доступен, гарантии целостности сняты.
@@ -437,11 +363,6 @@ fn cmd_sound(rest: &str) {
             if media.is_empty() {
                 println!("{}", t!(en: "  (image has no sounds: rebuild with build.sh step [2e/8])", ru: "  (в образе звуков нет: пересоберите — шаг build.sh [2e/8])"));
             }
-<<<<<<< HEAD
-            println!("{}", t!(en: "play: sound play <start|error|lowbat|fullbat|usbcon|usbdisc|welcome|update|bye>", ru: "играть: sound play <start|error|lowbat|fullbat|usbcon|usbdisc|welcome|update|bye>"));
-=======
-            println!("{}", t!(en: "play: sound play <start|error|lowbat|fullbat|usbcon|usbdisc>", ru: "играть: sound play <start|error|lowbat|fullbat|usbcon|usbdisc>"));
->>>>>>> arena/e8a29038-deix
             println!("{}", t!(en: "mode: sound mode [auto|hda|speaker] - select sound output device", ru: "режим: sound mode [auto|hda|speaker] - выбор устройства вывода звука"));
             println!("{}", t!(en: "HDA:  sound hda [test|play <name>] - Intel High Definition Audio status & test", ru: "HDA:  sound hda [test|play <имя>] - статус и тест Intel High Definition Audio"));
             println!("{}", t!(en: "PC:   sound speaker [beep|play <name>] - direct PC speaker (PWM port 0x61)", ru: "PC:   sound speaker [beep|play <имя>] - прямой вывод на PC speaker (ШИМ порт 0x61)"));
@@ -560,13 +481,6 @@ fn cmd_help() {
     println!("  color <name>            - {}", t!(en: "change text color", ru: "сменить цвет текста"));
     println!("                            (green/white/red/cyan/yellow)");
     println!("  cpuid                   - {}", t!(en: "print CPU vendor string", ru: "вывести vendor string процессора"));
-<<<<<<< HEAD
-    println!("  lang <en|ru>            - {}", t!(en: "switch interface language", ru: "переключить язык интерфейса"));
-    println!("  notify <kind> <text>    - {}", t!(en: "desktop notification (info/ok/warn/error)", ru: "уведомление рабочего стола (info/ok/warn/error)"));
-=======
-    println!("  mem <n>                 - {}", t!(en: "heap allocator test (Vec<u32> of n elements)", ru: "тест heap-аллокатора (Vec<u32> на n элементов)"));
-    println!("  lang <en|ru>            - {}", t!(en: "switch interface language", ru: "переключить язык интерфейса"));
->>>>>>> arena/e8a29038-deix
     println!("  ifconfig [ip|dns <ip>]  - {}", t!(en: "show/change network config (IP, DNS server)", ru: "показать/сменить сетевую конфигурацию (IP, DNS-сервер)"));
     println!("  arp                     - {}", t!(en: "show ARP cache", ru: "показать ARP-кэш"));
     println!("  ping <ip>               - {}", t!(en: "send ICMP echo request", ru: "отправить ICMP echo request"));
@@ -574,6 +488,7 @@ fn cmd_help() {
     println!("  threads [list|test]     - {}", t!(en: "preemptive multitasking: task list / selftest", ru: "вытесняющая многозадачность: список задач / самопроверка"));
     println!("  crypt <status|addpass|delpass|iter> - {}", t!(en: "volume password slots (LUKS-style)", ru: "пароли тома: слоты, как в LUKS"));
     println!("  dinit [status|services|mounts|users|audit|security|stage|reload] - {}", t!(en: "PID 1 supervisor: services, mounts, users, audit, secmon", ru: "супервизор PID 1: службы, монтирования, пользователи, аудит, монитор"));
+    println!("  nanocore [status|logs|trace|restart|graph|mode|help] - {}", t!(en: "Nano-Core orchestrator: split Stage 2 micro-processes", ru: "оркестратор Nano-Core: разбитый Stage 2 микро-процессы"));
     println!("  hal                     - {}", t!(en: "driver layer selftest on RTL8139", ru: "самопроверка прослойки драйверов на RTL8139"));
     println!("  nvidia                  - {}", t!(en: "NVIDIA hardware detection: probe and identify GPU (not an acceleration driver)", ru: "детект NVIDIA-железа: поиск и опознание карты (не драйвер ускорения)"));
     println!("  logo [show|info]        - {}", t!(en: "boot logo: show / info", ru: "загрузочное лого: показать / инфо"));
@@ -588,20 +503,6 @@ fn cmd_help() {
     println!("  write <file> <text>     - {}", t!(en: "create/overwrite a text file", ru: "создать/перезаписать текстовый файл"));
     println!("  rm <file>               - {}", t!(en: "delete a file", ru: "удалить файл"));
     println!("  pkg <list|install|remove|info> - {}", t!(en: "local package manager (see 'pkg list')", ru: "локальный пакетный менеджер (см. 'pkg list')"));
-<<<<<<< HEAD
-    println!("  media <status|install|remove|play|pause|stop|vol> - {}", t!(en: "media pack on /userdata and playback control", ru: "медиапак на /userdata и управление воспроизведением"));
-    println!("  run <program.mex>       - {}", t!(en: "run a .mex program", ru: "запустить .mex программу"));
-    println!("  install                 - {}", t!(en: "clone this disk onto a second physical disk (real HDD install)", ru: "клонировать этот диск на второй физический диск (установка на реальный HDD)"));
-    println!("  sysfs [status|convert]  - {}", t!(en: "convert /system from EROFS to ext2 (dev mode only)", ru: "конвертировать /system из EROFS в ext2 (только dev-режим)"));
-    println!("  curl <url>              - {}", t!(en: "HTTP(S) GET for network diagnostics", ru: "HTTP(S) GET для диагностики сети"));
-    println!("  dev [unlock|link|request|on|off|revoke] - {}", t!(en: "developer mode (unlock with a site key, link device, server activation; see docs/DEVAUTH.md)", ru: "режим разработчика (ключ с сайта, привязка, серверная активация; см. docs/DEVAUTH.md)"));
-=======
-    println!("  run <program.mex>       - {}", t!(en: "run a .mex program", ru: "запустить .mex программу"));
-    println!("  install                 - {}", t!(en: "clone this disk onto a second physical disk (real HDD install)", ru: "клонировать этот диск на второй физический диск (установка на реальный HDD)"));
-    println!("  sysfs [status|convert]  - {}", t!(en: "convert /system from EROFS to ext2 (dev mode only)", ru: "конвертировать /system из EROFS в ext2 (только dev-режим)"));
-    println!("  dev [request|on|off|revoke] - {}", t!(en: "developer mode (server-side activation, see docs/DEVAUTH.md)", ru: "режим разработчика (серверная активация, см. docs/DEVAUTH.md)"));
-    println!("  bigfile <size_kb>       - {}", t!(en: "test ext2 indirect blocks with a large file", ru: "проверить indirect-блоки ext2 большим файлом"));
->>>>>>> arena/e8a29038-deix
     println!("  useradd <user> <pass>   - {}", t!(en: "create a new user account", ru: "создать новый аккаунт пользователя"));
     println!("  passwd <u> <old> <new>  - {}", t!(en: "change a user's password", ru: "сменить пароль пользователя"));
     println!("  whoami                  - {}", t!(en: "show the currently logged-in user", ru: "показать текущего пользователя"));
@@ -616,10 +517,6 @@ fn cmd_help() {
     println!("  error [show DX-...]     - {}", t!(en: "error list and code cards", ru: "список ошибок и карточки кодов"));
     println!("  panic [last|clear]      - {}", t!(en: "last kernel panic report", ru: "последний отчёт об отказе ядра"));
     println!("  diagnostics [mode on]   - {}", t!(en: "diagnostic summary / verbose mode", ru: "сводка диагностики / подробный режим"));
-<<<<<<< HEAD
-    println!("  update [check|download|apply yes|cancel] - {}", t!(en: "update center: signed OS updates from the server", ru: "центр обновлений: подписанные обновления ОС с сервера"));
-=======
->>>>>>> arena/e8a29038-deix
     println!("  reboot                  - {}", t!(en: "reboot system", ru: "перезагрузка системы"));
     println!("  poweroff / shutdown     - {}", t!(en: "power off system (ACPI / QEMU)", ru: "выключение системы (ACPI / QEMU)"));
     println!("  halt                    - {}", t!(en: "halt CPU low-level (cli; hlt)", ru: "остановить процессор (cli; hlt)"));
@@ -732,50 +629,6 @@ fn cmd_cpuid() {
     println!("CPU: {}", crate::cpuid::describe());
 }
 
-<<<<<<< HEAD
-=======
-fn cmd_mem(arg: &str) {
-    let n: usize = if arg.is_empty() {
-        1000
-    } else {
-        match arg.parse() {
-            Ok(v) => v,
-            Err(_) => {
-                println!(
-                    "{}",
-                    t!(en: "Usage: mem <count>, e.g. mem 5000", ru: "Укажи число элементов, например: mem 5000")
-                );
-                return;
-            }
-        }
-    };
-
-    println_t!(
-        en: "Allocating Vec<u32> for {} elements via heap allocator...",
-        ru: "Выделяем Vec<u32> на {} элементов через heap-аллокатор...";
-        n
-    );
-    let mut v: Vec<u32> = Vec::with_capacity(n);
-    for i in 0..n as u32 {
-        v.push(i * 2);
-    }
-    let sum: u64 = v.iter().map(|&x| x as u64).sum();
-    let bytes = n * core::mem::size_of::<u32>();
-    println_t!(
-        en: "Done! Allocated {} bytes, sum of all elements = {}",
-        ru: "Готово! Выделено {} байт, сумма всех элементов = {}";
-        bytes, sum
-    );
-    println!(
-        "{}",
-        t!(
-            en: "Vec is automatically freed (dealloc) when it goes out of scope.",
-            ru: "Vec автоматически освобождён (dealloc) при выходе из области видимости."
-        )
-    );
-}
-
->>>>>>> arena/e8a29038-deix
 /// `wallpaper <url|/userdata/путь>` — скачивает PNG/BMP по http(s) или
 /// берёт файл с диска, уменьшает до лимита ext2 (268 КиБ), пишет в
 /// /userdata/wallpaper.bmp и переключает тему на стиль Custom.
@@ -788,27 +641,6 @@ fn cmd_wallpaper(arg: &str) {
             .get(t.wallpaper_style as usize)
             .copied()
             .unwrap_or("?");
-<<<<<<< HEAD
-        println!("  {}", t!(en: "Usage: wallpaper <style | http(s)://url | /userdata/path.png|.bmp>", ru: "Использование: wallpaper <стиль | http(s)://url | /userdata/путь.png|.bmp>"));
-        println!("  {} {}", t!(en: "Styles:", ru: "Стили:"), crate::ui::theme::WALLPAPER_STYLES.join(", "));
-        println!("  {} {}", t!(en: "Current style:", ru: "Текущий стиль:"), style);
-        return;
-    }
-    if let Some(i) = crate::ui::theme::WALLPAPER_STYLES.iter().position(|n| n.eq_ignore_ascii_case(a)) {
-        let mut t = crate::ui::theme::get_theme();
-        t.wallpaper_style = i as u8;
-        crate::ui::theme::set_theme(t);
-        crate::ui::theme::bump_wallpaper_epoch();
-        crate::ui::config::save();
-        println!("  [wallpaper] {} {}", t!(en: "style set:", ru: "стиль выбран:"), crate::ui::theme::WALLPAPER_STYLES[i]);
-        return;
-    }
-=======
-        println!("  {}", t!(en: "Usage: wallpaper <http(s)://url | /userdata/path.png|.bmp>", ru: "Использование: wallpaper <http(s)://url | /userdata/путь.png|.bmp>"));
-        println!("  {} {}", t!(en: "Current style:", ru: "Текущий стиль:"), style);
-        return;
-    }
->>>>>>> arena/e8a29038-deix
     let result = if a.starts_with("http://") || a.starts_with("https://") {
         println!("  {} {}", t!(en: "Downloading", ru: "Скачиваю"), a);
         crate::ui::wallpaper::set_from_url(a)
@@ -943,84 +775,6 @@ fn cmd_ifconfig(arg: &str) {
     }
 }
 
-<<<<<<< HEAD
-fn cmd_curl(arg: &str) {
-    if !rtl8139::is_ready() {
-        println!(
-            "{}",
-            t!(en: "No network card detected.", ru: "Сетевая карта не найдена.")
-        );
-        return;
-    }
-    let url = arg.trim();
-    if url.is_empty() {
-        println!(
-            "{}",
-            t!(
-                en: "Usage: curl <url> - HTTP(S) GET, prints status and the start of the body",
-                ru: "Использование: curl <url> - HTTP(S) GET, печатает статус и начало тела"
-            )
-        );
-        return;
-    }
-    let started = crate::timer::uptime_ms();
-    match crate::net::http::fetch_bytes(url) {
-        Ok(resp) => {
-            println!(
-                "  HTTP {} {} ({} bytes, {} ms, {})",
-                resp.status,
-                resp.reason,
-                resp.body.len(),
-                crate::timer::uptime_ms() - started,
-                resp.content_type
-            );
-            let text = String::from_utf8_lossy(&resp.body);
-            let head: String = text.chars().take(300).collect();
-            println!("{}", head);
-        }
-        Err(e) => println!("  curl: {}", e),
-    }
-}
-
-fn cmd_notify(arg: &str) {
-    use crate::ui::notify::{push, Kind};
-    let arg = arg.trim();
-    let (word, text) = match arg.split_once(' ') {
-        Some((w, t)) => (w, t.trim()),
-        None => (arg, ""),
-    };
-    let (kind, title) = match word {
-        "info" => (Kind::Info, "Information"),
-        "ok" | "success" => (Kind::Success, "Success"),
-        "warn" | "warning" => (Kind::Warning, "Warning"),
-        "error" | "err" => (Kind::Error, "Error"),
-        _ => {
-            println!(
-                "{}",
-                t!(
-                    en: "Usage: notify <info|ok|warn|error> <text> - desktop notification",
-                    ru: "Использование: notify <info|ok|warn|error> <текст> - уведомление рабочего стола"
-                )
-            );
-            return;
-        }
-    };
-    if text.is_empty() {
-        println!("{}", t!(en: "Notification text is empty.", ru: "Текст уведомления пуст."));
-        return;
-    }
-    push(kind, title, text);
-    println!(
-        "{}",
-        t!(
-            en: "Queued. Notifications are shown by the graphical desktop.",
-            ru: "В очереди. Уведомления показывает графический рабочий стол."
-        )
-    );
-}
-
-=======
->>>>>>> arena/e8a29038-deix
 fn cmd_arp() {
     if !rtl8139::is_ready() {
         println!(
@@ -1068,27 +822,6 @@ fn cmd_dns(arg: &str) {
         ru: "Запрос к DNS-серверу {}.{}.{}.{} ...";
         server[0], server[1], server[2], server[3]
     );
-<<<<<<< HEAD
-    let ips = crate::net::dns::resolve_all(host);
-    if ips.is_empty() {
-        println_t!(
-            en: "Could not resolve '{}': {}",
-            ru: "Не удалось разрешить '{}': {}";
-            host, crate::net::dns::last_error()
-        );
-        return;
-    }
-    for ip in ips {
-        println!("{}: {}.{}.{}.{}", host, ip[0], ip[1], ip[2], ip[3]);
-=======
-    match crate::net::dns::resolve_a(host) {
-        Some(ip) => println!("{}: {}.{}.{}.{}", host, ip[0], ip[1], ip[2], ip[3]),
-        None => println_t!(
-            en: "Could not resolve '{}' (timeout, NXDOMAIN or no network).",
-            ru: "Не удалось разрешить '{}' (таймаут, NXDOMAIN или нет сети).";
-            host
-        ),
->>>>>>> arena/e8a29038-deix
     }
 }
 
@@ -1516,93 +1249,6 @@ fn cmd_write(arg: &str) {
     }
 }
 
-<<<<<<< HEAD
-=======
-/// `bigfile <size_kb>` — тестовая команда для проверки indirect-блоков
-/// ext2 (см. подробный комментарий в начале ext2.rs): генерирует файл
-/// заданного размера (в КиБ) с предсказуемым псевдослучайным содержимым
-/// (без настоящего RNG — линейный конгруэнтный генератор с фиксированным
-/// зерном, чтобы можно было детерминированно сверить прочитанные назад
-/// байты), пишет его на диск и сразу читает обратно, побайтово сверяя
-/// содержимое. Не предназначена для обычного использования — это
-/// диагностический инструмент, аналогичный `mem <count>` (тестирует
-/// heap-аллокатор), но для файловой системы.
-fn cmd_bigfile(arg: &str) {
-    let size_kb: usize = match arg.trim().parse() {
-        Ok(v) => v,
-        Err(_) => {
-            println!(
-                "{}",
-                t!(
-                    en: "Usage: bigfile <size_kb>, e.g. 'bigfile 64' to test a 64 KiB file \\
-                         (exercises ext2 indirect blocks beyond the 12 KiB direct-only limit)",
-                    ru: "Использование: bigfile <размер_кб>, например 'bigfile 64' для проверки \\
-                         файла в 64 КиБ (задействует indirect-блоки ext2 сверх лимита в 12 КиБ)"
-                )
-            );
-            return;
-        }
-    };
-
-    if !ext2::is_formatted() {
-        if let Err(_) = ext2::format() {
-            println!("{}", t!(en: "Failed to format disk.", ru: "Не удалось отформатировать диск."));
-            return;
-        }
-    }
-
-    let size = size_kb * 1024;
-    let mut data = Vec::with_capacity(size);
-    // Простой LCG (linear congruential generator) с фиксированным
-    // зерном — не криптографический RNG, просто детерминированный
-    // "мусор", который легко сгенерировать заново для сверки.
-    let mut state: u32 = 0x2A2A2A2A;
-    for _ in 0..size {
-        state = state.wrapping_mul(1103515245).wrapping_add(12345);
-        data.push((state >> 16) as u8);
-    }
-
-    println_t!(
-        en: "Writing {} KiB test file (name: BIGTEST.BIN)...",
-        ru: "Записываем тестовый файл {} КиБ (имя: BIGTEST.BIN)...";
-        size_kb
-    );
-
-    if let Err(_) = ext2::write_file("BIGTEST.BIN", &data) {
-        println!("{}", t!(en: "Write failed (file too large for indirect block support?).", ru: "Ошибка записи (файл слишком большой даже для indirect-блока?)."));
-        return;
-    }
-
-    match ext2::read_file("BIGTEST.BIN") {
-        Ok(read_back) => {
-            if read_back.len() != data.len() {
-                println_t!(
-                    en: "MISMATCH: wrote {} bytes but read back {} bytes!",
-                    ru: "НЕСОВПАДЕНИЕ: записали {} байт, а прочитали {} байт!";
-                    data.len(), read_back.len()
-                );
-                return;
-            }
-            if read_back == data {
-                println_t!(
-                    en: "OK: all {} bytes match after write+read-back (indirect blocks work correctly).",
-                    ru: "OK: все {} байт совпадают после записи+чтения (indirect-блоки работают корректно).";
-                    data.len()
-                );
-            } else {
-                let first_diff = read_back.iter().zip(data.iter()).position(|(a, b)| a != b);
-                println_t!(
-                    en: "MISMATCH: data differs at byte offset {:?}!",
-                    ru: "НЕСОВПАДЕНИЕ: данные отличаются со смещения байта {:?}!";
-                    first_diff
-                );
-            }
-        }
-        Err(_) => println!("{}", t!(en: "Read-back failed.", ru: "Ошибка обратного чтения.")),
-    }
-}
-
->>>>>>> arena/e8a29038-deix
 // ==================== Авторизация (auth.rs) ====================
 
 /// Имя пользователя, вошедшего в текущем сеансе — None до успешного
@@ -2053,10 +1699,6 @@ pub fn cmd_reboot() {
 
 pub fn cmd_poweroff() {
     println!("{}", t!(en: "Powering off system...", ru: "Выключение системы..."));
-<<<<<<< HEAD
-    let _ = crate::sound::play_ui(crate::sound::UiSound::Goodbye);
-=======
->>>>>>> arena/e8a29038-deix
     crate::crypto_storage::lock();
     unsafe {
         crate::port::outw(0x604, 0x2000);
@@ -2069,29 +1711,6 @@ pub fn cmd_poweroff() {
     }
 }
 
-<<<<<<< HEAD
-=======
-pub fn cmd_dialog_test() {
-    let ok = crate::dialog::confirm("Continue?");
-    println!("confirm: {}", ok);
-    let line = crate::dialog::prompt_line("Enter text");
-    println!("prompt_line: {}", line);
-    let masked = crate::dialog::prompt_masked("Enter password");
-    println!("prompt_masked length: {}", masked.len());
-    let items = [String::from("Option 1"), String::from("Option 2")];
-    if let Some(idx) = crate::dialog::choose("Select item", &items) {
-        println!("selected: {}", idx);
-    }
-}
-
-pub fn cmd_erofs_test() {
-    let dummy = crate::erofs::build_image(&[("hello.txt", b"hello world\n")]);
-    if crate::erofs::is_erofs(&dummy) {
-        println!("  [erofs] build_image and is_erofs OK ({} bytes)", dummy.len());
-    }
-}
-
->>>>>>> arena/e8a29038-deix
 pub fn cmd_halt() {
     println!("{}", t!(en: "Halting the CPU. Goodbye!", ru: "Остановка процессора. До свидания!"));
     // См. комментарий в cmd_reboot() — та же самая гарантия зануления
@@ -2106,24 +1725,14 @@ pub fn cmd_halt() {
 }
 
 pub const VALID_COMMANDS: &[&str] = &[
-<<<<<<< HEAD
-    "help", "about", "echo", "clear", "uptime", "bootprof", "color", "cpuid", "lang",
-    "ifconfig", "arp", "ping", "dns", "threads", "crypt", "dinit", "hal", "gpu", "sound",
-    "ls", "cat", "write", "mkdir", "rm", "pkg", "run", "install",
-    "useradd", "passwd", "whoami", "users", "encrypt", "crash",
-    "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",
-    "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "dev", "profile",
-    "ps", "kill", "log", "error", "panic", "diagnostics", "wallpaper", "sysfs",
-    "notify", "curl", "update"
-=======
     "help", "about", "echo", "clear", "uptime", "color", "cpuid", "mem", "lang",
     "ifconfig", "arp", "ping", "dns", "threads", "crypt", "dinit", "hal", "gpu", "sound",
     "ls", "cat", "write", "mkdir", "rm", "pkg", "dialog", "erofs", "run", "install",
     "bigfile", "useradd", "passwd", "whoami", "users", "encrypt", "crash",
     "bugreport", "dmesg", "crashlog", "duil", "ds", "taskmgr", "reboot",
     "poweroff", "shutdown", "halt", "cli", "kmod", "lsmod", "dev", "profile",
-    "ps", "kill", "log", "error", "panic", "diagnostics", "wallpaper", "sysfs"
->>>>>>> arena/e8a29038-deix
+    "ps", "kill", "log", "error", "panic", "diagnostics", "wallpaper", "sysfs",
+    "nvidia", "microcode", "logo", "linux", "lock", "su", "sudo", "root", "nanocore",
 ];
 
 pub fn is_valid_command(name: &str) -> bool {
