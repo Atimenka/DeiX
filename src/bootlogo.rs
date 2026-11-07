@@ -87,6 +87,7 @@ pub fn draw_logo_at(r: &mut crate::renderer::Renderer, ox: i32, oy: i32, scale: 
     };
     let scale = scale.max(1);
     let total = logo.w * logo.h;
+    let sh = logo.h as i32 * scale;
 
     let mut pos: u32 = 0;
     let mut i = 0usize;
@@ -99,11 +100,24 @@ pub fn draw_logo_at(r: &mut crate::renderer::Renderer, ox: i32, oy: i32, scale: 
             continue;
         }
 
+        // Индекс 0 — фон (прозрачный), не закрашиваем.
+        if idx == 0 {
+            pos += count;
+            continue;
+        }
+
+        let color = logo.color(idx);
         let mut rem = count;
         while rem > 0 && pos < total {
+            let chunk = rem.min(total - pos);
+            let end = pos + chunk;
+            while pos < end {
+                let px = ox + ((pos % logo.w) as i32) * scale;
+                let py = oy + ((pos / logo.w) as i32) * scale;
+                r.fill_rect(px, py, scale as u32, scale as u32, color);
+                pos += 1;
             }
             rem -= chunk;
-            pos += chunk;
         }
     }
     oy + sh
