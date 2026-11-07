@@ -79,10 +79,18 @@ impl Drive {
     }
 }
 
+fn wait_bsy_clear() -> bool {
+    for _ in 0..1_000_000u32 {
         let status = unsafe { inb(STATUS_PORT) };
         if status & STATUS_BSY == 0 {
             return true;
         }
+    }
+    false
+}
+
+fn wait_drq_or_err() -> Result<(), ()> {
+    for _ in 0..1_000_000u32 {
         let status = unsafe { inb(STATUS_PORT) };
         if status & STATUS_ERR != 0 {
             return Err(());
@@ -90,6 +98,8 @@ impl Drive {
         if status & STATUS_DRQ != 0 {
             return Ok(());
         }
+    }
+    Err(())
 }
 
 /// Читает `count` секторов начиная с `lba` (LBA28, максимум 256 секторов
