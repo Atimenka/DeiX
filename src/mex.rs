@@ -168,6 +168,9 @@ fn resolve_program_path(name: &str) -> alloc::string::String {
     alloc::format!("/userdata/{}", name)
 }
 
+const MEX_MAX_READ: usize = 4 * 1024 * 1024; // 4 МиБ
+
+extern "C" fn api_read_file(name_ptr: *const u8, name_len: usize, out_ptr: *mut u8, out_cap: usize) -> i64 {
     // Лимит размера — защита от OOM при чтении больших файлов.
     if out_cap > MEX_MAX_READ {
         return -1;

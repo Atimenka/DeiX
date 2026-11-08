@@ -634,16 +634,6 @@ fn cmd_cpuid() {
     println!("CPU: {}", crate::cpuid::describe());
 }
 
-    match crate::net::dns::resolve_a(host) {
-        Some(ip) => println!("{}: {}.{}.{}.{}", host, ip[0], ip[1], ip[2], ip[3]),
-        None => println_t!(
-            en: "Could not resolve '{}' (timeout, NXDOMAIN or no network).",
-            ru: "Не удалось разрешить '{}' (таймаут, NXDOMAIN или нет сети).";
-            host
-        ),
-    }
-}
-
 fn cmd_ping(arg: &str) {
     if !rtl8139::is_ready() {
         println!(
@@ -1068,6 +1058,7 @@ fn cmd_write(arg: &str) {
     }
 }
 
+fn cmd_reboot() {
     crate::crypto_storage::lock();
     unsafe {
         crate::port::outw(0x604, 0x2000);
