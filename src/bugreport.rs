@@ -13,7 +13,7 @@ pub const BUGREPORT_FILE: &str = "/userdata/BUGREPORT.TXT";
 /// Собирает полный диагностический отчёт в одну строку.
 pub fn collect_report() -> String {
     let mut out = String::new();
-    out.push_str("    out.push_str("  DeiX OS — FULL DEBUG REPORT (bugreport)\n");
+    out.push_str("  DeiX OS — FULL DEBUG REPORT (bugreport)\n");
     out.push_str("
     // --- SYSTEM ---
     out.push_str("\n[SYSTEM]\n");
@@ -104,7 +104,7 @@ pub fn collect_report() -> String {
         None => out.push_str("  отчётов об отказе нет\n"),
     }
 
-    out.push_str("\n    out.push_str("  End of report. Attach BUGREPORT.TXT when reporting a bug.\n");
+    out.push_str("\n  End of report. Attach BUGREPORT.TXT when reporting a bug.\n");
     out
 }
 
