@@ -481,5 +481,6 @@ pub fn run_login_screen() -> String {
             }
         }
     }
+    }
 }
 
