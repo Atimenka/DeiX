@@ -591,8 +591,8 @@ fn read_input_line() -> String {
 ///   install --test <user> <pass>   (диск выбирается первым доступным,
 ///   /userdata = 8 МиБ, подтверждение стирания не требуется)
 pub fn cmd_install(arg: &str) {
-    crate::println!("    crate::println!("     DeiX OS - Installer (setup wizard)          ");
-    crate::println!("    crate::println!("  Full layout: /system (EROFS RO), /userdata (EXT2 RW)");
+    crate::println!("     DeiX OS - Installer (setup wizard)          ");
+    crate::println!("  Full layout: /system (EROFS RO), /userdata (EXT2 RW)");
     crate::println!();
 
     // ---- Режим --test (автоматизация) ----
@@ -761,7 +761,7 @@ pub fn cmd_install(arg: &str) {
     }
 
     if job.failed() {
-        crate::println!("        crate::println!("  INSTALL FAILED: {}", job.error().unwrap_or("unknown error"));
+        crate::println!("  INSTALL FAILED: {}", job.error().unwrap_or("unknown error"));
         crate::println!("  The target disk may be unbootable. Re-run 'install'.");
         crate::println!("        return;
     }
@@ -770,7 +770,7 @@ pub fn cmd_install(arg: &str) {
         crate::println!("  [install] note: {}", note);
     }
     crate::println!();
-    crate::println!("    crate::println!("  INSTALL COMPLETE!");
+    crate::println!("  INSTALL COMPLETE!");
     crate::println!("  User: {}", username);
     crate::println!("  /userdata: {} MiB (ext2)", userdata_sectors / 2048);
     crate::println!("  Disk is partitioned and ready to boot standalone.");

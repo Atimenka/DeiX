@@ -380,8 +380,10 @@ pub fn run_login_screen() -> String {
     // при вводе пароля на экране входа ОС сначала расшифровывает том
     // (crypto_storage::try_unlock), затем проверяет пользователя.
     println!();
-    println!("    println!("        {} - Login        ", crate::OS_RELEASE);
-    println!("    if crate::crypto_storage::is_encryption_enabled() {
+    println!("=====================================");
+    println!("        {} - Login        ", crate::OS_RELEASE);
+    println!("=====================================");
+    if crate::crypto_storage::is_encryption_enabled() {
         println!("Disk is encrypted (XTS-AES-256). Your account password unlocks it.");
     }
 
