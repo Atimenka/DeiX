@@ -14,7 +14,7 @@ pub const BUGREPORT_FILE: &str = "/userdata/BUGREPORT.TXT";
 pub fn collect_report() -> String {
     let mut out = String::new();
     out.push_str("  DeiX OS — FULL DEBUG REPORT (bugreport)\n");
-    out.push_str("
+    out.push_str("========================================================\n");
     // --- SYSTEM ---
     out.push_str("\n[SYSTEM]\n");
     out.push_str(&format!("  OS: DeiX v{} ({})\n", crate::KERNEL_VERSION, crate::BUILD_ID));
