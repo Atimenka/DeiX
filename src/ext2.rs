@@ -1381,6 +1381,8 @@ pub fn mkdir_p(path: &str) -> Result<u32, Ext2Error> {
     mkdir_at(&v, parent, &last)
 }
 
+pub fn delete_file_path(path: &str) -> Result<(), Ext2Error> {
+    let v = vol(VolId::Userdata)?;
     delete_file_path_at(&v, path)
 }
 

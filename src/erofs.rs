@@ -436,6 +436,7 @@ fn write_inode(
     wr_u16(img, off + 26, 0); // i_gid
     wr_u32(img, off + 28, 0); // i_reserved2
 }
+}
 
 /// Собирает блоки данных каталога (записи + имена, по блокам).
 fn build_dir_blocks(entries: &[(String, u64, u8)]) -> Vec<u8> {

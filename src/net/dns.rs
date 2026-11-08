@@ -169,37 +169,6 @@ pub fn last_error() -> String {
 }
 
 /// Резолвит первую A-запись `host`.
-pub fn resolve_a(host: &str) -> Option<[u8; 4]> {
-    resolve_all(host).first().copied()
-}
-
-/// Резолвит все A-записи `host` (до MAX_ADDRS) через настроенный
-/// DNS-сервер. Пустой список — имя не разрешилось (нет сети, таймаут
-/// или NXDOMAIN).
-pub fn resolve_all(host: &str) -> Vec<[u8; 4]> {
-    let name = host.trim().to_lowercase();
-    if !valid_hostname(&name) {
-        set_error(format!("недопустимое имя '{}'", name));
-        return Vec::new();
-    }
-    if let Some(ips) = cache_get(&name) {
-        return ips;
-    }
-    if !crate::rtl8139::is_ready() {
-        set_error(String::from("сетевая карта не готова"));
-        return Vec::new();
-    }
-
-    let servers = server_list();
-    let mut report = String::new();
-    for (si, server) in servers.iter().enumerate() {
-            return Some((ip, ttl as u64 * 1000));
-        }
-        pos += rdlen; // CNAME и прочие типы пропускаем
-    }
-    None
-}
-
 /// Резолвит A-запись `host` через настроенный DNS-сервер.
 /// None — имя не разрешилось (нет сети, таймаут или NXDOMAIN).
 pub fn resolve_a(host: &str) -> Option<[u8; 4]> {

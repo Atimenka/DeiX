@@ -172,7 +172,6 @@ pub fn draw_files(
     } else if let Some(err) = error {
         r.draw_text(w.x + SIDEBAR_W + 8, bottom_y, err, Color::RED, None);
     } else {
-        let mut loc = if current_path == "/" {
         let loc = if current_path == "/" {
             String::from(current_partition)
         } else {

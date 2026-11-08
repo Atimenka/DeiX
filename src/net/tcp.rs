@@ -211,26 +211,6 @@ pub fn recv(to: u64) -> Vec<u8> {
             *LAST_END.lock() = "таймаут: от сервера нет данных";
             return Vec::new();
         }
-            if let Some(ref c) = *cl {
-                if let Some((f, _, s)) = parse_tcp(&pkt, c.sport, c.dport) {
-                    if f&(PSH|ACK) != 0 {
-                        let p = tcp_payload(&pkt);
-                        if !p.is_empty() {
-                            // Подтверждаем полученные данные (window update):
-                            // иначе сервер упирается в окно и передача встаёт.
-                            let new_ack = s.wrapping_add(p.len() as u32);
-                            let mut nc = *c;
-                            nc.ack = new_ack;
-                            drop(cl);
-                            *CONN.lock() = Some(nc);
-                            send_seg(&nc, ACK, &[]);
-                            return p;
-                        }
-                    }
-                    if f&FIN != 0 { return Vec::new(); }
-                }
-            }
-        }
         if crate::timer::uptime_ms()-t0 > to { return Vec::new(); }
         crate::sched::idle_wait();
     }

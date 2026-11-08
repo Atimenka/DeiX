@@ -651,11 +651,6 @@ pub fn cmd_install(arg: &str) {
         crate::println!("  Step 2/6 - /userdata size: 16 MiB (test default)");
     } else {
         match max_mib {
-            Some(m) => crate::println!("  Step 2/6 - /userdata size in MiB (16..{}), Enter = 16:", m),
-            None => crate::println!("  Step 2/6 - /userdata size in MiB (>= 16), Enter = 16:"),
-        crate::println!("  Step 2/6 - /userdata size: 8 MiB (test default)");
-    } else {
-        match max_mib {
             Some(m) => crate::println!("  Step 2/6 - /userdata size in MiB (8..{}), Enter = 8:", m),
             None => crate::println!("  Step 2/6 - /userdata size in MiB (>= 8), Enter = 8:"),
         }
@@ -763,7 +758,7 @@ pub fn cmd_install(arg: &str) {
     if job.failed() {
         crate::println!("  INSTALL FAILED: {}", job.error().unwrap_or("unknown error"));
         crate::println!("  The target disk may be unbootable. Re-run 'install'.");
-        crate::println!("        return;
+        return;
     }
 
     for note in job.notes() {
@@ -775,4 +770,4 @@ pub fn cmd_install(arg: &str) {
     crate::println!("  /userdata: {} MiB (ext2)", userdata_sectors / 2048);
     crate::println!("  Disk is partitioned and ready to boot standalone.");
     crate::println!("  Reboot: 'reboot'");
-    crate::println!("}
+}

@@ -2281,6 +2281,7 @@ fn blend_into(pixels: &mut [u32], idx: usize, fg: Color, alpha: u8) {
     }
 }
 
+fn draw_wallpaper_bmp(pixels: &mut [u32], w: i32, h: i32) -> bool {
     let data = match ext2::read_file_path("/wallpaper.bmp") {
         Ok(d) => d,
         Err(_) => return false,

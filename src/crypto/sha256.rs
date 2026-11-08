@@ -160,6 +160,7 @@ impl Sha256 {
             round!(d, e, f, g, h, a, b, c, K[i + 5], w[i + 5]);
             round!(c, d, e, f, g, h, a, b, K[i + 6], w[i + 6]);
             round!(b, c, d, e, f, g, h, a, K[i + 7], w[i + 7]);
+        }
         for i in 0..64 {
             let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
             let ch = (e & f) ^ ((!e) & g);

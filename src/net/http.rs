@@ -183,15 +183,6 @@ fn request_once(
             // простоя незачем (мы всегда работаем с Connection: close).
             break;
         }
-            if raw.len() > MAX_BODY {
-                break;
-            }
-        } else if !raw.is_empty() {
-            // Если получили данные и новые не поступают более 1500мс
-            if crate::timer::uptime_ms() - t0 > 1500 {
-                break;
-            }
-        }
         if let Some(he) = find_header_end(&raw) {
             let head = String::from_utf8_lossy(&raw[..he]).into_owned();
             if header_contains(&head, "transfer-encoding", "chunked") {
