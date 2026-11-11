@@ -59,6 +59,7 @@ mod security_monitor;
 mod serial;
 mod sound;
 mod spinlock;
+mod smp;
 mod sync;
 mod sysfs;
 mod timer;
@@ -70,6 +71,7 @@ mod vbe;
 mod vga;
 mod vgaglobal;
 mod vfs;
+mod usb;
 mod vmmouse;
 
 use core::panic::PanicInfo;
@@ -168,7 +170,15 @@ pub extern "C" fn kernel_main() -> ! {
     println!("PS/2 keyboard: OK (handled via IRQ1)");
 
     mouse::init(800, 600);
+    
+    // USB-подсистема — после mouse и до сети
+    println!("USB subsystem: initializing...");
+    usb::init();
     println!("PS/2 mouse: OK (handled via IRQ12)");
+
+    // SMP — многоядерность
+    println!("SMP subsystem: initializing...");
+    smp::init();
 
     if ata::is_present() {
         println!("ATA disk: OK (PIO mode)");
