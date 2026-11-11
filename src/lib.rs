@@ -38,6 +38,8 @@ mod linux;
 mod loginui;
 mod luks;
 mod mex;
+mod nanocore;
+mod ipc;
 mod mm;
 mod module;
 mod mouse;
@@ -103,6 +105,11 @@ fn panic(info: &PanicInfo) -> ! {
 pub extern "C" fn kernel_main() -> ! {
     // На этом этапе прерывания ещё физически выключены (interrupts::init()
     // ниже их только включит), поэтому прямой доступ безопасен.
+
+    // NANOCORE — миниминальное ядро, запускается ПЕРВОЙ, до всего остального.
+    // Оно обеспечивает базовые услуги: память, планирование, IPC.
+    // Всё остальное (dinit, службы, GUI) — процессы Ring 3 под его управлением.
+    nanocore::init();
 
     // ВАЖНО для установленного диска: install не копирует .data ядра
     // (там живое состояние SpinLock/глобалов), поэтому на старте WRITER

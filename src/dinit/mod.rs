@@ -260,6 +260,27 @@ impl Dinit {
         self.supervisor_ticks += 1;
         let now = crate::timer::uptime_ms();
 
+        // 0. Heartbeat нанокласа: если нанокор не отвечает, это критическая
+        //    ошибка — весь граф загрузки (DAG) не может продолжаться.
+        if !crate::nanocore::heartbeat() {
+            crate::diag::critical_with(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Nanocore, 1),
+                crate::diag::Action::Reboot,
+                &alloc::format!("nanocore: heartbeat failed — нанокор не отвечает"),
+            );
+            // Попытка перезапуска нанокласа (только для тестирования).
+            crate::nanocore::restart();
+        }
+
+        // 1. Проверка DAG-загрузки: нанокор должен быть готов к продолжению.
+        if let Err(e) = crate::nanocore::dag_load_check() {
+            crate::diag::error_with(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Nanocore, 2),
+                crate::diag::Action::DegradeSubsystem,
+                &alloc::format!("nanocore: DAG-загрузка невозможна: {}", e),
+            );
+        }
+
         // Актуализация состояния встроенных служб по живости их подсистем
         // (например, net_daemon активируется после инициализации адаптера).
         for (name, desc) in self.services.iter_mut() {

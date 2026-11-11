@@ -168,6 +168,8 @@ pub struct Process {
     pub last_error_code: u32,
     /// Описание последней ошибки процесса.
     pub last_error: String,
+    /// Открытые IPC-каналы процесса (идентификаторы).
+    pub ipc_channels: Vec<u32>,
 }
 
 impl Process {
@@ -187,6 +189,7 @@ impl Process {
             image_path: String::new(),
             last_error_code: 0,
             last_error: String::new(),
+            ipc_channels: Vec::new(),
         }
     }
 
@@ -269,6 +272,10 @@ pub fn spawn(req: &SpawnRequest) -> Result<u32, ProcessError> {
         p.image_path = req.image_path.clone();
         idx
     };
+
+    // Регистрируем процесс в нанокоре — это делает нано-нити настоящими
+    // процессами с изоляцией адресного пространства.
+    crate::nanocore::register_process(pid);
 
     // Стандартные дескрипторы: консоль на ввод и вывод.
     {
@@ -422,6 +429,14 @@ pub fn kill(pid: u32, code: i32) -> Result<(), ProcessError> {
         let mut guard = MEX_IN_USE.lock();
         if *guard == Some(pid) {
             *guard = None;
+        }
+    }
+    // Освобождаем слот в нанокоре — процесс перестал быть настоящим процессом.
+    crate::nanocore::unregister_process(pid);
+    // Закрываем все IPC-каналы процесса.
+    if let Some(p) = table.iter_mut().find(|p| p.pid == pid) {
+        for ch in p.ipc_channels.drain(..) {
+            let _ = crate::ipc::close_channel(ch);
         }
     }
     if let Some(id) = sched_id {
