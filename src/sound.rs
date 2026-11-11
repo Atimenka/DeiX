@@ -336,25 +336,8 @@ pub fn play_ui_background(sound: UiSound) {
     }
     if crate::sched::spawn("ui-voice", background_task).is_none() {
         BACKGROUND_PENDING.store(0, Ordering::Release);
-
-/// Асинхронная версия play_ui: запускает звук в фоне, не блокируя
-/// загрузку. Использует прерывистый PIT-tone (короткие импульсы),
-/// которые воспроизводятся через таймер IRQ0.
-///
-/// Если HDA уже готов — запускаем play_dps в фоне (он сам синхронный,
-/// но не блокирует загрузку, потому что это один call).
-/// Иначе используем короткий PC speaker beep.
-pub fn play_ui_async(sound: UiSound) {
-    // Fast path: если звук короткий — просто play_ui (он быстрый).
-    // Длинные звуки (startup) играют через PIT-tone в фоне.
-    let dps_name = sound.dps_name();
-    if dps_name == "startup" || dps_name == "usb_connect" {
-        // Запускаем короткий стартовый звук через PC speaker
-        // (без чтения DPS-файла — экономим I/O).
-        beep_speaker(660, 60);
-        beep_speaker(880, 80);
-    } else {
-        // Для других звуков — обычная синхронная игра (они короткие).
+        }
+    }
 
 /// Асинхронная версия play_ui: запускает звук в фоне, не блокируя
 /// загрузку. Использует короткие PC speaker beeps вместо чтения DPS-файла.
