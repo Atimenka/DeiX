@@ -603,6 +603,23 @@ pub fn selftest() {
 
 /// Диапазон страницы самопроверки Ring 3: прослойке Linux он нужен
 /// для проверки указателей из пользовательского кода.
+
+/// Флаг: самопроверка Ring 3 отложена (ленивая инициализация).
+static SELFTEST_PENDING: AtomicBool = AtomicBool::new(true);
+
+/// Откладывает самопроверку Ring 3 до первого доступа.
+pub fn mark_selftest_pending() {
+    SELFTEST_PENDING.store(true, Ordering::SeqCst);
+}
+
+/// Выполняет самопроверку, если она ещё не сделана.
+pub fn ensure_selftest() {
+    if SELFTEST_PENDING.load(Ordering::SeqCst) {
+        SELFTEST_PENDING.store(false, Ordering::SeqCst);
+        selftest();
+    }
+}
+
 pub fn user_page_range() -> (u64, u64) {
     (USER_BASE, USER_BASE + 0x20_0000)
 }

@@ -145,3 +145,19 @@ pub fn lookup_layout(name: &str) -> Option<&'static PartitionLayout> {
     }
     None
 }
+
+/// Флаг: проверка разделов отложена (ленивая инициализация).
+static VALIDATION_PENDING: AtomicBool = AtomicBool::new(true);
+
+/// Откладывает проверку разделов до первого доступа.
+pub fn mark_validation_pending() {
+    VALIDATION_PENDING.store(true, Ordering::SeqCst);
+}
+
+/// Выполняет проверку разделов, если она ещё не сделана.
+pub fn ensure_validation() {
+    if VALIDATION_PENDING.load(Ordering::SeqCst) {
+        VALIDATION_PENDING.store(false, Ordering::SeqCst);
+        validate_partition_map_report();
+    }
+}

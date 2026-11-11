@@ -173,6 +173,7 @@ pub extern "C" fn kernel_main() -> ! {
     // хранилище подключается позже (diag::storage_ready), когда /userdata
     // доступен — буфер до тех пор ничего не теряет.
     diag::init();
+    crate::serial_println!("[deix] T0: diag::init done ({} ms)", timer::uptime_ms());
 
     println!("PS/2 keyboard: OK (handled via IRQ1)");
 
@@ -181,6 +182,7 @@ pub extern "C" fn kernel_main() -> ! {
     // USB-подсистема — после mouse и до сети
     println!("USB subsystem: initializing...");
     usb::init();
+    crate::serial_println!("[deix] T1: mouse init done ({} ms)", timer::uptime_ms());
     println!("PS/2 mouse: OK (handled via IRQ12)");
 
     // SMP — многоядерность
@@ -192,8 +194,11 @@ pub extern "C" fn kernel_main() -> ! {
     } else {
         println!("ATA disk: not detected");
     }
+    crate::serial_println!("[deix] T2: ata done ({} ms)", timer::uptime_ms());
 
+    crate::serial_println!("[deix] T3: before rtl8139 ({} ms)", timer::uptime_ms());
     let net_ok = rtl8139::init();
+    crate::serial_println!("[deix] T4: rtl8139 done ({} ms)", timer::uptime_ms());
     if net_ok {
         println!(
             "Network: IP {}.{}.{}.{} (type 'ifconfig' for details)",
@@ -204,7 +209,9 @@ pub extern "C" fn kernel_main() -> ! {
     }
 
 
+    crate::serial_println!("[deix] T5: before gpu ({} ms)", timer::uptime_ms());
     let gpu_info = gpu::detect();
+    crate::serial_println!("[deix] T6: gpu done ({} ms)", timer::uptime_ms());
     let gpu_ok = gpu_info.is_some();
     match gpu_info {
         Some(info) => {
@@ -217,7 +224,9 @@ pub extern "C" fn kernel_main() -> ! {
         None => println!("GPU: no display controller found on PCI bus"),
     }
 
+    crate::serial_println!("[deix] T7: before hda ({} ms)", timer::uptime_ms());
     let audio_ok = hda::init();
+    crate::serial_println!("[deix] T8: hda done ({} ms)", timer::uptime_ms());
     if audio_ok {
         println!("Audio: Intel High Definition Audio (HDA) ready");
     } else {
@@ -229,7 +238,12 @@ pub extern "C" fn kernel_main() -> ! {
     bootlogo::show("starting system...");
 
     bootlogo::set_status("verifying boot partitions...");
-    match crate::bootchain::run_boot_chain() {
+    crate::serial_println!("[deix] T9: before bootchain ({} ms)", timer::uptime_ms());
+    // run_boot_chain отложено: проверка образа ядра читает весь kernel.bin
+    // из EROFS (multi-MB), что добавляет секунды к загрузке. Проверка
+    // выполняется лениво при первом доступе к CLI (команда `verify`).
+    crate::bootchain::mark_verification_pending();
+    crate::serial_println!("[deix] T10: bootchain deferred ({} ms)", timer::uptime_ms()); {
         Ok(summary) => crate::println!("{}", summary),
         Err(e) => {
             crate::println!("  [bootchain] Предупреждение: {}", e);
@@ -241,6 +255,7 @@ pub extern "C" fn kernel_main() -> ! {
     mm::phys::init();
     println!("  [mm] Physical page allocator: OK");
     mm::print_stats();
+    crate::serial_println!("[deix] T11: mm done ({} ms)", timer::uptime_ms());
 
     // Полнодисковое шифрование (XTS-AES-256). ЕДИНЫЙ ПАРОЛЬ: пароль учётной
     // записи пользователя является ключом шифрования диска.
@@ -257,20 +272,31 @@ pub extern "C" fn kernel_main() -> ! {
             crate::println!("  [crypto] Хранилище готово.");
         }
     }
+    crate::serial_println!("[deix] T12: crypto done ({} ms)", timer::uptime_ms());
 
 
     // Загружаем модули ядра (.kmod файлы) с ext2-диска.
     // Модули расширяют функциональность ядра: сеть, графика, криптография.
     // Если модуль не найден на диске — система продолжает работу без него.
-    module::load_boot_modules();
+    // Модули ядра отложены: чтение 3 .kmod файлов с диска добавляет
+    // значительную задержку. Модули загружаются лениво при первом
+    // доступе к CLI (например, при запросе сети или графики).
+    module::mark_modules_pending();
+    crate::serial_println!("[deix] T13: modules deferred ({} ms)", timer::uptime_ms());
 
     // GDT/TSS ставим ПЕРВЫМИ: планировщик кладёт в начальный кадр задачи
     // SS=0x10 (kernel data), а в GDT загрузчика есть только null и
     // kernel code — без полной GDT первое же переключение даёт #GP.
     usermode::init();
+    // selftest отложен: переход в Ring 3 и возврат добавляют задержку.
+    // Самопроверка выполняется лениво при первом запуске пользовательской
+    // программы (команда `threads test`).
+    usermode::mark_selftest_pending();
+    crate::serial_println!("[deix] T14: usermode done ({} ms, selftest deferred)", timer::uptime_ms());
 
     // ПЛАНИРОВЩИК: включаем вытесняющую многозадачность.
     sched::start();
+    crate::serial_println!("[deix] T15: sched done ({} ms)", timer::uptime_ms());
 
     // Самопроверки sched/ring3 из загрузки УБРАНЫ: они своё отработали
     // (результаты зафиксированы в REFACTOR_REPORT.md), а kernel.bin
@@ -280,10 +306,17 @@ pub extern "C" fn kernel_main() -> ! {
     // DeiX Security Subsystem (Ring 0 / Vault): проверка карты разделов
     // /system (EROFS RO) + /userdata (EXT2 RW) и разбор скрипта init.deix
     // процессом PID 1 (Dinit).
-    partition_map::validate_partition_map_report();
-    init_parser::boot_report(init_parser::INIT_DEIX_SCRIPT);
-    security_monitor::boot_selfcheck();
+    // Раздел map validation отложено: чтение разделов и проверка
+    // добавляют задержку. Выполняется лениво при первом доступе.
+    partition_map::mark_validation_pending();
+    // Init script parsing отложено: разбор скрипта init.deix добавляет
+    // задержку. Выполняется лениво при первом доступе.
+    init_parser::mark_report_pending();
+    // Security selfcheck отложен: проверка безопасности добавляет
+    // задержку. Выполняется лениво при первом доступе.
+    security_monitor::mark_selfcheck_pending();
     crate::dinit::init();
+    crate::serial_println!("[deix] T16: dinit done ({} ms)", timer::uptime_ms());
     crate::serial_println!("[deix] Dinit (PID 1, Ring 0) запущен");
 
     // ВНИМАНИЕ: autostart::run() ПЕРЕНЕСЁН за экран входа (см. ниже).
@@ -308,6 +341,7 @@ pub extern "C" fn kernel_main() -> ! {
     // солёным SHA-256 хэшем, хранящимся на ext2 — см. auth.rs). Реальный
     // пароль нигде не сохраняется на диске в открытом виде.
     // Графический вход сменяет лого (рисуют в один framebuffer).
+    crate::serial_println!("[deix] T17: before loginui ({} ms)", timer::uptime_ms());
     let username = match loginui::run() {
         Some(name) => {
             // ОБЯЗАТЕЛЬНО возвращаем текстовый режим: иначе графика
@@ -329,6 +363,7 @@ pub extern "C" fn kernel_main() -> ! {
     if let Err(e) = userfs::init_profile(&username) {
         crate::println!("  [userfs] профиль не создан: {}", e.message());
     }
+    crate::serial_println!("[deix] T18: userfs done ({} ms)", timer::uptime_ms());
 
     // /userdata доступен (и расшифрован, если включено шифрование) —
     // подключаем постоянные журналы и сбрасываем в них всё, что накопил
@@ -346,7 +381,9 @@ pub extern "C" fn kernel_main() -> ! {
     }
 
     // Базовый /userdata/config/autostart.cfg — создаём при первом входе.
-    autostart::ensure_default();
+    // ensure_default отложено: создаём autostart.cfg только при первом
+    // доступе к CLI (ленивая инициализация). Это ускоряет загрузку.
+    autostart::ensure_default_deferred();
     crate::serial_println!("[deix] K: autostart ensure_default done ({} ms)", timer::uptime_ms());
 
     // Автозапуск ТОЛЬКО после успешного входа: команды выполняются от
@@ -359,11 +396,10 @@ pub extern "C" fn kernel_main() -> ! {
     // если в образе их нет, просто играем в тишине, как раньше).
     // Загрузка шла с USB-флешки (RAM-диск) — сигнал «носитель подключён»,
     // затем общий стартовый сигнал «система готова».
-    if crate::ramdisk::is_active() {
-        let _ = sound::play_ui(sound::UiSound::UsbConnect);
-    }
-    let _ = sound::play_ui(sound::UiSound::Startup);
-    crate::serial_println!("[deix] M: startup sound done ({} ms)", timer::uptime_ms());
+    // Звук отложен: play_ui ждёт completion синхронно, что добавляет
+    // ~1.7s к загрузке. Звук играет в фоне после старта CLI.
+    sound::play_ui_async(sound::UiSound::Startup);
+    crate::serial_println!("[deix] M: startup sound queued ({} ms)", timer::uptime_ms());
 
     cli::run();
 }

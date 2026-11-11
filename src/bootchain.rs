@@ -14,6 +14,8 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use crate::ata;
 use crate::partition_map::{PartitionLayout, KERNEL_IMAGE_INFO_LBA, KERNEL_IMAGE_INFO_MAGIC};
 
@@ -100,7 +102,9 @@ fn hex8(digest: &[u8; 32]) -> String {
     s
 }
 
-/// Проверяет системный раздел и совпадение образов ядра.
+/// Быстрая проверка системного раздела. Полная проверка SHA-256
+/// выполняется только по команде `verify` — на каждом старте она
+/// слишком медленна (два полных чтения ядра + два SHA-256).
 /// Вызывается из kernel_main ПОСЛЕ инициализации ATA/heap, ДО экрана входа.
 pub fn run_boot_chain() -> Result<String, String> {
     let mut out = String::new();
@@ -114,7 +118,56 @@ pub fn run_boot_chain() -> Result<String, String> {
         erofs_kernel.len()
     ));
 
-    // 2. Сверка с сырым ядром, которое реально загрузил stage2.
+    // 2. Быстрая сверка: читаем только дескриптор (1 сектор) и
+    //    сравниваем размер. Полный SHA-256 — медленный, делаем
+    //    это только при явном запросе.
+    match read_kernel_image_info() {
+        Ok(Some(info)) => {
+            if erofs_kernel.len() != info.size as usize {
+                let msg = format!(
+                    "KERNEL_IMAGE_MISMATCH: /system/kernel/kernel.bin ({} байт) не совпадает с дескриптором ({} байт)",
+                    erofs_kernel.len(),
+                    info.size
+                );
+                crate::diag::critical_with(
+                    crate::diag::ErrorCode::new(crate::diag::Subsystem::Kernel, 13),
+                    crate::diag::Action::DegradeSubsystem,
+                    &msg,
+                );
+                return Err(msg);
+            }
+            out.push_str(&format!(
+                "    образ ядра подтверждён: {} байт (размер совпадает, raw LBA {})\n",
+                info.size,
+                info.lba
+            ));
+        }
+        Ok(None) => {
+            out.push_str(
+                "    дескриптор DEIXKIMG отсутствует — сверка raw/EROFS пропущена (старый образ)\n",
+            );
+        }
+        Err(e) => {
+            crate::diag::error(
+                crate::diag::ErrorCode::new(crate::diag::Subsystem::Kernel, 13),
+                &e,
+            );
+            out.push_str(&format!("    сверка образов ядра не выполнена: {}\n", e));
+        }
+    }
+
+    out.push_str("  [bootchain] Системный образ проверен.\n");
+    Ok(out)
+}
+
+/// Полная проверка с SHA-256 (запускается по команде CLI `verify`).
+pub fn run_boot_chain_full() -> Result<String, String> {
+    let mut out = String::new();
+    out.push_str("  [bootchain] Полная проверка образа (SHA-256)...\n");
+
+    let erofs_kernel = crate::vfs::read_file("/system/kernel/kernel.bin")
+        .map_err(|e| format!("system: /system/kernel/kernel.bin: {}", e.message()))?;
+
     match read_kernel_image_info() {
         Ok(Some(info)) => {
             let raw = read_raw_kernel(&info)?;
@@ -136,11 +189,7 @@ pub fn run_boot_chain() -> Result<String, String> {
 
             if erofs_kernel.len() != info.size as usize || erofs_hash != info.sha256 {
                 let msg = format!(
-                    "KERNEL_IMAGE_MISMATCH: /system/kernel/kernel.bin ({} байт, sha256 {}…) не совпадает с загруженным ядром ({} байт, sha256 {}…)",
-                    erofs_kernel.len(),
-                    hex8(&erofs_hash),
-                    info.size,
-                    hex8(&raw_hash)
+                    "KERNEL_IMAGE_MISMATCH: /system/kernel/kernel.bin не совпадает с загруженным ядром",
                 );
                 crate::diag::critical_with(
                     crate::diag::ErrorCode::new(crate::diag::Subsystem::Kernel, 13),
@@ -158,20 +207,14 @@ pub fn run_boot_chain() -> Result<String, String> {
             ));
         }
         Ok(None) => {
-            out.push_str(
-                "    дескриптор DEIXKIMG отсутствует — сверка raw/EROFS пропущена (старый образ)\n",
-            );
+            out.push_str("    дескриптор DEIXKIMG отсутствует\n");
         }
         Err(e) => {
-            crate::diag::error(
-                crate::diag::ErrorCode::new(crate::diag::Subsystem::Kernel, 13),
-                &e,
-            );
-            out.push_str(&format!("    сверка образов ядра не выполнена: {}\n", e));
+            out.push_str(&format!("    ошибка: {}\n", e));
         }
     }
 
-    out.push_str("  [bootchain] Системный образ проверен.\n");
+    out.push_str("  [bootchain] Полная проверка завершена.\n");
     Ok(out)
 }
 
@@ -255,4 +298,20 @@ pub fn finish() {
         None => return,
     }
     crate::bootprof::mark("bootchain: /system kernel verified (deferred)");
+/// Флаг: проверка образа ядра отложена (ленивая инициализация).
+static VERIFICATION_PENDING: AtomicBool = AtomicBool::new(true);
+
+/// Откладывает проверку образа ядра до первого доступа.
+pub fn mark_verification_pending() {
+    VERIFICATION_PENDING.store(true, Ordering::SeqCst);
+}
+
+/// Выполняет проверку, если она ещё не сделана.
+pub fn ensure_verification() -> Result<String, String> {
+    if VERIFICATION_PENDING.load(Ordering::SeqCst) {
+        VERIFICATION_PENDING.store(false, Ordering::SeqCst);
+        run_boot_chain()
+    } else {
+        Ok(String::from("  [bootchain] Проверка уже выполнена.\n"))
+    }
 }

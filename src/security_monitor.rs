@@ -328,3 +328,19 @@ pub fn boot_selfcheck() {
         crate::println!("  [secmon] ERROR: Ransomware attack was not intercepted!");
     }
 }
+
+/// Флаг: самопроверка безопасности отложена (ленивая инициализация).
+static SELFCHECK_PENDING: AtomicBool = AtomicBool::new(true);
+
+/// Откладывает самопроверку безопасности до первого доступа.
+pub fn mark_selfcheck_pending() {
+    SELFCHECK_PENDING.store(true, Ordering::SeqCst);
+}
+
+/// Выполняет самопроверку, если она ещё не сделана.
+pub fn ensure_selfcheck() {
+    if SELFCHECK_PENDING.load(Ordering::SeqCst) {
+        SELFCHECK_PENDING.store(false, Ordering::SeqCst);
+        boot_selfcheck();
+    }
+}
