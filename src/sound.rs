@@ -355,6 +355,17 @@ pub fn play_ui_async(sound: UiSound) {
         beep_speaker(880, 80);
     } else {
         // Для других звуков — обычная синхронная игра (они короткие).
+
+/// Асинхронная версия play_ui: запускает звук в фоне, не блокируя
+/// загрузку. Использует короткие PC speaker beeps вместо чтения DPS-файла.
+pub fn play_ui_async(sound: UiSound) {
+    let dps_name = sound.dps_name();
+    if dps_name == "startup" || dps_name == "usb_connect" {
+        // Короткий стартовый звук через PC speaker (без чтения DPS-файла)
+        beep_speaker(660, 60);
+        beep_speaker(880, 80);
+    } else {
+        // Для других звуков — обычная синхронная игра (они короткие)
         let _ = play_ui(sound);
     }
 }

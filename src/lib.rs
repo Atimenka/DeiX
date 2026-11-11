@@ -167,6 +167,7 @@ pub extern "C" fn kernel_main() -> ! {
     allocator::init();
     println!("Heap allocator (16 MiB): OK");
     crate::serial_println!("[deix] I: heap ok");
+    crate::serial_println!("[deix] T0: heap ok ({} ms)", timer::uptime_ms());
 
     // Система диагностики: с этого момента каждое существенное событие
     // регистрируется в кольцевом буфере и уходит в serial. Постоянное
@@ -174,6 +175,7 @@ pub extern "C" fn kernel_main() -> ! {
     // доступен — буфер до тех пор ничего не теряет.
     diag::init();
     crate::serial_println!("[deix] T0: diag::init done ({} ms)", timer::uptime_ms());
+    crate::serial_println!("[deix] T1: diag init done ({} ms)", timer::uptime_ms());
 
     println!("PS/2 keyboard: OK (handled via IRQ1)");
 
@@ -189,6 +191,10 @@ pub extern "C" fn kernel_main() -> ! {
     println!("SMP subsystem: initializing...");
     smp::init();
 
+    crate::serial_println!("[deix] T2: mouse init done ({} ms)", timer::uptime_ms());
+    println!("PS/2 mouse: OK (handled via IRQ12)");
+
+    crate::serial_println!("[deix] T3: before ata ({} ms)", timer::uptime_ms());
     if ata::is_present() {
         println!("ATA disk: OK (PIO mode)");
     } else {
@@ -199,6 +205,9 @@ pub extern "C" fn kernel_main() -> ! {
     crate::serial_println!("[deix] T3: before rtl8139 ({} ms)", timer::uptime_ms());
     let net_ok = rtl8139::init();
     crate::serial_println!("[deix] T4: rtl8139 done ({} ms)", timer::uptime_ms());
+    crate::serial_println!("[deix] T4: before rtl8139 ({} ms)", timer::uptime_ms());
+    let net_ok = rtl8139::init();
+    crate::serial_println!("[deix] T5: rtl8139 done ({} ms)", timer::uptime_ms());
     if net_ok {
         println!(
             "Network: IP {}.{}.{}.{} (type 'ifconfig' for details)",
@@ -212,6 +221,9 @@ pub extern "C" fn kernel_main() -> ! {
     crate::serial_println!("[deix] T5: before gpu ({} ms)", timer::uptime_ms());
     let gpu_info = gpu::detect();
     crate::serial_println!("[deix] T6: gpu done ({} ms)", timer::uptime_ms());
+    crate::serial_println!("[deix] T6: before gpu ({} ms)", timer::uptime_ms());
+    let gpu_info = gpu::detect();
+    crate::serial_println!("[deix] T7: gpu done ({} ms)", timer::uptime_ms());
     let gpu_ok = gpu_info.is_some();
     match gpu_info {
         Some(info) => {
@@ -227,6 +239,9 @@ pub extern "C" fn kernel_main() -> ! {
     crate::serial_println!("[deix] T7: before hda ({} ms)", timer::uptime_ms());
     let audio_ok = hda::init();
     crate::serial_println!("[deix] T8: hda done ({} ms)", timer::uptime_ms());
+    crate::serial_println!("[deix] T8: before hda ({} ms)", timer::uptime_ms());
+    let audio_ok = hda::init();
+    crate::serial_println!("[deix] T9: hda done ({} ms)", timer::uptime_ms());
     if audio_ok {
         println!("Audio: Intel High Definition Audio (HDA) ready");
     } else {
@@ -239,6 +254,7 @@ pub extern "C" fn kernel_main() -> ! {
 
     bootlogo::set_status("verifying boot partitions...");
     crate::serial_println!("[deix] T9: before bootchain ({} ms)", timer::uptime_ms());
+    crate::serial_println!("[deix] T10: before bootchain ({} ms)", timer::uptime_ms());
     // run_boot_chain отложено: проверка образа ядра читает весь kernel.bin
     // из EROFS (multi-MB), что добавляет секунды к загрузке. Проверка
     // выполняется лениво при первом доступе к CLI (команда `verify`).
@@ -249,10 +265,12 @@ pub extern "C" fn kernel_main() -> ! {
             crate::println!("  [bootchain] Предупреждение: {}", e);
         }
     }
+    crate::serial_println!("[deix] T11: bootchain deferred ({} ms)", timer::uptime_ms());
 
     bootlogo::set_status("initializing memory...");
     // Инициализируем менеджер памяти (физический + виртуальный).
     mm::phys::init();
+    crate::serial_println!("[deix] T12: mm done ({} ms)", timer::uptime_ms());
     println!("  [mm] Physical page allocator: OK");
     mm::print_stats();
     crate::serial_println!("[deix] T11: mm done ({} ms)", timer::uptime_ms());
@@ -273,6 +291,9 @@ pub extern "C" fn kernel_main() -> ! {
         }
     }
     crate::serial_println!("[deix] T12: crypto done ({} ms)", timer::uptime_ms());
+    crate::serial_println!("[deix] T13: crypto done ({} ms)", timer::uptime_ms());
+        }
+    }
 
 
     // Загружаем модули ядра (.kmod файлы) с ext2-диска.
@@ -283,6 +304,7 @@ pub extern "C" fn kernel_main() -> ! {
     // доступе к CLI (например, при запросе сети или графики).
     module::mark_modules_pending();
     crate::serial_println!("[deix] T13: modules deferred ({} ms)", timer::uptime_ms());
+    crate::serial_println!("[deix] T14: modules deferred ({} ms)", timer::uptime_ms());
 
     // GDT/TSS ставим ПЕРВЫМИ: планировщик кладёт в начальный кадр задачи
     // SS=0x10 (kernel data), а в GDT загрузчика есть только null и
@@ -297,6 +319,11 @@ pub extern "C" fn kernel_main() -> ! {
     // ПЛАНИРОВЩИК: включаем вытесняющую многозадачность.
     sched::start();
     crate::serial_println!("[deix] T15: sched done ({} ms)", timer::uptime_ms());
+    crate::serial_println!("[deix] T15: usermode done ({} ms)", timer::uptime_ms());
+
+    // ПЛАНИРОВЩИК: включаем вытесняющую многозадачность.
+    sched::start();
+    crate::serial_println!("[deix] T16: sched done ({} ms)", timer::uptime_ms());
 
     // Самопроверки sched/ring3 из загрузки УБРАНЫ: они своё отработали
     // (результаты зафиксированы в REFACTOR_REPORT.md), а kernel.bin
@@ -317,6 +344,7 @@ pub extern "C" fn kernel_main() -> ! {
     security_monitor::mark_selfcheck_pending();
     crate::dinit::init();
     crate::serial_println!("[deix] T16: dinit done ({} ms)", timer::uptime_ms());
+    crate::serial_println!("[deix] T17: dinit done ({} ms)", timer::uptime_ms());
     crate::serial_println!("[deix] Dinit (PID 1, Ring 0) запущен");
 
     // ВНИМАНИЕ: autostart::run() ПЕРЕНЕСЁН за экран входа (см. ниже).
@@ -342,6 +370,7 @@ pub extern "C" fn kernel_main() -> ! {
     // пароль нигде не сохраняется на диске в открытом виде.
     // Графический вход сменяет лого (рисуют в один framebuffer).
     crate::serial_println!("[deix] T17: before loginui ({} ms)", timer::uptime_ms());
+    crate::serial_println!("[deix] T18: before loginui ({} ms)", timer::uptime_ms());
     let username = match loginui::run() {
         Some(name) => {
             // ОБЯЗАТЕЛЬНО возвращаем текстовый режим: иначе графика
@@ -364,6 +393,7 @@ pub extern "C" fn kernel_main() -> ! {
         crate::println!("  [userfs] профиль не создан: {}", e.message());
     }
     crate::serial_println!("[deix] T18: userfs done ({} ms)", timer::uptime_ms());
+    crate::serial_println!("[deix] T19: userfs done ({} ms)", timer::uptime_ms());
 
     // /userdata доступен (и расшифрован, если включено шифрование) —
     // подключаем постоянные журналы и сбрасываем в них всё, что накопил
