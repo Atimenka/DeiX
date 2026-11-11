@@ -669,7 +669,12 @@ pub fn run(name: &str, _args: &str) {
         name, header.version_minor, entry_addr, body_size
     );
 
+    crate::serial_println!("[mex] Process '{}' started work (PID assigned)", name);
+    
     let ret_code = run_ring3(entry_addr as u64);
+
+    crate::serial_println!("[mex] Process '{}' finished work, exit code {}", name, ret_code);
+    crate::serial_println!("[mex] Process '{}' launching next process...", name);
 
     println_t!(
         en: "Program '{}' exited with code {}.",
