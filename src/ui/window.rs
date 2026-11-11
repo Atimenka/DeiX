@@ -1257,14 +1257,21 @@ pub fn draw_window(
     }
 
     if fx.shadows_enabled() {
-        r.draw_drop_shadow(w.x, w.y, w.width, total_h, 4);
+        r.draw_drop_shadow(w.x, w.y, w.width, total_h, 6);
     }
     if !is_focused {
-        r.shade_rect(w.x, w.y, w.width, total_h, 15);
+        r.shade_rect(w.x, w.y, w.width, total_h, 12);
     }
 
     if fx.shadows_enabled() {
-        r.fill_rounded_rect_alpha(w.x + 4, w.y + 4, w.width, total_h, theme.corner_radius, Color::SHADOW, 80);
+        r.fill_rounded_rect_alpha(w.x + 4, w.y + 4, w.width, total_h, theme.corner_radius, Color::SHADOW, 45);
+    }
+
+    // Внутренняя световая каёмка сверху: придаёт объём без утяжеления.
+    if fx.shadows_enabled() && !is_dragging {
+        for px in (w.x + 4)..(w.x + w.width as i32 - 4) {
+            r.put_pixel_alpha(px, w.y + 5, Color::rgb(255, 255, 255), 8);
+        }
     }
 
     let title_bg = if is_focused { theme.titlebar_active } else { theme.titlebar_inactive };

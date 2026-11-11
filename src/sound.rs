@@ -108,8 +108,7 @@ pub fn alert() {
     beep(1320, 300);
 }
 
-// ==================== UI-звуки (DPS1 через ШИМ) ====================
-//
+////
 // Зачем: assets/*.wav (44.1 кГц/16-бит/стерео) — это десятки КБ чистого
 // сигнала, который в kernel.bin не влезает (лимит размера ядра), а PC
 // speaker не умеет DMA/PCM. Выход:
@@ -141,15 +140,6 @@ pub enum UiSound {
     /// USB-носитель отключён (usbdisc.dps). USB-стека нет — событие появится
     /// вместе с ним; API готово (доступно вручную: `sound usbdisc`).
     UsbDisconnect,
-<<<<<<< HEAD
-    /// Голосовое приветствие после входа (welcome.dps).
-    Welcome,
-    /// Голосовое сообщение: обновление скачано и ждёт перезагрузки (update.dps).
-    UpdateReady,
-    /// Голосовое прощание при выключении (bye.dps).
-    Goodbye,
-=======
->>>>>>> arena/e8a29038-deix
 }
 
 impl UiSound {
@@ -162,12 +152,6 @@ impl UiSound {
             UiSound::BatteryFull => "fullbat.dps",
             UiSound::UsbConnect => "usbcon.dps",
             UiSound::UsbDisconnect => "usbdisc.dps",
-<<<<<<< HEAD
-            UiSound::Welcome => "welcome.dps",
-            UiSound::UpdateReady => "update.dps",
-            UiSound::Goodbye => "bye.dps",
-=======
->>>>>>> arena/e8a29038-deix
         }
     }
 
@@ -180,12 +164,6 @@ impl UiSound {
             UiSound::BatteryFull => "батарея заряжена (API, события пока нет)",
             UiSound::UsbConnect => "USB-носитель обнаружен (загрузка с флешки)",
             UiSound::UsbDisconnect => "USB-носитель отключён (API вручную)",
-<<<<<<< HEAD
-            UiSound::Welcome => "голос: приветствие после входа",
-            UiSound::UpdateReady => "голос: обновление готово к установке",
-            UiSound::Goodbye => "голос: прощание при выключении",
-=======
->>>>>>> arena/e8a29038-deix
         }
     }
 
@@ -198,34 +176,18 @@ impl UiSound {
             UiSound::BatteryFull => "battery full (API ready, no event source yet)",
             UiSound::UsbConnect => "USB drive detected (USB flash boot)",
             UiSound::UsbDisconnect => "USB drive removed (manual API for now)",
-<<<<<<< HEAD
-            UiSound::Welcome => "voice: greeting after login",
-            UiSound::UpdateReady => "voice: update ready to install",
-            UiSound::Goodbye => "voice: goodbye on shutdown",
-=======
->>>>>>> arena/e8a29038-deix
         }
     }
 }
 
 /// Все эффекты реестра (для перечисления в CLI).
-<<<<<<< HEAD
-pub const UI_SOUNDS: [UiSound; 9] = [
-=======
 pub const UI_SOUNDS: [UiSound; 6] = [
->>>>>>> arena/e8a29038-deix
     UiSound::Startup,
     UiSound::Error,
     UiSound::BatteryLow,
     UiSound::BatteryFull,
     UiSound::UsbConnect,
     UiSound::UsbDisconnect,
-<<<<<<< HEAD
-    UiSound::Welcome,
-    UiSound::UpdateReady,
-    UiSound::Goodbye,
-=======
->>>>>>> arena/e8a29038-deix
 ];
 
 /// Псевдонимы для CLI: "start" -> "start.dps" и т.д.; неизвестное имя
@@ -238,12 +200,6 @@ fn resolve_alias<'a>(name: &'a str) -> &'a str {
         "fullbat" => UiSound::BatteryFull.dps_name(),
         "usbcon" => UiSound::UsbConnect.dps_name(),
         "usbdisc" => UiSound::UsbDisconnect.dps_name(),
-<<<<<<< HEAD
-        "welcome" => UiSound::Welcome.dps_name(),
-        "update" => UiSound::UpdateReady.dps_name(),
-        "bye" => UiSound::Goodbye.dps_name(),
-=======
->>>>>>> arena/e8a29038-deix
         other => other,
     }
 }
@@ -359,7 +315,6 @@ pub fn play_ui(sound: UiSound) -> Result<(), &'static str> {
     Ok(())
 }
 
-<<<<<<< HEAD
 static BACKGROUND_PENDING: AtomicU8 = AtomicU8::new(0);
 
 extern "C" fn background_task() {
@@ -381,11 +336,23 @@ pub fn play_ui_background(sound: UiSound) {
     }
     if crate::sched::spawn("ui-voice", background_task).is_none() {
         BACKGROUND_PENDING.store(0, Ordering::Release);
+        }
+    }
+
+/// Асинхронная версия play_ui: запускает звук в фоне, не блокируя
+/// загрузку. Использует короткие PC speaker beeps вместо чтения DPS-файла.
+pub fn play_ui_async(sound: UiSound) {
+    let dps_name = sound.dps_name();
+    if dps_name == "startup" || dps_name == "usb_connect" {
+        // Короткий стартовый звук через PC speaker (без чтения DPS-файла)
+        beep_speaker(660, 60);
+        beep_speaker(880, 80);
+    } else {
+        // Для других звуков — обычная синхронная игра (они короткие)
+        let _ = play_ui(sound);
     }
 }
 
-=======
->>>>>>> arena/e8a29038-deix
 /// Играет эффект по имени/псевдониму (для CLI `sound play <имя>`).
 pub fn play_named(name: &str) -> Result<(), &'static str> {
     let raw = load_dps(resolve_alias(name))?;

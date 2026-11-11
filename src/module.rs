@@ -238,7 +238,9 @@ fn build_kernel_api() -> KernelApi {
 }
 
 pub fn load_boot_modules() {
-    use crate::diag::{self, ErrorCode, Subsystem};
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+use crate::diag::{self, ErrorCode, Subsystem};
 
     // Карантин по итогам прошлой сессии: если отказ ядра произошёл внутри
     // региона модуля (RIP из отчёта попал в его диапазон), модуль не
@@ -303,6 +305,23 @@ pub fn load_boot_modules() {
                 );
             }
         }
+    }
+}
+
+
+/// Флаг: модули ядра отложены (ленивая инициализация).
+static MODULES_PENDING: AtomicBool = AtomicBool::new(true);
+
+/// Откладывает загрузку модулей ядра до первого доступа.
+pub fn mark_modules_pending() {
+    MODULES_PENDING.store(true, Ordering::SeqCst);
+}
+
+/// Выполняет загрузку модулей, если она ещё не сделана.
+pub fn ensure_modules() {
+    if MODULES_PENDING.load(Ordering::SeqCst) {
+        MODULES_PENDING.store(false, Ordering::SeqCst);
+        load_boot_modules();
     }
 }
 

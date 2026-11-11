@@ -129,8 +129,7 @@ pub struct MexApi {
     pub arp_resolve: extern "C" fn(ip_ptr: *const u8, ip_len: usize, mac_out: *mut u8) -> i64,
 }
 
-// ==================== v1.0 API implementation ====================
-
+//
 extern "C" fn api_print(ptr: *const u8, len: usize) {
     if ptr.is_null() || len == 0 || len > 1024 * 1024 {
         return;
@@ -169,25 +168,13 @@ fn resolve_program_path(name: &str) -> alloc::string::String {
     alloc::format!("/userdata/{}", name)
 }
 
-<<<<<<< HEAD
-=======
-/// Максимальный размер файла для чтения через MEX API.
-/// 128 КиБ — достаточно для конфигов, логи, USERS.DB.
-/// Большие файлы читаются по частям через offset (когда будет API).
-const MEX_MAX_READ: usize = 128 * 1024;
+const MEX_MAX_READ: usize = 4 * 1024 * 1024; // 4 МиБ
 
->>>>>>> arena/e8a29038-deix
 extern "C" fn api_read_file(name_ptr: *const u8, name_len: usize, out_ptr: *mut u8, out_cap: usize) -> i64 {
-    if name_ptr.is_null() || name_len == 0 || name_len > 64 {
-        return -1;
-    }
-<<<<<<< HEAD
-=======
     // Лимит размера — защита от OOM при чтении больших файлов.
     if out_cap > MEX_MAX_READ {
         return -1;
     }
->>>>>>> arena/e8a29038-deix
     let name_slice = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
     let name = match core::str::from_utf8(name_slice) {
         Ok(s) => s,
@@ -198,22 +185,6 @@ extern "C" fn api_read_file(name_ptr: *const u8, name_len: usize, out_ptr: *mut 
     // Если программа исполняется как процесс — чтение идёт через её own
     // таблицу дескрипторов, иначе (запуск из CLI) — напрямую через VFS.
     let path = resolve_program_path(name);
-<<<<<<< HEAD
-    let opened = match crate::process::current_pid() {
-        Some(pid) => crate::process::open(pid, &path, false).and_then(|fd| {
-            crate::process::read_fd(pid, fd).map(|d| (fd, d))
-        }),
-        None => Err(crate::process::ProcessError::NotFound(0)),
-    };
-    let result = match opened {
-        Ok((fd, data)) => {
-            if let Some(pid) = crate::process::current_pid() {
-                let _ = crate::process::close(pid, fd);
-            }
-            Ok(data)
-        }
-        Err(_) => crate::vfs::read_file(&path),
-=======
     // При вызове из процесса — строго через process::open (проверка капс).
     // Fallback в vfs::read_file только для CLI-контекста (без PID), где
     // капсы не применимы — вызывающий код управляет доступом сам.
@@ -227,7 +198,6 @@ extern "C" fn api_read_file(name_ptr: *const u8, name_len: usize, out_ptr: *mut 
             Err(_) => Err(()),
         },
         None => crate::vfs::read_file(&path).map_err(|_| ()),
->>>>>>> arena/e8a29038-deix
     };
     match result {
         Ok(data) => {
@@ -243,25 +213,17 @@ extern "C" fn api_read_file(name_ptr: *const u8, name_len: usize, out_ptr: *mut 
     }
 }
 
-<<<<<<< HEAD
-=======
-/// Максимальный размер данных для записи через MEX API.
-/// 256 КиБ за один вызов — достаточно для конфигов и лога.
 /// Большие данные идут по частям.
 const MEX_MAX_WRITE: usize = 256 * 1024;
 
->>>>>>> arena/e8a29038-deix
 extern "C" fn api_write_file(name_ptr: *const u8, name_len: usize, data_ptr: *const u8, data_len: usize) -> i64 {
     if name_ptr.is_null() || name_len == 0 || name_len > 64 || data_ptr.is_null() {
         return -1;
     }
-<<<<<<< HEAD
-=======
     // Лимит размера — защита от заполнения диска.
     if data_len > MEX_MAX_WRITE {
         return -1;
     }
->>>>>>> arena/e8a29038-deix
     let name_slice = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
     let name = match core::str::from_utf8(name_slice) {
         Ok(s) => s,
@@ -274,24 +236,6 @@ extern "C" fn api_write_file(name_ptr: *const u8, name_len: usize, data_ptr: *co
     }
 
     let path = resolve_program_path(name);
-<<<<<<< HEAD
-    // Запись идёт через таблицу дескрипторов процесса, если программа
-    // исполняется как процесс: только там проверяется возможность записи.
-    let written = match crate::process::current_pid() {
-        Some(pid) => crate::process::open(pid, &path, true).and_then(|fd| {
-            let r = crate::process::write_fd(pid, fd, data);
-            let _ = crate::process::close(pid, fd);
-            r
-        }),
-        None => Err(crate::process::ProcessError::NotFound(0)),
-    };
-    match written {
-        Ok(()) => 0,
-        Err(_) => match crate::vfs::write_file(&path, data) {
-            Ok(()) => 0,
-            Err(_) => -1,
-        },
-=======
     // Запись из процесса — строго через process::open (проверка WRITE_USERDATA).
     // Fallback в vfs::write_file только для CLI-контекста (без PID).
     let written = match crate::process::current_pid() {
@@ -308,12 +252,10 @@ extern "C" fn api_write_file(name_ptr: *const u8, name_len: usize, data_ptr: *co
     match written {
         Ok(()) => 0,
         Err(_) => -1,
->>>>>>> arena/e8a29038-deix
     }
 }
 
-// ==================== v1.1 network API implementation ====================
-
+//
 pub extern "C" fn api_ping(ip_ptr: *const u8, ip_len: usize, timeout_ms: u64) -> i64 {
     if ip_ptr.is_null() || ip_len != 4 {
         return -1;
@@ -374,8 +316,7 @@ extern "C" fn api_arp_resolve(ip_ptr: *const u8, ip_len: usize, mac_out: *mut u8
     }
 }
 
-// ==================== API construction ====================
-
+//
 /// Строит таблицу системных вызовов, передаваемую программе в RDI.
 pub fn build_api() -> MexApi {
     MexApi {
@@ -394,8 +335,7 @@ pub fn build_api() -> MexApi {
     }
 }
 
-// ==================== Исполнение в Ring 3 ====================
-
+//
 /// Заполняет shim-страницу: стабы, exit-стаб и таблицу MexApi.
 ///
 /// Каждый стаб (16 байт, по одному на функцию API):
@@ -604,8 +544,7 @@ fn dispatch_inner(idx: usize, a1: u64, a2: u64, a3: u64, a4: u64) -> u64 {
     }
 }
 
-// ==================== MEX loader ====================
-
+//
 /// Загружает и исполняет программу `name` (короткое имя ext2-файла, обычно
 /// оканчивающееся на .MEX) — вызывается из `cli.rs::cmd_run`.
 ///
@@ -730,7 +669,12 @@ pub fn run(name: &str, _args: &str) {
         name, header.version_minor, entry_addr, body_size
     );
 
+    crate::serial_println!("[mex] Process '{}' started work (PID assigned)", name);
+    
     let ret_code = run_ring3(entry_addr as u64);
+
+    crate::serial_println!("[mex] Process '{}' finished work, exit code {}", name, ret_code);
+    crate::serial_println!("[mex] Process '{}' launching next process...", name);
 
     println_t!(
         en: "Program '{}' exited with code {}.",
@@ -759,8 +703,7 @@ fn parse_header(data: &[u8]) -> Option<MexHeader> {
     })
 }
 
-// ==================== Загрузка в адресное пространство процесса ====================
-
+//
 /// Адрес, по которому линкуются `.mex`-программы (см. tools/mex.ld).
 /// Образы формата MEX не позиционно-независимы: тело нельзя разместить
 /// по другой базе без перелинковки, поэтому менеджер процессов обязан

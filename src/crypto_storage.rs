@@ -53,21 +53,6 @@ use crate::spinlock::SpinLock;
 /// использовать и без шифрования вовсе, как раньше).
 static ENGINE: SpinLock<Option<XtsAes256>> = SpinLock::new(None);
 
-<<<<<<< HEAD
-/// Меняет XTS-движок и сбрасывает кеш расшифрованных блоков ext2: он
-/// относится к конкретному ключу.
-fn set_engine(engine: Option<XtsAes256>) {
-    *ENGINE.lock() = engine;
-    crate::ext2::clear_block_cache();
-}
-
-/// Есть ли активный ключ: только тогда расшифрованные блоки можно кешировать.
-pub fn is_unlocked() -> bool {
-    ENGINE.lock().is_some()
-}
-
-=======
->>>>>>> arena/e8a29038-deix
 /// Служебный сектор ВНЕ ext2-тома (см. ext2.rs::FS_START_LBA=4096 —
 /// между концом загрузчика/ядра, около 461 сектора, и началом
 /// ext2-тома остаётся большой запас свободных секторов), где хранится
@@ -137,11 +122,7 @@ fn set_engine_mk(mk: &[u8; 32]) {
     key[..32].copy_from_slice(mk);
     let tweak = sha512::sha512(mk);
     key[32..].copy_from_slice(&tweak[..32]);
-<<<<<<< HEAD
-    set_engine(Some(XtsAes256::new(&key)));
-=======
     *ENGINE.lock() = Some(XtsAes256::new(&key));
->>>>>>> arena/e8a29038-deix
     for b in key.iter_mut() {
         *b = 0;
     }
@@ -177,11 +158,7 @@ pub fn try_unlock(password: &str) -> bool {
                     return true;
                 }
                 clear_master_key();
-<<<<<<< HEAD
-                set_engine(None);
-=======
                 *ENGINE.lock() = None;
->>>>>>> arena/e8a29038-deix
                 return false;
             }
             None => return false,
@@ -191,19 +168,11 @@ pub fn try_unlock(password: &str) -> bool {
     // Совместимость со СТАРЫМИ томами (ключ = SHA-512(пароль), без
     // заголовка). Проверяем по сигнатуре ext2, как раньше.
     let key = derive_key(password);
-<<<<<<< HEAD
-    set_engine(Some(XtsAes256::new(&key)));
-    let ok = crate::ext2::is_formatted();
-    if !ok {
-        clear_master_key();
-        set_engine(None);
-=======
     *ENGINE.lock() = Some(XtsAes256::new(&key));
     let ok = crate::ext2::is_formatted();
     if !ok {
         clear_master_key();
         *ENGINE.lock() = None;
->>>>>>> arena/e8a29038-deix
     }
     ok
 }
@@ -220,12 +189,6 @@ pub fn enable_encryption(password: &str) -> Result<(), ()> {
     if is_encryption_enabled() {
         return Ok(());
     }
-<<<<<<< HEAD
-    // Маркер, заголовок, форматирование и перезапись файлов — один пакет:
-    // сброс кеша диска однократно в конце, а не после каждого файла.
-    let _batch = crate::ata::FlushBatch::begin();
-=======
->>>>>>> arena/e8a29038-deix
     // 1) Собрать ВСЕ файлы тома, включая подкаталоги (пока они записаны
     //    открыто). Плоский сбор только корня терял бы /home, /config и
     //    прочие каталоги канонического layout при переформатировании.
@@ -289,11 +252,8 @@ pub fn lock() {
     // важно и почему одного присвоения `None` недостаточно с точки
     // зрения гарантий компилятора.
     clear_master_key();
-<<<<<<< HEAD
     set_engine(None);
-=======
     *ENGINE.lock() = None;
->>>>>>> arena/e8a29038-deix
 }
 
 /// Шифрует один 512-байтный физический сектор (на месте) для записи на
@@ -348,8 +308,7 @@ fn clear_master_key() {
     *MASTER_KEY.lock() = None;
 }
 
-// ==================== Как проверить (честно) ====================
-//
+////
 // В песочнице агента, где разрабатывался этот код, отсутствует
 // возможность загрузить kernel-модуль dm_mod/dm_crypt (нет root-доступа
 // к ядру самой песочницы, только к пользовательскому окружению) — то

@@ -1,15 +1,9 @@
 //! EROFS (Enhanced Read-Only File System) — НАСТОЯЩАЯ реализация формата.
 //!
 //! Соответствует спецификации EROFS v1 (erofs.docs.kernel.org, Linux
-<<<<<<< HEAD
-//! `fs/erofs/erofs_fs.h`). Модуль только читает: образ /system собирает
-//! `tools/make_deix_fs.py` на этапе сборки, ядро его не создаёт. Образы
-//! `mkfs.erofs` читаются этим модулем так же.
-=======
 //! `fs/erofs/erofs_fs.h`). Образы, созданные этим модулем, читаются
 //! штатными `dump.erofs`/`fsck.erofs` и монтируются ядром Linux; образы,
 //! созданные `mkfs.erofs`, читаются этим модулем.
->>>>>>> arena/e8a29038-deix
 //!
 //! ## Почему это важно
 //!
@@ -35,39 +29,7 @@
 //! no_std: только `alloc`.
 
 use alloc::string::String;
-<<<<<<< HEAD
-=======
-use alloc::vec;
->>>>>>> arena/e8a29038-deix
-use alloc::vec::Vec;
-
-/// Магия суперблока EROFS v1 (little-endian по смещению 1024).
-pub const EROFS_SUPER_MAGIC_V1: u32 = 0xE0F5_E1E2;
-/// Фиксированное смещение суперблока.
-pub const EROFS_SUPER_OFFSET: usize = 1024;
-/// Размер базового суперблока.
-pub const EROFS_SUPER_SIZE: usize = 128;
-/// Размер блока (blkszbits = 12).
-pub const EROFS_BLOCK_SIZE: usize = 4096;
-pub const EROFS_BLOCK_BITS: u8 = 12;
-/// Размер слота инода: nid = (offset - meta_blkaddr*blocksize) / 32.
-pub const EROFS_ISLOT_SIZE: usize = 32;
-/// Признак «нет блока данных».
-pub const EROFS_NULL_ADDR: u32 = !0;
-
-/// Раскладка данных FLAT_PLAIN: данные в целых блоках с `raw_blkaddr`.
-const DATALAYOUT_FLAT_PLAIN: u16 = 0;
-/// FLAT_INLINE: целые блоки + «хвост» сразу за инодом. Так пишет mkfs.erofs.
-const DATALAYOUT_FLAT_INLINE: u16 = 2;
-
-/// Типы файлов в записях каталога (совпадают с EROFS_FT_*).
-const EROFS_FT_REG_FILE: u8 = 1;
-const EROFS_FT_DIR: u8 = 2;
-
-<<<<<<< HEAD
-=======
 const S_IFREG: u16 = 0o100_000;
->>>>>>> arena/e8a29038-deix
 const S_IFDIR: u16 = 0o040_000;
 
 /// Ошибки разбора EROFS-образа.
@@ -83,11 +45,6 @@ pub enum ErofsError {
     Corrupt,
     /// Путь или имя не найдено в образе.
     NotFound,
-<<<<<<< HEAD
-    /// Устройство не отдало запрошенные сектора.
-    Io,
-=======
->>>>>>> arena/e8a29038-deix
 }
 
 impl ErofsError {
@@ -104,55 +61,11 @@ impl ErofsError {
             }
             ErofsError::Corrupt => "EROFS: повреждённая структура".into(),
             ErofsError::NotFound => "EROFS: файл или каталог не найден".into(),
-<<<<<<< HEAD
-            ErofsError::Io => "EROFS: ошибка чтения устройства".into(),
-=======
->>>>>>> arena/e8a29038-deix
         }
     }
 }
 
-<<<<<<< HEAD
-// ==================== ИСТОЧНИК ДАННЫХ ====================
-
-/// Произвольный доступ к байтам образа. Читатель не требует, чтобы образ
-/// целиком лежал в памяти: диск отдаёт только то, что запрошено.
-pub trait Source {
-    /// Читает до `len` байт со смещения `off`. У конца образа возвращает
-    /// меньше запрошенного (в пределе — пустой вектор).
-    fn read_at(&self, off: usize, len: usize) -> Result<Vec<u8>, ErofsError>;
-}
-
-impl Source for [u8] {
-    fn read_at(&self, off: usize, len: usize) -> Result<Vec<u8>, ErofsError> {
-        if off >= self.len() {
-            return Ok(Vec::new());
-        }
-        let end = off.saturating_add(len).min(self.len());
-        Ok(self[off..end].to_vec())
-    }
-}
-
-impl Source for Vec<u8> {
-    fn read_at(&self, off: usize, len: usize) -> Result<Vec<u8>, ErofsError> {
-        self.as_slice().read_at(off, len)
-    }
-}
-
-/// Читает ровно `len` байт или сообщает о повреждении образа.
-fn read_exact<S: Source + ?Sized>(img: &S, off: usize, len: usize) -> Result<Vec<u8>, ErofsError> {
-    let data = img.read_at(off, len)?;
-    if data.len() == len {
-        Ok(data)
-    } else {
-        Err(ErofsError::Corrupt)
-    }
-}
-
-=======
->>>>>>> arena/e8a29038-deix
-// ==================== ЧТЕНИЕ ====================
-
+//
 fn rd_u16(b: &[u8], o: usize) -> Option<u16> {
     Some(u16::from_le_bytes([*b.get(o)?, *b.get(o + 1)?]))
 }
@@ -177,11 +90,8 @@ fn rd_u64(b: &[u8], o: usize) -> Option<u64> {
 pub struct Superblock {
     pub blkszbits: u8,
     pub root_nid: u64,
-<<<<<<< HEAD
-=======
     pub inos: u64,
     pub blocks: u32,
->>>>>>> arena/e8a29038-deix
     pub meta_blkaddr: u32,
 }
 
@@ -194,34 +104,11 @@ impl Superblock {
         }
     }
 
-<<<<<<< HEAD
-=======
-    pub fn inos_and_blocks(&self) -> (u64, u32) {
-        (self.inos, self.blocks)
-    }
-
->>>>>>> arena/e8a29038-deix
-    /// Смещение инода по его nid.
-    pub fn inode_offset(&self, nid: u64) -> usize {
-        self.meta_blkaddr as usize * self.block_size() + nid as usize * EROFS_ISLOT_SIZE
-    }
-}
-
-/// Проверяет и разбирает суперблок.
-<<<<<<< HEAD
-pub fn parse_superblock<S: Source + ?Sized>(img: &S) -> Result<Superblock, ErofsError> {
-    let raw = img.read_at(EROFS_SUPER_OFFSET, EROFS_SUPER_SIZE)?;
-    if raw.len() < EROFS_SUPER_SIZE {
-        return Err(ErofsError::TooSmall);
-    }
-    let sb = &raw[..];
-=======
 pub fn parse_superblock(img: &[u8]) -> Result<Superblock, ErofsError> {
     if img.len() < EROFS_SUPER_OFFSET + EROFS_SUPER_SIZE {
         return Err(ErofsError::TooSmall);
     }
     let sb = &img[EROFS_SUPER_OFFSET..];
->>>>>>> arena/e8a29038-deix
     let magic = rd_u32(sb, 0).ok_or(ErofsError::TooSmall)?;
     if magic != EROFS_SUPER_MAGIC_V1 {
         return Err(ErofsError::BadMagic { found: magic });
@@ -230,13 +117,6 @@ pub fn parse_superblock(img: &[u8]) -> Result<Superblock, ErofsError> {
     if !(9..=16).contains(&blkszbits) {
         return Err(ErofsError::BadBlockSize { bits: blkszbits });
     }
-<<<<<<< HEAD
-    Ok(Superblock {
-        blkszbits,
-        root_nid: rd_u16(sb, 14).ok_or(ErofsError::TooSmall)? as u64,
-        meta_blkaddr: rd_u32(sb, 40).ok_or(ErofsError::TooSmall)?,
-    })
-=======
     let res = Superblock {
         blkszbits,
         root_nid: rd_u16(sb, 14).ok_or(ErofsError::TooSmall)? as u64,
@@ -246,7 +126,6 @@ pub fn parse_superblock(img: &[u8]) -> Result<Superblock, ErofsError> {
     };
     let _ = res.inos_and_blocks();
     Ok(res)
->>>>>>> arena/e8a29038-deix
 }
 
 /// Инод EROFS (нужные нам поля; поддержаны compact и extended).
@@ -268,17 +147,6 @@ impl Inode {
 }
 
 /// Читает инод по nid.
-<<<<<<< HEAD
-pub fn read_inode<S: Source + ?Sized>(img: &S, sb: &Superblock, nid: u64) -> Result<Inode, ErofsError> {
-    let off = sb.inode_offset(nid);
-    let raw = img.read_at(off, 64)?;
-    let raw = &raw[..];
-    let format = rd_u16(raw, 0).ok_or(ErofsError::Corrupt)?;
-    let extended = format & 1 == 1;
-    let datalayout = (format >> 1) & 7;
-    let xattr_icount = rd_u16(raw, 2).ok_or(ErofsError::Corrupt)? as usize;
-    let mode = rd_u16(raw, 4).ok_or(ErofsError::Corrupt)?;
-=======
 pub fn read_inode(img: &[u8], sb: &Superblock, nid: u64) -> Result<Inode, ErofsError> {
     let off = sb.inode_offset(nid);
     let format = rd_u16(img, off).ok_or(ErofsError::Corrupt)?;
@@ -286,7 +154,6 @@ pub fn read_inode(img: &[u8], sb: &Superblock, nid: u64) -> Result<Inode, ErofsE
     let datalayout = (format >> 1) & 7;
     let xattr_icount = rd_u16(img, off + 2).ok_or(ErofsError::Corrupt)? as usize;
     let mode = rd_u16(img, off + 4).ok_or(ErofsError::Corrupt)?;
->>>>>>> arena/e8a29038-deix
 
     // Размер структуры инода: compact 32, extended 64.
     let base = if extended { 64 } else { 32 };
@@ -300,15 +167,6 @@ pub fn read_inode(img: &[u8], sb: &Superblock, nid: u64) -> Result<Inode, ErofsE
 
     let (size, raw_blkaddr) = if extended {
         (
-<<<<<<< HEAD
-            rd_u64(raw, 8).ok_or(ErofsError::Corrupt)?,
-            rd_u32(raw, 16).ok_or(ErofsError::Corrupt)?,
-        )
-    } else {
-        (
-            rd_u32(raw, 8).ok_or(ErofsError::Corrupt)? as u64,
-            rd_u32(raw, 16).ok_or(ErofsError::Corrupt)?,
-=======
             rd_u64(img, off + 8).ok_or(ErofsError::Corrupt)?,
             rd_u32(img, off + 16).ok_or(ErofsError::Corrupt)?,
         )
@@ -316,7 +174,6 @@ pub fn read_inode(img: &[u8], sb: &Superblock, nid: u64) -> Result<Inode, ErofsE
         (
             rd_u32(img, off + 8).ok_or(ErofsError::Corrupt)? as u64,
             rd_u32(img, off + 16).ok_or(ErofsError::Corrupt)?,
->>>>>>> arena/e8a29038-deix
         )
     };
 
@@ -342,11 +199,7 @@ pub struct DirEntry {
 /// FLAT_PLAIN — данные целиком в блоках с `raw_blkaddr`.
 /// FLAT_INLINE — целые блоки в `raw_blkaddr`, а остаток (`size % blocksize`)
 /// лежит сразу за структурой инода. Именно так пишет `mkfs.erofs`.
-<<<<<<< HEAD
-fn inode_data<S: Source + ?Sized>(img: &S, sb: &Superblock, ino: &Inode) -> Result<Vec<u8>, ErofsError> {
-=======
 fn inode_data(img: &[u8], sb: &Superblock, ino: &Inode) -> Result<Vec<u8>, ErofsError> {
->>>>>>> arena/e8a29038-deix
     let bs = sb.block_size();
     let size = ino.size as usize;
     match ino.datalayout {
@@ -355,36 +208,20 @@ fn inode_data(img: &[u8], sb: &Superblock, ino: &Inode) -> Result<Vec<u8>, Erofs
                 return Ok(Vec::new());
             }
             let start = ino.raw_blkaddr as usize * bs;
-<<<<<<< HEAD
-            read_exact(img, start, size)
-=======
             Ok(img
                 .get(start..start + size)
                 .ok_or(ErofsError::Corrupt)?
                 .to_vec())
->>>>>>> arena/e8a29038-deix
         }
         DATALAYOUT_FLAT_INLINE => {
             let tail = size % bs;
             let head = size - tail;
-<<<<<<< HEAD
-            let mut out = if head > 0 {
-=======
             let mut out = Vec::with_capacity(size);
             if head > 0 {
->>>>>>> arena/e8a29038-deix
                 if ino.raw_blkaddr == EROFS_NULL_ADDR {
                     return Err(ErofsError::Corrupt);
                 }
                 let start = ino.raw_blkaddr as usize * bs;
-<<<<<<< HEAD
-                read_exact(img, start, head)?
-            } else {
-                Vec::new()
-            };
-            if tail > 0 {
-                out.extend_from_slice(&read_exact(img, ino.inline_off, tail)?);
-=======
                 out.extend_from_slice(img.get(start..start + head).ok_or(ErofsError::Corrupt)?);
             }
             if tail > 0 {
@@ -392,7 +229,6 @@ fn inode_data(img: &[u8], sb: &Superblock, ino: &Inode) -> Result<Vec<u8>, Erofs
                     img.get(ino.inline_off..ino.inline_off + tail)
                         .ok_or(ErofsError::Corrupt)?,
                 );
->>>>>>> arena/e8a29038-deix
             }
             Ok(out)
         }
@@ -403,57 +239,8 @@ fn inode_data(img: &[u8], sb: &Superblock, ino: &Inode) -> Result<Vec<u8>, Erofs
     }
 }
 
-<<<<<<< HEAD
-/// Читает кусок содержимого файла `[off, off + len)`. `len` обрезается по
-/// размеру файла; за концом файла возвращается пустой вектор. Позволяет
-/// обработать большой файл порциями, не держа его в памяти целиком.
-pub fn read_file_range<S: Source + ?Sized>(
-    img: &S,
-    sb: &Superblock,
-    ino: &Inode,
-    off: usize,
-    len: usize,
-) -> Result<Vec<u8>, ErofsError> {
-    let size = ino.size as usize;
-    if off >= size {
-        return Ok(Vec::new());
-    }
-    let len = len.min(size - off);
-    let bs = sb.block_size();
-    match ino.datalayout {
-        DATALAYOUT_FLAT_PLAIN => {
-            if ino.raw_blkaddr == EROFS_NULL_ADDR {
-                return Err(ErofsError::Corrupt);
-            }
-            read_exact(img, ino.raw_blkaddr as usize * bs + off, len)
-        }
-        DATALAYOUT_FLAT_INLINE => {
-            let head = size - size % bs;
-            let mut out = Vec::with_capacity(len);
-            if off < head {
-                if ino.raw_blkaddr == EROFS_NULL_ADDR {
-                    return Err(ErofsError::Corrupt);
-                }
-                let n = len.min(head - off);
-                out.extend_from_slice(&read_exact(img, ino.raw_blkaddr as usize * bs + off, n)?);
-            }
-            let done = out.len();
-            if done < len {
-                let tail_off = off + done - head;
-                out.extend_from_slice(&read_exact(img, ino.inline_off + tail_off, len - done)?);
-            }
-            Ok(out)
-        }
-        _ => Err(ErofsError::Corrupt),
-    }
-}
-
-/// Читает записи каталога.
-pub fn read_dir<S: Source + ?Sized>(img: &S, sb: &Superblock, nid: u64) -> Result<Vec<DirEntry>, ErofsError> {
-=======
 /// Читает записи каталога.
 pub fn read_dir(img: &[u8], sb: &Superblock, nid: u64) -> Result<Vec<DirEntry>, ErofsError> {
->>>>>>> arena/e8a29038-deix
     let ino = read_inode(img, sb, nid)?;
     if !ino.is_dir() {
         return Err(ErofsError::Corrupt);
@@ -511,11 +298,7 @@ pub fn read_dir(img: &[u8], sb: &Superblock, nid: u64) -> Result<Vec<DirEntry>, 
 }
 
 /// Ищет обычный файл по пути (например "kernel/kernel.bin" или "kernel.bin") и возвращает его инод.
-<<<<<<< HEAD
-pub fn lookup_path<S: Source + ?Sized>(img: &S, path: &str) -> Result<Inode, ErofsError> {
-=======
 pub fn lookup_path(img: &[u8], path: &str) -> Result<Inode, ErofsError> {
->>>>>>> arena/e8a29038-deix
     let sb = parse_superblock(img)?;
     let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     if parts.is_empty() {
@@ -546,11 +329,7 @@ pub fn lookup_path(img: &[u8], path: &str) -> Result<Inode, ErofsError> {
 }
 
 /// Ищет обычный файл в корне и возвращает его инод.
-<<<<<<< HEAD
-pub fn lookup<S: Source + ?Sized>(img: &S, name: &str) -> Result<Inode, ErofsError> {
-=======
 pub fn lookup(img: &[u8], name: &str) -> Result<Inode, ErofsError> {
->>>>>>> arena/e8a29038-deix
     let sb = parse_superblock(img)?;
     for e in read_dir(img, &sb, sb.root_nid)? {
         if e.name == name && e.file_type == EROFS_FT_REG_FILE {
@@ -561,11 +340,7 @@ pub fn lookup(img: &[u8], name: &str) -> Result<Inode, ErofsError> {
 }
 
 /// Читает содержимое файла из образа по имени или пути.
-<<<<<<< HEAD
-pub fn read_file<S: Source + ?Sized>(img: &S, path: &str) -> Result<Vec<u8>, ErofsError> {
-=======
 pub fn read_file(img: &[u8], path: &str) -> Result<Vec<u8>, ErofsError> {
->>>>>>> arena/e8a29038-deix
     let sb = parse_superblock(img)?;
     let ino = lookup_path(img, path).or_else(|_| lookup(img, path))?;
     inode_data(img, &sb, &ino)
@@ -580,11 +355,7 @@ pub struct DirListing {
 }
 
 /// Возвращает nid каталога по пути. Пустой путь и "/" дают корень.
-<<<<<<< HEAD
-fn resolve_dir_nid<S: Source + ?Sized>(img: &S, sb: &Superblock, path: &str) -> Result<u64, ErofsError> {
-=======
 fn resolve_dir_nid(img: &[u8], sb: &Superblock, path: &str) -> Result<u64, ErofsError> {
->>>>>>> arena/e8a29038-deix
     let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let mut nid = sb.root_nid;
     for part in parts {
@@ -599,11 +370,7 @@ fn resolve_dir_nid(img: &[u8], sb: &Superblock, path: &str) -> Result<u64, Erofs
 }
 
 /// Содержимое каталога по пути. Служебные "." и ".." отбрасываются.
-<<<<<<< HEAD
-pub fn list_dir<S: Source + ?Sized>(img: &S, path: &str) -> Result<Vec<DirListing>, ErofsError> {
-=======
 pub fn list_dir(img: &[u8], path: &str) -> Result<Vec<DirListing>, ErofsError> {
->>>>>>> arena/e8a29038-deix
     let sb = parse_superblock(img)?;
     let nid = resolve_dir_nid(img, &sb, path)?;
     let mut out: Vec<DirListing> = Vec::new();
@@ -626,17 +393,11 @@ pub fn list_dir(img: &[u8], path: &str) -> Result<Vec<DirListing>, ErofsError> {
 }
 
 /// Проверяет существование пути (файла или каталога) и возвращает инод.
-<<<<<<< HEAD
-pub fn stat<S: Source + ?Sized>(img: &S, path: &str) -> Result<Inode, ErofsError> {
-    lookup_path(img, path)
-}
-=======
 pub fn stat(img: &[u8], path: &str) -> Result<Inode, ErofsError> {
     lookup_path(img, path)
 }
 
-// ==================== ЗАПИСЬ (mkfs) ====================
-
+//
 fn wr_u16(b: &mut [u8], o: usize, v: u16) {
     b[o..o + 2].copy_from_slice(&v.to_le_bytes());
 }
@@ -674,6 +435,7 @@ fn write_inode(
     wr_u16(img, off + 24, 0); // i_uid
     wr_u16(img, off + 26, 0); // i_gid
     wr_u32(img, off + 28, 0); // i_reserved2
+}
 }
 
 /// Собирает блоки данных каталога (записи + имена, по блокам).
@@ -844,4 +606,3 @@ pub fn build_image(files: &[(&str, &[u8])]) -> Vec<u8> {
 pub fn is_erofs(img: &[u8]) -> bool {
     parse_superblock(img).is_ok()
 }
->>>>>>> arena/e8a29038-deix

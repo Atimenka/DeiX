@@ -35,8 +35,7 @@ const MAX_PROCS: usize = 32;
 /// Максимум открытых дескрипторов на процесс.
 const MAX_FDS: usize = 16;
 
-// ==================== Состояния и возможности ====================
-
+//
 /// Состояние процесса.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {
@@ -96,8 +95,7 @@ pub mod cap {
         | INSTALL;
 }
 
-// ==================== Файловые дескрипторы ====================
-
+//
 /// Открытый дескриптор. Чтение/запись через дескриптор со смещением
 /// не реализованы, поэтому дескриптор хранит только путь и режим.
 #[derive(Debug, Clone)]
@@ -149,8 +147,7 @@ impl FdTable {
     }
 }
 
-// ==================== Процесс ====================
-
+//
 /// Процесс DeiX.
 pub struct Process {
     pub pid: u32,
@@ -171,6 +168,8 @@ pub struct Process {
     pub last_error_code: u32,
     /// Описание последней ошибки процесса.
     pub last_error: String,
+    /// Открытые IPC-каналы процесса (идентификаторы).
+    pub ipc_channels: Vec<u32>,
 }
 
 impl Process {
@@ -190,6 +189,7 @@ impl Process {
             image_path: String::new(),
             last_error_code: 0,
             last_error: String::new(),
+            ipc_channels: Vec::new(),
         }
     }
 
@@ -206,8 +206,7 @@ impl Process {
     }
 }
 
-// ==================== Таблица процессов ====================
-
+//
 static PROCS: SpinLock<[Process; MAX_PROCS]> = SpinLock::new([const { Process::blank(0) }; MAX_PROCS]);
 static NEXT_PID: SpinLock<u32> = SpinLock::new(2);
 
@@ -273,6 +272,10 @@ pub fn spawn(req: &SpawnRequest) -> Result<u32, ProcessError> {
         p.image_path = req.image_path.clone();
         idx
     };
+
+    // Регистрируем процесс в нанокоре — это делает нано-нити настоящими
+    // процессами с изоляцией адресного пространства.
+    crate::nanocore::register_process(pid);
 
     // Стандартные дескрипторы: консоль на ввод и вывод.
     {
@@ -428,6 +431,14 @@ pub fn kill(pid: u32, code: i32) -> Result<(), ProcessError> {
             *guard = None;
         }
     }
+    // Освобождаем слот в нанокоре — процесс перестал быть настоящим процессом.
+    crate::nanocore::unregister_process(pid);
+    // Закрываем все IPC-каналы процесса.
+    if let Some(p) = table.iter_mut().find(|p| p.pid == pid) {
+        for ch in p.ipc_channels.drain(..) {
+            let _ = crate::ipc::close_channel(ch);
+        }
+    }
     if let Some(id) = sched_id {
         crate::sched::terminate(id);
     }
@@ -539,8 +550,7 @@ pub fn info(pid: u32) -> Result<ProcInfo, ProcessError> {
     })
 }
 
-// ==================== Доступ из кода процесса ====================
-
+//
 /// PID процесса, исполняющегося сейчас, если он известен.
 pub fn current_pid() -> Option<u32> {
     let sid = crate::sched::current_id();
@@ -580,8 +590,7 @@ pub fn record_crash(pid: u32, code: crate::diag::ErrorCode, detail: &str) {
         p.last_error = String::from(detail);
     }
 }
-// ==================== Файловые операции процесса ====================
-
+//
 /// Открывает файл от имени процесса: проверяет возможность и
 /// регистрирует дескриптор.
 pub fn open(pid: u32, path: &str, write: bool) -> Result<usize, ProcessError> {
@@ -607,8 +616,6 @@ pub fn open(pid: u32, path: &str, write: bool) -> Result<usize, ProcessError> {
         if caps & cap::WRITE_USERDATA == 0 {
             return Err(ProcessError::Vfs(String::from("нет права записи (cap WRITE_USERDATA)")));
         }
-<<<<<<< HEAD
-=======
     } else {
         // Чтение с read-only раздела (/system) требует READ_ANY капса.
         // Чтение из /userdata (read-write том) разрешено любому процессу —
@@ -624,7 +631,6 @@ pub fn open(pid: u32, path: &str, write: bool) -> Result<usize, ProcessError> {
                 )));
             }
         }
->>>>>>> arena/e8a29038-deix
     }
 
     let fd = Fd {
@@ -685,8 +691,7 @@ pub fn write_fd(pid: u32, num: usize, data: &[u8]) -> Result<(), ProcessError> {
     crate::vfs::write_file(&path, data).map_err(|e| ProcessError::Vfs(e.message()))
 }
 
-// ==================== CLI ====================
-
+//
 /// `ps` — список процессов.
 pub fn cmd_ps() {
     let procs = list();

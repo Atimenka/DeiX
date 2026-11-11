@@ -266,19 +266,6 @@ fn sys_nanosleep(req: u64) -> i64 {
     0
 }
 
-<<<<<<< HEAD
-/// `getrandom` — источник энтропии из счётчика тактов.
-fn sys_getrandom(buf: u64, len: u64) -> i64 {
-    if !user_range_ok(buf, len) {
-        return EFAULT;
-    }
-    let mut state = crate::timer::uptime_ms().wrapping_mul(6364136223846793005).wrapping_add(1);
-    for i in 0..len {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        unsafe { core::ptr::write((buf + i) as *mut u8, (state >> 24) as u8) };
-=======
 /// `getrandom` — криптостойкий энтропия из ГСЧ ядра (RDRAND + jitter).
 fn sys_getrandom(buf: u64, len: u64) -> i64 {
     // Лимит: 1 МиБ за один вызов — защита от OOM.
@@ -300,7 +287,6 @@ fn sys_getrandom(buf: u64, len: u64) -> i64 {
             core::ptr::copy_nonoverlapping(chunk.as_ptr(), (buf + filled) as *mut u8, need);
         }
         filled += need as u64;
->>>>>>> arena/e8a29038-deix
     }
     len as i64
 }

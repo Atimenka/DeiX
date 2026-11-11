@@ -85,13 +85,7 @@ pub fn screen(net_ok: bool, audio_ok: bool, gpu_ok: bool) {
     );
     report(
         "/userdata",
-<<<<<<< HEAD
-        if crate::ext2::is_formatted()
-            || crate::crypto_storage::is_encryption_enabled()
-        {
-=======
         if crate::ext2::is_formatted() {
->>>>>>> arena/e8a29038-deix
             Check::Ok
         } else {
             Check::Warn(

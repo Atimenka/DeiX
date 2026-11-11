@@ -11,6 +11,8 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use crate::vault::{VaultRejection, evaluate as vault_evaluate};
 
 /// Максимальная длина содержательной строки конфигурации (байт UTF-8).
@@ -820,4 +822,20 @@ pub fn boot_report(script: &str) {
         parser.report.rejected_lines,
         parser.report.skipped_lines
     );
+}
+
+/// Флаг: разбор init.deix отложен (ленивая инициализация).
+static REPORT_PENDING: AtomicBool = AtomicBool::new(true);
+
+/// Откладывает разбор init.deix до первого доступа.
+pub fn mark_report_pending() {
+    REPORT_PENDING.store(true, Ordering::SeqCst);
+}
+
+/// Выполняет разбор init.deix, если он ещё не сделан.
+pub fn ensure_report() {
+    if REPORT_PENDING.load(Ordering::SeqCst) {
+        REPORT_PENDING.store(false, Ordering::SeqCst);
+        boot_report(INIT_DEIX_SCRIPT);
+    }
 }
