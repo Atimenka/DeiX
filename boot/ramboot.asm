@@ -254,6 +254,12 @@ DATA16_SEG equ gdt_data16 - gdt_start  ; 0x20 data16
 ; ---------------- данные (DS=0, адреса 0x9000+off) ----------------
 boot_drive:    db 0
 
+ram_dst_phys:  resd 1
+sectors_left:  resw 1
+cur_lba_lo:    resw 1
+cur_lba_hi:    resw 1
+chunk_bytes:   resd 1
+
 disk_error:
     ; Раньше здесь был молчаливый вечный цикл: на реальном железе это
     ; выглядело как зависание без единого признака причины.
@@ -291,6 +297,5 @@ dap_lba_lo:
 dap_lba_hi:
     dw 0, 0
 
-align 512, db 0
 times 510-($-$$) db 0
 dw 0xAA55
