@@ -130,7 +130,6 @@ fn cmd_logs(_orch: &Orchestrator, args: &[&str]) {
             for entry in new.iter() {
                 println!("{}", entry.format());
             }
-            last += new.len();
             // In a real kernel, we'd yield here. For now, just break.
             break;
         }

@@ -422,7 +422,7 @@ pub fn readdir(path: &str) -> Result<Vec<DirEnt>, VfsError> {
             })?;
             Ok(listing
                 .into_iter()
-                .map(|e| DirEnt { name: e.name, is_dir: e.is_dir, size: e.size })
+                .map(|e| DirEnt { name: e.name, is_dir: e.is_dir, size: e.size as u64 })
                 .collect())
         }
         MOUNT_USERDATA => {

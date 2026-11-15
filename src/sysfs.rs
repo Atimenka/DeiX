@@ -96,7 +96,7 @@ fn convert() {
 
     // Без читаемой карты загрузки после форматирования система не загрузится,
     // поэтому проверяем её и файлы загрузчика ДО любых записей.
-    let old_map = match crate::bootmap::read_boot_map() {
+    let _old_map = match crate::bootmap::read_boot_map() {
         Some(map) => map,
         None => {
             println!("  [sysfs] ERROR: the boot map (LBA 2047) is missing. /system was not modified.");

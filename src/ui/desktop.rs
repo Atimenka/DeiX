@@ -2277,7 +2277,7 @@ fn blend_soft_disc(
 #[inline]
 fn blend_into(pixels: &mut [u32], idx: usize, fg: Color, alpha: u8) {
     if let Some(p) = pixels.get_mut(idx) {
-        *p = fg.alpha_blend(Color::from_u32(*p), alpha).0;
+        *p = fg.alpha_blend(Color::from_u32(*p), alpha as i32).0;
     }
 }
 
@@ -2353,7 +2353,7 @@ fn generate_wallpaper(pixels: &mut [u32], w: i32, h: i32, theme: &UiTheme) {
     };
     for y in 0..h {
         let t = (y * 255 / h) as u8;
-        let c = top.lerp(bottom, t).0;
+        let c = top.lerp(bottom, t as i32).0;
         let row = y as usize * wu;
         for x in 0..wu {
             if let Some(p) = pixels.get_mut(row + x) {

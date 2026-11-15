@@ -214,7 +214,7 @@ impl Orchestrator {
     pub fn spawn_process(&self, name: &str) -> Result<u32, String> {
         let mut procs = self.processes.lock();
         let mut next_pid = self.next_pid.lock();
-        let now_ms = log::now_ms();
+        let _now_ms = log::now_ms();
 
         for p in procs.iter_mut() {
             if p.manifest.name == name && p.state == ProcessState::Pending {
@@ -268,7 +268,7 @@ impl Orchestrator {
 
     /// Monitor heartbeat for a process.
     pub fn monitor_heartbeat(&self, pid: u32) -> bool {
-        let now_ms = log::now_ms();
+        let _now_ms = log::now_ms();
         let mut hbs = self.heartbeats.lock();
         match hbs.get_mut(&pid) {
             Some(hb) => hb.check(now_ms),
