@@ -112,7 +112,13 @@ jobs:
             -monitor none \
             > qemu_disk.log 2>&1 || [ $? -eq 124 ]
           echo "== QEMU disk log (tail) =="
-          tail -n 60 qemu_disk.log
+          tail -n 80 qemu_disk.log
+          {
+            echo "## QEMU Disk Log (tail 80)"
+            echo '```'
+            tail -n 80 qemu_disk.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           grep -q '=== DeiX boot: serial debug active ===' qemu_disk.log \
             || { echo "FAIL: нет маркера старта ядра"; exit 1; }
           grep -q 'mini kernel booted successfully!' qemu_disk.log \
