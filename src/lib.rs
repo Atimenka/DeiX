@@ -200,31 +200,6 @@ pub extern "C" fn kernel_main() -> ! {
         if ata::is_present() {
             println!("ATA disk: OK (PIO mode)");
         }
-    }
-    extern "C" fn drv_rtl8139() {
-        rtl8139::init();
-    }
-    extern "C" fn drv_gpu() {
-        gpu::detect();
-    }
-    extern "C" fn drv_hda() {
-        hda::init();
-    }
-    crate::serial_println!("[deix] T2: {} drivers spawned in parallel ({} ms)", spawned, timer::uptime_ms());
-    println!("PS/2 keyboard: OK (handled via IRQ1)");
-    println!("PS/2 mouse: OK (handled via IRQ12)");
-    println!("USB subsystem: initializing...");
-    println!("SMP subsystem: initializing...");
-
-    let mut spawned = 0;
-    if crate::sched::spawn("keyboard", drv_keyboard).is_some() { spawned += 1; }
-    if crate::sched::spawn("mouse", drv_mouse).is_some() { spawned += 1; }
-    if crate::sched::spawn("usb", drv_usb).is_some() { spawned += 1; }
-    if crate::sched::spawn("smp", drv_smp).is_some() { spawned += 1; }
-    if crate::sched::spawn("ata", drv_ata).is_some() { spawned += 1; }
-    if crate::sched::spawn("rtl8139", drv_rtl8139).is_some() { spawned += 1; }
-    if crate::sched::spawn("gpu", drv_gpu).is_some() { spawned += 1; }
-    if crate::sched::spawn("hda", drv_hda).is_some() { spawned += 1; }
     crate::serial_println!("[deix] T2: {} drivers spawned in parallel ({} ms)", spawned, timer::uptime_ms());
     println!("PS/2 keyboard: OK (handled via IRQ1)");
     println!("PS/2 mouse: OK (handled via IRQ12)");

@@ -24,7 +24,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::println;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::Ordering;
 
 const SUPABASE_URL: &str = "https://xtsrvmwfnsxunvwuaplz.supabase.co";
 const ANON_KEY: &str = "sb_publishable_gFxef7M8SrR-yUO_KyLkMg_AoNsUins";

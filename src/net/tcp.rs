@@ -39,10 +39,10 @@ static DUP_DROPPED: AtomicU32 = AtomicU32::new(0);
 static UNACKED: crate::spinlock::SpinLock<Vec<(u32, u64)>> = crate::spinlock::SpinLock::new(Vec::new());
 
 /// Причина последнего завершения соединения.
-pub fn last_end() -> &'static str {
+pub fn last_end() -> alloc::string::String {
     without_interrupts(|| {
         let guard = LAST_END.lock();
-        guard.as_str()
+        guard.clone()
     })
 }
 
@@ -193,7 +193,7 @@ pub fn recv(to: u64) -> Vec<u8> {
                 None => continue,
             };
             if f&RST != 0 {
-                *LAST_END.lock() = "сервер сбросил соединение (RST)";
+                *LAST_END.lock() = alloc::string::String::from("сервер сбросил соединение (RST)");
                 return Vec::new();
             }
             if f&ACK != 0 && (peer_ack.wrapping_sub(PEER_ACK.load(Ordering::Relaxed)) as i32) > 0 {
@@ -231,7 +231,7 @@ pub fn recv(to: u64) -> Vec<u8> {
                         PEER_FIN.store(true, Ordering::Relaxed);
                     }
                     drop(cl);
-                    crate::rtl8139::RX_BYTES.fetch_add(fresh.len() as u32, Ordering::Relaxed);
+                    crate::rtl8139::RX_BYTES.fetch_add(fresh.len() as u64, Ordering::Relaxed);
                     *CONN.lock() = Some(nc);
                     // Подтверждаем полученные данные (window update):
                     // иначе сервер упирается в окно и передача встаёт.
@@ -240,7 +240,7 @@ pub fn recv(to: u64) -> Vec<u8> {
                 }
             }
             if f&FIN != 0 {
-                *LAST_END.lock() = "сервер закрыл TCP-соединение (FIN)";
+                *LAST_END.lock() = alloc::string::String::from("сервер закрыл TCP-соединение (FIN)");
                 let mut nc = *c;
                 nc.ack = s.wrapping_add(1);
                 drop(cl);
@@ -254,7 +254,7 @@ pub fn recv(to: u64) -> Vec<u8> {
         }
         retransmit_if_due();
         if crate::timer::uptime_ms()-t0 > to {
-            *LAST_END.lock() = "таймаут: от сервера нет данных";
+            *LAST_END.lock() = alloc::string::String::from("таймаут: от сервера нет данных");
             return Vec::new();
         }
         if crate::timer::uptime_ms()-t0 > to { return Vec::new(); }

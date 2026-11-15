@@ -3,7 +3,7 @@
 //! Реализована инициализация APIC (Advanced Programmable Interrupt Controller)
 //! для поддержки нескольких CPU-ядер.
 
-use crate::port::{outb, outl, outl_u32, inl_u32};
+use crate::port::{outb, outl, outl_u32};
 use alloc::vec::Vec;
 
 // APIC registers
@@ -116,7 +116,8 @@ fn init_ioapic() -> bool {
 }
 
 fn boot_secondary_cpus() -> usize {
-    let mut num_cpus = 1; // BSP уже запущен
+    let _num_cpus_init = 1; // BSP уже запущен
+    let mut num_cpus = 1;
     
     // Запуск  AP (Application Processor) через INIT/SIPI IPI
     unsafe {

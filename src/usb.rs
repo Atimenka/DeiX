@@ -119,13 +119,13 @@ impl UsbController {
         devices
     }
 
-    fn enumerate_ehci(&mut self, devices: &mut Vec<UsbDevice>) {
+    fn enumerate_ehci(&mut self, _devices: &mut Vec<UsbDevice>) {
         // Простая эмуляция enumeration
         // На реальном железе нужно делать full enumeration с контролом скорости
         // Здесь возвращаем пустой список — реальная enumeration требует больше кода
     }
 
-    fn enumerate_ohci(&mut self, devices: &mut Vec<UsbDevice>) {
+    fn enumerate_ohci(&mut self, _devices: &mut Vec<UsbDevice>) {
         // То же самое для OHCI
     }
 }

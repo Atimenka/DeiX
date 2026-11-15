@@ -34,7 +34,7 @@ fn leaf(mut eax: u32) -> [u32; 4] {
 ///
 /// Задаётся для совместимости с общим API из других подсистем.
 pub unsafe fn cpuid(eax_in: u32, eax: &mut u32, ebx: &mut u32, ecx: &mut u32, edx: &mut u32) {
-    let (a, b, c, d) = leaf(eax_in);
+    let [a, b, c, d] = leaf(eax_in);
     *eax = a;
     *ebx = b;
     *ecx = c;

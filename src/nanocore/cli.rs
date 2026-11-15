@@ -12,8 +12,6 @@
 //! The CLI is invoked from the existing `cli.rs` command processor.
 
 use alloc::string::ToString;
-use alloc::vec::Vec;
-use alloc::format;
 
 use crate::nanocore::orchestrator::{Orchestrator, RunMode};
 use crate::nanocore::log;
@@ -108,7 +106,7 @@ fn cmd_status(orch: &Orchestrator) {
 }
 
 /// Show log entries.
-fn cmd_logs(orch: &Orchestrator, args: &[&str]) {
+fn cmd_logs(_orch: &Orchestrator, args: &[&str]) {
     let filter = args.iter().position(|&a| a == "--filter")
         .and_then(|i| args.get(i + 1))
         .copied();
@@ -140,7 +138,7 @@ fn cmd_logs(orch: &Orchestrator, args: &[&str]) {
 }
 
 /// Trace a specific process.
-fn cmd_trace(orch: &Orchestrator, args: &[&str]) {
+fn cmd_trace(_orch: &Orchestrator, args: &[&str]) {
     if args.is_empty() {
         println!("Usage: nanocore trace <name>");
         return;

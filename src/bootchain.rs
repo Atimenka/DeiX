@@ -260,7 +260,7 @@ impl VerifyStream {
             .map_err(|_| String::from("read error"))?;
         self.done += 512;
         let chunk_end = (self.done).min(self.total);
-        let offset = (self.done - 512).min(chunk_end - 512.min(chunk_end));
+        let _offset = (self.done - 512).min(chunk_end - 512.min(chunk_end));
         let len = chunk_end - (self.done - 512);
         if len <= 0 {
             Ok(Vec::new())

@@ -32,7 +32,11 @@ impl Stat {
     pub fn is_dir(&self) -> bool { false }
 }
 
-pub struct FileEntry;
+pub struct FileEntry {
+    pub name: alloc::string::String,
+    pub is_dir: bool,
+    pub size: u32,
+}
 
 pub fn build_image(_files: &[(&str, &[u8])]) -> Vec<u8> {
     Vec::new()

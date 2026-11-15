@@ -155,6 +155,7 @@ pub enum IconType {
     Settings, Check, Install, Browser, Theme, Wifi, Volume,
     Search, Grid, Bookmark, ArrowLeft, ArrowRight,
     Home, Reload, Cross, Trash, Download,
+<<<<<<< HEAD
 }
 
     pub const SHADOW: Color = Color::rgb(0, 0, 0);
@@ -209,6 +210,8 @@ pub enum IconType {
     Terminal, Files, TaskManager, Display, About, Power, Restart,
     Settings, Check, Install, Browser, Theme, Wifi, Volume,
     Search, Grid, Bookmark, ArrowLeft, ArrowRight,
+=======
+>>>>>>> d6b072f (fix: resolve 34 errors from rebase conflicts — dedup Renderer/IconType, fix spawned order, type mismatches, unused warnings)
 }
 
 impl Renderer {
@@ -265,7 +268,7 @@ impl Renderer {
             return;
         }
         let bg = Color(self.back_buffer[idx]);
-        self.back_buffer[idx] = color.alpha_blend(bg, alpha).0;
+        self.back_buffer[idx] = color.alpha_blend(bg, alpha as i32).0;
     }
 
     /// Быстрый `memcpy` из RAM back buffer в MMIO Framebuffer только по списку повреждённых областей DamageList.
@@ -349,7 +352,7 @@ impl Renderer {
             let end = start + (x1 - x0) as usize;
             for px in &mut self.back_buffer[start..end] {
                 let bg = Color(*px);
-                *px = color.alpha_blend(bg, alpha).0;
+                *px = color.alpha_blend(bg, alpha as i32).0;
             }
         }
         self.add_damage(Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32));
@@ -414,7 +417,7 @@ impl Renderer {
             let end = start + (x1 - x0) as usize;
             for px in &mut self.back_buffer[start..end] {
                 let c = Color(*px);
-                *px = c.lerp(Color::BLACK, strength).0;
+                *px = c.lerp(Color::BLACK, strength as i32).0;
             }
         }
         self.add_damage(Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32));

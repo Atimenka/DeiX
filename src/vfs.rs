@@ -221,7 +221,7 @@ pub fn read_file(path: &str) -> Result<Vec<u8>, VfsError> {
             let img = system_image()?;
             crate::erofs::read_file(&img, &rest).map_err(|e| match e {
                 crate::erofs::ErofsError::NotFound => VfsError::NotFound { path: String::from(path) },
-                other => VfsError::Io { path: String::from(path), cause: other.message() },
+                other => VfsError::Io { path: String::from(path), cause: other.message().into() },
             })
         }
         MOUNT_USERDATA => {
@@ -348,13 +348,13 @@ pub fn stat(path: &str) -> Result<Stat, VfsError> {
                     })
                     .map_err(|e| VfsError::Io {
                         path: String::from(path),
-                        cause: e.message(),
+                        cause: e.message().into(),
                     });
             }
             match crate::erofs::stat(&img, &rest) {
                 Ok(ino) => Ok(Stat {
                     is_dir: ino.is_dir(),
-                    size: ino.size,
+                    size: ino.size as u64,
                     read_only: true,
                 }),
                 Err(crate::erofs::ErofsError::NotFound) => {
@@ -362,7 +362,7 @@ pub fn stat(path: &str) -> Result<Stat, VfsError> {
                 }
                 Err(other) => Err(VfsError::Io {
                     path: String::from(path),
-                    cause: other.message(),
+                    cause: other.message().into(),
                 }),
             }
         }
@@ -418,7 +418,7 @@ pub fn readdir(path: &str) -> Result<Vec<DirEnt>, VfsError> {
             let img = system_image()?;
             let listing = crate::erofs::list_dir(&img, &rest).map_err(|e| match e {
                 crate::erofs::ErofsError::NotFound => VfsError::NotFound { path: String::from(path) },
-                other => VfsError::Io { path: String::from(path), cause: other.message() },
+                other => VfsError::Io { path: String::from(path), cause: other.message().into() },
             })?;
             Ok(listing
                 .into_iter()

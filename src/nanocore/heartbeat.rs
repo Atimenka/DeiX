@@ -98,6 +98,6 @@ pub fn check_normal(
 }
 
 /// Send a heartbeat (called by each Nano-Thread).
-pub fn send_beat(pid: u32, name: &str, now_ms: u64) {
+pub fn send_beat(pid: u32, name: &str, _now_ms: u64) {
     crate::nanocore::log::log(pid, name, LogLevel::Trace, "heartbeat");
 }
