@@ -254,11 +254,11 @@ DATA16_SEG equ gdt_data16 - gdt_start  ; 0x20 data16
 ; ---------------- данные (DS=0, адреса 0x9000+off) ----------------
 boot_drive:    db 0
 
-ram_dst_phys:  resd 1
-sectors_left:  resw 1
-cur_lba_lo:    resw 1
-cur_lba_hi:    resw 1
-chunk_bytes:   resd 1
+ram_dst_phys:  dd 0
+sectors_left:  dw 0
+cur_lba_lo:    dw 0
+cur_lba_hi:    dw 0
+chunk_bytes:   dd 0
 
 disk_error:
     ; Раньше здесь был молчаливый вечный цикл: на реальном железе это

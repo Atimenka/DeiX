@@ -437,8 +437,9 @@ pub fn kill(pid: u32, code: i32) -> Result<(), ProcessError> {
     {
         let mut table = PROCS.lock();
         if let Some(p) = table.iter_mut().find(|p| p.pid == pid) {
-        for ch in p.ipc_channels.drain(..) {
-            let _ = crate::ipc::close_channel(ch);
+            for ch in p.ipc_channels.drain(..) {
+                let _ = crate::ipc::close_channel(ch);
+            }
         }
     }
     if let Some(id) = sched_id {
