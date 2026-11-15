@@ -59,9 +59,19 @@ jobs:
 
       # ---------- 4. Сборка ----------
       - name: Run build.sh
-        run: bash ./build.sh
+        run: bash ./build.sh 2>&1 | tee /tmp/build_log.txt
         env:
           RUST_BACKTRACE: "1"
+        continue-on-error: true
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: /tmp/build_log.txt
+          if-no-files-found: ignore
+          retention-days: 1
 
       # ---------- 5. Проверка артефактов ----------
       - name: Verify artifacts
