@@ -142,40 +142,35 @@ jobs:
             echo "FAIL: паника ядра во время загрузки"; exit 1
           fi
 
-      # ---------- 6b. При падении smoke-теста — выгружаем полный лог в Issue ----------
-      # Лог-хранилище Actions недоступно для API-доступа, поэтому полный
-      # qemu_disk.log отправляем в Issue (issues API — api.github.com).
-      - name: Dump QEMU log to issue on failure
+      # ---------- 6b. При падении smoke-теста — выгружаем диагностику в Issue ----------
+      # Лог-хранилище Actions недоступно для API-доступа, поэтому
+      # диагностический summary (маркеры + начало/конец лога) отправляем в Issue.
+      - name: Dump QEMU diagnostics to issue on failure
         if: failure()
         run: |
           {
-            echo "## QEMU boot smoke test failed"
-            echo
+            echo "=== QEMU Boot Diagnostics ==="
             echo "Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo "Commit: $GITHUB_SHA"
-            echo
+            echo "Log size: $(wc -c < qemu_disk.log 2>/dev/null || echo 0) bytes"
+            echo "Marker '=== DeiX boot: serial debug active ===': $(grep -c '=== DeiX boot: serial debug active ===' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker 'mini kernel booted successfully!': $(grep -c 'mini kernel booted successfully!' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker 'R' (RAM disk loaded): $(grep -c '^R' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker 'K' (kernel copied): $(grep -c '^K' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker '1' (stage2 bss): $(grep -c '^1' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker '2' (long mode): $(grep -c '^2' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker '3' (paging): $(grep -c '^3' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker '4' (kernel_main): $(grep -c '^4' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker 'kernel_main entered': $(grep -c 'kernel_main entered' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "KERNEL PANIC: $(grep -c 'KERNEL PANIC' qemu_disk.log 2>/dev/null || echo 0)"
+            echo ""
             echo '```log'
-            cat qemu_disk.log 2>/dev/null || echo "(qemu_disk.log не найден)"
+            head -40 qemu_disk.log 2>/dev/null || echo "(qemu_disk.log не найден)"
+            echo "..."
+            tail -40 qemu_disk.log 2>/dev/null || echo ""
             echo '```'
           } > /tmp/qemu_issue_body.md
-          # Issue body ограничен 65536 символами — обрезаем до 60000,
-          # сохраняя начало и конец лога.
-          SIZE=$(wc -c < /tmp/qemu_issue_body.md)
-          if [ "$SIZE" -gt 60000 ]; then
-            head -c 30000 /tmp/qemu_issue_body.md > /tmp/body_head
-            tail -c 30000 /tmp/qemu_issue_body.md > /tmp/body_tail
-            {
-              cat /tmp/body_head
-              echo
-              echo "...[обрезано $((SIZE - 60000)) символов]..."
-              echo
-              cat /tmp/body_tail
-            } > /tmp/qemu_issue_body.md
-          fi
-          gh api repos/$GITHUB_REPOSITORY/issues \
-            --method POST \
-            -f "title=CI: QEMU boot smoke test failed (run $GITHUB_RUN_ID)" \
-            -f "body@/tmp/qemu_issue_body.md"
+          gh issue create --title "CI: QEMU boot smoke test failed (run $GITHUB_RUN_ID)" --body-file /tmp/qemu_issue_body.md
 
       # ---------- 7. Регрессия: первый и повторные запуски (персистентность) ----------
       - name: QEMU scenario - first boot, account, two reboots
