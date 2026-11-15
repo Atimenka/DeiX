@@ -124,7 +124,7 @@ fn cmd_logs(_orch: &Orchestrator, args: &[&str]) {
 
     if follow {
         println!("--- Following (press Ctrl+C to stop) ---");
-        let mut last = entries.len();
+        let last = entries.len();
         loop {
             let new = log::get_entries_since(last);
             for entry in new.iter() {

@@ -116,9 +116,8 @@ fn init_ioapic() -> bool {
 }
 
 fn boot_secondary_cpus() -> usize {
-    let _num_cpus_init = 1; // BSP уже запущен
-    let mut num_cpus = 1;
-    
+    let num_cpus;
+
     // Запуск  AP (Application Processor) через INIT/SIPI IPI
     unsafe {
         // Send INIT IPI to all APs (0xFF = all processors except self)
