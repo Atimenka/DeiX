@@ -172,9 +172,10 @@ jobs:
               cat /tmp/body_tail
             } > /tmp/qemu_issue_body.md
           fi
-          gh issue create \
-            --title "CI: QEMU boot smoke test failed (run $GITHUB_RUN_ID)" \
-            --body-file /tmp/qemu_issue_body.md
+          gh api repos/$GITHUB_REPOSITORY/issues \
+            --method POST \
+            -f "title=CI: QEMU boot smoke test failed (run $GITHUB_RUN_ID)" \
+            -f "body@/tmp/qemu_issue_body.md"
 
       # ---------- 7. Регрессия: первый и повторные запуски (персистентность) ----------
       - name: QEMU scenario - first boot, account, two reboots
