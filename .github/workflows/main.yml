@@ -150,11 +150,16 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, os, urllib.request
-          log = ""
           try:
               log = open("qemu_disk.log", "rb").read().decode("utf-8", "replace")
           except OSError:
               log = "(qemu_disk.log не найден)"
+          # Issue body ограничен 65536 символами — обрезаем лог до лимита,
+          # сохраняя начало и конец (куда важно для диагностики).
+          LIMIT = 55000
+          if len(log) > LIMIT:
+              half = LIMIT // 2
+              log = log[:half] + "\n...[обрезано " + str(len(log) - LIMIT) + " символов]...\n" + log[-half:]
           body = (
               "## QEMU boot smoke test failed\n\n"
               "Run: https://github.com/" + os.environ.get("GITHUB_REPOSITORY", "") + "/actions/runs/" + os.environ.get("GITHUB_RUN_ID", "") + "\n"
