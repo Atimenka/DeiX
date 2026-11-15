@@ -298,6 +298,8 @@ pub fn finish() {
         None => return,
     }
     crate::bootprof::mark("bootchain: /system kernel verified (deferred)");
+}
+
 /// Флаг: проверка образа ядра отложена (ленивая инициализация).
 static VERIFICATION_PENDING: AtomicBool = AtomicBool::new(true);
 
