@@ -144,33 +144,75 @@ jobs:
 
       # ---------- 6b. При падении smoke-теста — выгружаем диагностику в Issue ----------
       # Лог-хранилище Actions недоступно для API-доступа, поэтому
-      # диагностический summary (маркеры + начало/конец лога) отправляем в Issue.
+      # диагностический summary (маркеры + начало/конец лога) отправляем в Issue
+      # через REST API (curl + JSON, без gh CLI — он не работает в workflow).
       - name: Dump QEMU diagnostics to issue on failure
         if: failure()
         run: |
-          {
-            echo "=== QEMU Boot Diagnostics ==="
-            echo "Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-            echo "Commit: $GITHUB_SHA"
-            echo "Log size: $(wc -c < qemu_disk.log 2>/dev/null || echo 0) bytes"
-            echo "Marker '=== DeiX boot: serial debug active ===': $(grep -c '=== DeiX boot: serial debug active ===' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker 'mini kernel booted successfully!': $(grep -c 'mini kernel booted successfully!' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker 'R' (RAM disk loaded): $(grep -c '^R' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker 'K' (kernel copied): $(grep -c '^K' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker '1' (stage2 bss): $(grep -c '^1' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker '2' (long mode): $(grep -c '^2' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker '3' (paging): $(grep -c '^3' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker '4' (kernel_main): $(grep -c '^4' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker 'kernel_main entered': $(grep -c 'kernel_main entered' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "KERNEL PANIC: $(grep -c 'KERNEL PANIC' qemu_disk.log 2>/dev/null || echo 0)"
-            echo ""
-            echo '```log'
-            head -40 qemu_disk.log 2>/dev/null || echo "(qemu_disk.log не найден)"
-            echo "..."
-            tail -40 qemu_disk.log 2>/dev/null || echo ""
-            echo '```'
-          } > /tmp/qemu_issue_body.md
-          gh issue create --title "CI: QEMU boot smoke test failed (run $GITHUB_RUN_ID)" --body-file /tmp/qemu_issue_body.md
+          python3 - <<'PY'
+          import json, os, urllib.request, urllib.error
+
+          log_path = "qemu_disk.log"
+          try:
+              with open(log_path, "rb") as f:
+                  log = f.read().decode("utf-8", "replace")
+          except OSError:
+              log = "(qemu_disk.log не найден)"
+
+          lines = log.split("\n")
+          head = "\n".join(lines[:40])
+          tail = "\n".join(lines[-40:]) if len(lines) > 40 else ""
+
+          def count(pat):
+              return log.count(pat)
+
+          summary = f"""=== QEMU Boot Diagnostics ===
+Run: https://github.com/{os.environ.get('GITHUB_REPOSITORY','')}/actions/runs/{os.environ.get('GITHUB_RUN_ID','')}
+Commit: {os.environ.get('GITHUB_SHA','')}
+Log size: {len(log)} bytes
+
+Markers:
+  '=== DeiX boot: serial debug active ===': {count('=== DeiX boot: serial debug active ===')}
+  'mini kernel booted successfully!': {count('mini kernel booted successfully!')}
+  'R' (RAM disk loaded): {count(chr(10)+'R')}
+  'K' (kernel copied): {count(chr(10)+'K')}
+  '1' (stage2 bss): {count(chr(10)+'1')}
+  '2' (long mode): {count(chr(10)+'2')}
+  '3' (paging): {count(chr(10)+'3')}
+  '4' (kernel_main): {count(chr(10)+'4')}
+  'kernel_main entered': {count('kernel_main entered')}
+  KERNEL PANIC: {count('KERNEL PANIC')}
+
+--- First 40 lines ---
+{head}
+
+--- Last 40 lines ---
+{tail}
+"""
+
+          payload = json.dumps({
+              "title": "CI: QEMU boot smoke test failed (run " + os.environ.get("GITHUB_RUN_ID", "") + ")",
+              "body": summary,
+          }).encode("utf-8")
+
+          req = urllib.request.Request(
+              "https://api.github.com/repos/" + os.environ.get("GITHUB_REPOSITORY", "") + "/issues",
+              data=payload,
+              headers={
+                  "Authorization": "Bearer " + os.environ.get("GITHUB_TOKEN", ""),
+                  "Accept": "application/vnd.github+json",
+              },
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  data = json.loads(resp.read())
+                  print("Issue создан:", data.get("html_url"))
+          except urllib.error.HTTPError as e:
+              print("ОШИБКА создания Issue: HTTP", e.code)
+              print(e.read().decode("utf-8", "replace"))
+              raise
+          PY
 
       # ---------- 7. Регрессия: первый и повторные запуски (персистентность) ----------
       - name: QEMU scenario - first boot, account, two reboots
