@@ -200,6 +200,7 @@ pub extern "C" fn kernel_main() -> ! {
         if ata::is_present() {
             println!("ATA disk: OK (PIO mode)");
         }
+    }
     crate::serial_println!("[deix] T2: {} drivers spawned in parallel ({} ms)", spawned, timer::uptime_ms());
     println!("PS/2 keyboard: OK (handled via IRQ1)");
     println!("PS/2 mouse: OK (handled via IRQ12)");
