@@ -77,8 +77,21 @@ jobs:
       - name: Verify artifacts
         run: |
           set -e
-          echo "== build/ =="
+          echo "== build/ contents =="
           ls -lh build/
+          echo "== checking files =="
+          for f in deix_disk.img kernel.bin boot_sector.bin stage2.bin ramboot.bin SHA256SUMS; do
+            if [ -f "build/$f" ]; then
+              echo "OK: build/$f"
+            else
+              echo "MISSING: build/$f"
+            fi
+          done
+          echo "== checking release img =="
+          ls build/deix-*-x86_64.img 2>&1 || true
+          echo "== SHA256SUMS content =="
+          cat build/SHA256SUMS 2>&1 || true
+          echo "== verifying =="
           for f in deix_disk.img kernel.bin boot_sector.bin stage2.bin ramboot.bin SHA256SUMS; do
             test -f "build/$f" || { echo "Нет build/$f"; exit 1; }
           done
