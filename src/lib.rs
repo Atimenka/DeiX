@@ -110,6 +110,10 @@ fn panic(info: &PanicInfo) -> ! {
 /// (long_mode_init.asm) после перехода в 64-битный режим.
 #[no_mangle]
 pub extern "C" fn kernel_main() -> ! {
+    // Маркер входа в ядро: если его нет в serial-логе, но есть маркер '4'
+    // из long_mode_init.asm — ядро не загружено/не стартовало.
+    crate::serial_println!("[deix] kernel_main entered");
+
     // На этом этапе прерывания ещё физически выключены (interrupts::init()
     // ниже их только включит), поэтому прямой доступ безопасен.
 

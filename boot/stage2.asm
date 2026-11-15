@@ -46,6 +46,11 @@ stage2_start:
     rep stosd
 .bss_done:
 
+    ; маркер '1': bss загрузчика обнулён
+    mov dx, 0x3F8
+    mov al, '1'
+    out dx, al
+
     mov esp, stack_top
 
     ; kernel.bin уже скопирован напрямую по адресу 0x100000 в ramboot.asm —
@@ -54,8 +59,18 @@ stage2_start:
     call check_cpuid
     call check_long_mode
 
+    ; маркер '2': CPUID + long mode OK
+    mov dx, 0x3F8
+    mov al, '2'
+    out dx, al
+
     call set_up_page_tables
     call enable_paging
+
+    ; маркер '3': paging включен, переход в long mode
+    mov dx, 0x3F8
+    mov al, '3'
+    out dx, al
 
     lgdt [gdt64.pointer]
     jmp gdt64.code_segment:long_mode_entry

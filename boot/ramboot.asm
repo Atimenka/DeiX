@@ -188,6 +188,11 @@ bits 16
     jmp .load_loop
 .load_done:
 
+    ; ---- маркер: RAM-диск полностью загружен ----
+    mov dx, 0x3F8
+    mov al, 'R'
+    out dx, al
+
     ; ---- копируем kernel.bin из RAM-диска (LBA KERNEL_LBA) в 0x11000 ----
     cli
     lgdt [gdt_descriptor]
@@ -205,6 +210,11 @@ pm_copy_kernel:
     mov edi, 0x100000         ; KERNEL_DST (1 МиБ)
     mov ecx, KERNEL_SECTORS * 512 / 4
     rep movsd
+
+    ; ---- маркер: kernel.bin скопирован, прыгаем в stage2 ----
+    mov dx, 0x3F8
+    mov al, 'K'
+    out dx, al
 
     ; ---- jmp stage2 (0x10000, 32-бит PM, плоский CS) ----
     jmp STAGE2_ADDR

@@ -15,6 +15,11 @@ jobs:
   build:
     name: Build + verify DeiX (BIOS disk image)
     runs-on: ubuntu-latest
+    # Чтобы при падении QEMU-smoke-теста можно было получить лог загрузки:
+    # шаг создаёт Issue с полным содержимым qemu_disk.log.
+    permissions:
+      issues: write
+      contents: read
 
     steps:
       # ---------- 0. Checkout ----------
@@ -136,6 +141,27 @@ jobs:
           if grep -q 'KERNEL PANIC' qemu_disk.log; then
             echo "FAIL: паника ядра во время загрузки"; exit 1
           fi
+
+      # ---------- 6b. При падении smoke-теста — выгружаем полный лог в Issue ----------
+      # Лог-хранилище Actions недоступно для API-доступа, поэтому полный
+      # qemu_disk.log отправляем в Issue (issues API — api.github.com).
+      - name: Dump QEMU log to issue on failure
+        if: failure()
+        run: |
+          {
+            echo "## QEMU boot smoke test failed"
+            echo
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "Commit: ${{ github.sha }}"
+            echo
+            echo '```log'
+            cat qemu_disk.log 2>/dev/null || echo "(qemu_disk.log не найден)"
+            echo '```'
+          } > /tmp/qemu_issue_body.md
+          gh issue create \
+            --title "CI: QEMU boot smoke test failed (run ${{ github.run_id }})" \
+            --body-file /tmp/qemu_issue_body.md \
+            --label ci-failure 2>/dev/null || echo "WARN: не удалось создать Issue с логом"
 
       # ---------- 7. Регрессия: первый и повторные запуски (персистентность) ----------
       - name: QEMU scenario - first boot, account, two reboots
