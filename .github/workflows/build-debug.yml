@@ -1,0 +1,35 @@
+name: Build Debug
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm binutils gcc g++ make python3
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools-preview
+
+      - name: Run build.sh (capture output)
+        run: |
+          bash ./build.sh 2>&1 | tee /tmp/build_log.txt
+        id: build
+        continue-on-error: true
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-debug-log
+          path: /tmp/build_log.txt
+          if-no-files-found: ignore
+          retention-days: 1
