@@ -119,6 +119,18 @@ jobs:
           echo "== QEMU disk log (tail) =="
           tail -n 80 qemu_disk.log
           {
+            echo "## QEMU Marker Counts"
+            echo "R (ramboot loaded): $(grep -c '^R' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "K (kernel copied): $(grep -c '^K' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "1 (bss zeroed): $(grep -c '^1' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "2 (long mode OK): $(grep -c '^2' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "3 (paging on): $(grep -c '^3' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "4 (before kernel_main): $(grep -c '^4' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "kernel_main entered: $(grep -c 'kernel_main entered' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "serial debug active: $(grep -c 'serial debug active' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "booted successfully: $(grep -c 'mini kernel booted' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "PANIC: $(grep -c 'KERNEL PANIC' qemu_disk.log 2>/dev/null || echo 0)"
+            echo ""
             echo "## QEMU Disk Log (tail 80)"
             echo '```'
             tail -n 80 qemu_disk.log
