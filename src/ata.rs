@@ -55,6 +55,10 @@ const CMD_READ_SECTORS: u8 = 0x20;
 const CMD_WRITE_SECTORS: u8 = 0x30;
 const CMD_CACHE_FLUSH: u8 = 0xE7;
 const CMD_IDENTIFY: u8 = 0xEC;
+const CMD_SET_MULTIPLE: u8 = 0xC4;
+const MAX_MULTIPLE: u32 = 16;
+
+static MULTIPLE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 pub const SECTOR_SIZE: usize = 512;
 

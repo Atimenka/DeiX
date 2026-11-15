@@ -88,13 +88,13 @@ fn init_apic() -> bool {
         outb(0xA1, 0xFF);
         
         // Включить APIC
-        outl(APIC_BASE + APIC_ENABLE, 0x1FF);
+        outl_u32(APIC_BASE + APIC_ENABLE, 0x1FF);
         
         // Настроить SVR (Spurious Interrupt Vector Register)
-        outl(APIC_BASE + APIC_SVR, 0x1FF);
+        outl_u32(APIC_BASE + APIC_SVR, 0x1FF);
         
         // Отправить EOI для pending interrupts
-        outl(APIC_BASE + APIC_EOI, 0);
+        outl_u32(APIC_BASE + APIC_EOI, 0);
         
         true
     }
@@ -121,15 +121,15 @@ fn boot_secondary_cpus() -> usize {
     // Запуск  AP (Application Processor) через INIT/SIPI IPI
     unsafe {
         // Send INIT IPI to all APs (0xFF = all processors except self)
-        outl(APIC_BASE + APIC_ICR_LO, 0x000C4500); // INIT
-        outl(APIC_BASE + APIC_ICR_HI, 0x00000000);
+        outl_u32(APIC_BASE + APIC_ICR_LO, 0x000C4500); // INIT
+        outl_u32(APIC_BASE + APIC_ICR_HI, 0x00000000);
         
         // Wait for INIT to complete
         crate::timer::sleep_ms(10);
         
         // Send STARTUP IPI to APs (0x4687 = start at 0x8700)
-        outl(APIC_BASE + APIC_ICR_LO, 0x000C4687); // STARTUP
-        outl(APIC_BASE + APIC_ICR_HI, 0x00000000);
+        outl_u32(APIC_BASE + APIC_ICR_LO, 0x000C4687); // STARTUP
+        outl_u32(APIC_BASE + APIC_ICR_HI, 0x00000000);
         
         // Wait for STARTUP to complete
         crate::timer::sleep_ms(10);

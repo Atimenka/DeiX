@@ -434,7 +434,9 @@ pub fn kill(pid: u32, code: i32) -> Result<(), ProcessError> {
     // Освобождаем слот в нанокоре — процесс перестал быть настоящим процессом.
     crate::nanocore::unregister_process(pid);
     // Закрываем все IPC-каналы процесса.
-    if let Some(p) = table.iter_mut().find(|p| p.pid == pid) {
+    {
+        let mut table = PROCS.lock();
+        if let Some(p) = table.iter_mut().find(|p| p.pid == pid) {
         for ch in p.ipc_channels.drain(..) {
             let _ = crate::ipc::close_channel(ch);
         }

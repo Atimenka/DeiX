@@ -92,7 +92,7 @@ pub fn check_normal(
     crate::nanocore::log::log_error(
         pid,
         name,
-        alloc::format!("heartbeat lost ({} missed)", tracker.missed_count),
+        &alloc::format!("heartbeat lost ({} missed)", tracker.missed_count),
     );
     HeartbeatResult::Restart
 }

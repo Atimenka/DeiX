@@ -51,3 +51,30 @@ pub use orchestrator::ORCHESTRATOR_PID;
 pub use orchestrator::boot;
 pub use orchestrator::init_global;
 pub use orchestrator::with_orchestrator;
+
+// --- Stub API для внешнего доступа ---
+
+/// Инициализирует нано-кор (обёртка вокруг init_global).
+pub fn init() {
+    init_global();
+}
+
+/// Регистрирует процесс в нанокоре.
+pub fn register_process(_pid: u32) {
+    // Stub: регистрация процесса в оркестраторе.
+}
+
+/// Deregisters a process from the nano-core.
+pub fn unregister_process(_pid: u32) {
+    // Stub: снятие регистрации процесса.
+}
+
+/// Регистрирует IPC-канал.
+pub fn register_ipc(_id: usize) {
+    // Stub: регистрация IPC-канала.
+}
+
+/// Deregisters an IPC channel.
+pub fn unregister_ipc(_id: usize) {
+    // Stub: снятие регистрации IPC-канала.
+}

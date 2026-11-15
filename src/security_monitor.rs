@@ -9,6 +9,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Порог принятия решения о ликвидации угрозы (жёстко 0.85 по ТЗ).
 pub const DEFAULT_RISK_THRESHOLD: f32 = 0.85;

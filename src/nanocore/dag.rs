@@ -7,7 +7,7 @@
 //! No external crates — simple adjacency list with topological sort.
 
 use alloc::collections::BTreeMap;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 /// A directed graph representing process dependencies.
@@ -24,7 +24,7 @@ pub struct Dag {
 }
 
 impl Dag {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Dag {
             dependents: BTreeMap::new(),
             dependencies: BTreeMap::new(),
@@ -70,19 +70,19 @@ impl Dag {
     }
 
     /// Are all dependencies of `name` satisfied (i.e., in `completed`)?
-    pub fn ready(&self, name: &str, completed: &[&str]) -> bool {
+    pub fn ready(&self, name: &str, completed: &[String]) -> bool {
         let deps = self.dependencies(name);
-        deps.iter().all(|d| completed.contains(&d.as_str()))
+        deps.iter().all(|d| completed.iter().any(|c| c == d))
     }
 
     /// Get all processes that are ready to run given the completed set.
     /// Returns names in priority-independent order.
-    pub fn ready_set(&self, completed: &[&str]) -> Vec<String> {
+    pub fn ready_set(&self, completed: &[String]) -> Vec<String> {
         self.nodes
             .iter()
             .filter(|name| {
                 // Skip already-completed
-                if completed.contains(&name.as_str()) {
+                if completed.iter().any(|c| c == name) {
                     return false;
                 }
                 // Check all deps are completed
@@ -159,10 +159,10 @@ impl Dag {
             if wave.is_empty() {
                 break;
             }
-            waves.push(wave);
             for w in &wave {
                 completed.push(w.clone());
             }
+            waves.push(wave);
         }
         waves
     }

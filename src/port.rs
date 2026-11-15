@@ -36,6 +36,18 @@ pub unsafe fn inl(port: u16) -> u32 {
     value
 }
 
+/// 32-битная запись в порт с u32 адресом (для APIC/USB MMIO).
+#[inline]
+pub unsafe fn outl_u32(port: u32, value: u32) {
+    outl(port as u16, value);
+}
+
+/// 32-битное чтение из порта с u32 адресом (для APIC/USB MMIO).
+#[inline]
+pub unsafe fn inl_u32(port: u32) -> u32 {
+    inl(port as u16)
+}
+
 /// Читает buf.len()/2 слов (16 бит) подряд из порта в буфер — используется
 /// для быстрого чтения сектора диска через ATA PIO (256 слов = 512 байт).
 #[inline]

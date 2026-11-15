@@ -499,7 +499,7 @@ impl Desktop {
             let mut idx = [0usize; START_MENU_APPS.len()];
             let n = filtered_app_indices(&self.menu_search, &mut idx);
             for k in 0..n {
-                if l.app_items[k].contains(x, y) {
+                if Rect::contains(&l.app_items[k], x, y) {
                     if self.menu_sel != k {
                         self.menu_sel = k;
                         self.dirty = true;
@@ -1066,7 +1066,7 @@ impl Desktop {
         let mut idx = [0usize; START_MENU_APPS.len()];
         let n = filtered_app_indices(&self.menu_search, &mut idx);
         for k in 0..n {
-            if l.app_items[k].contains(x, y) {
+            if Rect::contains(&l.app_items[k], x, y) {
                 self.launch_app(START_MENU_APPS[idx[k]].1, screen_w, screen_h);
                 return;
             }
@@ -2603,4 +2603,9 @@ fn parent_path(path: &str) -> String {
         Some(0) | None => String::from("/"),
         Some(pos) => String::from(&trimmed[..pos]),
     }
+}
+
+fn load_bmp_wallpaper(_pixels: &mut [u32], _w: u32, _h: u32) -> bool {
+    // Stub: загрузка BMP-обоев не реализована.
+    false
 }

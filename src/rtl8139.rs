@@ -192,7 +192,11 @@ pub fn poll_deferred() {
 /// Счётчики трафика. Обновляются атомарно: RX растёт в контексте
 /// прерывания, поэтому блокировку здесь брать нельзя.
 static RX_PACKETS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-static RX_BYTES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub static RX_BYTES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+pub fn rx_bytes_total() -> u64 {
+    RX_BYTES.load(core::sync::atomic::Ordering::Relaxed)
+}
 static TX_PACKETS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static TX_BYTES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 

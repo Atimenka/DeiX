@@ -85,6 +85,8 @@ pub struct TlsStream {
     server: Keys,
     rx: Vec<u8>,
     closed: bool,
+    last_error: Option<String>,
+    records: usize,
 }
 
 /// HKDF-Expand-Label (RFC 8446 §7.1).
@@ -586,6 +588,8 @@ fn handshake(host: &str) -> Result<TlsStream, String> {
         server: Keys::from_secret(&s_ap),
         rx,
         closed: false,
+        last_error: None,
+        records: 0,
     })
 }
 

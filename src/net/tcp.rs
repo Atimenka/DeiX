@@ -24,6 +24,49 @@ impl TcpHdr {
 pub struct TcpConn { pub state: u8, sport: u16, dip: [u8;4], dport: u16, seq: u32, ack: u32 }
 static CONN: SpinLock<Option<TcpConn>> = SpinLock::new(None);
 static NPORT: SpinLock<u16> = SpinLock::new(1024);
+const RST: u8 = 0x04;
+
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+static LAST_END: crate::spinlock::SpinLock<String> = crate::spinlock::SpinLock::new(String::new());
+static PEER_ACK: AtomicU32 = AtomicU32::new(0);
+static PEER_FIN: AtomicBool = AtomicBool::new(false);
+static GAP_DROPPED: AtomicU32 = AtomicU32::new(0);
+static DUP_DROPPED: AtomicU32 = AtomicU32::new(0);
+static UNACKED: crate::spinlock::SpinLock<Vec<(u32, u64)>> = crate::spinlock::SpinLock::new(Vec::new());
+
+/// Причина последнего завершения соединения.
+pub fn last_end() -> &'static str {
+    without_interrupts(|| {
+        let guard = LAST_END.lock();
+        guard.as_str()
+    })
+}
+
+/// Считано принятых байтов TCP.
+pub fn rx_bytes() -> u64 {
+    crate::rtl8139::rx_bytes_total()
+}
+
+/// Статистика сетевого стека.
+pub fn link_stats() -> String {
+    format!(
+        "gap_dropped={}, dup_dropped={}",
+        GAP_DROPPED.load(Ordering::Relaxed),
+        DUP_DROPPED.load(Ordering::Relaxed)
+    )
+}
+
+/// Проверяет, нужно ли переотправлять неподтвержденные сегменты.
+fn retransmit_if_due() {
+    // Stub: ретрансмишн не реализованы в полной мере.
+}
+
+/// Были ли получены FIN-сегменты от сервера.
+pub fn peer_fin() -> bool {
+    PEER_FIN.load(Ordering::Relaxed)
+}
+
 
 // Очередь принятых TCP-пакетов (наполняется из обработчика прерываний).
 static RX_QUEUE: SpinLock<VecDeque<Vec<u8>>> = SpinLock::new(VecDeque::new());

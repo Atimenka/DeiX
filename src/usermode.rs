@@ -23,6 +23,7 @@
 //! в ядро через `exit`. Результат виден в serial-логе при загрузке.
 
 use core::arch::{asm, global_asm};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // ==================== Селекторы GDT ====================
 

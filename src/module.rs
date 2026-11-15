@@ -22,6 +22,7 @@ use crate::{print, println};
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 const KMOD_MAGIC: u32 = 0x444F_4D4B; // "KMOD" LE
 const KMOD_HEADER_SIZE: usize = 44;   // 0x2C
@@ -238,8 +239,6 @@ fn build_kernel_api() -> KernelApi {
 }
 
 pub fn load_boot_modules() {
-    use core::sync::atomic::{AtomicBool, Ordering};
-
 use crate::diag::{self, ErrorCode, Subsystem};
 
     // Карантин по итогам прошлой сессии: если отказ ядра произошёл внутри

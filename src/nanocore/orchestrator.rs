@@ -394,8 +394,8 @@ impl Orchestrator {
                 LogLevel::Info,
                 &alloc::format!(
                     "DAG complete: {}/{} procs",
-                    self.completed_count.lock(),
-                    self.total_count.lock()
+                    *self.completed_count.lock(),
+                    *self.total_count.lock()
                 ),
             );
             log::log(
@@ -486,12 +486,12 @@ impl Orchestrator {
     /// Launch ready processes.
     pub fn launch_ready(&self) {
         let now_ms = log::now_ms();
-        let completed: Vec<&str> = {
+        let completed: Vec<String> = {
             let procs = self.processes.lock();
             procs
                 .iter()
                 .filter(|p| p.state == ProcessState::Exited)
-                .map(|p| p.manifest.name.as_str())
+                .map(|p| p.manifest.name.clone())
                 .collect()
         };
 

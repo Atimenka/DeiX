@@ -63,18 +63,18 @@ impl UsbController {
     fn init_ehci(&mut self) -> bool {
         unsafe {
             // Сброс контроллера
-            outl(self.base + EHCI_USBCMD, 0x00);
+            outl_u32(self.base + EHCI_USBCMD, 0x00);
             
             // Установка конфигурации
-            outl(self.base + EHCI_CONFIGFLAG, 0x80);
+            outl_u32(self.base + EHCI_CONFIGFLAG, 0x80);
             
             // Проверка подключения портов
-            let port_status = inl(self.base + EHCI_PORTSTATUS);
+            let port_status = inl_u32(self.base + EHCI_PORTSTATUS);
             if port_status & 0x01 != 0 {
                 // Порт подключён
                 self.port_connected = true;
                 // Включить порт
-                outl(self.base + EHCI_PORTSTATUS, 0x00020000 | port_status);
+                outl_u32(self.base + EHCI_PORTSTATUS, 0x00020000 | port_status);
                 return true;
             }
             false
@@ -84,13 +84,13 @@ impl UsbController {
     fn init_ohci(&mut self) -> bool {
         unsafe {
             // Сброс контроллера
-            outl(self.base + OHCI_CONTROL, 0x00);
+            outl_u32(self.base + OHCI_CONTROL, 0x00);
             
             // Включить порт
-            outl(self.base + OHCI_STATUS, 0x00);
+            outl_u32(self.base + OHCI_STATUS, 0x00);
             
             // Проверка подключения
-            let port_status = inl(self.base + OHCI_PORT_STATUS);
+            let port_status = inl_u32(self.base + OHCI_PORT_STATUS);
             if port_status & 0x01 != 0 {
                 self.port_connected = true;
                 return true;

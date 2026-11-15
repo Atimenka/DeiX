@@ -164,12 +164,14 @@ fn request_once(
 
     let mut raw: Vec<u8> = Vec::new();
     let t0 = crate::timer::uptime_ms();
+    let mut last: u64 = t0;
+    let idle_ms: u64 = 2000;
     loop {
         let chunk = conn.recv(1000);
         if !chunk.is_empty() {
             raw.extend_from_slice(&chunk);
             last = crate::timer::uptime_ms();
-            if raw.len() > max_body {
+            if raw.len() > MAX_BODY {
                 break;
             }
         } else if !raw.is_empty() {

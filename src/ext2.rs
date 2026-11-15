@@ -1381,6 +1381,27 @@ pub fn mkdir_p(path: &str) -> Result<u32, Ext2Error> {
     mkdir_at(&v, parent, &last)
 }
 
+pub fn list_dir_path(path: &str) -> Result<Vec<FileEntry>, Ext2Error> {
+    let v = vol(VolId::Userdata)?;
+    list_dir_path_at(&v, path)
+}
+
+pub fn read_file_path(path: &str) -> Result<Vec<u8>, Ext2Error> {
+    let v = vol(VolId::Userdata)?;
+    read_file_path_at(&v, path)
+}
+
+pub fn write_file_path(path: &str, data: &[u8]) -> Result<(), Ext2Error> {
+    let v = vol(VolId::Userdata)?;
+    write_file_path_at(&v, path, data)
+}
+
+pub fn mkdir(path: &str) -> Result<u32, Ext2Error> {
+    let v = vol(VolId::Userdata)?;
+    let (parent, last) = resolve_parent_at(&v, path, true)?;
+    mkdir_at(&v, parent, &last)
+}
+
 pub fn delete_file_path(path: &str) -> Result<(), Ext2Error> {
     let v = vol(VolId::Userdata)?;
     delete_file_path_at(&v, path)

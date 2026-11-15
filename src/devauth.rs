@@ -24,12 +24,16 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::println;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 const SUPABASE_URL: &str = "https://xtsrvmwfnsxunvwuaplz.supabase.co";
 const ANON_KEY: &str = "sb_publishable_gFxef7M8SrR-yUO_KyLkMg_AoNsUins";
 
 const DEVICE_ID_FILE: &str = "/userdata/etc/device.id";
 const UNLOCK_KEY_FILE: &str = "/userdata/etc/dev_unlock.key";
+
+static LINK_PENDING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static PENDING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 //
 /// Возвращает device_id этой установки (32 hex-символа), создавая и

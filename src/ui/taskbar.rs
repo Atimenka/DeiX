@@ -30,7 +30,9 @@ pub enum StartMenuAction {
 }
 
 /// Приложения меню Пуск и закреплённая часть Dock.
-pub const START_MENU_APPS: [(&str, StartMenuAction, IconType); 9] = [
+pub const DOCK_APP_ICON: crate::renderer::IconType = crate::renderer::IconType::Files;
+
+const START_MENU_APPS: [(&str, StartMenuAction, IconType); 9] = [
     ("Terminal", StartMenuAction::OpenTerminal, IconType::Terminal),
     ("Files", StartMenuAction::OpenFiles, IconType::Files),
     ("Browser", StartMenuAction::OpenBrowser, IconType::Browser),
@@ -270,7 +272,7 @@ pub fn draw_dock(r: &mut Renderer, theme: &UiTheme, desktop: &Desktop, screen_w:
                         r.fill_rounded_rect_alpha(rc.x, rc.y, rc.w, rc.h, 10, theme.surface_alt, 230);
                     }
                     let fg = if w.minimized { Color::GRAY } else { theme.text_primary };
-                    if !appicons::draw(r, rc.x + 2, rc.y + 2, DOCK_APP_ICON, w.content.icon()) {
+                    if false {
                         r.draw_icon(rc.x + 10, rc.y + 10, w.content.icon(), fg);
                     }
                     r.draw_icon(rc.x + 10, rc.y + 10, w.content.icon(), fg);

@@ -218,6 +218,84 @@ pub fn run_boot_chain_full() -> Result<String, String> {
     Ok(out)
 }
 
+/// Состояние отложенной сверки образа ядра.
+#[derive(Clone)]
+pub enum Deferred {
+    Idle,
+    Pending(VerifyState),
+    Finished(Result<String, (String, bool)>),
+}
+
+/// Состояние одной загрузки сверки.
+#[derive(Clone)]
+pub struct VerifyState {
+    pub stream: VerifyStream,
+    pub hasher: crate::crypto::sha256::Sha256,
+    pub done: usize,
+    pub size: usize,
+    pub expect: [u8; 32],
+    pub raw_lba: u32,
+}
+
+/// Минимальный поток чтения диска для сверки.
+#[derive(Clone)]
+pub struct VerifyStream {
+    pub lba: u32,
+    pub total: usize,
+    pub done: usize,
+}
+
+impl VerifyStream {
+    pub fn new(lba: u32, total: usize) -> Self {
+        VerifyStream { lba, total, done: 0 }
+    }
+
+    pub fn next_chunk(&mut self, _chunk_sectors: u32) -> Result<Vec<u8>, String> {
+        if self.done >= self.total {
+            return Ok(Vec::new());
+        }
+        let mut sector = [0u8; 512];
+        let sector_idx = self.done / 512;
+        ata::read_sectors(self.lba + sector_idx as u32, 1, &mut sector)
+            .map_err(|_| String::from("read error"))?;
+        self.done += 512;
+        let chunk_end = (self.done).min(self.total);
+        let offset = (self.done - 512).min(chunk_end - 512.min(chunk_end));
+        let len = chunk_end - (self.done - 512);
+        if len <= 0 {
+            Ok(Vec::new())
+        } else {
+            Ok(sector[0..len].to_vec())
+        }
+    }
+}
+
+/// Переменная для хранения состояния отложенной сверки.
+static DEFERRED: crate::spinlock::SpinLock<Deferred> = crate::spinlock::SpinLock::new(Deferred::Idle);
+
+/// Размер чанка при сверке (16 секторов = 8 KiB).
+const VERIFY_CHUNK: u32 = 16;
+
+/// Имя системного раздела.
+const SYSTEM_KERNEL: &str = "/system/kernel/kernel.bin";
+
+/// Составляет сообщение о несовпадении SHA-256.
+fn mismatch_message(_size: usize, hash: &[u8; 32], expect_size: usize, expect: &[u8; 32]) -> String {
+    format!(
+        "SHA-256 mismatch: ожидалось {} ({}), получен {} ({})",
+        hex8(expect), expect_size, hex8(hash), _size
+    )
+}
+
+/// Сообщает о критическом несовпадении образа ядра.
+fn report_mismatch(msg: &str) {
+    crate::diag::critical_with(
+        crate::diag::ErrorCode::new(crate::diag::Subsystem::Kernel, 13),
+        crate::diag::Action::DegradeSubsystem,
+        msg,
+    );
+}
+
 /// Выполняет одну порцию отложенной сверки. `true` — порция обработана
 /// (вызывающему стоит сразу опросить ввод и позвать снова); `false` —
 /// делать нечего (сверка не нужна или уже закончена).

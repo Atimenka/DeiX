@@ -102,6 +102,60 @@ impl Color {
     pub const CYAN: Color = Color::rgb(6, 182, 212);
 }
 
+    pub const SHADOW: Color = Color::rgb(0, 0, 0);
+
+    pub fn alpha_blend(&self, bg: Color, alpha: i32) -> Color {
+        let a = (alpha.max(0).min(255) as u32) * 255;
+        let inv = 255 * 255 - a;
+        let sr = ((self.0 >> 16) & 0xFF) as u32;
+        let sg = ((self.0 >> 8) & 0xFF) as u32;
+        let sb = (self.0 & 0xFF) as u32;
+        let br = ((bg.0 >> 16) & 0xFF) as u32;
+        let bg_g = ((bg.0 >> 8) & 0xFF) as u32;
+        let bb = (bg.0 & 0xFF) as u32;
+        let r = (sr * a + br * inv) / (255 * 255);
+        let g = (sg * a + bg_g * inv) / (255 * 255);
+        let b = (sb * a + bb * inv) / (255 * 255);
+        Color((r << 16) | (g << 8) | b)
+    }
+
+    pub fn lerp(&self, other: Color, strength: i32) -> Color {
+        let s = strength.max(0).min(255) as u32;
+        let inv = 255 - s;
+        let sr = ((self.0 >> 16) & 0xFF) as u32;
+        let sg = ((self.0 >> 8) & 0xFF) as u32;
+        let sb = (self.0 & 0xFF) as u32;
+        let or = ((other.0 >> 16) & 0xFF) as u32;
+        let og = ((other.0 >> 8) & 0xFF) as u32;
+        let ob = (other.0 & 0xFF) as u32;
+        let r = (sr * inv + or * s) / 255;
+        let g = (sg * inv + og * s) / 255;
+        let b = (sb * inv + ob * s) / 255;
+        Color((r << 16) | (g << 8) | b)
+    }
+
+    pub fn palette() -> [Color; 16] {
+        [
+            Color::BLACK, Color::WHITE, Color::RED, Color::GREEN,
+            Color::BLUE, Color::GRAY, Color::DARK_GRAY, Color::LIGHT_GRAY,
+            Color::DESKTOP_BLUE, Color::TITLEBAR_ACTIVE, Color::TITLEBAR_INACTIVE, Color::YELLOW,
+            Color::CYAN, Color::rgb(239, 68, 68), Color::rgb(34, 197, 94), Color::rgb(59, 130, 246),
+        ]
+    }
+
+pub struct Renderer {
+    pub fb: Framebuffer,
+    pub back_buffer: Vec<u32>,
+    pub damage: crate::ui::surface::DamageList,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IconType {
+    Terminal, Files, TaskManager, Display, About, Power, Restart,
+    Settings, Check, Install, Browser, Theme, Wifi, Volume,
+    Search, Grid, Bookmark, ArrowLeft, ArrowRight,
+}
+
 impl Renderer {
     pub fn new(fb: Framebuffer) -> Self {
         let pixel_count = (fb.width as usize) * (fb.height as usize);

@@ -1264,3 +1264,82 @@ pub fn run_duil_terminal() {
         }
     }
 }
+
+// --- Заглушки отсутствующих команд ---
+
+fn cmd_run(rest: &str) {
+    crate::println!("run: запуск программы не поддерживается в этой версии");
+    let _ = rest;
+}
+
+fn cmd_bigfile(rest: &str) {
+    crate::println!("bigfile: тест большого файла");
+    let _ = rest;
+}
+
+fn cmd_useradd(rest: &str) {
+    crate::println!("useradd: добавление пользователя");
+    let _ = rest;
+}
+
+fn cmd_passwd(rest: &str) {
+    crate::println!("passwd: смена пароля");
+    let _ = rest;
+}
+
+fn cmd_whoami() {
+    crate::println!("{}", crate::userfs::current_username().unwrap_or_else(|| String::from("unknown")));
+}
+
+fn cmd_users() {
+    crate::println!("users: список пользователей");
+}
+
+fn cmd_encrypt(rest: &str) {
+    crate::println!("encrypt: управление шифрованием");
+    let _ = rest;
+}
+
+fn cmd_crash(rest: &str) {
+    crate::println!("crash: демонстрация ядерного краша");
+    let _ = rest;
+}
+
+fn cmd_poweroff() {
+    crate::println!("poweroff: выключение системы");
+    crate::halt();
+}
+
+fn cmd_lsmod() {
+    crate::println!("lsmod: список загруженных модулей");
+}
+
+fn cmd_kmod(rest: &str) {
+    crate::println!("kmod: управление модулями");
+    let _ = rest;
+}
+
+fn cmd_wallpaper(rest: &str) {
+    crate::println!("wallpaper: изменение обоев");
+    let _ = rest;
+}
+
+fn current_user() -> Option<String> {
+    crate::userfs::current_username()
+}
+
+pub fn set_current_user(_name: &str) {
+    // Stub: устанавливает текущего пользователя.
+}
+
+fn parse_ipv4(s: &str) -> Option<[u8; 4]> {
+    let mut parts = s.split('.');
+    let mut ip = [0u8; 4];
+    for i in 0..4 {
+        ip[i] = parts.next()?.parse::<u8>().ok()?;
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(ip)
+}

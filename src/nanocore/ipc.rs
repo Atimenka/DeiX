@@ -10,6 +10,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use alloc::vec::Vec;
+use alloc::string::{String, ToString};
 
 /// Max IPC message size (64 KiB).
 pub const MAX_MSG_SIZE: usize = 65536;

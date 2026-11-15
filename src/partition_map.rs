@@ -4,6 +4,7 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 pub struct PartitionPolicy {
     pub name: &'static str,

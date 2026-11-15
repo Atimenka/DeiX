@@ -128,6 +128,7 @@ enum Focus {
     User,
     Pass,
     Confirm,
+    Totp,
 }
 
 /// Перерисовывает экран входа целиком.

@@ -20,7 +20,17 @@ const ATTEMPT_TIMEOUT_MS: u64 = 2000;
 /// TTL кеша ограничиваем сверху 10 минутами, снизу — 5 секундами.
 const TTL_MAX_MS: u64 = 600_000;
 const TTL_MIN_MS: u64 = 5_000;
-const CACHE_CAP: usize = 16;
+const CACHE_CAP: usize = 16;\nconst MAX_ADDRS: usize = 8;
+
+static LAST_ERROR: crate::spinlock::SpinLock<String> = crate::spinlock::SpinLock::new(String::new());
+
+/// Результат разбора DNS-ответа.
+pub enum Parsed {
+    Answer([u8; 4], u64),
+    Truncated,
+    Reject(String),
+}
+
 
 struct CacheEntry {
     name: String,
@@ -108,7 +118,7 @@ fn skip_name(msg: &[u8], mut pos: usize) -> Option<usize> {
 /// Разбирает ответ: возвращает (ip, ttl_ms) первой A-записи из секции
 /// ответов. CNAME-записи пропускаются — сервер кладёт A каноничного
 /// имени в тот же ответ.
-fn parse_response(msg: &[u8], expect_id: u16) -> Option<([u8; 4], u64)> {
+fn parse_response(msg: &[u8], expect_id: u16) -> Option<Parsed> {
     if msg.len() < 12 {
         return None;
     }
@@ -128,7 +138,7 @@ fn parse_response(msg: &[u8], expect_id: u16) -> Option<([u8; 4], u64)> {
         pos = skip_name(msg, pos)? + 4; // QTYPE + QCLASS
     }
 
-    for _ in 0..ancount {
+    let mut ips: Vec<[u8; 4]> = Vec::new();\n    let mut min_ttl_ms: u64 = TTL_MAX_MS;\n\n    for _ in 0..ancount {
         pos = skip_name(msg, pos)?;
         if pos + 10 > msg.len() {
             return None;
@@ -213,7 +223,7 @@ pub fn resolve_a(host: &str) -> Option<[u8; 4]> {
                     if sip != server || sp != DNS_PORT {
                         continue; // чужая датаграмма — ждём дальше
                     }
-                    if let Some((ip, ttl_ms)) = parse_response(&data, id) {
+                    if let Some(Parsed::Answer(ip, ttl_ms)) = parse_response(&data, id) {
                         cache_put(&name, ip, ttl_ms);
                         return Some(ip);
                     }

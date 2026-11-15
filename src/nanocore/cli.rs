@@ -85,8 +85,8 @@ fn cmd_status(orch: &Orchestrator) {
              procs.len(),
              orch.completed_count());
     println!();
-    println!("  {'PID':<6} {'Name':<24} {'Category':<10} {'Priority':<10} {'State':<12} {'Restarts':<10} {'Actions':<10}");
-    println!("  {'─'.repeat(6)} {'─'.repeat(24)} {'─'.repeat(10)} {'─'.repeat(10)} {'─'.repeat(12)} {'─'.repeat(10)} {'─'.repeat(10)}");
+    println!("  {:<6} {:<24} {:<10} {:<10} {:<12} {:<10} {:<10}", "PID", "Name", "Category", "Priority", "State", "Restarts", "Actions");
+    println!("  {:<6} {:<24} {:<10} {:<10} {:<12} {:<10} {:<10}", "─", "─", "─", "─", "─", "─", "─");
 
     for p in procs.iter() {
         let name = &p.manifest.name;
@@ -149,8 +149,8 @@ fn cmd_trace(orch: &Orchestrator, args: &[&str]) {
     let entries = log::get_entries_filtered(name);
 
     println!("=== Trace: {} ===", name);
-    println!("  {'Time':<10} {'PID':<6} {'Level':<8} Message");
-    println!("  {'─'.repeat(10)} {'─'.repeat(6)} {'─'.repeat(8)} {'─'.repeat(40)}");
+    println!("  {:<10} {:<6} {:<8} {}", "Time", "PID", "Level", "Message");
+    println!("  {:<10} {:<6} {:<8} {:<40}", "─", "─", "─", "─");
 
     for entry in entries.iter() {
         println!("  [{:.3}]   [{:<4}] [{:<6}] {}",

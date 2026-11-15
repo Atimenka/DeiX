@@ -16,7 +16,7 @@
 //!
 //! No external crates — we parse line-by-line into [`ProcessManifest`].
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 /// Restart policy for a Nano-Thread.
@@ -56,6 +56,17 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => LogLevel::Trace,
+            1 => LogLevel::Debug,
+            2 => LogLevel::Info,
+            3 => LogLevel::Warn,
+            4 => LogLevel::Error,
+            _ => LogLevel::Info,
+        }
+    }
+
     pub fn from_str(s: &str) -> Self {
         match s {
             "trace" => LogLevel::Trace,
