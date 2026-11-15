@@ -170,7 +170,7 @@ fn parse_response(msg: &[u8], expect_id: u16) -> Option<Parsed> {
         }
         return Some(Parsed::Reject(String::from("ответ без A-записей")));
     }
-    Some(Parsed::Answer(ips, min_ttl_ms))
+    Some(Parsed::Answer(ips[0], min_ttl_ms))
 }
 
 fn set_error(msg: String) {

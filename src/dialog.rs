@@ -1,4 +1,6 @@
-//! Stub для dialog — UI диалоги (заглушка).
+//! UI диалоги (заглушка).
+
+use alloc::string::String;
 
 pub fn confirm(_msg: &str) -> bool {
     true

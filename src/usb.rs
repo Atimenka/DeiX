@@ -3,7 +3,7 @@
 //! Нативно поддерживает USB 2.0 (EHCI) и USB 1.1 (OHCI/UHCI).
 //! Реализован минимальный stack для чтения USB-накопителей.
 
-use crate::port::{inb, outb, inw, outw, inl, outl};
+use crate::port::{inl, outl, outl_u32, inl_u32};
 use alloc::vec::Vec;
 
 // Порта PCI для поиска USB-контроллеров

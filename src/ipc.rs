@@ -178,7 +178,7 @@ pub fn create_channel(reader: u32, writer: u32) -> Result<u32, String> {
     channels.push(channel);
 
     // Регистрируем в нанокоре.
-    crate::nanocore::register_ipc(id);
+    crate::nanocore::register_ipc(id as usize);
 
     Ok(id)
 }
@@ -213,7 +213,7 @@ pub fn close_channel(channel_id: u32) -> Result<(), String> {
     channel.close();
     // Удаляем из реестра.
     channels.retain(|c| c.id != channel_id);
-    crate::nanocore::unregister_ipc(channel_id);
+    crate::nanocore::unregister_ipc(channel_id as usize);
     Ok(())
 }
 

@@ -25,7 +25,7 @@
 //! ```
 
 use crate::renderer::Color;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 static BOOT_STEP: AtomicUsize = AtomicUsize::new(0);
 const BOOT_STEPS: usize = 10;
@@ -34,7 +34,7 @@ fn draw_progress(r: &mut crate::renderer::Renderer, bottom: i32, step: usize) {
     let bar_w = 200;
     let bar_x = (r.width() as i32 - bar_w) / 2;
     let bar_y = bottom + 10;
-    let filled = ((step * bar_w) / BOOT_STEPS) as i32;
+    let filled = ((step as i32 * bar_w) / BOOT_STEPS as i32) as i32;
     r.fill_rect(bar_x, bar_y, bar_w as u32, 8, Color::DARK_GRAY);
     r.fill_rect(bar_x, bar_y, filled as u32, 8, Color::GREEN);
 }

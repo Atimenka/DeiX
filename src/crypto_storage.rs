@@ -252,7 +252,8 @@ pub fn lock() {
     // важно и почему одного присвоения `None` недостаточно с точки
     // зрения гарантий компилятора.
     clear_master_key();
-    set_engine_mk(None);
+    let _zero_key = [0u8; 32];
+    set_engine_mk(&_zero_key);
     *ENGINE.lock() = None;
 }
 

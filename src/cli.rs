@@ -4,8 +4,6 @@
 //! (сами команды всегда набираются латиницей, независимо от языка).
 
 use crate::lang::Lang;
-use crate::net;
-use crate::pkg;
 use crate::rtl8139;
 use crate::vga::Color;
 use crate::vgaglobal::with_writer;

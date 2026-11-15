@@ -2334,7 +2334,7 @@ fn generate_wallpaper(pixels: &mut [u32], w: i32, h: i32, theme: &UiTheme) {
 
     // Стиль Custom: картинка пользователя; если её нет или формат не
     // поддержан — ниже рисуется процедурная Aurora (ветки `_`).
-    if theme.wallpaper_style == 4 && load_bmp_wallpaper(pixels, w, h) {
+    if theme.wallpaper_style == 4 && load_bmp_wallpaper(pixels, w as u32, h as u32) {
         return;
     }
 

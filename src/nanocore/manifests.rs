@@ -8,6 +8,7 @@
 //! Categories: drv (10), fs (8), sec (6), mem (4), net (4), log (6),
 //!             sys (6), ui (4), svc (2) = 50 total.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use crate::nanocore::manifest::ProcessManifest;
 

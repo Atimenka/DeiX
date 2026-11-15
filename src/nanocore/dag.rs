@@ -82,7 +82,7 @@ impl Dag {
             .iter()
             .filter(|name| {
                 // Skip already-completed
-                if completed.iter().any(|c| c == name) {
+                if completed.iter().any(|c| c.as_str() == name.as_str()) {
                     return false;
                 }
                 // Check all deps are completed
@@ -152,7 +152,7 @@ impl Dag {
             let wave: Vec<String> = sorted
                 .iter()
                 .filter(|name| {
-                    !completed.contains(name) && self.ready(name, &completed.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+                    !completed.contains(name) && self.ready(name, &completed)
                 })
                 .cloned()
                 .collect();

@@ -3,6 +3,9 @@
 
 use crate::net::ipv4;
 use crate::rtl8139;
+use alloc::format;
+use alloc::string::String;
+use crate::sync::without_interrupts;
 use crate::spinlock::SpinLock;
 use alloc::vec::Vec;
 use alloc::collections::VecDeque;
@@ -196,7 +199,7 @@ pub fn recv(to: u64) -> Vec<u8> {
             if f&ACK != 0 && (peer_ack.wrapping_sub(PEER_ACK.load(Ordering::Relaxed)) as i32) > 0 {
                 PEER_ACK.store(peer_ack, Ordering::Relaxed);
                 UNACKED.lock().retain(|(seq, d)| {
-                    (seq.wrapping_add(d.len() as u32).wrapping_sub(peer_ack) as i32) > 0
+                    (seq.wrapping_add(*d as u32).wrapping_sub(peer_ack) as i32) > 0
                 });
             }
             if f&(PSH|ACK) != 0 {
@@ -228,7 +231,7 @@ pub fn recv(to: u64) -> Vec<u8> {
                         PEER_FIN.store(true, Ordering::Relaxed);
                     }
                     drop(cl);
-                    RX_BYTES.fetch_add(fresh.len() as u32, Ordering::Relaxed);
+                    crate::rtl8139::RX_BYTES.fetch_add(fresh.len() as u32, Ordering::Relaxed);
                     *CONN.lock() = Some(nc);
                     // Подтверждаем полученные данные (window update):
                     // иначе сервер упирается в окно и передача встаёт.

@@ -382,6 +382,7 @@ pub fn run() -> Option<String> {
                     (Focus::Pass, true) => Focus::Confirm,
                     (Focus::Pass, false) => Focus::User,
                     (Focus::Confirm, _) => Focus::User,
+                    (Focus::Totp, _) => Focus::User,
                 };
             }
             b'\n' | b'\r' => {
@@ -481,6 +482,7 @@ pub fn run() -> Option<String> {
                 Focus::User => user.pop(),
                 Focus::Pass => pass.pop(),
                 Focus::Confirm => confirm.pop(),
+                Focus::Totp => pass.pop(),
             },
             0x20..=0x7E => match focus {
                 Focus::User => user.push(c),

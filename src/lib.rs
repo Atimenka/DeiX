@@ -184,40 +184,31 @@ pub extern "C" fn kernel_main() -> ! {
     crate::serial_println!("[deix] T1: diag init done ({} ms)", timer::uptime_ms());
 
     // Spawn ALL drivers in parallel as background tasks
-    let drivers = [
-        ("keyboard", || {
-            // keyboard already initialized by IRQ1 handler
-        }),
-        ("mouse", || {
-            mouse::init(800, 600);
-        }),
-        ("usb", || {
-            usb::init();
-        }),
-        ("smp", || {
-            smp::init();
-        }),
-        ("ata", || {
-            if ata::is_present() {
-                println!("ATA disk: OK (PIO mode)");
-            }
-        }),
-        ("rtl8139", || {
-            rtl8139::init();
-        }),
-        ("gpu", || {
-            gpu::detect();
-        }),
-        ("hda", || {
-            hda::init();
-        }),
-    ];
-
-    let mut spawned = 0;
-    for (name, task) in drivers.iter() {
-        if crate::sched::spawn(name, task).is_some() {
-            spawned += 1;
+    extern "C" fn drv_keyboard() {
+        // keyboard already initialized by IRQ1 handler
+    }
+    extern "C" fn drv_mouse() {
+        mouse::init(800, 600);
+    }
+    extern "C" fn drv_usb() {
+        usb::init();
+    }
+    extern "C" fn drv_smp() {
+        smp::init();
+    }
+    extern "C" fn drv_ata() {
+        if ata::is_present() {
+            println!("ATA disk: OK (PIO mode)");
         }
+    }
+    extern "C" fn drv_rtl8139() {
+        rtl8139::init();
+    }
+    extern "C" fn drv_gpu() {
+        gpu::detect();
+    }
+    extern "C" fn drv_hda() {
+        hda::init();
     }
     crate::serial_println!("[deix] T2: {} drivers spawned in parallel ({} ms)", spawned, timer::uptime_ms());
     println!("PS/2 keyboard: OK (handled via IRQ1)");
@@ -225,6 +216,20 @@ pub extern "C" fn kernel_main() -> ! {
     println!("USB subsystem: initializing...");
     println!("SMP subsystem: initializing...");
 
+    let mut spawned = 0;
+    if crate::sched::spawn("keyboard", drv_keyboard).is_some() { spawned += 1; }
+    if crate::sched::spawn("mouse", drv_mouse).is_some() { spawned += 1; }
+    if crate::sched::spawn("usb", drv_usb).is_some() { spawned += 1; }
+    if crate::sched::spawn("smp", drv_smp).is_some() { spawned += 1; }
+    if crate::sched::spawn("ata", drv_ata).is_some() { spawned += 1; }
+    if crate::sched::spawn("rtl8139", drv_rtl8139).is_some() { spawned += 1; }
+    if crate::sched::spawn("gpu", drv_gpu).is_some() { spawned += 1; }
+    if crate::sched::spawn("hda", drv_hda).is_some() { spawned += 1; }
+    crate::serial_println!("[deix] T2: {} drivers spawned in parallel ({} ms)", spawned, timer::uptime_ms());
+    println!("PS/2 keyboard: OK (handled via IRQ1)");
+    println!("PS/2 mouse: OK (handled via IRQ12)");
+    println!("USB subsystem: initializing...");
+    println!("SMP subsystem: initializing...");
     // RADICAL: Everything else is deferred to background tasks
     // Boot proceeds immediately to login screen
 
@@ -279,7 +284,7 @@ pub extern "C" fn kernel_main() -> ! {
     // Go directly to login screen - everything else completes in parallel
 
     // Контрольный список загрузки
-    diag::boot::screen(net_ok, audio_ok, gpu_ok);
+    diag::boot::screen(false, false, false);
 
     diag::cli::announce_previous_failure();
 
@@ -338,6 +343,15 @@ pub extern "C" fn kernel_main() -> ! {
 /// Полный сброс глобальных структур состояния (.data/.bss) перед переносом
 /// ядра на установленный диск (команда `install`). Предотвращает перенос
 /// живых указателей на кучу и мусорных дескрипторов сессии.
+
+/// Останавливает CPU (для halt/shutdown).
+pub fn halt() {
+    unsafe {
+        core::arch::asm!("hlt", options(noreturn));
+    }
+}
+
+
 pub fn reset_all_globals() {
     crate::cli::set_current_user("");
     crate::cli::set_cwd("");
