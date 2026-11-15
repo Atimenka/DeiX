@@ -144,51 +144,37 @@ jobs:
 
       # ---------- 6b. При падении smoke-теста — выгружаем полный лог в Issue ----------
       # Лог-хранилище Actions недоступно для API-доступа, поэтому полный
-      # qemu_disk.log отправляем в Issue через REST API (api.github.com).
+      # qemu_disk.log отправляем в Issue (issues API — api.github.com).
       - name: Dump QEMU log to issue on failure
         if: failure()
         run: |
-          python3 - <<'PY'
-          import json, os, urllib.request
-          try:
-              log = open("qemu_disk.log", "rb").read().decode("utf-8", "replace")
-          except OSError:
-              log = "(qemu_disk.log не найден)"
-          # Issue body ограничен 65536 символами — обрезаем лог до лимита,
-          # сохраняя начало и конец (куда важно для диагностики).
-          LIMIT = 55000
-          if len(log) > LIMIT:
-              half = LIMIT // 2
-              log = log[:half] + "\n...[обрезано " + str(len(log) - LIMIT) + " символов]...\n" + log[-half:]
-          body = (
-              "## QEMU boot smoke test failed\n\n"
-              "Run: https://github.com/" + os.environ.get("GITHUB_REPOSITORY", "") + "/actions/runs/" + os.environ.get("GITHUB_RUN_ID", "") + "\n"
-              "Commit: " + os.environ.get("GITHUB_SHA", "") + "\n\n"
-              "\`\`\`log\n" + log + "\n\`\`\`\n"
-          )
-          payload = json.dumps({
-              "title": "CI: QEMU boot smoke test failed (run " + os.environ.get("GITHUB_RUN_ID", "") + ")",
-              "body": body,
-          }).encode("utf-8")
-          req = urllib.request.Request(
-              "https://api.github.com/repos/" + os.environ.get("GITHUB_REPOSITORY", "") + "/issues",
-              data=payload,
-              headers={
-                  "Authorization": "Bearer " + os.environ.get("GITHUB_TOKEN", ""),
-                  "Accept": "application/vnd.github+json",
-              },
-              method="POST",
-          )
-          try:
-              with urllib.request.urlopen(req) as resp:
-                  data = json.loads(resp.read())
-                  print("Issue создан:", data.get("html_url"))
-          except urllib.error.HTTPError as e:
-              print("ОШИБКА создания Issue: HTTP", e.code)
-              print(e.read().decode("utf-8", "replace"))
-              raise
-          PY
-
+          {
+            echo "## QEMU boot smoke test failed"
+            echo
+            echo "Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "Commit: $GITHUB_SHA"
+            echo
+            echo '```log'
+            cat qemu_disk.log 2>/dev/null || echo "(qemu_disk.log не найден)"
+            echo '```'
+          } > /tmp/qemu_issue_body.md
+          # Issue body ограничен 65536 символами — обрезаем до 60000,
+          # сохраняя начало и конец лога.
+          SIZE=$(wc -c < /tmp/qemu_issue_body.md)
+          if [ "$SIZE" -gt 60000 ]; then
+            head -c 30000 /tmp/qemu_issue_body.md > /tmp/body_head
+            tail -c 30000 /tmp/qemu_issue_body.md > /tmp/body_tail
+            {
+              cat /tmp/body_head
+              echo
+              echo "...[обрезано $((SIZE - 60000)) символов]..."
+              echo
+              cat /tmp/body_tail
+            } > /tmp/qemu_issue_body.md
+          fi
+          gh issue create \
+            --title "CI: QEMU boot smoke test failed (run $GITHUB_RUN_ID)" \
+            --body-file /tmp/qemu_issue_body.md
 
       # ---------- 7. Регрессия: первый и повторные запуски (персистентность) ----------
       - name: QEMU scenario - first boot, account, two reboots
