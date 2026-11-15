@@ -334,7 +334,7 @@ pub fn execute(line: &str) {
         }
         _ => println_t!(
             en: "Unknown command: '{}'. Type 'help'.",
-            ru: "Неизвестная команда: '{}'. Введи 'help'.",
+            ru: "Неизвестная команда: '{}'. Введи 'help'.";
             cmd
         ),
     }
