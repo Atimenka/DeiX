@@ -119,10 +119,20 @@ jobs:
             tail -n 80 qemu_disk.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          grep -q '=== DeiX boot: serial debug active ===' qemu_disk.log \
-            || { echo "FAIL: нет маркера старта ядра"; exit 1; }
-          grep -q 'mini kernel booted successfully!' qemu_disk.log \
-            || { echo "FAIL: ядро не дошло до конца инициализации"; exit 1; }
+          if ! grep -q '=== DeiX boot: serial debug active ===' qemu_disk.log; then
+            echo "FAIL: нет маркера старта ядра"
+            echo "--- LOG START ---"
+            cat qemu_disk.log
+            echo "--- LOG END ---"
+            exit 1
+          fi
+          if ! grep -q 'mini kernel booted successfully!' qemu_disk.log; then
+            echo "FAIL: ядро не дошло до конца инициализации"
+            echo "--- LOG START ---"
+            cat qemu_disk.log
+            echo "--- LOG END ---"
+            exit 1
+          fi
           if grep -q 'KERNEL PANIC' qemu_disk.log; then
             echo "FAIL: паника ядра во время загрузки"; exit 1
           fi
