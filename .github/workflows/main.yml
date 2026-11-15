@@ -143,9 +143,6 @@ jobs:
           fi
 
       # ---------- 6b. При падении smoke-теста — выгружаем диагностику в Issue ----------
-      # Лог-хранилище Actions недоступно для API-доступа, поэтому
-      # диагностический summary (маркеры + начало/конец лога) отправляем в Issue
-      # через REST API (curl + JSON, без heredoc — он ломается в YAML block scalar).
       - name: Dump QEMU diagnostics to issue on failure
         if: failure()
         run: |
@@ -154,29 +151,23 @@ jobs:
             echo "Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo "Commit: $GITHUB_SHA"
             echo "Log size: $(wc -c < qemu_disk.log 2>/dev/null || echo 0) bytes"
-            echo "Marker '=== DeiX boot: serial debug active ===': $(grep -c '=== DeiX boot: serial debug active ===' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker 'mini kernel booted successfully!': $(grep -c 'mini kernel booted successfully!' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker 'R' (RAM disk loaded): $(grep -c '^R' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker 'K' (kernel copied): $(grep -c '^K' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker '1' (stage2 bss): $(grep -c '^1' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker '2' (long mode): $(grep -c '^2' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker '3' (paging): $(grep -c '^3' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker '4' (kernel_main): $(grep -c '^4' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker 'kernel_main entered': $(grep -c 'kernel_main entered' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "KERNEL PANIC: $(grep -c 'KERNEL PANIC' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker serial debug: $(grep -c 'serial debug active' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker booted: $(grep -c 'mini kernel booted' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker R: $(grep -c '^R' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker K: $(grep -c '^K' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker 1: $(grep -c '^1' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker 2: $(grep -c '^2' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker 3: $(grep -c '^3' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker 4: $(grep -c '^4' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "Marker kernel_main: $(grep -c 'kernel_main entered' qemu_disk.log 2>/dev/null || echo 0)"
+            echo "PANIC: $(grep -c 'KERNEL PANIC' qemu_disk.log 2>/dev/null || echo 0)"
             echo ""
-            echo '```log'
-            head -40 qemu_disk.log 2>/dev/null || echo "(qemu_disk.log не найден)"
+            head -30 qemu_disk.log 2>/dev/null || echo "(no log)"
             echo "..."
-            tail -40 qemu_disk.log 2>/dev/null || echo ""
-            echo '```'
-          } > /tmp/qemu_body.md
-          python3 -c "import json; json.dump({'title': 'CI: QEMU boot smoke test failed (run $GITHUB_RUN_ID)', 'body': open('/tmp/qemu_body.md').read()}, open('/tmp/qemu_payload.json', 'w'))"
-          curl -sS -X POST \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            --data-binary @/tmp/qemu_payload.json \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/issues"
+            tail -30 qemu_disk.log 2>/dev/null || echo ""
+          } > /tmp/body.md
+          python3 -c "import json; json.dump({'title':'CI: QEMU boot failed ('+__import__('os').environ.get('GITHUB_RUN_ID','')+')', 'body':open('/tmp/body.md').read()}, open('/tmp/payload.json','w'))"
+          curl -sS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" --data-binary @/tmp/payload.json "https://api.github.com/repos/$GITHUB_REPOSITORY/issues"
 
       # ---------- 7. Регрессия: первый и повторные запуски (персистентность) ----------
       - name: QEMU scenario - first boot, account, two reboots
