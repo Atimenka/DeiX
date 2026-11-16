@@ -27,6 +27,8 @@ pub enum Subsystem {
     Elf = 11,
     Pkg = 12,
     Security = 13,
+    /// Nano-Core (orchestrator + Nano-Threads).
+    Nanocore = 14,
 }
 
 /// Все подсистемы в порядке возрастания — для вывода списков и фильтров.
@@ -45,6 +47,7 @@ pub const ALL_SUBSYSTEMS: &[Subsystem] = &[
     Subsystem::Elf,
     Subsystem::Pkg,
     Subsystem::Security,
+    Subsystem::Nanocore,
 ];
 
 impl Subsystem {
@@ -65,6 +68,7 @@ impl Subsystem {
             Subsystem::Elf => "ELF",
             Subsystem::Pkg => "PKG",
             Subsystem::Security => "SEC",
+            Subsystem::Nanocore => "NC",
         }
     }
 
@@ -85,6 +89,7 @@ impl Subsystem {
             Subsystem::Elf => "ELF-загрузчик",
             Subsystem::Pkg => "Пакеты",
             Subsystem::Security => "Безопасность",
+            Subsystem::Nanocore => "Нано-кор",
         }
     }
 

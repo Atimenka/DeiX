@@ -31,6 +31,8 @@ pub enum Action {
     SaveReportAndHalt = 6,
     /// Выполнить аппаратный сброс.
     HardwareReset = 7,
+    /// Выполнить мягкий перезапуск через Dinit (restart nano-core).
+    Reboot = 8,
 }
 
 impl Action {
@@ -45,6 +47,7 @@ impl Action {
             Action::DegradeSubsystem => "degrade-subsystem",
             Action::SaveReportAndHalt => "save-report-halt",
             Action::HardwareReset => "hardware-reset",
+            Action::Reboot => "reboot",
         }
     }
 
@@ -59,6 +62,7 @@ impl Action {
             Action::DegradeSubsystem => "Подсистема будет отключена",
             Action::SaveReportAndHalt => "Отчёт будет сохранён, система остановится",
             Action::HardwareReset => "Будет выполнен аппаратный сброс",
+            Action::Reboot => "Будет выполнен перезапуск системы",
         }
     }
 
