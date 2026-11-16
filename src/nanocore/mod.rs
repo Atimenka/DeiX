@@ -94,7 +94,7 @@ pub fn restart() {
 /// Проверяет, что DAG-граф загрузки может быть построен и загружен.
 ///
 /// Stub-реализация: проверка проходит, если манифесты корректны.
-pub fn dag_load_check() -> Result<(), String> {
+pub fn dag_load_check() -> Result<(), alloc::string::String> {
     // Stub: DAG-проверка (полная реализация — в Dinit ELS).
     Ok(())
 }
