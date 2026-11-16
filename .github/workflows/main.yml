@@ -231,64 +231,55 @@ jobs:
         run: python3 tools/test_all_subsystems.py
 
       # ---------- 10. Артефакты ----------
-      - name: Split disk image into chunks (artifact-safe)
+      - name: Prepare root-dir artifacts (build/ paths don't upload here)
         if: always()
         run: |
-          # Платформа системно не выгружает артефакты из build/ — разбиваем
-          # образ на 512 КБ чанки в корневой директории (по шаблону, который
-          # аплейдится корректно) и оставляем sha256 для проверки.
-          mkdir -p .ci-chunks
-          rm -f .ci-chunks/chunk-*
-          IMG="build/deix-0.3.0-beta-x86_64.img"
-          [ -f "$IMG" ] || IMG="build/deix_disk.img"
-          if [ -f "$IMG" ]; then
-            split -b 512k -d -a 3 "$IMG" .ci-chunks/chunk-
-            echo "## Image chunks" >> "$GITHUB_STEP_SUMMARY"
-            echo "Source: $IMG" >> "$GITHUB_STEP_SUMMARY"
-            echo "SHA256: $(sha256sum "$IMG" | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
-            echo "Chunks: $(ls .ci-chunks | wc -l)" >> "$GITHUB_STEP_SUMMARY"
-            echo "Reassemble: cat .ci-chunks/chunk-* > deix.img" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Образ не найден — чанки не созданы" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          # В этом окружении аплейды из build/ системно не работают
+          # (проверено: даже build/SHA256SUMS не аплейдится, а корневые и
+          # /tmp-файлы проходят). Копируем готовые артефакты в корень репа.
+          mkdir -p .ci-art
+          rm -rf .ci-art/*
+          echo "## Prepared artifacts" >> "$GITHUB_STEP_SUMMARY"
+          for f in deix-0.3.0-beta-x86_64.img deix-0.3.0-beta-x86_64.iso \
+                   deix_disk.img kernel.bin boot_sector.bin stage2.bin ramboot.bin SHA256SUMS; do
+            if [ -f "build/$f" ]; then
+              cp "build/$f" ".ci-art/$f"
+              echo "- .ci-art/$f ($(stat -c%s ".ci-art/$f") B)" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- build/$f — НЕ СОЗДАН" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
 
       - name: Upload deix.img
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: deix-img
-          path: build/deix-0.3.0-beta-x86_64.img
+          path: .ci-art/deix-0.3.0-beta-x86_64.img
           if-no-files-found: ignore
           retention-days: 30
 
-      - name: Upload build probe (SHA256SUMS)
+      - name: Upload disk image backup (deix_disk.img)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-probe
-          path: build/SHA256SUMS
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Upload image chunks
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: deix-img-chunks
-          path: .ci-chunks/chunk-*
+          name: deix-img-raw
+          path: .ci-art/deix_disk.img
           if-no-files-found: ignore
           retention-days: 30
 
-      - name: Upload build binaries
+      - name: Upload build binaries + SHA256SUMS
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: deix-bin
           path: |
-            build/kernel.bin
-            build/boot_sector.bin
-            build/stage2.bin
-            build/ramboot.bin
-            build/SHA256SUMS
-          if-no-files-found: error
+            .ci-art/kernel.bin
+            .ci-art/boot_sector.bin
+            .ci-art/stage2.bin
+            .ci-art/ramboot.bin
+            .ci-art/SHA256SUMS
+          if-no-files-found: ignore
           retention-days: 30
 
       - name: Verify artifacts uploaded
