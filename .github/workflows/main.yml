@@ -116,6 +116,7 @@ jobs:
       - name: QEMU boot smoke test
         timeout-minutes: 5
         run: |
+          set +e
           # Гарантируем наличие QEMU на раннере: ранние прогоны могли падать
           # на отсутствие qemu-system-x86_64 с пустым логом.
           if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
