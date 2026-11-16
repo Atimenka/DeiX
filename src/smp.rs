@@ -103,12 +103,12 @@ fn init_apic() -> bool {
 fn init_ioapic() -> bool {
     unsafe {
         // Redirection table entry size
-        outb(0xFE000000 + 0x00, 0x11); // RDCR = 0x11 (2 entries)
-        
+        outl_u32(0xFE000000 + 0x00, 0x11); // RDCR = 0x11 (2 entries)
+
         // Disable all interrupts initially
         for i in 0..16 {
-            outl(0xFE000000 + 0x1000 + i * 8, 0);
-            outl(0xFE000000 + 0x1000 + i * 8 + 4, 0);
+            outl_u32(0xFE000000 + 0x1000 + i * 8, 0);
+            outl_u32(0xFE000000 + 0x1000 + i * 8 + 4, 0);
         }
         
         true
