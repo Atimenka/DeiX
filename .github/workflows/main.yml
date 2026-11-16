@@ -67,7 +67,16 @@ jobs:
         run: bash ./build.sh 2>&1 | tee /tmp/build_log.txt
         env:
           RUST_BACKTRACE: "1"
-        continue-on-error: true
+
+      - name: Dump build log tail (diagnostics)
+        if: always()
+        run: |
+          echo "## Build log tail" >> "$GITHUB_STEP_SUMMARY"
+          tail -40 /tmp/build_log.txt >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          TAIL=$(tail -40 /tmp/build_log.txt 2>/dev/null | tr '\n' '|' | sed 's/|*$//')
+          if ! grep -q "Готово! Образ диска" /tmp/build_log.txt 2>/dev/null; then
+            echo "::error::BUILD FAILED::build.sh не завершился успешно. Хвост лога: $TAIL"
+          fi
 
       - name: Upload build log
         if: always()
