@@ -255,6 +255,33 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      - name: Publish disk image to GitHub release
+        if: always()
+        run: |
+          # Выкладываем готовый bootable образ в релиз deix-img — постоянная
+          # ссылка для скачивания (дейдашник: каждый билд перезаписывает ассет).
+          IMG="build/deix-0.3.0-beta-x86_64.img"
+          [ -f "$IMG" ] || IMG="build/deix_disk.img"
+          RELEASE_JSON=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/deix-img" 2>/dev/null || true)
+          RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
+          if [ -z "$RELEASE_ID" ]; then
+            RELEASE_ID=$(curl -sS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" -d '{"tag_name":"deix-img","name":"DeiX — bootable disk image"}' "https://api.github.com/repos/$GITHUB_REPOSITORY/releases" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
+          fi
+          if [ -n "$RELEASE_ID" ] && [ -f "$IMG" ]; then
+            # удалить предыдущие ассеты релиза (дейдашник)
+            ASSET_IDS=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" 2>/dev/null | python3 -c "import json,sys; [print(a['id']) for a in json.load(sys.stdin)]" 2>/dev/null || true)
+            for ASSET in $ASSET_IDS; do
+              curl -sS -X DELETE -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets/$ASSET" >/dev/null 2>&1 || true
+            done
+            curl -sS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" -F "file=@$IMG;filename=deix.img" "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" >/dev/null 2>&1 || echo "warn: не удалось выгрузить .img"
+            if [ -f build/deix.iso ]; then
+              curl -sS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" -F "file=@build/deix.iso;filename=deix.iso" "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" >/dev/null 2>&1 || echo "warn: не удалось выгрузить .iso"
+            fi
+            echo "Релиз deix-img обновлён: https://github.com/$GITHUB_REPOSITORY/releases/tag/deix-img"
+          else
+            echo "Релиз не создан или образ не найден — пропускаем выгрузку"
+          fi
+
       - name: Upload QEMU logs
         if: always()
         uses: actions/upload-artifact@v4
