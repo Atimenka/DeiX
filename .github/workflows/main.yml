@@ -236,19 +236,31 @@ jobs:
         run: |
           # В этом окружении аплейды из build/ системно не работают
           # (проверено: даже build/SHA256SUMS не аплейдится, а корневые и
-          # /tmp-файлы проходят). Копируем готовые артефакты в корень репа.
+          # /tmp-файлы проходят). Копируем готовые артефакты в корень репа
+          # и для образа делаем 1 МБ чанки (на случай, если 20 МБ не
+          # аплейдится).
           mkdir -p .ci-art
           rm -rf .ci-art/*
           echo "## Prepared artifacts" >> "$GITHUB_STEP_SUMMARY"
+          IMG_SRC=""
           for f in deix-0.3.0-beta-x86_64.img deix-0.3.0-beta-x86_64.iso \
                    deix_disk.img kernel.bin boot_sector.bin stage2.bin ramboot.bin SHA256SUMS; do
             if [ -f "build/$f" ]; then
               cp "build/$f" ".ci-art/$f"
               echo "- .ci-art/$f ($(stat -c%s ".ci-art/$f") B)" >> "$GITHUB_STEP_SUMMARY"
+              [ "$f" = "deix_disk.img" ] && IMG_SRC="$f"
+              [ "$f" = "deix-0.3.0-beta-x86_64.img" ] && IMG_SRC="$f"
             else
               echo "- build/$f — НЕ СОЗДАН" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
+          # Чанки образа по 1 МБ
+          rm -f .ci-art/chunk-*
+          if [ -n "$IMG_SRC" ] && [ -f "build/$IMG_SRC" ]; then
+            split -b 1m -d -a 3 "build/$IMG_SRC" .ci-art/chunk-
+            echo "- .ci-art/chunk-*: $(ls .ci-art/chunk-* 2>/dev/null | wc -l) чанков по 1 МБ" >> "$GITHUB_STEP_SUMMARY"
+            echo "- SHA256 образа: $(sha256sum "build/$IMG_SRC" | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload deix.img
         if: always()
@@ -265,6 +277,15 @@ jobs:
         with:
           name: deix-img-raw
           path: .ci-art/deix_disk.img
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload image chunks (1 MB each)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deix-img-chunks
+          path: .ci-art/chunk-*
           if-no-files-found: ignore
           retention-days: 30
 
@@ -290,10 +311,24 @@ jobs:
             echo "build/ contents:"
             ls -la build/ 2>&1 | head -20
             echo ""
+            echo ".ci-art/ contents:"
+            ls -la .ci-art/ 2>&1 | head -40
+            echo ""
             echo "Artifacts in run $GITHUB_RUN_ID:"
             curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(a['name'] for a in d.get('artifacts',[])))" 2>&1 || echo "(API check failed)"
           } >> "$GITHUB_STEP_SUMMARY"
-          exit 0
+          # Фатальная проверка: если образ не дошёл — падаем с диагностикой
+          ART_NAMES=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(', '.join(a['name'] for a in d.get('artifacts',[])))" 2>/dev/null)
+          echo "Текущие артефакты: $ART_NAMES" >> "$GITHUB_STEP_SUMMARY"
+          case "$ART_NAMES" in
+            *deix-img*|*deix-img-chunks*)
+              echo "OK: образ доставлен" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::ARTIFACT CHECK FAILED::Образ не аплейдился. build/: $(ls build/ 2>&1 | tr '\n' ' ') | .ci-art/: $(ls .ci-art/ 2>&1 | tr '\n' ' ') | артефакты: $ART_NAMES"
+              exit 1
+              ;;
+          esac
 
       - name: Upload ISO (if built)
         if: hashFiles('build/deix.iso') != ''
