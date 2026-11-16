@@ -55,6 +55,7 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src, llvm-tools-preview
+          targets: x86_64-unknown-none
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
