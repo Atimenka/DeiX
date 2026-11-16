@@ -231,13 +231,21 @@ jobs:
         run: python3 tools/test_all_subsystems.py
 
       # ---------- 10. Артефакты ----------
-      - name: Upload build artifacts
+      - name: Upload deix.img
         uses: actions/upload-artifact@v4
         with:
-          name: deix-release
+          name: deix-img
           path: |
+            build/deix-0.3.0-beta-x86_64.img
             build/deix_disk.img
-            build/deix-*-x86_64.img
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: deix-bin
+          path: |
             build/kernel.bin
             build/boot_sector.bin
             build/stage2.bin
@@ -245,6 +253,19 @@ jobs:
             build/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
+
+      - name: Verify artifacts uploaded
+        if: always()
+        run: |
+          {
+            echo "## Artifact verification"
+            echo "build/ contents:"
+            ls -la build/ 2>&1 | head -20
+            echo ""
+            echo "Artifacts in run $GITHUB_RUN_ID:"
+            curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(a['name'] for a in d.get('artifacts',[])))" 2>&1 || echo "(API check failed)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
 
       - name: Upload ISO (if built)
         if: hashFiles('build/deix.iso') != ''
