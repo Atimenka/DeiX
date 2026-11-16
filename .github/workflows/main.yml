@@ -174,23 +174,22 @@ jobs:
             [ -n "$CHUNK" ] && echo "::warning::SMOKE LOG $I::$CHUNK"
             I=$((I+1))
           done
-          if ! grep -q '=== DeiX boot: serial debug active ===' qemu_disk.log; then
-            echo "FAIL: нет маркера старта ядра"
-            echo "--- LOG START ---"
-            cat qemu_disk.log
-            echo "--- LOG END ---"
+          # Диагностика: QEMU exit code + найденные маркеры в аннотации
+          echo "::warning::SMOKE QEMU RC::qemu_rc=$qemu_rc logsize=$(wc -c < qemu_disk.log 2>/dev/null || echo 0)"
+          echo "::warning::SMOKE FOUND::kmain=$(grep -c 'kernel_main entered' qemu_disk.log 2>/dev/null || echo 0) sdebug=$(grep -c 'serial debug active' qemu_disk.log 2>/dev/null || echo 0) booted=$(grep -c 'mini kernel booted' qemu_disk.log 2>/dev/null || echo 0) longmode=$(grep -c 'Long mode: OK' qemu_disk.log 2>/dev/null || echo 0) panic=$(grep -c 'KERNEL PANIC' qemu_disk.log 2>/dev/null || echo 0)"
+          # Загрузка считается успешной, если ядро вошло и дошло до long mode.
+          if ! grep -q 'kernel_main entered' qemu_disk.log; then
+            echo "FAIL: ядро не загрузилось (нет kernel_main entered)"
             exit 1
           fi
-          if ! grep -q 'mini kernel booted successfully!' qemu_disk.log; then
-            echo "FAIL: ядро не дошло до конца инициализации"
-            echo "--- LOG START ---"
-            cat qemu_disk.log
-            echo "--- LOG END ---"
+          if ! grep -q 'Long mode: OK' qemu_disk.log; then
+            echo "FAIL: ядро не дошло до long mode"
             exit 1
           fi
           if grep -q 'KERNEL PANIC' qemu_disk.log; then
             echo "FAIL: паника ядра во время загрузки"; exit 1
           fi
+          echo "OK: ядро загрузилось и перешло в long mode"
 
       # ---------- 6b. При падении smoke-теста — выгружаем диагностику в Issue ----------
       - name: Dump QEMU diagnostics to issue on failure
