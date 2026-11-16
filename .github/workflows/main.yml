@@ -256,11 +256,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: deix-img
-          path: |
-            build/deix-0.3.0-beta-x86_64.img
-            build/deix_disk.img
+          path: build/deix-0.3.0-beta-x86_64.img
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: Upload build probe (SHA256SUMS)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-probe
+          path: build/SHA256SUMS
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload image chunks
         if: always()
