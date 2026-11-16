@@ -165,18 +165,19 @@ jobs:
           # Диагностика в аннотации — читаемая без доступа к логам step
           MARKERS="S:$(grep -c '^S' qemu_disk.log 2>/dev/null || echo 0) R:$(grep -c '^R' qemu_disk.log 2>/dev/null || echo 0) K:$(grep -c '^K' qemu_disk.log 2>/dev/null || echo 0) 1:$(grep -c '^1' qemu_disk.log 2>/dev/null || echo 0) 2:$(grep -c '^2' qemu_disk.log 2>/dev/null || echo 0) 3:$(grep -c '^3' qemu_disk.log 2>/dev/null || echo 0) 4:$(grep -c '^4' qemu_disk.log 2>/dev/null || echo 0) kmain:$(grep -c 'kernel_main entered' qemu_disk.log 2>/dev/null || echo 0) sdebug:$(grep -c 'serial debug active' qemu_disk.log 2>/dev/null || echo 0) booted:$(grep -c 'mini kernel booted' qemu_disk.log 2>/dev/null || echo 0) panic:$(grep -c 'KERNEL PANIC' qemu_disk.log 2>/dev/null || echo 0)"
           echo "::warning::SMOKE MARKERS::$MARKERS"
+          echo "::warning::SMOKE QEMU RC::qemu_rc=$qemu_rc logsize=$(wc -c < qemu_disk.log 2>/dev/null || echo 0)"
+          echo "::warning::SMOKE FOUND::kmain=$(grep -c 'kernel_main entered' qemu_disk.log 2>/dev/null || echo 0) sdebug=$(grep -c 'serial debug active' qemu_disk.log 2>/dev/null || echo 0) booted=$(grep -c 'mini kernel booted' qemu_disk.log 2>/dev/null || echo 0) longmode=$(grep -c 'Long mode: OK' qemu_disk.log 2>/dev/null || echo 0) panic=$(grep -c 'KERNEL PANIC' qemu_disk.log 2>/dev/null || echo 0)"
           # Serial-лог в отдельной аннотации — ВЕСЬ лог, но компактно.
-          # Разбиваем на куски по 180 симв. — GitHub обрезает длинные bodies.
+          # Разбиваем на куски по 8 строк — GitHub обрезает длинные bodies.
           LOGLINES=$(wc -l < qemu_disk.log 2>/dev/null || echo 0)
           I=0
           while [ $I -lt $LOGLINES ]; do
             CHUNK=$(sed -n "$((I*8+1)),$((I*8+8))p" qemu_disk.log 2>/dev/null | tr '\n' '~' | sed 's/~~*/~/g; s/~$//' | cut -c1-180)
-            [ -n "$CHUNK" ] && echo "::warning::SMOKE LOG $I::$CHUNK"
+            if [ -n "$CHUNK" ]; then
+              echo "::warning::SMOKE LOG $I::$CHUNK"
+            fi
             I=$((I+1))
           done
-          # Диагностика: QEMU exit code + найденные маркеры в аннотации
-          echo "::warning::SMOKE QEMU RC::qemu_rc=$qemu_rc logsize=$(wc -c < qemu_disk.log 2>/dev/null || echo 0)"
-          echo "::warning::SMOKE FOUND::kmain=$(grep -c 'kernel_main entered' qemu_disk.log 2>/dev/null || echo 0) sdebug=$(grep -c 'serial debug active' qemu_disk.log 2>/dev/null || echo 0) booted=$(grep -c 'mini kernel booted' qemu_disk.log 2>/dev/null || echo 0) longmode=$(grep -c 'Long mode: OK' qemu_disk.log 2>/dev/null || echo 0) panic=$(grep -c 'KERNEL PANIC' qemu_disk.log 2>/dev/null || echo 0)"
           # Загрузка считается успешной, если ядро вошло и дошло до long mode.
           if ! grep -q 'kernel_main entered' qemu_disk.log; then
             echo "FAIL: ядро не загрузилось (нет kernel_main entered)"
