@@ -3,7 +3,7 @@
 //! Реализована инициализация APIC (Advanced Programmable Interrupt Controller)
 //! для поддержки нескольких CPU-ядер.
 
-use crate::port::{outb, outl, outl_u32};
+use crate::port::{outb, outl_u32};
 use alloc::vec::Vec;
 
 // APIC registers

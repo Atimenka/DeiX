@@ -29,6 +29,13 @@ pub unsafe fn outl(port: u16, value: u32) {
     core::arch::asm!("out dx, eax", in("dx") port, in("eax") value, options(nomem, nostack, preserves_flags));
 }
 
+#[inline]
+pub unsafe fn inl(port: u16) -> u32 {
+    let value: u32;
+    core::arch::asm!("in eax, dx", out("eax") value, in("dx") port, options(nomem, nostack, preserves_flags));
+    value
+}
+
 /// Пишет 32-битное значение в 32-битный I/O-порт (адрес MMIO2, например
 /// IOAPIC на 0xFE000000). `out` с `eDX` даёт доступ к портам больше 0xFFFF
 /// в защищённом режиме.
@@ -37,23 +44,12 @@ pub unsafe fn outl_u32(port: u32, value: u32) {
     core::arch::asm!("out dx, eax", in("dx") port, in("eax") value, options(nomem, nostack, preserves_flags));
 }
 
-#[inline]
-pub unsafe fn inl(port: u16) -> u32 {
-    let value: u32;
-    core::arch::asm!("in eax, dx", out("eax") value, in("dx") port, options(nomem, nostack, preserves_flags));
-    value
-}
-
-/// 32-битная запись в порт с u32 адресом (для APIC/USB MMIO).
-#[inline]
-pub unsafe fn outl_u32(port: u32, value: u32) {
-    outl(port as u16, value);
-}
-
 /// 32-битное чтение из порта с u32 адресом (для APIC/USB MMIO).
 #[inline]
 pub unsafe fn inl_u32(port: u32) -> u32 {
-    inl(port as u16)
+    let value: u32;
+    core::arch::asm!("in eax, dx", out("eax") value, in("dx") port, options(nomem, nostack, preserves_flags));
+    value
 }
 
 /// Читает buf.len()/2 слов (16 бит) подряд из порта в буфер — используется
