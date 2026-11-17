@@ -29,6 +29,14 @@ pub unsafe fn outl(port: u16, value: u32) {
     core::arch::asm!("out dx, eax", in("dx") port, in("eax") value, options(nomem, nostack, preserves_flags));
 }
 
+/// Пишет 32-битное значение в 32-битный I/O-порт (адрес MMIO2, например
+/// IOAPIC на 0xFE000000). `out` с `eDX` даёт доступ к портам больше 0xFFFF
+/// в защищённом режиме.
+#[inline]
+pub unsafe fn outl_u32(port: u32, value: u32) {
+    core::arch::asm!("out dx, eax", in("dx") port, in("eax") value, options(nomem, nostack, preserves_flags));
+}
+
 #[inline]
 pub unsafe fn inl(port: u16) -> u32 {
     let value: u32;
