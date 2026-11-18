@@ -65,18 +65,33 @@ jobs:
 
       # ---------- 4. Сборка ----------
       - name: Run build.sh
-        run: bash ./build.sh 2>&1 | tee /tmp/build_log.txt
+
+        run: |
+          set -o pipefail
+          bash ./build.sh 2>&1 | tee /tmp/build_log.txt
         env:
           RUST_BACKTRACE: "1"
 
-      - name: Dump build log tail (diagnostics)
+      - name: Dump build log (diagnostics)
         if: always()
         run: |
-          echo "## Build log tail" >> "$GITHUB_STEP_SUMMARY"
-          tail -40 /tmp/build_log.txt >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
-          TAIL=$(tail -40 /tmp/build_log.txt 2>/dev/null | tr '\n' '|' | sed 's/|*$//')
-          if ! grep -q "Готово! Образ диска" /tmp/build_log.txt 2>/dev/null; then
-            echo "::error::BUILD FAILED::build.sh не завершился успешно. Хвост лога: $TAIL"
+          LOG=/tmp/build_log.txt
+          if [ -f "$LOG" ]; then
+            SIZE=$(wc -c < "$LOG")
+            if ! grep -q "Готово! Образ диска" "$LOG" 2>/dev/null; then
+              # Ключевые строки ошибок в аннотации (для быстрого чтения)
+              ERRORS=$(grep -aE "ОШИБКА|error\[E[0-9]+\]|^error:|^warning: unused|E[0-9]+:" "$LOG" | head -25 | tr '\n' '~' | sed 's/~*$//')
+              echo "::error::BUILD FAILED::build.sh завершился с ошибкой. Лог: $SIZE байт."
+              echo "::error::BUILD ERRORS::$ERRORS"
+              # Полный лог — в summary (видно в GitHub UI)
+              echo "## Build log (full)" >> "$GITHUB_STEP_SUMMARY"
+              cat "$LOG" >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+            else
+              echo "::warning::BUILD OK::build.sh завершился успешно ($SIZE байт)"
+            fi
+          else
+            echo "::warning::NO LOG::build_log.txt не найден"
+
           fi
 
       - name: Upload build log
