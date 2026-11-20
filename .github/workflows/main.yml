@@ -50,6 +50,7 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src, llvm-tools-preview
+          targets: x86_64-unknown-none
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -59,9 +60,30 @@ jobs:
 
       # ---------- 4. Сборка ----------
       - name: Run build.sh
-        run: bash ./build.sh
+        run: |
+          set -o pipefail
+          bash ./build.sh 2>&1 | tee /tmp/build_log.txt
         env:
           RUST_BACKTRACE: "1"
+
+      - name: Dump build log (diagnostics)
+        if: always()
+        run: |\
+          LOG=/tmp/build_log.txt
+          if [ -f "$LOG" ]; then
+            SIZE=$(wc -c < "$LOG")
+            if ! grep -q "Готово! Образ диска" "$LOG" 2>/dev/null; then
+              ERRORS=$(grep -aE "ОШИБКА|error\[E[0-9]+\]|^error:|^warning: unused|E[0-9]+:" "$LOG" | head -25 | tr '\n' '~' | sed 's/~*$//')
+              echo "::error::BUILD FAILED::build.sh завершился с ошибкой. Лог: $SIZE байт."
+              echo "::error::BUILD ERRORS::$ERRORS"
+              echo "## Build log (full)" >> "$GITHUB_STEP_SUMMARY"
+              cat "$LOG" >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+            else
+              echo "::warning::BUILD OK::build.sh завершился успешно ($SIZE байт)"
+            fi
+          else
+            echo "::warning::NO LOG::build_log.txt не найден"
+          fi
 
       # ---------- 5. Проверка артефактов ----------
       - name: Verify artifacts
