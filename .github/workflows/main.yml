@@ -68,7 +68,7 @@ jobs:
 
       - name: Dump build log (diagnostics)
         if: always()
-        run: |\
+        run: |
           LOG=/tmp/build_log.txt
           if [ -f "$LOG" ]; then
             SIZE=$(wc -c < "$LOG")
