@@ -224,7 +224,7 @@ pub fn boot_chain() {
                 job.running = true;
                 job.stop_reason = None;
                 orch.launched += 1;
-                if let Some(rec) = orch.dag.stages.iter_mut().find(|s| &s.name == name) {
+                if let Some(rec) = orch.dag.stages_mut().iter_mut().find(|s| &s.name == name) {
                     rec.started_ms = started_at;
                     rec.done_ms = uptime_ms();
                     rec.ok = true;
@@ -234,7 +234,7 @@ pub fn boot_chain() {
                 job.running = false;
                 job.stop_reason = Some(String::from("spawn failed"));
                 orch.boot_failures += 1;
-                if let Some(rec) = orch.dag.stages.iter_mut().find(|s| &s.name == name) {
+                if let Some(rec) = orch.dag.stages_mut().iter_mut().find(|s| &s.name == name) {
                     rec.started_ms = started_at;
                     rec.done_ms = uptime_ms();
                     rec.ok = false;

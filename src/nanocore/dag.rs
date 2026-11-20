@@ -78,6 +78,11 @@ impl Dag {
         &self.stages
     }
 
+    /// Mutable accessor: обновляет записи этапов (старт/окончание/результат).
+    pub fn stages_mut(&mut self) -> &mut [StageRecord] {
+        &mut self.stages
+    }
+
     #[allow(dead_code)] // API-поверхность для отчётов
     pub fn get(&self, name: &str) -> Option<&StageRecord> {
         self.stages.iter().find(|s| s.name == name)

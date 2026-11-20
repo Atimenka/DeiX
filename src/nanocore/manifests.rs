@@ -129,7 +129,7 @@ pub fn parse(text: &str) -> Option<Vec<ServiceManifest>> {
     }
 
     // Завершаем последний блок (имя обязательно).
-    if let Some(mut cur) = current {
+    if let Some(cur) = current {
         if !cur.name.is_empty() && !cur.spawn.is_empty() {
             services.push(cur);
         }
