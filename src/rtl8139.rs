@@ -77,7 +77,8 @@ impl Rtl8139State {
 
 static STATE: SpinLock<Rtl8139State> = SpinLock::new(Rtl8139State::new());
 
-////
+// ==================== Отложенная обработка RX ====================
+//
 // Обработчик прерывания карты обязан вернуться как можно быстрее и не
 // имеет права аллоцировать: куча защищена локом, который может держать
 // прерванный код, а разбор Ethernet/IP/TCP — это сотни инструкций на
@@ -85,7 +86,7 @@ static STATE: SpinLock<Rtl8139State> = SpinLock::new(Rtl8139State::new());
 // а весь стек работает потом, из `poll_deferred`.
 
 /// Число слотов приёмного кольца.
-const RX_RING_SLOTS: usize = 16;
+const RX_RING_SLOTS: usize = 64;
 /// Максимальный размер кадра в слоте.
 const RX_RING_FRAME: usize = 1600;
 
@@ -192,11 +193,7 @@ pub fn poll_deferred() {
 /// Счётчики трафика. Обновляются атомарно: RX растёт в контексте
 /// прерывания, поэтому блокировку здесь брать нельзя.
 static RX_PACKETS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-pub static RX_BYTES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-
-pub fn rx_bytes_total() -> u64 {
-    RX_BYTES.load(core::sync::atomic::Ordering::Relaxed)
-}
+static RX_BYTES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static TX_PACKETS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static TX_BYTES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
@@ -214,7 +211,7 @@ pub fn traffic_counters() -> (u64, u64, u64, u64) {
 /// Карта найдена и инициализирована. GUI использует это для честного
 /// статуса сети: без устройства иконка/строка не изображают подключение.
 pub fn is_present() -> bool {
-    STATE.lock().initialized
+    without_interrupts(|| STATE.lock().initialized)
 }
 
 /// Пытается найти RTL8139 на шине PCI и проинициализировать её. Возвращает
@@ -380,14 +377,19 @@ pub fn on_interrupt() {
 /// Вычитывает из кольцевого RX-буфера все накопившиеся пакеты и передаёт
 /// их обработчику Ethernet-уровня.
 pub fn poll_rx() {
-    let io_base = {
+    let io_base = without_interrupts(|| {
         let st = STATE.lock();
-        if !st.initialized { return; }
-        st.io_base
+        if st.initialized { Some(st.io_base) } else { None }
+    });
+    let io_base = match io_base {
+        Some(base) => base,
+        None => return,
     };
     // Сначала выгребаем кадры из карты в кольцо, потом разбираем их
-    // сетевым стеком уже вне контекста прерывания.
-    unsafe { drain_rx_buffer(io_base); }
+    // сетевым стеком уже вне контекста прерывания. Выгрузка идёт с
+    // отключёнными прерываниями: ISR карты читает тот же `rx_offset`, и
+    // без этого оба вычитывали бы один кадр и портили указатель CAPR.
+    without_interrupts(|| unsafe { drain_rx_buffer(io_base) });
     poll_deferred();
 }
 

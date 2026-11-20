@@ -11,26 +11,41 @@ if [ ! -f "$IMG" ]; then
     exit 1
 fi
 
+# PulseAudio-сервер реально отвечает? Без pactl проверить нельзя — тогда
+# считаем, что отвечает (прежнее поведение).
+pulse_alive() {
+  command -v pactl >/dev/null 2>&1 || return 0
+  timeout 3 pactl info >/dev/null 2>&1
+}
+
 AUDIO_ARGS=()
 if [ "${AUDIO_OFF:-0}" = "1" ] || [ "${QEMU_AUDIO_DRV:-}" = "none" ]; then
   AUDIO_ARGS=(-audiodev none,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0)
-elif [ -e "/mnt/wslg/PulseServer" ]; then
+elif [ -e "/mnt/wslg/PulseServer" ] && PULSE_SERVER="unix:/mnt/wslg/PulseServer" pulse_alive; then
   export PULSE_SERVER="unix:/mnt/wslg/PulseServer"
   AUDIO_ARGS=(-audiodev pa,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0)
-elif [ -n "${PULSE_SERVER:-}" ] && { [ -f "/run/user/$(id -u)/pulse/pid" ] || [ -f "/run/user/1000/pulse/pid" ] || pulseaudio --check 2>/dev/null; }; then
+elif [ -n "${PULSE_SERVER:-}" ] && { [ -f "/run/user/$(id -u)/pulse/pid" ] || [ -f "/run/user/1000/pulse/pid" ] || pulseaudio --check 2>/dev/null; } && pulse_alive; then
   AUDIO_ARGS=(-audiodev pa,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0)
 elif [ -e "/dev/snd" ] && [ "$(id -u)" -ne 0 ]; then
   AUDIO_ARGS=(-audiodev alsa,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0)
 else
-  # Безопасный режим: эмуляция HDA в гости без зависания от системного PulseAudio root
+  # Безопасный режим (в т.ч. когда PulseAudio не отвечает): эмуляция HDA в гости без зависания от системного PulseAudio root
   AUDIO_ARGS=(-audiodev none,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0)
 fi
 
 # Сеть: user-mode networking (slirp) + RTL8139 — гость получает
 # 10.0.2.15/24, шлюз 10.0.2.2, DNS 10.0.2.3; без этих флагов браузер и
 # команды dns/ping честно сообщат об отсутствии сетевой карты.
+# Кеш диска: ядро после каждой операции шлёт ATA FLUSH CACHE, а QEMU по
+# умолчанию (cache=writeback) превращает его в fsync образа на хосте — на
+# WSL это десятки миллисекунд на каждую запись. cache=unsafe флаши игнорирует:
+# образ пишется быстро, но при внезапном отключении ХОСТА (не гостя и не QEMU)
+# может остаться несогласованным — для отладочного образа это допустимо.
+# DEIX_DISK_CACHE=writeback ./run.sh — прежнее поведение.
+DISK_CACHE="${DEIX_DISK_CACHE:-unsafe}"
+
 qemu-system-x86_64 \
-    -drive format=raw,file="$IMG" \
+    -drive format=raw,file="$IMG",cache="$DISK_CACHE" \
     -m 512M \
     -netdev user,id=n0 -device rtl8139,netdev=n0 \
     "${AUDIO_ARGS[@]}" \

@@ -46,11 +46,6 @@ stage2_start:
     rep stosd
 .bss_done:
 
-    ; маркер '1': bss загрузчика обнулён
-    mov dx, 0x3F8
-    mov al, '1'
-    out dx, al
-
     mov esp, stack_top
 
     ; kernel.bin уже скопирован напрямую по адресу 0x100000 в ramboot.asm —
@@ -59,18 +54,8 @@ stage2_start:
     call check_cpuid
     call check_long_mode
 
-    ; маркер '2': CPUID + long mode OK
-    mov dx, 0x3F8
-    mov al, '2'
-    out dx, al
-
     call set_up_page_tables
     call enable_paging
-
-    ; маркер '3': paging включен, переход в long mode
-    mov dx, 0x3F8
-    mov al, '3'
-    out dx, al
 
     lgdt [gdt64.pointer]
     jmp gdt64.code_segment:long_mode_entry
@@ -186,7 +171,8 @@ error:
     mov byte  [0xb800a], al
     hlt
 
-;
+; ==================== 64-битный режим: читаем kernel.bin ====================
+
 bits 64
 long_mode_entry:
     mov ax, 0
@@ -202,6 +188,16 @@ long_mode_entry:
     jmp rax
 
 section .bss
+; Стек — ПЕРВЫМ и 64 КиБ: это стек самого ядра (kernel_main и вся оболочка,
+; включая рабочий стол), он растёт вниз. Раньше стек (16 КиБ) лежал ПОСЛЕ
+; таблиц страниц, и его переполнение затирало конец page_table_l2_gpu —
+; записи framebuffer (0xFD000000) — после чего первая же запись в кадровый
+; буфер давала #PF (отчёт: rsp в 0x6C8 байт от stack_bottom). Теперь под
+; стеком нет ничего из таблиц страниц.
+align 4096
+stack_bottom:
+    resb 4096 * 16
+stack_top:
 align 4096
 page_table_l4:
     resb 4096
@@ -211,9 +207,6 @@ page_table_l2:
     resb 4096        ; P2 нулевого гигабайта
 page_table_l2_gpu:
     resb 4096        ; P2 для GPU MMIO (4-й гигабайт)
-stack_bottom:
-    resb 4096 * 4
-stack_top:
 
 section .rodata
 gdt64:

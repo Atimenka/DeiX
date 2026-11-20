@@ -1,71 +1,46 @@
-//! Nano-Core Orchestrator — the "conductor" of the boot process.
+//! Nano-Core orchestrator — движок загрузки и мониторинга нано-служб.
 //!
-//! The orchestrator is a lightweight (~50 KB) process loaded by the
-//! boot chain. It does NOT do any actual work itself — it reads the
-//! DAG manifests, spawns Nano-Threads in parallel, monitors their
-//! heartbeats, restarts failed processes, and logs every event.
+//! Работа:
+//! 1. `init()` — собирает DAG из манифеста служб, инициализирует
+//!    heartbeat-трекер и IPC-шину, проверяет циклы.
+//! 2. `boot_chain()` — последовательно запускает службы в порядке
+//!    волн DAG (topological order), используя реальный процессо-
+//!    вой менеджер ядра (`process::spawn`) или встроенные задачи
+//!    (`sched::spawn`), и отмечает этапы в DAG.
+//! 3. `run_monitor_tick()` — опрос heartbeat'ов, перезапуск
+//!    утонувших служб по политике restart.
 //!
-//! Key APIs:
-//!   - spawn_process(name, caps) -> Result<Pid>
-//!   - monitor_heartbeat(pid) -> bool
-//!   - restart_on_failure(pid, max) -> Result<()>
-//!   - build_dag(dir) -> Dag
-//!   - log_start(name), log_action(name, detail), log_end(name)
-//!
-//! The orchestrator runs in the kernel's idle loop, checking for
-//! processes that are ready to start and processes that need
-//! heartbeat checks.
+//! Запускается после `dinit::init()` в ядре (PID 1 уже занят dinit).
+//! Все службы — задачи ядра через `sched::spawn`, реальные
+//! процессы (MEX) пускаются через `process::spawn` при необходимости.
 
-use alloc::collections::BTreeMap;
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::nanocore::dag::Dag;
-use crate::nanocore::manifest::{LogLevel, ProcessManifest};
-use crate::nanocore::process::{NanoThread, ProcessState};
-use crate::nanocore::heartbeat::HeartbeatTracker;
-use crate::nanocore::log;
+use crate::nanocore::{dag, heartbeat, ipc, log, manifests};
+use crate::process::{self, SpawnRequest};
+use crate::sched;
 use crate::spinlock::SpinLock;
+use crate::timer::uptime_ms;
 
-/// Max Nano-Threads in the system.
-pub const MAX_THREADS: usize = 128;
-
-/// The orchestrator's process ID.
-pub const ORCHESTRATOR_PID: u32 = 1;
-
-/// Current run mode.
+/// Режим работы нано-кора.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // варианты используются по мере появления служб
 pub enum RunMode {
-    Normal,   // All 50 processes
-    Fast,     // Only critical (~15)
-    Safe,     // No UI and net (~35)
-    Debug,    // All + verbose logs
-    Recovery, // Only fs-read + log + sys
+    /// Стандартная работа (boot + мониторинг).
+    Normal,
+    /// Быстрый старт — минимум служб.
+    Fast,
+    /// Безопасный режим — только heartbeat, без авто-рестартов.
+    Safe,
+    /// Отладка — максимальный журнал.
+    Debug,
+    /// Восстановление после сбоя.
+    Recovery,
 }
 
-impl RunMode {
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "fast" => RunMode::Fast,
-            "safe" => RunMode::Safe,
-            "debug" => RunMode::Debug,
-            "recovery" => RunMode::Recovery,
-            _ => RunMode::Normal,
-        }
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            RunMode::Normal => "normal",
-            RunMode::Fast => "fast",
-            RunMode::Safe => "safe",
-            RunMode::Debug => "debug",
-            RunMode::Recovery => "recovery",
-        }
-    }
-}
-
-/// Current boot phase.
+/// Фаза загрузки.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootPhase {
     Initializing,
@@ -76,546 +51,384 @@ pub enum BootPhase {
 }
 
 impl BootPhase {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
-            BootPhase::Initializing => "INITIALIZING",
-            BootPhase::Launching => "LAUNCHING",
-            BootPhase::Monitoring => "MONITORING",
-            BootPhase::Complete => "COMPLETE",
+            BootPhase::Initializing => "INIT",
+            BootPhase::Launching => "LAUNCH",
+            BootPhase::Monitoring => "MON",
+            BootPhase::Complete => "OK",
             BootPhase::Panic => "PANIC",
         }
     }
 }
 
-/// The Nano-Core Orchestrator.
+impl RunMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunMode::Normal => "normal",
+            RunMode::Fast => "fast",
+            RunMode::Safe => "safe",
+            RunMode::Debug => "debug",
+            RunMode::Recovery => "recovery",
+        }
+    }
+}
+
+/// Обозначение одной службы в оркестраторе (с контекстом запуска).
+#[derive(Debug, Clone)]
+pub struct ServiceJob {
+    /// Манифест службы.
+    pub manifest: manifests::ServiceManifest,
+    /// PID процесса (0 = встроенная задача ядра).
+    pub pid: u32,
+    /// Запущена ли служба.
+    pub running: bool,
+    /// Причина остановки (если есть).
+    pub stop_reason: Option<String>,
+}
+
+/// Глобальное состояние оркестратора.
 pub struct Orchestrator {
-    processes: SpinLock<Vec<NanoThread>>,
-    dag: SpinLock<Dag>,
-    heartbeats: SpinLock<BTreeMap<u32, HeartbeatTracker>>,
-    phase: SpinLock<BootPhase>,
-    mode: RunMode,
-    next_pid: SpinLock<u32>,
-    started_ms: u64,
-    completed_count: SpinLock<u32>,
-    total_count: SpinLock<u32>,
+    /// DAG зависимостей.
+    pub dag: dag::Dag,
+    /// heartbeat-трекер.
+    pub beats: heartbeat::HeartbeatTracker,
+    /// Запущенные службы.
+    pub jobs: Vec<ServiceJob>,
+    /// Текущий режим.
+    pub mode: RunMode,
+    /// Текущая фаза.
+    pub phase: BootPhase,
+    /// Успешно запущенных служб.
+    pub launched: u32,
+    /// Сбоев загрузки.
+    pub boot_failures: u32,
 }
 
 impl Orchestrator {
     pub const fn new() -> Self {
         Orchestrator {
-            processes: SpinLock::new(Vec::new()),
-            dag: SpinLock::new(Dag::new()),
-            heartbeats: SpinLock::new(BTreeMap::new()),
-            phase: SpinLock::new(BootPhase::Initializing),
+            dag: dag::Dag::new(),
+            beats: heartbeat::HeartbeatTracker::new(),
+            jobs: Vec::new(),
             mode: RunMode::Normal,
-            next_pid: SpinLock::new(2), // PID 1 is orchestrator itself
-            started_ms: 0,
-            completed_count: SpinLock::new(0),
-            total_count: SpinLock::new(0),
+            phase: BootPhase::Initializing,
+            launched: 0,
+            boot_failures: 0,
         }
     }
+}
 
-    pub fn set_mode(&mut self, mode: RunMode) {
-        self.mode = mode;
-    }
+/// Глобальный оркестратор.
+pub static ORCHESTRATOR: SpinLock<Orchestrator> = SpinLock::new(Orchestrator::new());
 
-    pub fn mode(&self) -> RunMode {
-        self.mode
-    }
+/// Инициализировать нано-кора: DAG, heartbeat, IPC-каналы.
+///
+/// Возвращает false, если DAG содержит цикл.
+pub fn init(mode: RunMode) -> bool {
+    {
+        let mut orch = ORCHESTRATOR.lock();
+        orch.mode = mode;
+        orch.phase = BootPhase::Initializing;
+        orch.dag = dag::Dag::new();
+        orch.beats = heartbeat::HeartbeatTracker::new();
+        orch.jobs.clear();
+        orch.launched = 0;
+        orch.boot_failures = 0;
 
-    pub fn phase(&self) -> BootPhase {
-        *self.phase.lock()
-    }
+        // Манифесты служб.
+        let services = manifests::builtin();
 
-    pub fn set_phase(&self, phase: BootPhase) {
-        *self.phase.lock() = phase;
-    }
-
-    pub fn started_ms(&self) -> u64 {
-        self.started_ms
-    }
-
-    /// Initialize the orchestrator with all manifests.
-    pub fn init(&mut self, manifests: &[ProcessManifest]) {
-        self.started_ms = log::now_ms();
-        log::set_boot_time(self.started_ms);
-
-        // Build DAG
-        let mut dag = self.dag.lock();
-        for m in manifests {
-            dag.add_node(&m.name, &m.requires);
-        }
-        drop(dag);
-
-        // Create process entries
-        let mut procs = self.processes.lock();
-        procs.reserve(manifests.len());
-        let mut next_pid = self.next_pid.lock();
-        for m in manifests {
-            if !self.should_run(m) {
-                continue;
+        // DAG: каждая служба с зависимостями из манифеста.
+        let mut dag_ok = true;
+        for s in &services {
+            let deps: Vec<&str> = s.deps.iter().map(String::as_str).collect();
+            if !orch.dag.add(&s.name, &deps) {
+                log::error(&format!("DAG cycle at service {}", s.name));
+                dag_ok = false;
             }
-            let pid = *next_pid;
-            *next_pid += 1;
-            let thread = NanoThread::new(m.clone(), pid, self.started_ms);
-            procs.push(thread);
-        }
-        let total = procs.len() as u32;
-        *self.total_count.lock() = total;
-
-        // Initialize heartbeat trackers
-        let mut hbs = self.heartbeats.lock();
-        for p in procs.iter() {
-            hbs.insert(p.pid, HeartbeatTracker::new(self.started_ms));
-        }
-
-        self.set_phase(BootPhase::Launching);
-        log::log(
-            ORCHESTRATOR_PID,
-            "nano-core",
-            LogLevel::Info,
-            &alloc::format!(
-                "orchestrator started ({} procs, mode={}, dag_nodes={})",
-                total, self.mode.as_str(), self.dag.lock().nodes().len()
-            ),
-        );
-    }
-
-    /// Check if a process should run in the current mode.
-    fn should_run(&self, m: &ProcessManifest) -> bool {
-        match self.mode {
-            RunMode::Normal => true,
-            RunMode::Debug => true,
-            RunMode::Fast => {
-                // Only critical + early processes
-                m.priority <= 30
-            }
-            RunMode::Safe => {
-                // No UI and net
-                m.category != "ui" && m.category != "net"
-            }
-            RunMode::Recovery => {
-                // Only fs-read + log + sys
-                m.category == "fs" || m.category == "log" || m.category == "sys"
-            }
-        }
-    }
-
-    /// Build the DAG from a directory of manifests (or embedded manifests).
-    pub fn build_dag(&mut self, manifests: &[ProcessManifest]) -> Result<(), String> {
-        let mut dag = self.dag.lock();
-        for m in manifests {
-            dag.add_node(&m.name, &m.requires);
-        }
-        Ok(())
-    }
-
-    /// Spawn a process by name.
-    pub fn spawn_process(&self, name: &str) -> Result<u32, String> {
-        let mut procs = self.processes.lock();
-        let mut next_pid = self.next_pid.lock();
-        let now_ms = log::now_ms();
-
-        for p in procs.iter_mut() {
-            if p.manifest.name == name && p.state == ProcessState::Pending {
-                p.start(now_ms);
-                let pid = p.pid;
-                // Initialize heartbeat
-                {
-                    let mut hbs = self.heartbeats.lock();
-                    hbs.insert(pid, HeartbeatTracker::new(now_ms));
-                }
-                log::log_start(pid, name);
-                log::log_action(pid, name, "spawned");
-                return Ok(pid);
-            }
-        }
-
-        // Not found — spawn a new process from manifest
-        let manifests = crate::nanocore::manifests::parse_all()
-            .map_err(|e| alloc::format!("parse manifests: {}", e))?;
-        for m in &manifests {
-            if m.name == name {
-                let pid = *next_pid;
-                *next_pid += 1;
-                let mut thread = NanoThread::new(m.clone(), pid, now_ms);
-                thread.start(now_ms);
-                procs.push(thread);
-                {
-                    let mut hbs = self.heartbeats.lock();
-                    hbs.insert(pid, HeartbeatTracker::new(now_ms));
-                }
-                log::log_start(pid, name);
-                log::log_action(pid, name, "spawned");
-                return Ok(pid);
-            }
-        }
-
-        Err(alloc::format!("process not found: {}", name))
-    }
-
-    /// Spawn a process with specific capabilities.
-    pub fn spawn_process_with_caps(
-        &self,
-        name: &str,
-        caps: &[&str],
-    ) -> Result<u32, String> {
-        // For now, caps are informational. In a real implementation,
-        // they would be passed to seccomp.
-        let _ = caps;
-        self.spawn_process(name)
-    }
-
-    /// Monitor heartbeat for a process.
-    pub fn monitor_heartbeat(&self, pid: u32) -> bool {
-        let now_ms = log::now_ms();
-        let mut hbs = self.heartbeats.lock();
-        match hbs.get_mut(&pid) {
-            Some(hb) => hb.check(now_ms),
-            None => false,
-        }
-    }
-
-    /// Check all heartbeats and restart failed processes.
-    pub fn check_all_heartbeats(&self) {
-        let now_ms = log::now_ms();
-        let mut to_restart = Vec::new();
-        let mut critical_fail = false;
-
-        // Check heartbeats
-        {
-            let mut hbs = self.heartbeats.lock();
-            let mut procs = self.processes.lock();
-            for p in procs.iter_mut() {
-                if p.state != ProcessState::Running && p.state != ProcessState::Waiting {
-                    continue;
-                }
-                if let Some(hb) = hbs.get_mut(&p.pid) {
-                    if !hb.check(now_ms) {
-                        if p.is_critical() {
-                            log::log_error(
-                                p.pid,
-                                &p.manifest.name,
-                                "CRITICAL: heartbeat lost",
-                            );
-                            critical_fail = true;
-                        } else {
-                            log::log_error(
-                                p.pid,
-                                &p.manifest.name,
-                                &alloc::format!("heartbeat lost ({} missed)", hb.missed_count),
-                            );
-                            to_restart.push(p.pid);
-                        }
-                    }
-                }
-            }
-        }
-
-        if critical_fail {
-            self.set_phase(BootPhase::Panic);
-            log::log_error(
-                ORCHESTRATOR_PID,
-                "nano-core",
-                "PANIC: critical process heartbeat lost",
-            );
-            return;
-        }
-
-        // Restart non-critical failed processes
-        for pid in to_restart {
-            self.restart_on_failure(pid, 3);
-        }
-    }
-
-    /// Restart a failed process.
-    pub fn restart_on_failure(&self, pid: u32, max: u32) -> Result<(), String> {
-        let mut procs = self.processes.lock();
-        let now_ms = log::now_ms();
-
-        for p in procs.iter_mut() {
-            if p.pid == pid {
-                if p.restart_count >= max {
-                    log::log_error(
-                        p.pid,
-                        &p.manifest.name,
-                        &alloc::format!("restart limit {} reached", max),
-                    );
-                    return Err(alloc::format!(
-                        "restart limit {} reached for {}",
-                        max, p.manifest.name
-                    ));
-                }
-                p.mark_restarting(now_ms);
-                log::log_action(p.pid, &p.manifest.name, "RESTARTING");
-                // Reset heartbeat
-                {
-                    let mut hbs = self.heartbeats.lock();
-                    hbs.insert(pid, HeartbeatTracker::new(now_ms));
-                }
-                return Ok(());
-            }
-        }
-        Err(alloc::format!("process not found: {}", pid))
-    }
-
-    /// Mark a process as running.
-    pub fn mark_running(&self, pid: u32, name: &str, detail: &str) {
-        let now_ms = log::now_ms();
-        let mut procs = self.processes.lock();
-        for p in procs.iter_mut() {
-            if p.pid == pid {
-                p.mark_running(now_ms);
-                log::log_action(pid, name, detail);
-                break;
-            }
-        }
-    }
-
-    /// Mark a process as exited.
-    pub fn mark_exited(&self, pid: u32, name: &str, detail: &str) {
-        let now_ms = log::now_ms();
-        let mut procs = self.processes.lock();
-        let mut completed = false;
-        for p in procs.iter_mut() {
-            if p.pid == pid {
-                p.mark_exited(now_ms);
-                log::log_end(pid, name, detail);
-                *self.completed_count.lock() += 1;
-                completed = true;
-                break;
-            }
-        }
-        if completed && self.all_done() {
-            self.set_phase(BootPhase::Complete);
-            log::log(
-                ORCHESTRATOR_PID,
-                "nano-core",
-                LogLevel::Info,
-                &alloc::format!(
-                    "DAG complete: {}/{} procs",
-                    *self.completed_count.lock(),
-                    *self.total_count.lock()
-                ),
-            );
-            log::log(
-                ORCHESTRATOR_PID,
-                "nano-core",
-                LogLevel::Info,
-                "handing off to Dinit supervisor",
-            );
-        }
-    }
-
-    /// Mark a process as failed.
-    pub fn mark_failed(&self, pid: u32, name: &str, error: &str) {
-        let now_ms = log::now_ms();
-        let mut procs = self.processes.lock();
-        for p in procs.iter_mut() {
-            if p.pid == pid {
-                p.mark_failed(now_ms, error);
-                log::log_error(pid, name, error);
-                // Check if critical and degraded
-                if p.is_critical() && !p.should_restart() {
-                    self.set_phase(BootPhase::Panic);
-                    log::log_error(
-                        ORCHESTRATOR_PID,
-                        "nano-core",
-                        "PANIC: critical process failed, cannot degrade",
-                    );
-                }
-                break;
-            }
-        }
-    }
-
-    /// Check if all processes are done.
-    pub fn all_done(&self) -> bool {
-        let procs = self.processes.lock();
-        let total = *self.total_count.lock();
-        *self.completed_count.lock() >= total && !procs.is_empty()
-    }
-
-    /// Get completed count.
-    pub fn completed_count(&self) -> u32 {
-        *self.completed_count.lock()
-    }
-
-    /// Get total count.
-    pub fn total_count(&self) -> u32 {
-        *self.total_count.lock()
-    }
-
-    /// Get a process by name.
-    pub fn get_process(&self, name: &str) -> Option<NanoThread> {
-        let procs = self.processes.lock();
-        procs.iter().find(|p| p.manifest.name == name).cloned()
-    }
-
-    /// Get all processes.
-    pub fn get_processes(&self) -> Vec<NanoThread> {
-        self.processes.lock().iter().cloned().collect()
-    }
-
-    /// Get process stats.
-    pub fn get_stats(&self) -> crate::nanocore::process::ProcessStats {
-        let procs = self.processes.lock();
-        let refs: Vec<&NanoThread> = procs.iter().collect();
-        crate::nanocore::process::compute_stats(&refs)
-    }
-
-    /// Get the DAG.
-    pub fn get_dag(&self) -> Dag {
-        self.dag.lock().clone()
-    }
-
-    /// Get the DAG waves (parallel groups).
-    pub fn get_dag_waves(&self) -> Vec<Vec<String>> {
-        self.dag.lock().waves()
-    }
-
-    /// Run the orchestrator's main loop step.
-    /// Called from the kernel idle loop.
-    pub fn step(&self) {
-        // 1. Check heartbeats
-        if self.phase() == BootPhase::Monitoring || self.phase() == BootPhase::Launching {
-            self.check_all_heartbeats();
-        }
-    }
-
-    /// Launch ready processes.
-    pub fn launch_ready(&self) {
-        let _now_ms = log::now_ms();
-        let completed: Vec<String> = {
-            let procs = self.processes.lock();
-            procs
-                .iter()
-                .filter(|p| p.state == ProcessState::Exited)
-                .map(|p| p.manifest.name.clone())
-                .collect()
-        };
-
-        let ready = self.dag.lock().ready_set(&completed);
-        for name in ready {
-            if let Ok(pid) = self.spawn_process(&name) {
-                // Mark as running immediately (in real impl, process would
-                // signal when it's actually running).
-                self.mark_running(pid, &name, "deps ok, launched");
-            }
-        }
-
-        // If all are launched, switch to monitoring
-        if self.phase() == BootPhase::Launching {
-            let procs = self.processes.lock();
-            let all_launched = procs.iter().all(|p| {
-                p.state == ProcessState::Running
-                    || p.state == ProcessState::Exited
-                    || p.state == ProcessState::Waiting
-                    || p.state == ProcessState::Failed
-                    || p.state == ProcessState::Panic
+            orch.beats.register(&s.name, s.deadline_ms);
+            orch.jobs.push(ServiceJob {
+                manifest: s.clone(),
+                pid: 0,
+                running: false,
+                stop_reason: None,
             });
-            drop(procs);
-            if all_launched {
-                self.set_phase(BootPhase::Monitoring);
-                log::log(
-                    ORCHESTRATOR_PID,
-                    "nano-core",
-                    LogLevel::Info,
-                    "all processes launched, entering monitoring",
-                );
-            }
         }
+
+        // IPC-каналы.
+        {
+            let mut bus = ipc::IPC.lock();
+            let _ = bus.channel("nc-log");
+            let _ = bus.channel("nc-cmd");
+        }
+
+        log::info(&format!(
+            "nanocore init: {} services, dag stages={}, waves={}",
+            orch.jobs.len(),
+            orch.dag.len(),
+            orch.dag.wave_count()
+        ));
+        if !dag_ok {
+            orch.phase = BootPhase::Panic;
+            return false;
+        }
+        orch.phase = BootPhase::Launching;
+        true
     }
+}
 
-    /// Run the full boot sequence.
-    pub fn boot(&mut self) {
-        self.set_phase(BootPhase::Initializing);
+/// Запустить boot-цепочку: в порядке DAG (topological waves).
+///
+/// Служба `proc:xxx` пускается как встроенная задача ядра
+/// (`sched::spawn`), служба `cmd:xxx` — как процесс через
+/// `process::spawn`. Встроенные задачи — статические функции.
+pub fn boot_chain() {
+    let order: Vec<String> = {
+        let orch = ORCHESTRATOR.lock();
+        orch.dag.execution_order().iter().map(|s| s.name.clone()).collect()
+    };
 
-        // Parse manifests
-        let manifests = match crate::nanocore::manifests::parse_all() {
-            Ok(m) => m,
-            Err(e) => {
-                log::log_error(ORCHESTRATOR_PID, "nano-core", &alloc::format!("manifest parse error: {}", e));
-                self.set_phase(BootPhase::Panic);
-                return;
+    for name in &order {
+        let started_at = uptime_ms();
+
+        // Блок с spawn-ом: берём задачу из оркестратора, парсим спец,
+        // запускаем вне лока (spawn может лочить другие подсистемы).
+        let spawn_spec = {
+            let orch = ORCHESTRATOR.lock();
+            orch.jobs
+                .iter()
+                .find(|j| &j.manifest.name == name)
+                .map(|j| String::from(&j.manifest.spawn))
+        };
+        let Some(spawn_spec) = spawn_spec else {
+            continue;
+        };
+
+        let result = match spawn_spec.as_str() {
+            sp if sp.starts_with("proc:") => spawn_proc_task(&sp[5..]),
+            sp if sp.starts_with("cmd:") => spawn_process(&sp[4..]),
+            other => {
+                log::error(&format!("service {}: bad spawn spec '{}'", name, other));
+                false
             }
         };
 
-        // Initialize
-        self.init(&manifests);
-
-        // Launch ready processes in waves
-        loop {
-            if self.phase() == BootPhase::Panic || self.phase() == BootPhase::Complete {
-                break;
-            }
-            self.launch_ready();
-            // In a real kernel, we'd yield to the scheduler here.
-            // For now, we just iterate.
-            if self.phase() == BootPhase::Monitoring {
-                break;
+        // Записываем результат в оркестратор.
+        {
+            let mut orch = ORCHESTRATOR.lock();
+            let Some(job) = orch.jobs.iter_mut().find(|j| &j.manifest.name == name) else {
+                continue;
+            };
+            if result {
+                job.running = true;
+                job.stop_reason = None;
+                orch.launched += 1;
+                if let Some(rec) = orch.dag.stages.iter_mut().find(|s| &s.name == name) {
+                    rec.started_ms = started_at;
+                    rec.done_ms = uptime_ms();
+                    rec.ok = true;
+                }
+                log::info(&format!("service {} launched", name));
+            } else {
+                job.running = false;
+                job.stop_reason = Some(String::from("spawn failed"));
+                orch.boot_failures += 1;
+                if let Some(rec) = orch.dag.stages.iter_mut().find(|s| &s.name == name) {
+                    rec.started_ms = started_at;
+                    rec.done_ms = uptime_ms();
+                    rec.ok = false;
+                }
+                log::error(&format!("service {} failed to spawn", name));
             }
         }
+    }
 
-        // Log boot summary
-        let stats = self.get_stats();
-        log::log(
-            ORCHESTRATOR_PID,
-            "nano-core",
-            LogLevel::Info,
-            &alloc::format!(
-                "boot summary: {}/{} running, {} exited, {} failed, {} restarts",
-                stats.running, stats.total, stats.exited, stats.failed, stats.total_restarts
+    let mut orch = ORCHESTRATOR.lock();
+    orch.phase = BootPhase::Monitoring;
+    log::info(&format!(
+        "boot chain done: {} launched, {} failed",
+        orch.launched, orch.boot_failures
+    ));
+}
+
+/// Запустить встроенную задачу ядра.
+///
+/// Функции с именами, известными orchestrator'у:
+/// - `nanocore_hb_monitor` → heartbeat-опрос;
+/// - `nanocore_ipc_drain` → слив IPC-каналов;
+/// - `nanocore_log_report` → слив журнала в serial.
+fn spawn_proc_task(fn_name: &str) -> bool {
+    match fn_name {
+        "nanocore_hb_monitor" => {
+            sched::spawn("nanocore-hb-monitor", hb_monitor_task);
+            true
+        }
+        "nanocore_ipc_drain" => {
+            sched::spawn("nanocore-ipc-drain", ipc_drain_task);
+            true
+        }
+        "nanocore_log_report" => {
+            sched::spawn("nanocore-log-report", log_report_task);
+            true
+        }
+        _ => {
+            log::error(&format!("unknown proc task '{}'", fn_name));
+            false
+        }
+    }
+}
+
+/// Запустить реальный процесс через ядро (через MEX-образ по пути cmd).
+fn spawn_process(cmd: &str) -> bool {
+    let req = SpawnRequest {
+        name: String::from("nanocore-proc"),
+        uid: 0,
+        parent: 0,
+        caps: 0,
+        cwd: String::from("/"),
+        image_path: String::from(cmd),
+    };
+    match process::spawn(&req) {
+        Ok(pid) => {
+            log::info(&format!("process '{}' spawned pid {}", cmd, pid));
+            true
+        }
+        Err(e) => {
+            log::error(&format!("process spawn '{}' failed: {}", cmd, e.message()));
+            false
+        }
+    }
+}
+
+/// Отправить пульс службы.
+fn beat(name: &str) {
+    heartbeat::HEARTBEATS.lock().beat(name);
+}
+
+/// Цикл heartbeat-мониторинга. Запускается как задача ядра.
+///
+/// - бьёт пульс собственной службы;
+/// - проверяет пульсы других служб;
+/// - при падении перезапускает по политике restart.
+extern "C" fn hb_monitor_task() {
+    log::info("hb-monitor task started");
+    loop {
+        // Свой пульс.
+        beat("hb-monitor");
+
+        // Опрос других служб.
+        let dead = heartbeat::HEARTBEATS.lock().check_all();
+
+        if !dead.is_empty() {
+            for name in &dead {
+                restart_service(name);
+            }
+        }
+        sched::sleep_ms(1000);
+    }
+}
+
+/// Слив IPC-каналов: прокидывает сообщения nc-log в serial.
+extern "C" fn ipc_drain_task() {
+    log::info("ipc-drain task started");
+    loop {
+        if let Some(m) = ipc::try_recv("nc-log") {
+            crate::serial_println!("[nanocore] ipc-drain: {}", m.as_str());
+        }
+        sched::sleep_ms(500);
+    }
+}
+
+/// Служба-репортер: отправляет liveness в канал nc-cmd.
+extern "C" fn log_report_task() {
+    log::info("log-report task started");
+    loop {
+        ipc::send("nc-cmd", "log-report: alive");
+        sched::sleep_ms(2000);
+    }
+}
+
+/// Перезапущить службу по политике restart.
+pub fn restart_service(name: &str) -> bool {
+    let (policy, was_running, spawn_spec) = {
+        let orch = ORCHESTRATOR.lock();
+        match orch.jobs.iter().find(|j| &j.manifest.name == name) {
+            Some(job) => (
+                job.manifest.restart,
+                job.running,
+                String::from(&job.manifest.spawn),
             ),
-        );
+            None => return false,
+        }
+    };
+
+    if policy == manifests::RestartPolicy::Never {
+        log::warn(&format!("service {} dead, restart policy is Never", name));
+        return false;
     }
-}
-
-impl core::default::Default for Orchestrator {
-    fn default() -> Self {
-        Self::new()
+    // Если не была запущена и политика on-fail — не трогаем.
+    if !was_running && policy == manifests::RestartPolicy::OnFail {
+        return false;
     }
-}
 
-/// Global orchestrator instance.
-pub static ORCHESTRATOR: SpinLock<Option<Orchestrator>> = SpinLock::new(None);
+    let ok = if let Some(rest) = spawn_spec.strip_prefix("proc:") {
+        spawn_proc_task(rest)
+    } else if let Some(rest) = spawn_spec.strip_prefix("cmd:") {
+        spawn_process(rest)
+    } else {
+        false
+    };
 
-/// Initialize the global orchestrator.
-pub fn init_global() {
-    let mut guard = ORCHESTRATOR.lock();
-    if guard.is_none() {
-        *guard = Some(Orchestrator::new());
-    }
-}
-
-/// Run the nano-core boot sequence on the global orchestrator.
-pub fn boot() {
-    init_global();
-    let mut guard = ORCHESTRATOR.lock();
-    if let Some(orch) = guard.as_mut() {
-        orch.boot();
-    }
-}
-
-/// Get a reference to the global orchestrator inside a closure.
-/// If not initialized, the closure is called with a fresh instance.
-pub fn with_orchestrator<F: FnOnce(&Orchestrator)>(f: F) {
-    let guard = ORCHESTRATOR.lock();
-    match guard.as_ref() {
-        Some(orch) => f(orch),
-        None => {
-            // Not initialized — show a message
-            crate::println!("Nano-Core not initialized.");
+    {
+        let mut orch = ORCHESTRATOR.lock();
+        if let Some(job) = orch.jobs.iter_mut().find(|j| &j.manifest.name == name) {
+            if ok {
+                job.running = true;
+                job.stop_reason = None;
+            } else {
+                job.stop_reason = Some(String::from("restart failed"));
+            }
         }
     }
+    if ok {
+        // Отметка в heartbeat-трекере: счётчик рестартов + новый пульс.
+        {
+            let mut beats = heartbeat::HEARTBEATS.lock();
+            if let Some(hb) = beats.beats.get_mut(name) {
+                hb.mark_restarted();
+            }
+        }
+        log::info(&format!("service {} restarted", name));
+    } else {
+        log::error(&format!("service {} restart failed", name));
+    }
+    ok
 }
 
-/// Get a mutable reference to the global orchestrator.
-pub fn with_orchestrator_mut<F: FnOnce(&mut Orchestrator)>(f: F) {
-    let mut guard = ORCHESTRATOR.lock();
-    if let Some(ref mut orch) = *guard {
-        f(orch);
-    } else {
-        crate::println!("Nano-Core not initialized.");
+/// Цикл мониторинга: проверка heartbeat'ов + перезапуски.
+///
+/// Можно вызывать вручную из CLI.
+pub fn run_monitor_tick() -> u32 {
+    let dead = heartbeat::HEARTBEATS.lock().check_all();
+    let mut restarted = 0;
+    for name in &dead {
+        if restart_service(name) {
+            restarted += 1;
+        }
     }
+    restarted
+}
+
+/// Статус нано-кора для CLI.
+pub fn status_line() -> String {
+    let orch = ORCHESTRATOR.lock();
+    format!(
+        "nanocore[{}] mode={} services={} launched={} failed={}",
+        orch.phase.as_str(),
+        orch.mode.as_str(),
+        orch.jobs.len(),
+        orch.launched,
+        orch.boot_failures
+    )
 }

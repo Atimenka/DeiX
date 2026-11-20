@@ -30,17 +30,6 @@ fn leaf(mut eax: u32) -> [u32; 4] {
     [eax, ebx, ecx, edx]
 }
 
-/// Читает лист CPUID с выходными параметрами.
-///
-/// Задаётся для совместимости с общим API из других подсистем.
-pub unsafe fn cpuid(eax_in: u32, eax: &mut u32, ebx: &mut u32, ecx: &mut u32, edx: &mut u32) {
-    let [a, b, c, d] = leaf(eax_in);
-    *eax = a;
-    *ebx = b;
-    *ecx = c;
-    *edx = d;
-}
-
 /// Строка производителя процессора (лист 0: EBX, EDX, ECX).
 pub fn vendor_string() -> alloc::string::String {
     let [_, ebx, ecx, edx] = leaf(0);

@@ -11,16 +11,6 @@ pub struct SpinLock<T> {
 }
 
 unsafe impl<T> Sync for SpinLock<T> {}
-impl<T: core::fmt::Debug> core::fmt::Debug for SpinLock<T> {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        if self.locked.load(Ordering::Relaxed) {
-            f.write_str("<locked>")
-        } else {
-            f.debug_tuple("SpinLock").field(unsafe { &*self.data.get() }).finish()
-        }
-    }
-}
-
 
 pub struct SpinLockGuard<'a, T> {
     lock: &'a SpinLock<T>,

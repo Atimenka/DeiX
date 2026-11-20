@@ -22,7 +22,6 @@ use crate::{print, println};
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
 
 const KMOD_MAGIC: u32 = 0x444F_4D4B; // "KMOD" LE
 const KMOD_HEADER_SIZE: usize = 44;   // 0x2C
@@ -239,7 +238,7 @@ fn build_kernel_api() -> KernelApi {
 }
 
 pub fn load_boot_modules() {
-use crate::diag::{self, ErrorCode, Subsystem};
+    use crate::diag::{self, ErrorCode, Subsystem};
 
     // Карантин по итогам прошлой сессии: если отказ ядра произошёл внутри
     // региона модуля (RIP из отчёта попал в его диапазон), модуль не
@@ -304,23 +303,6 @@ use crate::diag::{self, ErrorCode, Subsystem};
                 );
             }
         }
-    }
-}
-
-
-/// Флаг: модули ядра отложены (ленивая инициализация).
-static MODULES_PENDING: AtomicBool = AtomicBool::new(true);
-
-/// Откладывает загрузку модулей ядра до первого доступа.
-pub fn mark_modules_pending() {
-    MODULES_PENDING.store(true, Ordering::SeqCst);
-}
-
-/// Выполняет загрузку модулей, если она ещё не сделана.
-pub fn ensure_modules() {
-    if MODULES_PENDING.load(Ordering::SeqCst) {
-        MODULES_PENDING.store(false, Ordering::SeqCst);
-        load_boot_modules();
     }
 }
 

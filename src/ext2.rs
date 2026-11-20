@@ -44,6 +44,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::spinlock::SpinLock;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 pub const BLOCK_SIZE: usize = 1024;
 const SECTOR_SIZE: usize = 512;
@@ -75,11 +76,11 @@ const MAX_FILE_BLOCKS: usize =
     MAX_DIRECT_BLOCKS + PTRS_PER_INDIRECT_BLOCK + PTRS_PER_INDIRECT_BLOCK * PTRS_PER_INDIRECT_BLOCK;
 
 /// Начало тома ext2 /userdata на диске (раздел P2).
-pub const FS_START_LBA: u32 = 24576;
-/// Размер тома /userdata по умолчанию (штатный образ: 16384 секторов =
-/// 8 МиБ). Реальный размер читается из таблицы разделов MBR; эта
+pub const FS_START_LBA: u32 = 36864;
+/// Размер тома /userdata по умолчанию (штатный образ: 32768 секторов =
+/// 16 МиБ). Реальный размер читается из таблицы разделов MBR; эта
 /// константа — запасной вариант, когда MBR не читается.
-const TOTAL_SECTORS_DEFAULT: u32 = 16384;
+const TOTAL_SECTORS_DEFAULT: u32 = 32768;
 
 /// Номер блока суперблока (при блоке 1024 суперблок лежит в блоке 1).
 const SB_BLOCK: u32 = 1;
@@ -106,7 +107,8 @@ pub struct FileEntry {
     pub is_directory: bool,
 }
 
-//
+// ==================== тома ====================
+
 /// Какой из смонтированных томов использовать.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VolId {
@@ -157,6 +159,7 @@ fn cache_idx(id: VolId) -> usize {
 /// Сбрасывает закешированную геометрию тома (после format/convert).
 pub fn invalidate_cache(id: VolId) {
     VOL_CACHE.lock()[cache_idx(id)] = None;
+    clear_block_cache();
 }
 
 /// Размер раздела /userdata в секторах из таблицы разделов MBR.
@@ -253,7 +256,8 @@ fn vol(id: VolId) -> Result<Vol, Ext2Error> {
     Ok(v)
 }
 
-//
+// ==================== геометрия группы ====================
+
 /// Первый блок группы g (в группе 0 это суперблок, блок 1).
 fn group_base(v: &Vol, g: u32) -> u32 {
     1 + g * v.bpg
@@ -280,6 +284,91 @@ fn gdt_locate(g: u32) -> (u32, usize) {
     (GDT_BLOCK + (byte / BLOCK_SIZE) as u32, byte % BLOCK_SIZE)
 }
 
+// ---------------- кеш расшифрованных блоков ----------------
+
+/// Сколько блоков держит кеш (по 1 КиБ). Прямое отображение по номеру блока.
+const BCACHE_SLOTS: usize = 512;
+
+/// Расшифрованные блоки зашифрованного тома. XTS-AES в программной
+/// реализации стоит десятки тысяч инструкций на сектор, а ext2 читает одни и
+/// те же служебные блоки (суперблок, дескрипторы групп, битовые карты,
+/// таблицы инодов) десятки раз за операцию. Кеш сквозной: запись идёт на
+/// диск сразу, в кеше обновляется копия. Содержит открытый текст, поэтому
+/// затирается при блокировке тома и смене ключа.
+struct BlockCache {
+    tags: Vec<u32>,
+    data: Vec<u8>,
+}
+
+static BCACHE: SpinLock<Option<BlockCache>> = SpinLock::new(None);
+/// Поколение кеша: растёт при каждой записи и сбросе. Чтение, начатое до
+/// записи, не имеет права положить в кеш устаревший блок.
+static BCACHE_GEN: AtomicU32 = AtomicU32::new(0);
+
+fn bcache_slot(lba: u32) -> usize {
+    ((lba / SECTORS_PER_BLOCK) as usize) % BCACHE_SLOTS
+}
+
+fn bcache_get(lba: u32) -> Option<[u8; BLOCK_SIZE]> {
+    let guard = BCACHE.lock();
+    let cache = guard.as_ref()?;
+    let slot = bcache_slot(lba);
+    if cache.tags[slot] != lba {
+        return None;
+    }
+    let mut out = [0u8; BLOCK_SIZE];
+    out.copy_from_slice(&cache.data[slot * BLOCK_SIZE..(slot + 1) * BLOCK_SIZE]);
+    Some(out)
+}
+
+/// Кладёт блок в кеш. `generation` — поколение, снятое до чтения с диска; если оно
+/// изменилось, блок мог устареть и не сохраняется. `None` — запись на диск
+/// (безусловная).
+fn bcache_put(lba: u32, data: &[u8; BLOCK_SIZE], generation: Option<u32>) {
+    let mut guard = BCACHE.lock();
+    match generation {
+        Some(g) => {
+            if BCACHE_GEN.load(Ordering::SeqCst) != g {
+                return;
+            }
+        }
+        None => {
+            BCACHE_GEN.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let cache = guard.get_or_insert_with(|| BlockCache {
+        tags: alloc::vec![u32::MAX; BCACHE_SLOTS],
+        data: alloc::vec![0u8; BCACHE_SLOTS * BLOCK_SIZE],
+    });
+    let slot = bcache_slot(lba);
+    cache.tags[slot] = lba;
+    cache.data[slot * BLOCK_SIZE..(slot + 1) * BLOCK_SIZE].copy_from_slice(data);
+}
+
+fn bcache_forget(lba: u32) {
+    let mut guard = BCACHE.lock();
+    BCACHE_GEN.fetch_add(1, Ordering::SeqCst);
+    if let Some(cache) = guard.as_mut() {
+        let slot = bcache_slot(lba);
+        if cache.tags[slot] == lba {
+            cache.tags[slot] = u32::MAX;
+        }
+    }
+}
+
+/// Сбрасывает кеш и затирает открытый текст в памяти (блокировка тома,
+/// смена ключа).
+pub fn clear_block_cache() {
+    let mut guard = BCACHE.lock();
+    BCACHE_GEN.fetch_add(1, Ordering::SeqCst);
+    if let Some(cache) = guard.as_mut() {
+        for b in cache.data.iter_mut() {
+            unsafe { core::ptr::write_volatile(b, 0) };
+        }
+    }
+    *guard = None;
+}
+
 // ---------------- низкоуровневый ввод-вывод блоков ----------------
 
 /// Читает один ext2-блок (2 физических сектора). Для шифрованного тома
@@ -289,6 +378,13 @@ fn gdt_locate(g: u32) -> (u32, usize) {
 fn blk_read(io: VolIo, encrypted: bool, start_lba: u32, block: u32) -> Result<[u8; BLOCK_SIZE], Ext2Error> {
     let mut buf = [0u8; BLOCK_SIZE];
     let lba = start_lba + block * SECTORS_PER_BLOCK;
+    let cacheable = encrypted && io == VolIo::Standard;
+    if cacheable {
+        if let Some(hit) = bcache_get(lba) {
+            return Ok(hit);
+        }
+    }
+    let generation = BCACHE_GEN.load(Ordering::SeqCst);
     let res = match io {
         VolIo::Standard => ata::read_sectors(lba, SECTORS_PER_BLOCK as u8, &mut buf),
         VolIo::Raw(drive) => ata::read_sectors_from(drive, lba, SECTORS_PER_BLOCK as u8, &mut buf),
@@ -301,6 +397,9 @@ fn blk_read(io: VolIo, encrypted: bool, start_lba: u32, block: u32) -> Result<[u
             let start = (i as usize) * SECTOR_SIZE;
             let end = start + SECTOR_SIZE;
             crate::crypto_storage::decrypt_sector_after_read(sector_lba, &mut buf[start..end]);
+        }
+        if cacheable && crate::crypto_storage::is_unlocked() {
+            bcache_put(lba, &buf, Some(generation));
         }
     }
 
@@ -326,6 +425,14 @@ fn blk_write(io: VolIo, encrypted: bool, start_lba: u32, block: u32, data: &[u8;
         VolIo::Standard => ata::write_sectors(lba, SECTORS_PER_BLOCK as u8, &out),
         VolIo::Raw(drive) => ata::write_sectors_to(drive, lba, SECTORS_PER_BLOCK as u8, &out),
     };
+    let cacheable = encrypted && io == VolIo::Standard && crate::crypto_storage::is_unlocked();
+    if cacheable {
+        if res.is_ok() {
+            bcache_put(lba, data, None);
+        } else {
+            bcache_forget(lba);
+        }
+    }
     res.map_err(|_| Ext2Error::DiskError)
 }
 
@@ -733,7 +840,8 @@ fn remove_dirent(v: &Vol, dir_ino: u32, name: &str) -> Result<bool, Ext2Error> {
     Ok(false)
 }
 
-//
+// ==================== форматирование ====================
+
 /// Текущее "время" ядра в секундах — RTC-драйвера для таймстампов нет,
 /// используется аптайм с момента загрузки. e2fsck не проверяет
 /// правдоподобность значений времени, только их наличие.
@@ -882,6 +990,7 @@ fn build_gdt(plan: &FormatPlan) -> Vec<u8> {
 /// Записывает метаданные одной группы: суперблок (основной или копию),
 /// GDT, битовые карты и обнулённую таблицу инодов.
 pub fn format_group(plan: &FormatPlan, g: u32) -> Result<(), Ext2Error> {
+    let _batch = ata::FlushBatch::begin();
     let v = plan.as_vol();
     let now = fake_timestamp();
     let base = group_base(&v, g);
@@ -943,6 +1052,7 @@ pub fn format_group(plan: &FormatPlan, g: u32) -> Result<(), Ext2Error> {
 
 /// Завершает форматирование: корневой каталог и lost+found в группе 0.
 pub fn format_finish(plan: &FormatPlan) -> Result<(), Ext2Error> {
+    let _batch = ata::FlushBatch::begin();
     let v = plan.as_vol();
     let (_, _, itable) = group_meta(&v, 0);
     let root_block = itable + plan.itb_blocks;
@@ -971,6 +1081,7 @@ pub fn format_finish(plan: &FormatPlan) -> Result<(), Ext2Error> {
 }
 
 fn format_volume(io: VolIo, encrypted: bool, start_lba: u32, total_sectors: u32) -> Result<(), Ext2Error> {
+    let _batch = ata::FlushBatch::begin();
     let plan = plan_format(io, encrypted, start_lba, total_sectors)?;
     for g in 0..plan.groups {
         format_group(&plan, g)?;
@@ -1008,7 +1119,24 @@ pub fn plan_format_raw(drive: Drive, start_lba: u32, total_sectors: u32) -> Resu
 pub fn write_file_raw(drive: Drive, start_lba: u32, max_sectors: u32, name: &str, data: &[u8]) -> Result<(), Ext2Error> {
     let v = load_vol(VolIo::Raw(drive), false, start_lba, max_sectors)?;
     validate_name(name)?;
+    let _batch = ata::FlushBatch::begin();
     write_file_at(&v, ROOT_INO, name, data)
+}
+
+/// Записывает файл по пути на том произвольного диска, создавая
+/// недостающие каталоги (mkdir -p) — установщик переносит на новый
+/// /userdata обои и настройки, лежащие в подкаталогах.
+pub fn write_file_path_raw(drive: Drive, start_lba: u32, max_sectors: u32, path: &str, data: &[u8]) -> Result<(), Ext2Error> {
+    let v = load_vol(VolIo::Raw(drive), false, start_lba, max_sectors)?;
+    let _batch = ata::FlushBatch::begin();
+    write_file_path_at(&v, path, data)
+}
+
+/// Читает файл по пути с тома произвольного диска — установщик
+/// перечитывает записанное для финальной проверки (этап 3).
+pub fn read_file_path_raw(drive: Drive, start_lba: u32, max_sectors: u32, path: &str) -> Result<Vec<u8>, Ext2Error> {
+    let v = load_vol(VolIo::Raw(drive), false, start_lba, max_sectors)?;
+    read_file_path_at(&v, path)
 }
 
 // ---------------- имена файлов ----------------
@@ -1026,7 +1154,8 @@ fn validate_name(name: &str) -> Result<(), Ext2Error> {
     Ok(())
 }
 
-//
+// ==================== операции внутри тома ====================
+
 fn list_dir_ino(v: &Vol, dir_ino: u32, skip_lost_found: bool) -> Result<Vec<FileEntry>, Ext2Error> {
     let dir_inode = read_inode(v, dir_ino)?;
     let mut entries = Vec::new();
@@ -1206,7 +1335,8 @@ fn write_file_at(v: &Vol, dir_ino: u32, name: &str, data: &[u8]) -> Result<(), E
     Ok(())
 }
 
-////
+// ==================== каталоги и пути ====================
+//
 // ext2 поддерживает иерархию с самого начала: lost+found (inode 11,
 // режим 0o040700) создаёт уже format(). Здесь — создание каталогов в
 // рантайме и разбор путей вида "/users/ivan/files".
@@ -1345,7 +1475,8 @@ fn delete_file_path_at(v: &Vol, path: &str) -> Result<(), Ext2Error> {
     Ok(())
 }
 
-//
+// ==================== публичное API: /userdata ====================
+
 pub fn list_root() -> Result<Vec<FileEntry>, Ext2Error> {
     let v = vol(VolId::Userdata)?;
     list_dir_ino(&v, ROOT_INO, true)
@@ -1361,11 +1492,13 @@ pub fn read_file(name: &str) -> Result<Vec<u8>, Ext2Error> {
 
 pub fn write_file(name: &str, data: &[u8]) -> Result<(), Ext2Error> {
     let v = vol(VolId::Userdata)?;
+    let _batch = ata::FlushBatch::begin();
     write_file_at(&v, ROOT_INO, name, data)
 }
 
 pub fn delete_file(name: &str) -> Result<(), Ext2Error> {
     let v = vol(VolId::Userdata)?;
+    let _batch = ata::FlushBatch::begin();
     validate_name(name)?;
     let found = find_in_dir(&v, ROOT_INO, name)?;
     let (_, _, ino) = found.ok_or(Ext2Error::FileNotFound)?;
@@ -1377,37 +1510,39 @@ pub fn delete_file(name: &str) -> Result<(), Ext2Error> {
 /// `mkdir -p`: создаёт всю цепочку каталогов пути.
 pub fn mkdir_p(path: &str) -> Result<u32, Ext2Error> {
     let v = vol(VolId::Userdata)?;
+    let _batch = ata::FlushBatch::begin();
     let (parent, last) = resolve_parent_at(&v, path, true)?;
     mkdir_at(&v, parent, &last)
 }
 
+/// Список содержимого каталога по пути (`"/"` — корень).
 pub fn list_dir_path(path: &str) -> Result<Vec<FileEntry>, Ext2Error> {
     let v = vol(VolId::Userdata)?;
     list_dir_path_at(&v, path)
 }
 
+/// Записывает файл по пути, создавая недостающие каталоги (mkdir -p).
+pub fn write_file_path(path: &str, data: &[u8]) -> Result<(), Ext2Error> {
+    let v = vol(VolId::Userdata)?;
+    let _batch = ata::FlushBatch::begin();
+    write_file_path_at(&v, path, data)
+}
+
+/// Читает файл по пути.
 pub fn read_file_path(path: &str) -> Result<Vec<u8>, Ext2Error> {
     let v = vol(VolId::Userdata)?;
     read_file_path_at(&v, path)
 }
 
-pub fn write_file_path(path: &str, data: &[u8]) -> Result<(), Ext2Error> {
-    let v = vol(VolId::Userdata)?;
-    write_file_path_at(&v, path, data)
-}
-
-pub fn mkdir(path: &str) -> Result<u32, Ext2Error> {
-    let v = vol(VolId::Userdata)?;
-    let (parent, last) = resolve_parent_at(&v, path, true)?;
-    mkdir_at(&v, parent, &last)
-}
-
+/// Удаляет файл по пути.
 pub fn delete_file_path(path: &str) -> Result<(), Ext2Error> {
     let v = vol(VolId::Userdata)?;
+    let _batch = ata::FlushBatch::begin();
     delete_file_path_at(&v, path)
 }
 
-//
+// ==================== публичное API: произвольный том ====================
+
 pub fn list_dir_path_vol(id: VolId, path: &str) -> Result<Vec<FileEntry>, Ext2Error> {
     let v = vol(id)?;
     list_dir_path_at(&v, path)
@@ -1420,16 +1555,19 @@ pub fn read_file_path_vol(id: VolId, path: &str) -> Result<Vec<u8>, Ext2Error> {
 
 pub fn write_file_path_vol(id: VolId, path: &str, data: &[u8]) -> Result<(), Ext2Error> {
     let v = vol(id)?;
+    let _batch = ata::FlushBatch::begin();
     write_file_path_at(&v, path, data)
 }
 
 pub fn delete_file_path_vol(id: VolId, path: &str) -> Result<(), Ext2Error> {
     let v = vol(id)?;
+    let _batch = ata::FlushBatch::begin();
     delete_file_path_at(&v, path)
 }
 
 pub fn mkdir_p_vol(id: VolId, path: &str) -> Result<u32, Ext2Error> {
     let v = vol(id)?;
+    let _batch = ata::FlushBatch::begin();
     let (parent, last) = resolve_parent_at(&v, path, true)?;
     mkdir_at(&v, parent, &last)
 }

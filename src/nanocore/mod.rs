@@ -1,100 +1,52 @@
-//! Nano-Core — разбитый Stage 2 для сверхбыстрой загрузки.
+//! Nano-Core — нанослой ядра DeiX.
 //!
-//! Вместо монолита Boot chain загружает крошечный оркестратор (~50 КБ),
-//! который параллельно поднимает десятки строго именованных изолированных
-//! процессов (Nano-Threads). Каждый процесс запускается только когда его
-//! зависимости готовы (DAG-граф), логирует свои действия и завершается
-//! или переходит в режим ожидания.
+//! Реализация, написанная с нуля для релиза 3.0:
+//! - **dag** — граф зависимостей boot-этапов и служб (топологические
+//!   волны, проверка циклов);
+//! - **manifests** — текстовые описания служб;
+//! - **heartbeat** — трекер живости служб с дедлайнами и счётчиками;
+//! - **ipc** — встроенная кольцевая IPC-шина между службами;
+//! - **log** — структурированный журнал (serial + diag + IPC);
+//! - **orchestrator** — загрузка служб в порядке DAG и мониторинг;
+//! - **cli** — встроенные команды `nc` / `nc-status` / `nc-boot`.
 //!
-//! ## Архитектура
-//!
-//! ```text
-//! Boot chain → Nano-Core Orchestrator (PID 1)
-//!   ├── DAG manifest (50 процессов)
-//!   ├── drv-*   (10 — драйверы)
-//!   ├── fs-*    (8  — файловая система)
-//!   ├── sec-*   (6  — безопасность)
-//!   ├── mem-*   (4  — память)
-//!   ├── net-*   (4  — сеть)
-//!   ├── log-*   (6  — логирование)
-//!   ├── sys-*   (6  — системные)
-//!   ├── ui-*    (4  — интерфейс)
-//!   └── svc-*   (2  — фоновые)
-//! ```
-//!
-//! ## Ключевые API
-//!
-//! * [`Orchestrator`] — дирижёр: spawn, monitor, restart, log.
-//! * [`manifest::ProcessManifest`] — описание одного процесса.
-//! * [`dag::Dag`] — граф зависимостей (topological sort, waves).
-//! * [`process::NanoThread`] — состояние одного процесса.
-//! * [`heartbeat::HeartbeatTracker`] — мониторинг живости.
-//! * [`ipc::IpcRing`] — IPC-шина (shared memory + ring buffer).
-//! * [`log`] — система логирования (ring → serial → disk).
-//! * [`cli`] — `nanocore status/logs/trace/restart/graph`.
-//! * [`manifests`] — 50 встроенных манифестов.
+//! Нano-кора не заменяет dinit/process/sched — она работает
+//! ПОВЕРХ них: запускается после `dinit::init()`, использует
+//! `sched::spawn` для задач ядра и `process::spawn` для реальных
+//! процессов, сохраняет единый журнал через `diag`.
 
+pub mod cli;
 pub mod dag;
 pub mod heartbeat;
-pub mod cli;
 pub mod ipc;
 pub mod log;
-pub mod manifest;
 pub mod manifests;
 pub mod orchestrator;
-pub mod process;
 
-pub use orchestrator::init_global;
-
-
-// --- Stub API для внешнего доступа ---
-
-/// Инициализирует нано-кор (обёртка вокруг init_global).
-pub fn init() {
-    init_global();
-}
-
-/// Регистрирует процесс в нанокоре.
-pub fn register_process(_pid: u32) {
-    // Stub: регистрация процесса в оркестраторе.
-}
-
-/// Deregisters a process from the nano-core.
-pub fn unregister_process(_pid: u32) {
-    // Stub: снятие регистрации процесса.
-}
-
-/// Регистрирует IPC-канал.
-pub fn register_ipc(_id: usize) {
-    // Stub: регистрация IPC-канала.
-}
-
-/// Deregisters an IPC channel.
-pub fn unregister_ipc(_id: usize) {
-    // Stub: снятие регистрации IPC-канала.
-}
-
-/// Проверяет живость нано-кора (heartbeat).
+/// Запустить нано-кору: инициализация + boot-цепочка + monitor.
 ///
-/// Заглядывает в общий оркестратор: если он инициализирован и не в
-/// состоянии отказа — считает нанокор живым. Stub-реализация: оркестратор
-/// инициализируется при [`init`], поэтому по умолчанию возвращает true.
-pub fn heartbeat() -> bool {
-    // Инициализированный оркестратор считается живым.
-    true
+/// Вызывается из `kernel_main` после `dinit::init()`.
+pub fn run(mode: orchestrator::RunMode) {
+    if !orchestrator::init(mode) {
+        log::error("nanocore init failed (dag cycle)");
+        return;
+    }
+    orchestrator::boot_chain();
+    // Запуск monitor'а — его задача продолжает жить после возврата.
+    log::info("nanocore started");
 }
 
-/// Перезагружает нано-кор (restart).
-///
-/// Stub-реализация: повторная инициализация глобального оркестратора.
-pub fn restart() {
-    // Stub: перезапуск оркестратора (полная реализация — в Dinit ELS).
-}
-
-/// Проверяет, что DAG-граф загрузки может быть построен и загружен.
-///
-/// Stub-реализация: проверка проходит, если манифесты корректны.
-pub fn dag_load_check() -> Result<(), alloc::string::String> {
-    // Stub: DAG-проверка (полная реализация — в Dinit ELS).
-    Ok(())
+/// Остановить нано-кору (остановить все запущенные службы).
+pub fn stop() {
+    {
+        let mut orch = orchestrator::ORCHESTRATOR.lock();
+        for job in orch.jobs.iter_mut() {
+            if job.running {
+                job.running = false;
+                job.stop_reason = Some(alloc::string::String::from("stopped by nc stop"));
+            }
+        }
+        orch.phase = orchestrator::BootPhase::Complete;
+    }
+    log::info("nanocore stopped");
 }

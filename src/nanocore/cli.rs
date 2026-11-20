@@ -1,242 +1,151 @@
-//! nanocore CLI — command-line interface for the Nano-Core orchestrator.
+//! Nano-Core CLI — встроенные команды для управления нано-корой.
 //!
-//! Commands:
-//!   nanocore status           — table of all process states
-//!   nanocore logs [--follow]  — view log entries
-//!   nanocore logs --filter X  — filter logs by name substring
-//!   nanocore trace <name>     — trace a specific process
-//!   nanocore restart <name>   — hot restart a process
-//!   nanocore graph            — DAG graph visualization
-//!   nanocore mode <mode>      — switch run mode
-//!
-//! The CLI is invoked from the existing `cli.rs` command processor.
+//! Подключается в CLI ядра как команда `nc`:
+//! - `nc` или `nc status` — статус нано-кора (фаза, DAG, heartbeat'и);
+//! - `nc boot` — ручной перезапуск boot-цепочки;
+//! - `nc tick` — один шаг monitor-цикла (проверка heartbeat'ов);
+//! - `nc dag` — отрисовка DAG (последовательность волн);
+//! - `nc log` — последние записи журнала нано-кора;
+//! - `nc restart <name>` — перезапуск службы;
+//! - `nc stop` — остановка нано-кора.
 
-use alloc::string::ToString;
+use crate::nanocore::{heartbeat, log, orchestrator};
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
 
-use crate::nanocore::orchestrator::{Orchestrator, RunMode};
-use crate::nanocore::log;
-use crate::println;
+/// Разбить строку аргументов на слова (whitespace-separated).
+fn split_words(text: &str) -> Vec<String> {
+    text.split_whitespace().map(String::from).collect()
+}
 
-/// Execute a nanocore command.
-/// Returns true if the command was handled.
-pub fn execute(args: &[&str]) -> bool {
-    if args.is_empty() {
-        return false;
-    }
-    if args[0] != "nanocore" {
-        return false;
-    }
-    if args.len() < 2 {
-        print_help();
-        return true;
-    }
-
-    let cmd = args[1];
-    let rest = &args[2..];
-
-    crate::nanocore::orchestrator::with_orchestrator(|orch| {
-        match cmd {
-            "status" => cmd_status(orch),
-            "logs" => cmd_logs(orch, rest),
-            "trace" => cmd_trace(orch, rest),
-            "restart" => cmd_restart(orch, rest),
-            "graph" => cmd_graph(orch),
-            "mode" => cmd_mode(orch, rest),
-            "help" | "?" => print_help(),
-            _ => {
-                println!("Unknown nanocore command: {}", cmd);
-                println!("Use 'nanocore help' for command list.");
-            }
+/// Командная строка: `nc` с подкомандами.
+pub fn run(args: &str) {
+    let words = split_words(args);
+    let sub = words.first().map(String::as_str).unwrap_or("status");
+    match sub {
+        "status" => cmd_status(),
+        "boot" => cmd_boot(),
+        "tick" => cmd_tick(),
+        "dag" => cmd_dag(),
+        "log" => cmd_log(),
+        "restart" => {
+            let name = words.get(1).map(String::as_str).unwrap_or("");
+            cmd_restart(name);
         }
-    });
-    true
-}
-
-fn print_help() {
-    println!("=== Nano-Core CLI ===");
-    println!("  nanocore status            — Show process status table");
-    println!("  nanocore logs [--follow]   — Show log entries");
-    println!("  nanocore logs --filter X   — Filter logs by process name");
-    println!("  nanocore trace <name>      — Trace a specific process");
-    println!("  nanocore restart <name>    — Hot restart a process");
-    println!("  nanocore graph             — Show DAG graph (waves)");
-    println!("  nanocore mode <mode>       — Switch run mode (normal/fast/safe/debug/recovery)");
-    println!("  nanocore help              — Show this help");
-}
-
-/// Render a status table of all processes.
-fn cmd_status(orch: &Orchestrator) {
-    let procs = orch.get_processes();
-    let phase = orch.phase();
-    let mode = orch.mode();
-    let started = orch.started_ms();
-    let now = log::now_ms();
-    let elapsed = now.saturating_sub(started);
-
-    println!();
-    println!("╔═════════════════════════════════════════════════════════════════════════╗");
-    println!("║                    Nano-Core Status (mode: {}, phase: {})      ║",
-             mode.as_str(), phase.as_str());
-    println!("╚═════════════════════════════════════════════════════════════════════════╝");
-    println!("  Boot time: {:.3}s | Processes: {} | Completed: {}",
-             elapsed as f64 / 1000.0,
-             procs.len(),
-             orch.completed_count());
-    println!();
-    println!("  {:<6} {:<24} {:<10} {:<10} {:<12} {:<10} {:<10}", "PID", "Name", "Category", "Priority", "State", "Restarts", "Actions");
-    println!("  {:<6} {:<24} {:<10} {:<10} {:<12} {:<10} {:<10}", "─", "─", "─", "─", "─", "─", "─");
-
-    for p in procs.iter() {
-        let name = &p.manifest.name;
-        let cat = &p.manifest.category;
-        let prio = p.manifest.priority_tier().as_str();
-        let state = p.state.as_str();
-        let restarts = p.restart_count.to_string();
-        let actions = p.actions_logged.to_string();
-        println!("  {:<6} {:<24} {:<10} {:<10} {:<12} {:<10} {:<10}",
-                 p.pid, name, cat, prio, state, restarts, actions);
-    }
-
-    let stats = orch.get_stats();
-    println!();
-    println!("  Total: {} | Running: {} | Exited: {} | Failed: {} | Panic: {} | Restarts: {}",
-             stats.total, stats.running, stats.exited, stats.failed,
-             stats.panicked, stats.total_restarts);
-    println!();
-}
-
-/// Show log entries.
-fn cmd_logs(_orch: &Orchestrator, args: &[&str]) {
-    let filter = args.iter().position(|&a| a == "--filter")
-        .and_then(|i| args.get(i + 1))
-        .copied();
-    let follow = args.contains(&"--follow");
-
-    let entries = if let Some(f) = filter {
-        log::get_entries_filtered(f)
-    } else {
-        log::get_entries()
-    };
-
-    for entry in entries.iter() {
-        println!("{}", entry.format());
-    }
-
-    if follow {
-        println!("--- Following (press Ctrl+C to stop) ---");
-        let last = entries.len();
-        loop {
-            let new = log::get_entries_since(last);
-            for entry in new.iter() {
-                println!("{}", entry.format());
-            }
-            // In a real kernel, we'd yield here. For now, just break.
-            break;
+        "stop" => cmd_stop(),
+        other => {
+            crate::println!("{}", String::from("unknown nc subcommand"));
+            print_usage();
+            let _ = other;
         }
     }
 }
 
-/// Trace a specific process.
-fn cmd_trace(_orch: &Orchestrator, args: &[&str]) {
-    if args.is_empty() {
-        println!("Usage: nanocore trace <name>");
-        return;
-    }
-    let name = args[0];
-    let entries = log::get_entries_filtered(name);
+fn cmd_status() {
+    let orch = orchestrator::ORCHESTRATOR.lock();
+    crate::println!("=== Nano-Core status ===");
+    crate::println!("{}", orchestrator::status_line());
+    crate::println!("DAG stages: {}", orch.dag.len());
+    crate::println!("DAG waves: {}", orch.dag.wave_count());
 
-    println!("=== Trace: {} ===", name);
-    println!("  {:<10} {:<6} {:<8} {}", "Time", "PID", "Level", "Message");
-    println!("  {:<10} {:<6} {:<8} {:<40}", "─", "─", "─", "─");
-
-    for entry in entries.iter() {
-        println!("  [{:.3}]   [{:<4}] [{:<6}] {}",
-                 entry.timestamp_ms as f64 / 1000.0,
-                 entry.pid,
-                 entry.level.as_str().to_uppercase(),
-                 entry.message);
-    }
-
-    if entries.is_empty() {
-        println!("  No log entries for '{}'", name);
-    }
-    println!();
-}
-
-/// Hot restart a process.
-fn cmd_restart(orch: &Orchestrator, args: &[&str]) {
-    if args.is_empty() {
-        println!("Usage: nanocore restart <name>");
-        return;
-    }
-    let name = args[0];
-
-    if let Some(proc) = orch.get_process(name) {
-        let pid = proc.pid;
-        println!("Restarting {} (PID {})...", name, pid);
-
-        // Mark as failed first
-        orch.mark_failed(pid, name, "manual restart requested");
-
-        // Restart
-        if let Err(e) = orch.restart_on_failure(pid, proc.manifest.max_restarts) {
-            println!("Restart failed: {}", e);
+    crate::println!("Services:");
+    for job in &orch.jobs {
+        let status = if job.running {
+            String::from("running")
+        } else if let Some(reason) = &job.stop_reason {
+            format!("stopped ({})", reason)
         } else {
-            println!("Restart initiated for {}", name);
+            String::from("idle")
+        };
+        crate::println!(
+            "  {:<14} spawn={:<28} {}",
+            job.manifest.name, job.manifest.spawn, status
+        );
+    }
+
+    crate::println!("Heartbeats:");
+    let beats = heartbeat::HEARTBEATS.lock();
+    for hb in beats.beats.values() {
+        let state = if hb.alive { "alive" } else { "DEAD" };
+        crate::println!(
+            "  {:<14} last={}ms deadline={}ms fails={} restarts={} {}",
+            hb.name,
+            hb.last_beat_ms,
+            hb.deadline_ms,
+            hb.failures,
+            hb.restarts,
+            state
+        );
+    }
+    crate::println!("=== end ===");
+}
+
+fn cmd_boot() {
+    crate::println!("[nanocore] manual boot chain restart...");
+    orchestrator::boot_chain();
+    crate::println!("[nanocore] boot chain done");
+}
+
+fn cmd_tick() {
+    let n = orchestrator::run_monitor_tick();
+    crate::println!("[nanocore] monitor tick done, {} services restarted", n);
+}
+
+fn cmd_dag() {
+    let orch = orchestrator::ORCHESTRATOR.lock();
+    crate::println!("=== Nano-Core DAG ===");
+    let order = orch.dag.execution_order();
+    let mut wave = 0u32;
+    for stage in &order {
+        if stage.wave != wave {
+            crate::println!("-- wave {} --", wave);
+            wave = stage.wave;
         }
+        let flag = if stage.ok { "OK" } else { "--" };
+        crate::println!("  [{}] {:<14} {}", flag, stage.name, stage.deps.join(", "));
+    }
+    crate::println!("=== end ===");
+}
+
+fn cmd_log() {
+    crate::println!("=== Nano-Core log (last 32) ===");
+    for entry in log::recent().iter().rev().take(32) {
+        crate::println!(
+            "  [{}] t={}ms {}",
+            entry.level.as_str(),
+            entry.at_ms,
+            entry.text
+        );
+    }
+    crate::println!("=== end ===");
+}
+
+fn cmd_restart(name: &str) {
+    if name.is_empty() {
+        crate::println!("usage: nc restart <service-name>");
+        return;
+    }
+    if orchestrator::restart_service(name) {
+        crate::println!("[nanocore] service {} restarted", name);
     } else {
-        println!("Process not found: {}", name);
+        crate::println!("[nanocore] service {} restart failed", name);
     }
-    println!();
 }
 
-/// Show DAG graph as waves (parallel groups).
-fn cmd_graph(orch: &Orchestrator) {
-    let waves = orch.get_dag_waves();
-    let dag = orch.get_dag();
-    println!();
-    println!("╔═════════════════════════════════════════════════════════════════════════╗");
-    println!("║                    Nano-Core DAG Graph (Waves)                       ║");
-    println!("╚═════════════════════════════════════════════════════════════════════════╝");
-    println!();
-
-    if waves.is_empty() {
-        println!("  DAG not built yet.");
-        println!();
-        return;
-    }
-
-    for (i, wave) in waves.iter().enumerate() {
-        println!("  Wave {}: {} processes (parallel)", i + 1, wave.len());
-        for proc_name in wave.iter() {
-            let deps = dag.dependencies(proc_name);
-            if deps.is_empty() {
-                println!("    └── {} (no dependencies)", proc_name);
-            } else {
-                println!("    └── {} (requires: {}, parallel with {} others)",
-                         proc_name, deps.join(", "), wave.len() - 1);
-            }
-        }
-        println!();
-    }
-
-    let total = waves.len();
-    println!("  Total waves: {}", total);
-    println!("  Max parallelism: {} processes", waves.iter().map(|w| w.len()).max().unwrap_or(0));
-    println!();
+fn cmd_stop() {
+    crate::nanocore::stop();
+    crate::println!("[nanocore] stopped");
 }
 
-/// Switch run mode.
-fn cmd_mode(orch: &Orchestrator, args: &[&str]) {
-    if args.is_empty() {
-        println!("Current mode: {}", orch.mode().as_str());
-        println!("Available modes: normal, fast, safe, debug, recovery");
-        println!();
-        return;
-    }
-    let new_mode = RunMode::from_str(args[0]);
-    println!("Mode changed to: {}", new_mode.as_str());
-    println!();
+fn print_usage() {
+    crate::println!("");
+    crate::println!("nc [subcommand] — Nano-Core control");
+    crate::println!("  status        — состояние служб и heartbeat'ов");
+    crate::println!("  boot          — запустить boot-цепочку DAG");
+    crate::println!("  tick          — шаг heartbeat-мониторинга");
+    crate::println!("  dag           — DAG зависимостей (по волнам)");
+    crate::println!("  log           — последние записи журнала");
+    crate::println!("  restart <s>   — перезапустить службу <s>");
+    crate::println!("  stop          — остановить нано-кору");
 }
-
-

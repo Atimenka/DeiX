@@ -205,16 +205,6 @@ pub fn known_profiles() -> Vec<String> {
 
 /// Создаёт профиль: каталоги home/<имя>/{files,configs} и стартовый
 /// конфиг внутри.
-pub fn current_username() -> Option<alloc::string::String> {
-    // Return the first known profile as the current user
-    let profiles = known_profiles();
-    if !profiles.is_empty() {
-        Some(profiles[0].clone())
-    } else {
-        Some(alloc::string::String::from("root"))
-    }
-}
-
 pub fn init_profile(user: &str) -> Result<(), UserFsError> {
     if !valid_component(user) {
         return Err(UserFsError::BadName);

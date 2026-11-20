@@ -11,9 +11,12 @@ mod ramdisk;
 mod auth;
 mod autostart;
 mod bootlogo;
+mod bootprof;
 mod bootchain;
+mod bootmap;
 mod bugreport;
 mod cli;
+mod cloudauth;
 mod cp866;
 mod cpuid;
 mod crypto;
@@ -21,6 +24,11 @@ mod crypto_storage;
 mod devauth;
 mod devmode;
 mod diag;
+mod dinit;
+mod ds;
+mod duil;
+mod erofs;
+mod erofs_disk;
 mod ext2;
 mod font;
 mod font_cyrillic;
@@ -32,14 +40,16 @@ mod drivers;
 mod init_parser;
 mod install;
 mod interrupts;
+mod jpeg;
 mod keyboard;
 mod lang;
 mod linux;
 mod loginui;
 mod luks;
+mod media;
+mod mediapack;
 mod mex;
 mod nanocore;
-mod ipc;
 mod mm;
 mod module;
 mod mouse;
@@ -61,11 +71,11 @@ mod security_monitor;
 mod serial;
 mod sound;
 mod spinlock;
-mod smp;
 mod sync;
 mod sysfs;
 mod timer;
 mod ui;
+mod update;
 mod userfs;
 mod usermode;
 mod vault;
@@ -73,15 +83,7 @@ mod vbe;
 mod vga;
 mod vgaglobal;
 mod vfs;
-mod usb;
 mod vmmouse;
-mod dinit;
-mod erofs;
-mod dialog;
-mod duil;
-mod ds;
-mod bootmap;
-mod bootprof;
 
 use core::panic::PanicInfo;
 
@@ -110,17 +112,8 @@ fn panic(info: &PanicInfo) -> ! {
 /// (long_mode_init.asm) после перехода в 64-битный режим.
 #[no_mangle]
 pub extern "C" fn kernel_main() -> ! {
-    // Маркер входа в ядро: если его нет в serial-логе, но есть маркер '4'
-    // из long_mode_init.asm — ядро не загружено/не стартовало.
-    crate::serial_println!("[deix] kernel_main entered");
-
     // На этом этапе прерывания ещё физически выключены (interrupts::init()
     // ниже их только включит), поэтому прямой доступ безопасен.
-
-    // NANOCORE — миниминальное ядро, запускается ПЕРВОЙ, до всего остального.
-    // Оно обеспечивает базовые услуги: память, планирование, IPC.
-    // Всё остальное (dinit, службы, GUI) — процессы Ring 3 под его управлением.
-    nanocore::init();
 
     // ВАЖНО для установленного диска: install не копирует .data ядра
     // (там живое состояние SpinLock/глобалов), поэтому на старте WRITER
@@ -178,145 +171,212 @@ pub extern "C" fn kernel_main() -> ! {
     allocator::init();
     println!("Heap allocator (16 MiB): OK");
     crate::serial_println!("[deix] I: heap ok");
-    crate::serial_println!("[deix] T0: heap ok ({} ms)", timer::uptime_ms());
+    bootprof::mark("heap ready");
 
-    // RADICAL OPTIMIZATION: Parallel driver initialization
-    // All independent drivers are spawned as background tasks simultaneously
-    // This reduces boot time from ~66s to <1s
-
+    // Система диагностики: с этого момента каждое существенное событие
+    // регистрируется в кольцевом буфере и уходит в serial. Постоянное
+    // хранилище подключается позже (diag::storage_ready), когда /userdata
+    // доступен — буфер до тех пор ничего не теряет.
     diag::init();
-    crate::serial_println!("[deix] T1: diag init done ({} ms)", timer::uptime_ms());
+    bootprof::mark("diag ring ready");
 
-    // Spawn ALL drivers in parallel as background tasks
-    extern "C" fn drv_keyboard() {
-        // keyboard already initialized by IRQ1 handler
-    }
-    extern "C" fn drv_mouse() {
-        mouse::init(800, 600);
-    }
-    extern "C" fn drv_usb() {
-        usb::init();
-    }
-    extern "C" fn drv_smp() {
-        smp::init();
-    }
-    extern "C" fn drv_ata() {
-        if ata::is_present() {
-            println!("ATA disk: OK (PIO mode)");
-        }
-    }
-    extern "C" fn drv_rtl8139() {
-        rtl8139::init();
-    }
-    extern "C" fn drv_gpu() {
-        gpu::detect();
-    }
-    extern "C" fn drv_hda() {
-        hda::init();
-    }
-
-    let mut spawned = 0;
-    if crate::sched::spawn("keyboard", drv_keyboard).is_some() { spawned += 1; }
-    if crate::sched::spawn("mouse", drv_mouse).is_some() { spawned += 1; }
-    if crate::sched::spawn("usb", drv_usb).is_some() { spawned += 1; }
-    if crate::sched::spawn("smp", drv_smp).is_some() { spawned += 1; }
-    if crate::sched::spawn("ata", drv_ata).is_some() { spawned += 1; }
-    if crate::sched::spawn("rtl8139", drv_rtl8139).is_some() { spawned += 1; }
-    if crate::sched::spawn("gpu", drv_gpu).is_some() { spawned += 1; }
-    if crate::sched::spawn("hda", drv_hda).is_some() { spawned += 1; }
-    crate::serial_println!("[deix] T2: {} drivers spawned in parallel ({} ms)", spawned, timer::uptime_ms());
     println!("PS/2 keyboard: OK (handled via IRQ1)");
+
+    mouse::init(800, 600);
     println!("PS/2 mouse: OK (handled via IRQ12)");
-    println!("USB subsystem: initializing...");
-    println!("SMP subsystem: initializing...");
-    // RADICAL: Everything else is deferred to background tasks
-    // Boot proceeds immediately to login screen
+
+    if ata::is_present() {
+        match ata::enable_multiple() {
+            0 => crate::serial_println!("[ata] READ MULTIPLE недоступен — чтение по одному сектору"),
+            n => crate::serial_println!("[ata] READ MULTIPLE включён: {} секторов за один DRQ", n),
+        }
+        ata::enable_irq_wait();
+        println!("ATA disk: OK (PIO mode)");
+    } else {
+        println!("ATA disk: not detected");
+    }
+
+    bootprof::mark("ata probe");
+    let net_ok = rtl8139::init();
+    bootprof::mark("rtl8139 init");
+    if net_ok {
+        println!(
+            "Network: IP {}.{}.{}.{} (type 'ifconfig' for details)",
+            net::my_ip()[0], net::my_ip()[1], net::my_ip()[2], net::my_ip()[3]
+        );
+    } else {
+        println!("Network: no RTL8139 card found (run QEMU with '-net nic,model=rtl8139 -net user')");
+    }
+
+
+    let gpu_info = gpu::detect();
+    let gpu_ok = gpu_info.is_some();
+    bootprof::mark("gpu detect");
+    match gpu_info {
+        Some(info) => {
+            println!(
+                "GPU: {} detected (device ID {:#06x}). Type 'gpu info' for details.",
+                info.vendor.name(),
+                info.device_id
+            );
+        }
+        None => println!("GPU: no display controller found on PCI bus"),
+    }
+
+    let audio_ok = hda::init();
+    bootprof::mark("hda init");
+    if audio_ok {
+        println!("Audio: Intel High Definition Audio (HDA) ready");
+    } else {
+        println!("Audio: PC Speaker (run QEMU with '-device intel-hda -device hda-duplex' for HDA)");
+    }
 
     println!("Default language: English. Type 'lang ru' to switch to Russian.");
 
     bootlogo::show("starting system...");
+    bootprof::mark("boot logo shown");
 
-    // Defer ALL remaining boot work to background
-    crate::serial_println!("[deix] T3: boot fast path ({} ms)", timer::uptime_ms());
-
-    // Spawn background tasks for everything else
-    // All deferred work runs in parallel after fast path to login
-    extern "C" fn bootchain_verify() {
-        let _ = crate::bootchain::ensure_verification();
-    }
-    extern "C" fn mm_init_bg() {
-        mm::phys::init();
-    }
-    extern "C" fn crypto_check_bg() {
-        crate::crypto_storage::is_encryption_enabled();
-    }
-    extern "C" fn modules_load_bg() {
-        module::ensure_modules();
-    }
-    extern "C" fn usermode_init_bg() {
-        usermode::init();
-        usermode::ensure_selftest();
-    }
-    extern "C" fn partition_validate_bg() {
-        partition_map::ensure_validation();
-    }
-    extern "C" fn init_parse_bg() {
-        init_parser::ensure_report();
-    }
-    extern "C" fn security_check_bg() {
-        security_monitor::ensure_selfcheck();
+    bootlogo::set_status("verifying boot partitions...");
+    match crate::bootchain::run_boot_chain() {
+        Ok(summary) => crate::println!("{}", summary),
+        Err(e) => {
+            crate::println!("  [bootchain] Предупреждение: {}", e);
+        }
     }
 
-    crate::sched::spawn("bootchain-verify", bootchain_verify);
-    crate::sched::spawn("mm-init", mm_init_bg);
-    crate::sched::spawn("crypto-check", crypto_check_bg);
-    crate::sched::spawn("modules-load", modules_load_bg);
-    crate::sched::spawn("usermode-gdt", usermode_init_bg);
-    crate::sched::spawn("partition-validate", partition_validate_bg);
-    crate::sched::spawn("init-parse", init_parse_bg);
-    crate::sched::spawn("security-check", security_check_bg);
+    bootprof::mark("bootchain done");
+    bootlogo::set_status("initializing memory...");
+    // Инициализируем менеджер памяти (физический + виртуальный).
+    mm::phys::init();
+    println!("  [mm] Physical page allocator: OK");
+    mm::print_stats();
+    bootprof::mark("mm phys init");
 
-    crate::serial_println!("[deix] T4: all deferred work spawned ({} ms)", timer::uptime_ms());
-    crate::serial_println!("[deix] T5: going to login ({} ms)", timer::uptime_ms());
+    // Полнодисковое шифрование (XTS-AES-256). ЕДИНЫЙ ПАРОЛЬ: пароль учётной
+    // записи пользователя является ключом шифрования диска.
+    // При заводской настройке диск не зашифрован; первая настройка
+    // (создание первого аккаунта) ВКЛЮЧАЕТ шифрование. При
+    // последующих загрузках разблокировка происходит на экране входа.
+    match crate::crypto_storage::is_encryption_enabled() {
+        true => {
+            crate::serial_println!("[crypto] Диск зашифрован (XTS-AES-256) — разблокировка при входе.");
+            crate::println!("  [crypto] Диск зашифрован (XTS-AES-256). Разблокировка — паролем аккаунта.");
+        }
+        false => {
+            crate::serial_println!("[crypto] Диск не зашифрован.");
+            crate::println!("  [crypto] Хранилище готово.");
+        }
+    }
 
-    // RADICAL: Scheduler already running, all deferred work in background
-    // Go directly to login screen - everything else completes in parallel
 
-    // Контрольный список загрузки
-    diag::boot::screen(false, false, false);
+    // Загружаем модули ядра (.kmod файлы) с ext2-диска.
+    // Модули расширяют функциональность ядра: сеть, графика, криптография.
+    // Если модуль не найден на диске — система продолжает работу без него.
+    bootprof::mark("crypto state check");
+    if update::pending() {
+        crate::println!("  [update] an update is waiting: kernel modules are not loaded, /system is about to be replaced.");
+    } else {
+        module::load_boot_modules();
+    }
+    bootprof::mark("kmod load");
 
+    // GDT/TSS ставим ПЕРВЫМИ: планировщик кладёт в начальный кадр задачи
+    // SS=0x10 (kernel data), а в GDT загрузчика есть только null и
+    // kernel code — без полной GDT первое же переключение даёт #GP.
+    usermode::init();
+
+    // ПЛАНИРОВЩИК: включаем вытесняющую многозадачность.
+    sched::start();
+    bootprof::mark("usermode+sched start");
+
+    // Самопроверки sched/ring3 из загрузки УБРАНЫ: они своё отработали
+    // (результаты зафиксированы в REFACTOR_REPORT.md), а kernel.bin
+    // упёрся в потолок 572 КиБ — буфер загрузчика на 0x11000 граничит
+    // с видеопамятью VGA. Запустить вручную: 'threads test'.
+
+    // DeiX Security Subsystem (Ring 0 / Vault): проверка карты разделов
+    // /system (EROFS RO) + /userdata (EXT2 RW) и разбор скрипта init.deix
+    // процессом PID 1 (Dinit).
+    partition_map::validate_partition_map_report();
+    bootprof::mark("partition map validate");
+    init_parser::boot_report(init_parser::INIT_DEIX_SCRIPT);
+    security_monitor::boot_selfcheck();
+    bootprof::mark("init script + security selfcheck");
+    crate::dinit::init();
+    bootprof::mark("dinit init");
+    crate::serial_println!("[deix] Dinit (PID 1, Ring 0) запущен");
+
+    // Nano-Core: нанослой ядра — DAG зависимостей, heartbeat-мониторинг,
+    // IPC-шина. Запускается ПОВЕРХ dinit (PID 1 занят); использует задачи
+    // ядра (sched) и процесс-менеджер (process) для реальных процессов.
+    crate::nanocore::run(crate::nanocore::orchestrator::RunMode::Normal);
+    bootprof::mark("nanocore init + boot chain");
+    crate::serial_println!("[deix] Nano-Core запущен (dag/heartbeat/ipc)");
+
+    // ВНИМАНИЕ: autostart::run() ПЕРЕНЕСЁН за экран входа (см. ниже).
+    // Раньше он выполнялся здесь — до аутентификации, и любой, кто мог
+    // записать AUTOSTART.CFG, получал исполнение команд в обход входа
+    // (например, строкой "gpu mode 800x600" можно было увести систему
+    // в графику и не увидеть логин вовсе). Это дыра в безопасности.
+
+    // Контрольный список загрузки: каждая строка — реальная проверка
+    // подсистемы, сбой регистрируется в журнале со своим кодом DX-*.
+    diag::boot::screen(net_ok, audio_ok, gpu_ok);
+    bootprof::mark("diag boot screen");
+
+    // Если прошлая сессия завершилась отказом ядра (дамп в сырых секторах,
+    // LBA 2048), сообщаем об этом до входа. Плановая перезагрузка дампа
+    // не оставляет и диалога не вызывает.
     diag::cli::announce_previous_failure();
 
     bootlogo::set_status("system ready");
+    bootprof::mark("system ready, waiting at login");
 
-    crate::serial_println!("[deix] T20: before loginui ({} ms)", timer::uptime_ms());
+    // Экран входа — до первого запуска создаёт первый аккаунт, при
+    // последующих запусках требует ввод логина/пароля (сверяется с
+    // солёным SHA-256 хэшем, хранящимся на ext2 — см. auth.rs). Реальный
+    // пароль нигде не сохраняется на диске в открытом виде.
+    // Графический вход сменяет лого (рисуют в один framebuffer).
     let username = match loginui::run() {
         Some(name) => {
+            // ОБЯЗАТЕЛЬНО возвращаем текстовый режим: иначе графика
+            // остаётся на мониторе, а CLI пишет в невидимый буфер —
+            // это и выглядело как "картинка не пропадает".
             loginui::back_to_text();
             crate::println!("Welcome to DeiX, {}!", name);
             name
         }
         None => auth::run_login_screen(),
     };
-    crate::serial_println!("[deix] T21: loginui done ({} ms)", timer::uptime_ms());
-
+    bootprof::mark("login finished (includes the time the user spent typing)");
+    bootchain::finish();
+    update::run_apply_mode();
     cli::set_current_user(&username);
     let uid = if username == "root" { 0 } else { 1000 };
     if let Some(dinit) = crate::dinit::DINIT.lock().as_mut() {
         dinit.register_user(uid, &username);
     }
 
-    // Профиль пользователя
+    // Все записи первого входа (профиль, журналы, каталоги, autostart) идут
+    // одним пакетом: кеш диска сбрасывается один раз в конце, а не после
+    // каждой мелкой операции (каждый сброс — fsync образа на хосте).
+    let first_login_writes = ata::FlushBatch::begin();
+
+    // Профиль пользователя: /userdata/home/<имя>/{files,configs}.
     if let Err(e) = userfs::init_profile(&username) {
         crate::println!("  [userfs] профиль не создан: {}", e.message());
     }
-    crate::serial_println!("[deix] T22: userfs done ({} ms)", timer::uptime_ms());
 
-    // /userdata доступен — подключаем постоянные журналы
+    // /userdata доступен (и расшифрован, если включено шифрование) —
+    // подключаем постоянные журналы и сбрасываем в них всё, что накопил
+    // кольцевой буфер с начала загрузки. События до этой точки не теряются.
+    bootprof::mark("user profile init");
     diag::storage_ready();
+    bootprof::mark("diag storage_ready");
     crate::serial_println!("[deix] J: storage_ready done ({} ms)", timer::uptime_ms());
 
-    // Канонический layout /userdata
+    // Канонический layout /userdata: недостающие каталоги создаются
+    // идемпотентно (mkdir_p) при каждом входе.
     for d in [
         "/userdata/home", "/userdata/config", "/userdata/apps", "/userdata/packages",
         "/userdata/downloads", "/userdata/cache", "/userdata/update", "/userdata/log",
@@ -324,33 +384,45 @@ pub extern "C" fn kernel_main() -> ! {
         let _ = vfs::mkdir(d);
     }
 
-    // autostart.cfg — ленивая инициализация
-    autostart::ensure_default_deferred();
+    // Базовый /userdata/config/autostart.cfg — создаём при первом входе.
+    autostart::ensure_default();
+    bootprof::mark("userdata dirs + autostart defaults");
+    drop(first_login_writes);
+    bootprof::mark("first login writes flushed");
     crate::serial_println!("[deix] K: autostart ensure_default done ({} ms)", timer::uptime_ms());
 
-    // Автозапуск после входа
+    // Автозапуск ТОЛЬКО после успешного входа: команды выполняются от
+    // имени вошедшего пользователя, а не анонимно до аутентификации.
     autostart::run();
+    bootprof::mark("autostart run");
     crate::serial_println!("[deix] L: autostart run done ({} ms)", timer::uptime_ms());
 
-    // Звук отложен: play_ui ждёт completion синхронно, что добавляет ~1.7s
-    sound::play_ui_async(sound::UiSound::Startup);
-    crate::serial_println!("[deix] M: startup sound queued ({} ms)", timer::uptime_ms());
+    // UI-звуки (PC speaker, src/sound.rs; файлы *.dps в /system/media/audio/ui —
+    // если в образе их нет, просто играем в тишине, как раньше).
+    // Загрузка шла с USB-флешки (RAM-диск) — сигнал «носитель подключён»,
+    // затем общий стартовый сигнал «система готова». Играет отдельная
+    // задача: звук идёт секунды, и ждать его до приглашения незачем.
+    if sched::spawn("boot-sound", boot_sound_task).is_none() {
+        boot_sound_task();
+    }
 
+    bootprof::mark("boot sound + cli prompt");
     cli::run();
+}
+
+/// Стартовые UI-звуки; выполняется в фоновой задаче планировщика.
+extern "C" fn boot_sound_task() {
+    if crate::ramdisk::is_active() {
+        let _ = sound::play_ui(sound::UiSound::UsbConnect);
+    }
+    let _ = sound::play_ui(sound::UiSound::Startup);
+    let _ = sound::play_ui(sound::UiSound::Welcome);
+    crate::serial_println!("[deix] M: startup sound done ({} ms)", timer::uptime_ms());
 }
 
 /// Полный сброс глобальных структур состояния (.data/.bss) перед переносом
 /// ядра на установленный диск (команда `install`). Предотвращает перенос
 /// живых указателей на кучу и мусорных дескрипторов сессии.
-
-/// Останавливает CPU (для halt/shutdown).
-pub fn halt() {
-    unsafe {
-        core::arch::asm!("hlt", options(noreturn));
-    }
-}
-
-
 pub fn reset_all_globals() {
     crate::cli::set_current_user("");
     crate::cli::set_cwd("");

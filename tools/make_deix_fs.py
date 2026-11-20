@@ -10,12 +10,15 @@
 
 Служебные области до первого раздела:
   LBA 0           — MBR (boot_sector.bin)
-  LBA 1..2046     — stage2 + ramboot + сырой kernel.bin
-  LBA 2047        — дескриптор образа ядра DEIXKIMG (LBA/размер/SHA-256)
+  LBA 1..2046     — свободны (нули)
+  LBA 2047        — карта загрузки DEIXKIMG v2 (docs/BOOTMAP.md)
   LBA 2048..2111  — область аварийного дампа (DEIXPNIC, src/diag/panic.rs)
+
+Загрузчик и ядро лежат файлами в /system, карта загрузки указывает на них.
 
 /system содержит структуру каталогов:
   - kernel/kernel.bin
+  - boot/stage2.bin, boot/ramboot.bin
   - etc/init.deix
   - services/dinit.cfg
   - media/audio/ui/*.dps
@@ -36,22 +39,18 @@ SPB = BLOCK // SECTOR        # секторов на блок ext2
 # --- геометрия ext2-тома /userdata (та же, что в src/ext2.rs) ---
 SB_BLOCK = 1
 GDT_BLOCK = 2
-BLOCK_BITMAP = 3
-INODE_BITMAP = 4
-INODE_TABLE_START = 5
 INODE_SIZE = 128
 EXT2_MAGIC = 0xEF53
 
 # --- КАРТА РАЗДЕЛОВ DeiX (должна совпадать с src/partition_map.rs) ---
 # Два первичных раздела в MBR, логических разделов нет.
 PRIMARY = [
-    (1, 0x83, 4096,  20480, "/system"),    # bootable, системный EROFS
-    (2, 0x83, 24576, 16384, "/userdata"),  # ext2, пользовательские данные
+    (1, 0x83, 4096,  32768, "/system"),    # bootable, системный EROFS
+    (2, 0x83, 36864, 32768, "/userdata"),  # ext2, пользовательские данные
 ]
 
 # Дескриптор образа ядра: сектор LBA 2047 (см. src/partition_map.rs
-# KERNEL_IMAGE_INFO_LBA). Формат: magic(8) + kernel_lba(u32 LE) +
-# kernel_size(u32 LE) + sha256(32).
+# KERNEL_IMAGE_INFO_LBA). Формат — docs/BOOTMAP.md.
 KERNEL_IMAGE_INFO_LBA = 2047
 KERNEL_IMAGE_INFO_MAGIC = b"DEIXKIMG"
 
@@ -88,22 +87,63 @@ def fill_mbr(img):
     img[511] = 0xAA
 
 
-def write_kernel_image_info(img, kernel_lba, kernel_bytes):
-    """Пишет дескриптор DEIXKIMG в сектор LBA 2047.
+BLOCK_4K = 4096
+BOOTMAP_VERSION = 2
+BOOTMAP_EXTENTS = {"stage2": (64, 8), "ramboot": (128, 8), "kernel": (192, 40)}
+SYSTEM_START_LBA = next(start for _, _, start, _, name in PRIMARY if name == "/system")
 
-    Ядро (src/bootchain.rs) сверяет по нему сырой kernel.bin и
-    /system/kernel/kernel.bin (размер + SHA-256, DX-KRN-0013).
+BOOT_FILES = {
+    "stage2": "boot/stage2.bin",
+    "ramboot": "boot/ramboot.bin",
+    "kernel": "kernel/kernel.bin",
+}
+
+
+def pad_block(data):
+    """Дополняет файл нулями до целого числа блоков EROFS (4096 Б).
+
+    Иначе mkfs.erofs кладёт хвост файла inline рядом с inode, и файл
+    перестаёт быть непрерывным участком диска, который читает MBR.
     """
-    sectors = (len(kernel_bytes) + SECTOR - 1) // SECTOR
-    if kernel_lba + sectors > KERNEL_IMAGE_INFO_LBA:
-        print("ОШИБКА: сырой kernel.bin (LBA %d, %d сект) пересекает дескриптор (LBA %d)"
-              % (kernel_lba, sectors, KERNEL_IMAGE_INFO_LBA), file=sys.stderr)
+    return data + b"\x00" * (-len(data) % BLOCK_4K)
+
+
+def locate_in_blob(blob, content, name):
+    """LBA файла внутри собранного EROFS-образа /system.
+
+    Файл не сжат и выровнен по блоку, поэтому лежит непрерывно: ищем его
+    байты в образе и требуем единственное, выровненное по 4096 вхождение.
+    """
+    if blob.count(content) != 1:
+        print("ОШИБКА: %s: в образе /system %d вхождений файла, ожидалось ровно 1"
+              % (name, blob.count(content)), file=sys.stderr)
         sys.exit(1)
+    off = blob.find(content)
+    if off % BLOCK_4K:
+        print("ОШИБКА: %s лежит в /system со смещением %d — не выровнен по %d"
+              % (name, off, BLOCK_4K), file=sys.stderr)
+        sys.exit(1)
+    return SYSTEM_START_LBA + off // SECTOR
+
+
+def write_boot_map(img, boot):
+    """Пишет карту загрузки DEIXKIMG v2 в сектор LBA 2047.
+
+    `boot` — {"stage2"|"ramboot"|"kernel": (lba, байты файла с отступом,
+    размер без отступа)}. Формат — docs/BOOTMAP.md.
+    """
     sec = bytearray(SECTOR)
+    kernel_lba, kernel_bytes, _ = boot["kernel"]
     sec[0:8] = KERNEL_IMAGE_INFO_MAGIC
     sec[8:12] = struct.pack("<I", kernel_lba)
     sec[12:16] = struct.pack("<I", len(kernel_bytes))
     sec[16:48] = hashlib.sha256(kernel_bytes).digest()
+    sec[48:52] = struct.pack("<I", BOOTMAP_VERSION)
+    sec[52:56] = struct.pack("<I", (boot["stage2"][2] + SECTOR - 1) // SECTOR)
+    sec[56:60] = struct.pack("<I", (boot["ramboot"][2] + SECTOR - 1) // SECTOR)
+    for key, (offset, _max) in BOOTMAP_EXTENTS.items():
+        lba, data, _ = boot[key]
+        sec[offset:offset + 8] = struct.pack("<II", lba, len(data) // SECTOR)
     base = KERNEL_IMAGE_INFO_LBA * SECTOR
     img[base:base + SECTOR] = sec
 
@@ -252,34 +292,55 @@ def write_erofs_image(img, start_lba, secs, label, files=None):
             "EROFS-образ %s (%d Б) больше раздела %s (%d Б)"
             % (label, len(blob), label, capacity))
     img[base:base + len(blob)] = blob
+    return blob
+
+
+BLOCKS_PER_GROUP = 8192  # как в ядре: src/ext2.rs BLOCKS_PER_GROUP
 
 
 def format_ext2_at(img, start_lba, total_sectors):
-    """Форматирует ext2-том начиная с произвольного LBA (для /userdata)."""
+    """Форматирует ext2-том начиная с произвольного LBA (для /userdata).
+
+    Раскладка повторяет драйвер ядра (src/ext2.rs): группа — 8192 блоков,
+    в каждой группе копия суперблока, копия GDT, карты блоков и инодов и
+    таблица инодов; том может состоять из нескольких групп.
+    """
     total_blocks = total_sectors // SPB
+    bpg = BLOCKS_PER_GROUP
+    groups = (total_blocks - 1 + bpg - 1) // bpg
+    gdt_blocks = (groups * 32 + BLOCK - 1) // BLOCK
     inodes = ((max(32, total_blocks * BLOCK // 4096) + 7) // 8) * 8
-    itb = (inodes * INODE_SIZE + BLOCK - 1) // BLOCK
-    dstart = INODE_TABLE_START + itb
-    reserved = dstart + 1
-    valid_blocks = total_blocks - 1
-    free_blocks = valid_blocks - reserved
-    free_inodes = inodes - 10 - 1
+    ipg = inodes // groups
+    assert groups * ipg == inodes and 8 <= ipg <= BLOCK * 8
+    itb = (ipg * INODE_SIZE + BLOCK - 1) // BLOCK
     now = 0x60000000
+
+    def gmeta(g):
+        base = 1 + g * bpg
+        bbm = base + 1 + gdt_blocks
+        return base, bbm, bbm + 1, bbm + 2
+
+    def gcount(g):
+        base = 1 + g * bpg
+        return min(bpg, total_blocks - base)
+
+    def data_start(g):
+        return gmeta(g)[3] + itb
 
     def blk_lba(b):
         return start_lba + b * SPB
-
-    def rb(b):
-        lb = blk_lba(b) * SECTOR
-        return bytearray(img[lb:lb + BLOCK])
 
     def wb(b, data):
         lb = blk_lba(b) * SECTOR
         img[lb:lb + BLOCK] = data
 
+    zeros = bytes(BLOCK)
+    wi_table = {}
+
     def wi(ino, mode, size, links, ptrs, used):
-        idx = ino - 1
-        block = INODE_TABLE_START + (idx * INODE_SIZE) // BLOCK
+        g = (ino - 1) // ipg
+        idx = (ino - 1) % ipg
+        block = gmeta(g)[3] + (idx * INODE_SIZE) // BLOCK
         off = (idx * INODE_SIZE) % BLOCK
         raw = bytearray(INODE_SIZE)
         raw[0:2] = struct.pack("<H", mode)
@@ -288,9 +349,19 @@ def format_ext2_at(img, start_lba, total_sectors):
         raw[28:32] = struct.pack("<I", used * SPB)
         for i in range(15):
             raw[40 + i * 4:44 + i * 4] = struct.pack("<I", ptrs[i])
-        buf = rb(block)
+        buf = bytearray(wi_table.get(block, zeros))
         buf[off:off + INODE_SIZE] = raw
-        wb(block, buf)
+        wi_table[block] = bytes(buf)
+
+    dstart = data_start(0)
+    reserved0 = dstart - 1 + 2          # метаданные группы 0 + корень + lost+found
+    free_per_group = []
+    for g in range(groups):
+        overhead = data_start(g) - (1 + g * bpg)
+        used = overhead + (2 if g == 0 else 0)
+        free_per_group.append(gcount(g) - used)
+    free_blocks = sum(free_per_group)
+    free_inodes = inodes - 10 - 1
 
     # Суперблок.
     sb = bytearray(BLOCK)
@@ -299,9 +370,9 @@ def format_ext2_at(img, start_lba, total_sectors):
     sb[12:16] = struct.pack("<I", free_blocks)
     sb[16:20] = struct.pack("<I", free_inodes)
     sb[20:24] = struct.pack("<I", 1)
-    sb[32:36] = struct.pack("<I", total_blocks)
+    sb[32:36] = struct.pack("<I", bpg)
     sb[36:40] = struct.pack("<I", total_blocks)
-    sb[40:44] = struct.pack("<I", inodes)
+    sb[40:44] = struct.pack("<I", ipg)
     sb[48:52] = struct.pack("<I", now)
     sb[54:56] = struct.pack("<H", 0xFFFF)
     sb[56:58] = struct.pack("<H", EXT2_MAGIC)
@@ -309,32 +380,45 @@ def format_ext2_at(img, start_lba, total_sectors):
     sb[64:68] = struct.pack("<I", now)
     wb(SB_BLOCK, sb)
 
-    # GDT.
+    # GDT: по дескриптору на группу.
     gdt = bytearray(BLOCK)
-    gdt[0:4] = struct.pack("<I", BLOCK_BITMAP)
-    gdt[4:8] = struct.pack("<I", INODE_BITMAP)
-    gdt[8:12] = struct.pack("<I", INODE_TABLE_START)
-    gdt[12:14] = struct.pack("<H", free_blocks)
-    gdt[14:16] = struct.pack("<H", free_inodes)
-    gdt[16:18] = struct.pack("<H", 2)
-    wb(GDT_BLOCK, gdt)
+    for g in range(groups):
+        _, bbm, ibm, it = gmeta(g)
+        o = g * 32
+        gdt[o:o + 4] = struct.pack("<I", bbm)
+        gdt[o + 4:o + 8] = struct.pack("<I", ibm)
+        gdt[o + 8:o + 12] = struct.pack("<I", it)
+        gdt[o + 12:o + 14] = struct.pack("<H", free_per_group[g])
+        gdt[o + 14:o + 16] = struct.pack("<H", ipg - (11 if g == 0 else 0))
+        gdt[o + 16:o + 18] = struct.pack("<H", 2 if g == 0 else 0)
+    for b in range(GDT_BLOCK, GDT_BLOCK + gdt_blocks):
+        wb(b, gdt if b == GDT_BLOCK else zeros)
 
-    # Bitmap блоков.
-    bm = bytearray(BLOCK)
-    for b in range(reserved):
-        bm[b // 8] |= 1 << (b % 8)
-    for b in range(valid_blocks, BLOCK * 8):
-        bm[b // 8] |= 1 << (b % 8)
-    wb(BLOCK_BITMAP, bm)
+    # Карты блоков и инодов, таблицы инодов — по группам.
+    for g in range(groups):
+        base, bbm, ibm, it = gmeta(g)
+        n = gcount(g)
+        bm = bytearray(BLOCK)
+        for i in range(data_start(g) - base):
+            bm[i // 8] |= 1 << (i % 8)
+        if g == 0:
+            for blk in (dstart, dstart + 1):
+                i = blk - base
+                bm[i // 8] |= 1 << (i % 8)
+        for i in range(n, BLOCK * 8):
+            bm[i // 8] |= 1 << (i % 8)
+        wb(bbm, bm)
 
-    # Bitmap инодов.
-    ibm = bytearray(BLOCK)
-    for i in range(10):
-        ibm[i // 8] |= 1 << (i % 8)
-    ibm[(11 - 1) // 8] |= 1 << ((11 - 1) % 8)
-    for i in range(inodes, BLOCK * 8):
-        ibm[i // 8] |= 1 << (i % 8)
-    wb(INODE_BITMAP, ibm)
+        ib = bytearray(BLOCK)
+        if g == 0:
+            for i in range(11):
+                ib[i // 8] |= 1 << (i % 8)
+        for i in range(ipg, BLOCK * 8):
+            ib[i // 8] |= 1 << (i % 8)
+        wb(ibm, ib)
+
+        for b in range(it, it + itb):
+            wb(b, zeros)
 
     # Корневой каталог.
     root = bytearray(BLOCK)
@@ -351,9 +435,6 @@ def format_ext2_at(img, start_lba, total_sectors):
     root[30] = 10
     root[32:42] = b"lost+found"
     wb(dstart, root)
-    ptrs = [0] * 15
-    ptrs[0] = dstart
-    wi(2, 0o040755, BLOCK, 3, ptrs, 1)
 
     lf = bytearray(BLOCK)
     lf[0:4] = struct.pack("<I", 11)
@@ -365,22 +446,36 @@ def format_ext2_at(img, start_lba, total_sectors):
     lf[18] = 2
     lf[20:22] = b".."
     wb(dstart + 1, lf)
+
+    ptrs = [0] * 15
+    ptrs[0] = dstart
+    wi(2, 0o040755, BLOCK, 3, ptrs, 1)
     ptrs2 = [0] * 15
     ptrs2[0] = dstart + 1
     wi(11, 0o040700, BLOCK, 2, ptrs2, 1)
+    for block, data in sorted(wi_table.items()):
+        wb(block, data)
 
 
-def init_all_partitions(img, kernel_bytes):
-    """Инициализирует ФС во всех разделах: /system (EROFS RO) + /userdata (EXT2 RW)."""
+def init_all_partitions(img, boot_files):
+    """Инициализирует ФС во всех разделах: /system (EROFS RO) + /userdata (EXT2 RW).
+
+    `boot_files` — {"stage2"|"ramboot"|"kernel": байты}. Возвращает
+    {имя: (LBA, байты с отступом, размер без отступа)}.
+    """
+    padded = {k: pad_block(v) for k, v in boot_files.items()}
+    located = {}
     for num, typ, start, secs, name in PRIMARY:
         if name == "/userdata":
             format_ext2_at(img, start, secs)
         elif name == "/system":
             system_files = {
-                "kernel/kernel.bin":   kernel_bytes,
+                BOOT_FILES[k]: padded[k] for k in BOOT_FILES
+            }
+            system_files.update({
                 "etc/init.deix":       b"# DeiX OS init script\nmount /system\nmount /userdata\n",
                 "services/dinit.cfg":  b"# Dinit services config\n",
-            }
+            })
             # UI-звуки лежат ТОЛЬКО в /system/media/audio/ui/ —
             # этот путь читает src/sound.rs.
             snd_dir = os.path.join("build", "sounds")
@@ -389,7 +484,25 @@ def init_all_partitions(img, kernel_bytes):
                     if _f.endswith(".dps"):
                         with open(os.path.join(snd_dir, _f), "rb") as _fh:
                             system_files[f"media/audio/ui/{_f}"] = _fh.read()
-            write_erofs_image(img, start, secs, name, system_files)
+            # Обои и картинки-иллюстрации в /system БОЛЬШЕ не кладутся:
+            # это некритичная тяжёлая среда, она живёт в медиапаке на
+            # /userdata/media (tools/make_media_pack.py, src/mediapack.rs).
+            # /system (EROFS 16 МиБ) несёт только критичное: загрузчик,
+            # etc/, UI-звуки и иконки приложений.
+            #
+            # Цветные иконки приложений (DXIC, tools/make_icons.py) читает
+            # ui::appicons из /system/media/icons/.
+            ic_dir = os.path.join("assets", "icons")
+            if os.path.isdir(ic_dir):
+                for _f in sorted(os.listdir(ic_dir)):
+                    if _f.endswith(".dxic"):
+                        with open(os.path.join(ic_dir, _f), "rb") as _fh:
+                            system_files[f"media/icons/{_f}"] = _fh.read()
+            blob = write_erofs_image(img, start, secs, name, system_files)
+            for k in BOOT_FILES:
+                located[k] = (locate_in_blob(blob, padded[k], BOOT_FILES[k]),
+                              padded[k], len(boot_files[k]))
+    return located
 
 
 def main():
@@ -405,13 +518,21 @@ def main():
     if parent_dir:
         os.makedirs(parent_dir, exist_ok=True)
 
-    kernel_path = os.path.join(parent_dir if parent_dir else ".", "kernel.bin")
-    if not os.path.exists(kernel_path):
-        print("ОШИБКА: %s не найден — соберите ядро (build.sh) перед разметкой образа"
-              % kernel_path, file=sys.stderr)
+    boot_files = {}
+    for key, fname in (("kernel", "kernel.bin"), ("stage2", "stage2.bin"),
+                       ("ramboot", "ramboot.bin")):
+        path = os.path.join(parent_dir if parent_dir else ".", fname)
+        if not os.path.exists(path):
+            print("ОШИБКА: %s не найден — соберите загрузчик и ядро (build.sh) перед разметкой образа"
+                  % path, file=sys.stderr)
+            sys.exit(1)
+        with open(path, "rb") as f:
+            boot_files[key] = f.read()
+    if len(boot_files["stage2"]) > BLOCK_4K:
+        print("ОШИБКА: stage2.bin (%d Б) не помещается в 4096 Б (0x10000..0x11000)"
+              % len(boot_files["stage2"]), file=sys.stderr)
         sys.exit(1)
-    with open(kernel_path, "rb") as f:
-        kernel_bytes = f.read()
+    boot_files["kernel"] = pad_block(boot_files["kernel"])
 
     need = max(PARTITIONS_END_SECTORS, RAMDISK_WINDOW_SECTORS) * SECTOR
     if not os.path.exists(img_path) or os.path.getsize(img_path) < need:
@@ -422,13 +543,11 @@ def main():
         img = bytearray(f.read())
 
     fill_mbr(img)
-    init_all_partitions(img, kernel_bytes)
-
-    if "kernel-lba" in opts:
-        write_kernel_image_info(img, int(opts["kernel-lba"]), kernel_bytes)
-    else:
-        print("ПРЕДУПРЕЖДЕНИЕ: --kernel-lba не передан — дескриптор DEIXKIMG не записан,"
-              " сверка raw/EROFS ядра будет пропущена", file=sys.stderr)
+    zero_start = SECTOR
+    zero_end = KERNEL_IMAGE_INFO_LBA * SECTOR
+    img[zero_start:zero_end] = bytes(zero_end - zero_start)
+    located = init_all_partitions(img, boot_files)
+    write_boot_map(img, located)
 
     with open(img_path, "wb") as f:
         f.write(img)

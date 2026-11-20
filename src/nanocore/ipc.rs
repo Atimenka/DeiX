@@ -1,170 +1,229 @@
-//! IPC ring buffer for Nano-Core.
+//! Nano-Core IPC — встроенная IPC-шина между нано-службами.
 //!
-//! Shared memory + ring buffer protocol:
-//! Header: {src, dst, opcode, len, checksum}
-//! Max message: 64 KiB, timeout: 100 ms.
-//!
-//! In this no_std kernel, the "shared memory" is just a static buffer
-//! in `.bss`. Processes communicate via the orchestrator's IPC hub.
+//! Кольцевые буферы в статической памяти ядра. Каждый канал —
+//! именованная очередь сообщений фиксированного размера. Посылка
+//! `send` не блокирует: если буфер переполнен — сообщение пропускается
+//! (со счётчиком сбросов), что делает шина устойчивой к всплескам.
+//! Защита — SpinLock; каналы регистрируются в статическом регистре.
 
-use core::sync::atomic::{AtomicU32, Ordering};
-
+use crate::spinlock::SpinLock;
+use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::string::{String, ToString};
 
-/// Max IPC message size (64 KiB).
-pub const MAX_MSG_SIZE: usize = 65536;
-/// IPC timeout in milliseconds.
-pub const IPC_TIMEOUT_MS: u64 = 100;
-/// Max ring buffer slots.
-pub const RING_CAPACITY: usize = 256;
+/// Размер одного сообщения в канале.
+pub const MSG_SIZE: usize = 96;
+/// Кол-во сообщений в кольцевом буфере канала.
+pub const CAPACITY: usize = 64;
+/// Максимум каналов в шине.
+pub const MAX_CHANNELS: usize = 12;
 
-/// IPC message header.
+/// Сообщение IPC.
 #[derive(Debug, Clone, Copy)]
-pub struct IpcHeader {
-    pub src: u32,
-    pub dst: u32,
-    pub opcode: u32,
-    pub len: u16,
-    pub checksum: u16,
+pub struct Message {
+    /// Текст сообщения.
+    pub text: [u8; MSG_SIZE],
+    /// Длина текстовой части.
+    pub len: usize,
+    /// Момент посылки (ms от загрузки).
+    pub at_ms: u64,
 }
 
-impl IpcHeader {
-    pub fn new(src: u32, dst: u32, opcode: u32, len: u16) -> Self {
-        let checksum = (src as u16) ^ (dst as u16) ^ (opcode as u16) ^ len;
-        IpcHeader { src, dst, opcode, len, checksum }
-    }
+impl Message {
+    /// Нулевое сообщение для const-инициализации кольца.
+    pub const ZERO: Message = Message {
+        text: [0u8; MSG_SIZE],
+        len: 0,
+        at_ms: 0,
+    };
 
-    pub fn is_valid(&self) -> bool {
-        let checksum = (self.src as u16) ^ (self.dst as u16) ^ (self.opcode as u16) ^ self.len;
-        checksum == self.checksum
-    }
-}
-
-/// IPC message (header + payload).
-#[derive(Debug, Clone)]
-pub struct IpcMessage {
-    pub header: IpcHeader,
-    pub payload: Vec<u8>,
-}
-
-impl IpcMessage {
-    pub fn new(src: u32, dst: u32, opcode: u32, payload: Vec<u8>) -> Self {
-        let len = (payload.len() as u16).min(MAX_MSG_SIZE as u16);
-        IpcMessage {
-            header: IpcHeader::new(src, dst, opcode, len),
-            payload: payload.into_iter().take(len as usize).collect(),
+    pub fn from_str(text: &str) -> Self {
+        let mut buf = [0u8; MSG_SIZE];
+        let bytes = text.as_bytes();
+        let len = bytes.len().min(MSG_SIZE - 1);
+        buf[..len].copy_from_slice(&bytes[..len]);
+        Message {
+            text: buf,
+            len,
+            at_ms: crate::timer::uptime_ms(),
         }
     }
+
+    pub fn as_str(&self) -> &str {
+        // Содержимое точно в ASCII (лог и статусы) — безопасно.
+        unsafe { core::str::from_utf8_unchecked(&self.text[..self.len]) }
+    }
 }
 
-/// Common IPC opcodes.
-pub mod opcode {
-    pub const HEARTBEAT: u32 = 0x01;
-    pub const LOG_PUSH: u32 = 0x02;
-    pub const STATUS_QUERY: u32 = 0x03;
-    pub const STATUS_RESPONSE: u32 = 0x04;
-    pub const DEPENDENCY_READY: u32 = 0x05;
-    pub const DEPENDENCY_FAIL: u32 = 0x06;
-    pub const RESTART_REQUEST: u32 = 0x07;
-    pub const SHUTDOWN: u32 = 0x08;
-    pub const DISCOVER: u32 = 0x09;
-    pub const RESPONSE: u32 = 0x10;
+/// Один кольцевый буфер канала.
+struct Ring {
+    buf: [Message; CAPACITY],
+    head: usize,
+    tail: usize,
+    count: usize,
+    drops: u64,
 }
 
-/// Simple IPC ring buffer (single-producer, single-consumer).
-///
-/// In this kernel, the orchestrator is the only consumer and Nano-Threads
-/// are the producers (they push messages into the ring).
-pub struct IpcRing {
-    buf: Vec<Vec<u8>>,
-    head: AtomicU32,
-    tail: AtomicU32,
-    count: AtomicU32,
+impl Ring {
+    const fn new() -> Self {
+        Ring {
+            buf: [Message::ZERO; CAPACITY],
+            head: 0,
+            tail: 0,
+            count: 0,
+            drops: 0,
+        }
+    }
+
+    fn push(&mut self, msg: Message) {
+        if self.count == CAPACITY {
+            self.drops += 1;
+            return;
+        }
+        self.buf[self.tail] = msg;
+        self.tail = (self.tail + 1) % CAPACITY;
+        self.count += 1;
+    }
+
+    fn pop(&mut self) -> Option<Message> {
+        if self.count == 0 {
+            return None;
+        }
+        let msg = self.buf[self.head];
+        self.head = (self.head + 1) % CAPACITY;
+        self.count -= 1;
+        Some(msg)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    fn drops(&self) -> u64 {
+        self.drops
+    }
 }
 
-impl IpcRing {
+/// Именованный канал IPC.
+pub struct Channel {
+    name: String,
+    lock: SpinLock<Ring>,
+}
+
+impl Channel {
+    pub fn new(name: impl Into<String>) -> Self {
+        Channel {
+            name: name.into(),
+            lock: SpinLock::new(Ring::new()),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Отправить сообщение. Безблокирующая.
+    pub fn send(&self, text: &str) {
+        let mut ring = self.lock.lock();
+        ring.push(Message::from_str(text));
+    }
+
+    /// Безблокирующее получение одного сообщения.
+    pub fn try_recv(&self) -> Option<Message> {
+        let mut ring = self.lock.lock();
+        ring.pop()
+    }
+
+    /// Количество ждущих сообщений.
+    pub fn pending(&self) -> usize {
+        self.lock.lock().count
+    }
+
+    /// Счётчик сброшенных из-за переполнения сообщений.
+    #[allow(dead_code)] // API-поверхность для отчётов
+    pub fn drops(&self) -> u64 {
+        self.lock.lock().drops()
+    }
+}
+
+/// IPC-шина: статический регистр каналов.
+pub struct IpcBus {
+    channels: [Option<Channel>; MAX_CHANNELS],
+}
+
+impl IpcBus {
     pub const fn new() -> Self {
-        // Vec::new() is const-constructible in const context since Rust 1.60
-        // but we need a runtime init for the buffer allocation.
-        // We'll use a separate init function.
-        IpcRing {
-            buf: Vec::new(),
-            head: AtomicU32::new(0),
-            tail: AtomicU32::new(0),
-            count: AtomicU32::new(0),
+        IpcBus {
+            channels: [None, None, None, None, None, None, None, None, None, None, None, None],
         }
     }
 
-    pub fn init(&mut self) {
-        self.buf = alloc::vec![Vec::new(); RING_CAPACITY];
+    /// Зарегистрировать или получить канал по имени.
+    /// Возвращает None, если регистр исчерпан.
+    pub fn channel(&mut self, name: &str) -> Option<&mut Channel> {
+        if let Some(existing) = self.channels.iter_mut().find(|c| {
+            c.as_ref().map(|ch| ch.name() == name).unwrap_or(false)
+        }) {
+            return existing.as_mut();
+        }
+        let slot = self.channels.iter_mut().find(|c| c.is_none())?;
+        *slot = Some(Channel::new(name));
+        slot.as_mut()
     }
 
-    pub fn push(&mut self, msg: IpcMessage) -> Result<(), String> {
-        let count = self.count.load(Ordering::Relaxed);
-        if count >= RING_CAPACITY as u32 {
-            return Err("IPC ring full".to_string());
-        }
-        let slot = (self.tail.load(Ordering::Relaxed) % RING_CAPACITY as u32) as usize;
-        let mut bytes: Vec<u8> = Vec::with_capacity(msg.payload.len() + 16);
-        // Serialize header
-        bytes.extend_from_slice(&msg.header.src.to_le_bytes());
-        bytes.extend_from_slice(&msg.header.dst.to_le_bytes());
-        bytes.extend_from_slice(&msg.header.opcode.to_le_bytes());
-        bytes.extend_from_slice(&msg.header.len.to_le_bytes());
-        bytes.extend_from_slice(&msg.header.checksum.to_le_bytes());
-        bytes.extend_from_slice(&msg.payload);
-        self.buf[slot] = bytes;
-        self.tail.fetch_add(1, Ordering::Release);
-        self.count.fetch_add(1, Ordering::Release);
-        Ok(())
-    }
-
-    pub fn pop(&mut self) -> Option<IpcMessage> {
-        if self.count.load(Ordering::Relaxed) == 0 {
-            return None;
-        }
-        let slot = (self.head.load(Ordering::Relaxed) % RING_CAPACITY as u32) as usize;
-        let bytes = match self.buf.get(slot) {
-            Some(b) if !b.is_empty() => b.clone(),
-            _ => {
-                self.head.fetch_add(1, Ordering::Release);
-                self.count.fetch_sub(1, Ordering::Release);
-                return None;
+    pub fn send(&self, name: &str, text: &str) {
+        for c in self.channels.iter().flatten() {
+            if c.name() == name {
+                c.send(text);
+                return;
             }
-        };
-        self.head.fetch_add(1, Ordering::Release);
-        self.count.fetch_sub(1, Ordering::Release);
-
-        // Deserialize header
-        if bytes.len() < 16 {
-            return None;
         }
-        let src = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        let dst = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-        let opcode = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
-        let len = u16::from_le_bytes([bytes[12], bytes[13]]);
-        let checksum = u16::from_le_bytes([bytes[14], bytes[15]]);
-
-        let header = IpcHeader { src, dst, opcode, len, checksum };
-        if !header.is_valid() {
-            return None;
-        }
-        let payload = bytes[16..16 + len as usize].to_vec();
-        Some(IpcMessage { header, payload })
     }
 
-    pub fn len(&self) -> u32 {
-        self.count.load(Ordering::Relaxed)
+    pub fn try_recv(&self, name: &str) -> Option<Message> {
+        for c in self.channels.iter().flatten() {
+            if c.name() == name {
+                return c.try_recv();
+            }
+        }
+        None
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+    pub fn pending(&self, name: &str) -> usize {
+        for c in self.channels.iter().flatten() {
+            if c.name() == name {
+                return c.pending();
+            }
+        }
+        0
     }
 }
 
-impl core::default::Default for IpcRing {
-    fn default() -> Self {
-        Self::new()
-    }
+/// Глобальная IPC-шина.
+pub static IPC: SpinLock<IpcBus> = SpinLock::new(IpcBus::new());
+
+/// Отправить сообщение в канал по имени.
+pub fn send(name: &str, text: &str) {
+    IPC.lock().send(name, text);
+}
+
+/// Безблокирующее получение сообщения из канала.
+pub fn try_recv(name: &str) -> Option<Message> {
+    IPC.lock().try_recv(name)
+}
+
+/// Количество ждущих сообщений в канале.
+#[allow(dead_code)] // API-поверхность для отчётов
+pub fn pending(name: &str) -> usize {
+    IPC.lock().pending(name)
+}
+
+/// Имена зарегистрированных каналов (для отчётов).
+#[allow(dead_code)] // API-поверхность для отчётов
+pub fn channel_names() -> Vec<String> {
+    let bus = IPC.lock();
+    bus.channels
+        .iter()
+        .flatten()
+        .map(|c| String::from(c.name()))
+        .collect()
 }

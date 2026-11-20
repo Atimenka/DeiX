@@ -13,8 +13,10 @@ pub const BUGREPORT_FILE: &str = "/userdata/BUGREPORT.TXT";
 /// Собирает полный диагностический отчёт в одну строку.
 pub fn collect_report() -> String {
     let mut out = String::new();
+    out.push_str("========================================================\n");
     out.push_str("  DeiX OS — FULL DEBUG REPORT (bugreport)\n");
     out.push_str("========================================================\n");
+
     // --- SYSTEM ---
     out.push_str("\n[SYSTEM]\n");
     out.push_str(&format!("  OS: DeiX v{} ({})\n", crate::KERNEL_VERSION, crate::BUILD_ID));
@@ -74,10 +76,11 @@ pub fn collect_report() -> String {
         ));
     }
     out.push_str(&format!(
-        "  {:<12} LBA {:>6}..{:>6} (stage2, {} sect)\n",
-        "/bootloader",
+        "  {:<12} LBA {:>6}..{:>6} (reserved, boot map at {}, {} sect)\n",
+        "/boot-gap",
         crate::partition_map::BOOTLOADER_LBA,
         crate::partition_map::BOOTLOADER_LBA + crate::partition_map::BOOTLOADER_SECTORS - 1,
+        crate::partition_map::KERNEL_IMAGE_INFO_LBA,
         crate::partition_map::BOOTLOADER_SECTORS,
     ));
 
@@ -104,7 +107,8 @@ pub fn collect_report() -> String {
         None => out.push_str("  отчётов об отказе нет\n"),
     }
 
-    out.push_str("\n  End of report. Attach BUGREPORT.TXT when reporting a bug.\n");
+    out.push_str("\n========================================================\n");
+    out.push_str("  End of report. Attach BUGREPORT.TXT when reporting a bug.\n");
     out
 }
 

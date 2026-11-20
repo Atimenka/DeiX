@@ -35,11 +35,6 @@ long_mode_start:
     ; от IDE/CD) НЕ должны приходить до установки IDT в interrupts::init().
     cli
 
-    ; маркер '4': long mode включён, переход в kernel_main
-    mov dx, 0x3F8
-    mov al, '4'
-    out dx, al
-
     call kernel_main
 
     hlt

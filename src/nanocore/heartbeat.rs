@@ -1,103 +1,114 @@
-//! Heartbeat monitoring for Nano-Threads.
+//! Nano-Core heartbeat — живость служб.
 //!
-//! Each Nano-Thread sends a heartbeat every 500ms. If 3 beats are missed,
-//! the process is restarted (up to max_restarts). If 3 restarts fail,
-//! the process is marked degraded. Critical processes cannot be degraded —
-//! their failure triggers a Nano-Core panic.
-//!
-//! Heartbeat is checked by the orchestrator in its idle loop.
+//! Каждая служба берёт «пульс» (beat) регулярно. Для каждой службы
+//! задаётся дедлайн: если пульс не приходил дольше deadline_ms, служба
+//! считается утонувшей (dead) — наблюдатель инициирует перезапуск
+//! по политике restart. Счётчик рестартов и последнее время пульса
+//! доступны для отчётов.
 
-use crate::nanocore::manifest::LogLevel;
+use crate::spinlock::SpinLock;
+use crate::timer::uptime_ms;
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
 
-/// Heartbeat interval in milliseconds.
-pub const HEARTBEAT_INTERVAL_MS: u64 = 500;
-/// Number of missed beats before restart.
-pub const HEARTBEAT_MAX_MISSED: u32 = 3;
-
-/// Tracks heartbeat state for a single process.
+/// Пульс одной службы.
 #[derive(Debug, Clone)]
-pub struct HeartbeatTracker {
+pub struct Heartbeat {
+    /// Имя службы.
+    pub name: String,
+    /// Последний пришедший пульс (ms от загрузки).
     pub last_beat_ms: u64,
-    pub missed_count: u32,
-    pub is_alive: bool,
+    /// Дедлайн между пульсами (ms).
+    pub deadline_ms: u64,
+    /// Сколько раз служба считалась утонувшей.
+    pub failures: u32,
+    /// Сколько раз служба была перезапущена наблюдателем.
+    pub restarts: u32,
+    /// Признак того, что служба жива (последний пульс был в пределах дедлайна).
+    pub alive: bool,
+}
+
+impl Heartbeat {
+    pub fn new(name: impl Into<String>, deadline_ms: u64) -> Self {
+        Heartbeat {
+            name: name.into(),
+            last_beat_ms: uptime_ms(),
+            deadline_ms,
+            failures: 0,
+            restarts: 0,
+            alive: true,
+        }
+    }
+
+    /// Про registered пульс: обновить время и сбросить счётчик сбоя.
+    pub fn beat(&mut self) {
+        self.last_beat_ms = uptime_ms();
+        self.alive = true;
+    }
+
+    /// Проверить живость относительно текущего времени.
+    /// Возвращает true, если служба утонула (deadline истек).
+    pub fn check_dead(&mut self) -> bool {
+        let now = uptime_ms();
+        if now.saturating_sub(self.last_beat_ms) > self.deadline_ms {
+            self.alive = false;
+            self.failures += 1;
+            true
+        } else {
+            self.alive = true;
+            false
+        }
+    }
+
+    /// Отметить перезапуск службы.
+    pub fn mark_restarted(&mut self) {
+        self.restarts += 1;
+        self.beat();
+    }
+}
+
+/// Регистр пульсов всех служб.
+#[derive(Default)]
+pub struct HeartbeatTracker {
+    pub beats: BTreeMap<String, Heartbeat>,
 }
 
 impl HeartbeatTracker {
-    pub fn new(now_ms: u64) -> Self {
+    pub const fn new() -> Self {
         HeartbeatTracker {
-            last_beat_ms: now_ms,
-            missed_count: 0,
-            is_alive: true,
+            beats: BTreeMap::new()
         }
     }
 
-    pub fn beat(&mut self, now_ms: u64) {
-        self.last_beat_ms = now_ms;
-        self.missed_count = 0;
-        self.is_alive = true;
+    pub fn register(&mut self, name: &str, deadline_ms: u64) {
+        self.beats
+            .entry(String::from(name))
+            .or_insert_with(|| Heartbeat::new(name, deadline_ms));
     }
 
-    /// Check heartbeat, return true if process is still alive.
-    pub fn check(&mut self, now_ms: u64) -> bool {
-        if now_ms >= self.last_beat_ms + HEARTBEAT_INTERVAL_MS {
-            self.missed_count += 1;
-            if self.missed_count >= HEARTBEAT_MAX_MISSED {
-                self.is_alive = false;
-                return false;
+    pub fn beat(&mut self, name: &str) {
+        if let Some(hb) = self.beats.get_mut(name) {
+            hb.beat();
+        }
+    }
+
+    /// Проверить все пульсы; возвращает список утонувших служб.
+    pub fn check_all(&mut self) -> Vec<String> {
+        let mut dead = Vec::new();
+        for (name, hb) in self.beats.iter_mut() {
+            if hb.check_dead() {
+                dead.push(name.clone());
             }
         }
-        true
+        dead
     }
 
-    pub fn should_restart(&self) -> bool {
-        !self.is_alive
+    #[allow(dead_code)] // API-поверхность для отчётов
+    pub fn len(&self) -> usize {
+        self.beats.len()
     }
 }
 
-/// Result of a heartbeat check.
-pub enum HeartbeatResult {
-    /// Process is healthy.
-    Healthy,
-    /// Process missed heartbeats, should be restarted.
-    Restart,
-    /// Process is critically dead, cannot be restarted.
-    Critical,
-}
-
-/// Check heartbeat for a critical process.
-pub fn check_critical(
-    tracker: &mut HeartbeatTracker,
-    pid: u32,
-    name: &str,
-    now_ms: u64,
-) -> HeartbeatResult {
-    if tracker.check(now_ms) {
-        return HeartbeatResult::Healthy;
-    }
-    // Critical process is dead — panic.
-    crate::nanocore::log::log_error(pid, name, "CRITICAL: heartbeat lost, panic");
-    HeartbeatResult::Critical
-}
-
-/// Check heartbeat for a non-critical process.
-pub fn check_normal(
-    tracker: &mut HeartbeatTracker,
-    pid: u32,
-    name: &str,
-    now_ms: u64,
-) -> HeartbeatResult {
-    if tracker.check(now_ms) {
-        return HeartbeatResult::Healthy;
-    }
-    crate::nanocore::log::log_error(
-        pid,
-        name,
-        &alloc::format!("heartbeat lost ({} missed)", tracker.missed_count),
-    );
-    HeartbeatResult::Restart
-}
-
-/// Send a heartbeat (called by each Nano-Thread).
-pub fn send_beat(pid: u32, name: &str, _now_ms: u64) {
-    crate::nanocore::log::log(pid, name, LogLevel::Trace, "heartbeat");
-}
+/// Глобальная обёртка для использования из нескольких задач.
+pub static HEARTBEATS: SpinLock<HeartbeatTracker> = SpinLock::new(HeartbeatTracker::new());

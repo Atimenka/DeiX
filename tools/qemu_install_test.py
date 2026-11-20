@@ -3,13 +3,14 @@
 """Полный сквозной тест `install` (установка DeiX на второй диск):
   1) первичная настройка на загрузочном диске;
   2) `install` на ATA Slave (интерактивно: диск=2, user, pass, confirm, yes);
-  3) проверка целевого диска: MBR sig, stage2, ramboot, kernel.bin,
-     дескриптор DEIXKIMG, EROFS /system, ext2 /userdata;
+  3) проверка целевого диска: MBR sig, stage2, ramboot, kernel.bin по
+     карте загрузки DEIXKIMG, EROFS /system, ext2 /userdata;
   4) загрузка ТОЛЬКО с установленного диска, вход созданного пользователя.
 
 Использование: python3 tools/qemu_install_test.py
 """
-import os, pty, subprocess, select, time
+import os
+import struct, pty, subprocess, select, time
 
 IMG = 'build/deix_disk.img'
 TARGET = '/tmp/install_target.img'
@@ -25,21 +26,17 @@ def drive_size(path):
 
 def main():
     print('=== DeiX install test (slave) ===')
-    # свежий заводской загрузочный образ (LBA ядра — как в build.sh:
-    # 1 + секторы stage2 + секторы ramboot)
+    # свежий заводской загрузочный образ: stage2, ramboot и ядро кладутся в
+    # /system, карта загрузки — в LBA 2047
     import subprocess as sp
-    st2_sect = (os.path.getsize('build/stage2.bin') + 511) // 512
-    rb_sect = (os.path.getsize('build/ramboot.bin') + 511) // 512
-    kernel_lba = 1 + st2_sect + rb_sect
-    r = sp.run(['python3', 'tools/make_deix_fs.py', IMG,
-                f'--kernel-lba={kernel_lba}'], capture_output=True)
+    r = sp.run(['python3', 'tools/make_deix_fs.py', IMG], capture_output=True)
     if r.returncode != 0:
         print('  [FAIL] make_deix_fs'); return 1
     if os.path.exists(TARGET):
         os.remove(TARGET)
-    # пустой целевой диск 20 МиБ (минимум — 40960 секторов, конец /userdata)
+    # пустой целевой диск 40 МиБ (минимум — 69632 сектора, конец /userdata)
     with open(TARGET, 'wb') as f:
-        f.write(b'\x00' * (20 * 1024 * 1024))
+        f.write(b'\x00' * (40 * 1024 * 1024))
 
     p, m = start_qemu(['qemu-system-x86_64', '-m', '512',
                  '-drive', f'file={IMG},format=raw,if=ide',
@@ -99,18 +96,29 @@ def main():
     st2 = open('build/stage2.bin', 'rb').read()
     rb = open('build/ramboot.bin', 'rb').read()
     kb = open('build/kernel.bin', 'rb').read()
-    st2_sect = (len(st2) + 511) // 512
-    rb_sect = (len(rb) + 511) // 512
-    kstart = 1 + st2_sect + rb_sect
+
+    def by_map(offset, slots, size):
+        """Читает файл по участкам карты загрузки целевого диска."""
+        m = d[2047 * 512:2048 * 512]
+        out = b''
+        for i in range(slots):
+            lba, secs = struct.unpack('<II', m[offset + i * 8:offset + i * 8 + 8])
+            if secs == 0:
+                break
+            out += d[lba * 512:(lba + secs) * 512]
+        return out[:size]
+
     checks = {
         'MBR sig': d[510:512].hex() == '55aa',
         'boot_sector': d[:446] == open('build/boot_sector.bin', 'rb').read()[:446],
-        'stage2': d[512:512 + len(st2)] == st2,
-        'ramboot': d[(1 + st2_sect) * 512:(1 + st2_sect) * 512 + len(rb)] == rb,
-        'kernel': d[kstart * 512:kstart * 512 + len(kb)] == kb,
         'DEIXKIMG': d[2047 * 512:2047 * 512 + 8] == b'DEIXKIMG',
+        'map version 2': struct.unpack('<I', d[2047 * 512 + 48:2047 * 512 + 52])[0] == 2,
+        'stage2 by map': by_map(64, 8, len(st2)) == st2,
+        'ramboot by map': by_map(128, 8, len(rb)) == rb,
+        'kernel by map': by_map(192, 40, len(kb)) == kb,
+        'reserved area is zero': not any(d[512:2047 * 512]),
         'EROFS magic (/system)': d[4096 * 512 + 1024:4096 * 512 + 1028].hex() == 'e2e1f5e0',
-        'ext2 magic (/userdata)': d[24576 * 512 + 1024 + 56:24576 * 512 + 1024 + 58].hex() == '53ef',
+        'ext2 magic (/userdata)': d[36864 * 512 + 1024 + 56:36864 * 512 + 1024 + 58].hex() == '53ef',
     }
     for k, v in checks.items():
         print(f'  [{"OK" if v else "FAIL"}] target: {k}')

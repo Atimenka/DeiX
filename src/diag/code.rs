@@ -27,8 +27,7 @@ pub enum Subsystem {
     Elf = 11,
     Pkg = 12,
     Security = 13,
-    /// Nano-Core (orchestrator + Nano-Threads).
-    Nanocore = 14,
+    Nano = 14,
 }
 
 /// Все подсистемы в порядке возрастания — для вывода списков и фильтров.
@@ -47,7 +46,7 @@ pub const ALL_SUBSYSTEMS: &[Subsystem] = &[
     Subsystem::Elf,
     Subsystem::Pkg,
     Subsystem::Security,
-    Subsystem::Nanocore,
+    Subsystem::Nano,
 ];
 
 impl Subsystem {
@@ -68,7 +67,7 @@ impl Subsystem {
             Subsystem::Elf => "ELF",
             Subsystem::Pkg => "PKG",
             Subsystem::Security => "SEC",
-            Subsystem::Nanocore => "NC",
+            Subsystem::Nano => "NAN",
         }
     }
 
@@ -89,7 +88,7 @@ impl Subsystem {
             Subsystem::Elf => "ELF-загрузчик",
             Subsystem::Pkg => "Пакеты",
             Subsystem::Security => "Безопасность",
-            Subsystem::Nanocore => "Нано-кор",
+            Subsystem::Nano => "Nano-кора",
         }
     }
 
@@ -131,7 +130,8 @@ impl ErrorCode {
             10 => Subsystem::Disk,
             11 => Subsystem::Elf,
             12 => Subsystem::Pkg,
-            _ => Subsystem::Security,
+            13 => Subsystem::Security,
+            _ => Subsystem::Nano,
         }
     }
 
@@ -210,6 +210,7 @@ pub struct CodeInfo {
 
 /// Полная таблица кодов. Именно она отвечает на «что означает этот код».
 pub static TABLE: &[CodeInfo] = &[
+    // ==================== Ядро (KRN) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Kernel, 1), summary: "Куча ядра исчерпана",
         detail: "Выделитель ядра не смог отдать блок: свободных страниц кучи нет.",
         action: "Перезагрузите систему; при повторе сократите число одновременно запущенных служб." },
@@ -247,9 +248,10 @@ pub static TABLE: &[CodeInfo] = &[
         detail: "Инвариант ядра нарушен, безопасное продолжение работы невозможно.",
         action: "Сохраните отчёт об отказе и выполните перезагрузку." },
     CodeInfo { code: ErrorCode::new(Subsystem::Kernel, 13), summary: "Несовпадение образа ядра (KERNEL_IMAGE_MISMATCH)",
-        detail: "Сырое ядро, загруженное stage2, не совпадает по размеру или SHA-256 с /system/kernel/kernel.bin либо с дескриптором сборки DEIXKIMG.",
+        detail: "Ядро, прочитанное по карте загрузки DEIXKIMG, не совпадает по SHA-256 с описанием сборки, либо /system/kernel/kernel.bin не совпадает с ним по размеру или SHA-256.",
         action: "Пересоберите и переустановите образ системы; не смешивайте kernel.bin из разных сборок." },
 
+    // ==================== Память (MEM) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Memory, 1), summary: "Ошибка страницы (Page Fault)",
         detail: "Обращение к странице, которая не отображена или недоступна в текущем режиме.",
         action: "Проверьте адрес, по которому произошло обращение." },
@@ -287,6 +289,7 @@ pub static TABLE: &[CodeInfo] = &[
         detail: "Буфер прямого доступа к памяти недоступен или пересекает границу."
             , action: "Проверьте выравнивание и размер DMA-области." },
 
+    // ==================== Виртуальная ФС (VFS) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Vfs, 1), summary: "Сбой монтирования",
         detail: "Том не удалось подключить к точке монтирования.",
         action: "Проверьте целостность тома и наличие драйвера ФС." },
@@ -301,7 +304,7 @@ pub static TABLE: &[CodeInfo] = &[
         action: "Проверьте права доступа и мандаты процесса." },
     CodeInfo { code: ErrorCode::new(Subsystem::Vfs, 5), summary: "Файловая система только для чтения",
         detail: "Том смонтирован read-only (системный раздел).",
-        action: "Пишите в /userdata вместо /system." },
+        action: "Пишите в /userdata; запись в /system возможна только на ext2 и в dev-режиме." },
     CodeInfo { code: ErrorCode::new(Subsystem::Vfs, 6), summary: "Каталог не пуст",
         detail: "Удаление каталога невозможно, пока в нём есть записи.",
         action: "Сначала удалите содержимое каталога." },
@@ -324,6 +327,7 @@ pub static TABLE: &[CodeInfo] = &[
         detail: "Журнал ФС не удалось применить при монтировании.",
         action: "Том будет смонтирован без журнала; выполните проверку." },
 
+    // ==================== EROFS (ERO) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Erofs, 1), summary: "Некорректный суперблок",
         detail: "Суперблок EROFS не читается или содержит противоречивые поля.",
         action: "Пересоберите образ /system." },
@@ -352,6 +356,7 @@ pub static TABLE: &[CodeInfo] = &[
         detail: "Размер тома меньше, чем требует суперблок.",
         action: "Проверьте размер раздела и полноту записи образа." },
 
+    // ==================== EXT2 (EXT) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Ext2, 1), summary: "Некорректный суперблок",
         detail: "Суперблок EXT2 отсутствует или повреждён; том не отформатирован.",
         action: "Отформатируйте /userdata, если данные не нужны." },
@@ -383,6 +388,7 @@ pub static TABLE: &[CodeInfo] = &[
         detail: "Исчерпан лимит числа файлов на томе.",
         action: "Удалите ненужные файлы или каталоги." },
 
+    // ==================== Модули ядра (KMD) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Kmod, 1), summary: "Модуль не найден",
         detail: "Файл .kmod отсутствует в /system/kmod.",
         action: "Проверьте состав системного образа." },
@@ -414,6 +420,7 @@ pub static TABLE: &[CodeInfo] = &[
         detail: "Модуль требует другой модуль, который не загружен.",
         action: "Проверьте порядок загрузки модулей." },
 
+    // ==================== Dinit (DIN) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Dinit, 1), summary: "Сбой запуска службы",
         detail: "Исполняемый файл службы не найден или не удалось создать процесс.",
         action: "Проверьте путь к исполняемому файлу в описании службы." },
@@ -445,6 +452,7 @@ pub static TABLE: &[CodeInfo] = &[
         detail: "Супервизор не смог обработать событие жизненного цикла службы.",
         action: "Сохраните отчёт об отказе." },
 
+    // ==================== Графика (GFX) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Gfx, 1), summary: "Сбой инициализации GPU",
         detail: "Видеоадаптер не ответил на инициализацию.",
         action: "Система переключится в текстовый режим консоли." },
@@ -473,6 +481,7 @@ pub static TABLE: &[CodeInfo] = &[
         detail: "GPU не отвечает на запросы дольше допустимого времени.",
         action: "Выполняется сброс дисплея в текстовый режим." },
 
+    // ==================== Сеть (NET) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Net, 1), summary: "Сетевой адаптер не обнаружен",
         detail: "Поддерживаемый NIC не найден на шине PCI.",
         action: "Сетевые функции будут недоступны." },
@@ -507,6 +516,7 @@ pub static TABLE: &[CodeInfo] = &[
         detail: "Буфер приёма или передачи заполнен.",
         action: "Уменьшите размер передаваемых данных." },
 
+    // ==================== Звук (AUD) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Audio, 1), summary: "Звуковое устройство не найдено",
         detail: "Поддерживаемый аудиокодек не обнаружен на шине PCI.",
         action: "Звук будет недоступен." },
@@ -529,6 +539,7 @@ pub static TABLE: &[CodeInfo] = &[
         detail: "Поток уже использует аудиоустройство.",
         action: "Остановите другое воспроизведение." },
 
+    // ==================== Диск (DISK) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Disk, 1), summary: "Устройство не обнаружено",
         detail: "Контроллер не ответил на идентификацию.",
         action: "Проверьте подключение носителя." },
@@ -551,6 +562,7 @@ pub static TABLE: &[CodeInfo] = &[
         detail: "Таблица MBR/GPT повреждена или содержит пересекающиеся разделы.",
         action: "Проверьте разметку носителя." },
 
+    // ==================== ELF (ELF) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Elf, 1), summary: "Некорректное магическое число ELF",
         detail: "Файл не является ELF-образом.",
         action: "Проверьте, что загружается именно исполняемый файл." },
@@ -579,6 +591,7 @@ pub static TABLE: &[CodeInfo] = &[
         detail: "Задачи планировщика ядра исполняются в Ring 0, поэтому запускать в них пользовательские ELF-программы нельзя.",
         action: "Используйте MEX-образ (Ring 3); запуск ELF-процессов появится вместе с пользовательским планировщиком." },
 
+    // ==================== Пакеты (PKG) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Pkg, 1), summary: "Пакет не найден",
         detail: "Пакет с таким именем отсутствует в базе.",
         action: "Проверьте имя пакета." },
@@ -610,6 +623,7 @@ pub static TABLE: &[CodeInfo] = &[
         detail: "Установлена та же или более новая версия пакета.",
         action: "Используйте обновление вместо установки." },
 
+    // ==================== Безопасность (SEC) ====================
     CodeInfo { code: ErrorCode::new(Subsystem::Security, 1), summary: "Доступ запрещён",
         detail: "Операция запрещена политикой безопасности.",
         action: "Проверьте права и мандаты процесса." },

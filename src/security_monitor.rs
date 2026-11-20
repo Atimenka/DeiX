@@ -9,7 +9,6 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Порог принятия решения о ликвидации угрозы (жёстко 0.85 по ТЗ).
 pub const DEFAULT_RISK_THRESHOLD: f32 = 0.85;
@@ -327,21 +326,5 @@ pub fn boot_selfcheck() {
         crate::println!("  [secmon] Heuristic Security Monitor: ALL CHECKS PASSED");
     } else {
         crate::println!("  [secmon] ERROR: Ransomware attack was not intercepted!");
-    }
-}
-
-/// Флаг: самопроверка безопасности отложена (ленивая инициализация).
-static SELFCHECK_PENDING: AtomicBool = AtomicBool::new(true);
-
-/// Откладывает самопроверку безопасности до первого доступа.
-pub fn mark_selfcheck_pending() {
-    SELFCHECK_PENDING.store(true, Ordering::SeqCst);
-}
-
-/// Выполняет самопроверку, если она ещё не сделана.
-pub fn ensure_selfcheck() {
-    if SELFCHECK_PENDING.load(Ordering::SeqCst) {
-        SELFCHECK_PENDING.store(false, Ordering::SeqCst);
-        boot_selfcheck();
     }
 }

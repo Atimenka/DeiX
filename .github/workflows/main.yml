@@ -15,11 +15,6 @@ jobs:
   build:
     name: Build + verify DeiX (BIOS disk image)
     runs-on: ubuntu-latest
-    # Чтобы при падении QEMU-smoke-теста можно было получить лог загрузки:
-    # шаг создаёт Issue с полным содержимым qemu_disk.log.
-    permissions:
-      issues: write
-      contents: read
 
     steps:
       # ---------- 0. Checkout ----------
@@ -55,7 +50,6 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src, llvm-tools-preview
-          targets: x86_64-unknown-none
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -65,84 +59,28 @@ jobs:
 
       # ---------- 4. Сборка ----------
       - name: Run build.sh
-
-        run: |
-          set -o pipefail
-          bash ./build.sh 2>&1 | tee /tmp/build_log.txt
+        run: bash ./build.sh
         env:
           RUST_BACKTRACE: "1"
-
-      - name: Dump build log (diagnostics)
-        if: always()
-        run: |
-          LOG=/tmp/build_log.txt
-          if [ -f "$LOG" ]; then
-            SIZE=$(wc -c < "$LOG")
-            if ! grep -q "Готово! Образ диска" "$LOG" 2>/dev/null; then
-              # Ключевые строки ошибок в аннотации (для быстрого чтения)
-              ERRORS=$(grep -aE "ОШИБКА|error\[E[0-9]+\]|^error:|^warning: unused|E[0-9]+:" "$LOG" | head -25 | tr '\n' '~' | sed 's/~*$//')
-              echo "::error::BUILD FAILED::build.sh завершился с ошибкой. Лог: $SIZE байт."
-              echo "::error::BUILD ERRORS::$ERRORS"
-              # Полный лог — в summary (видно в GitHub UI)
-              echo "## Build log (full)" >> "$GITHUB_STEP_SUMMARY"
-              cat "$LOG" >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
-            else
-              echo "::warning::BUILD OK::build.sh завершился успешно ($SIZE байт)"
-            fi
-          else
-            echo "::warning::NO LOG::build_log.txt не найден"
-
-          fi
-
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: /tmp/build_log.txt
-          if-no-files-found: ignore
-          retention-days: 1
 
       # ---------- 5. Проверка артефактов ----------
       - name: Verify artifacts
         run: |
-          echo "== build/ contents =="
+          set -e
+          echo "== build/ =="
           ls -lh build/
-          echo "== checking files =="
           for f in deix_disk.img kernel.bin boot_sector.bin stage2.bin ramboot.bin SHA256SUMS; do
-            if [ -f "build/$f" ]; then
-              echo "OK: build/$f"
-            else
-              echo "MISSING: build/$f"
-            fi
+            test -f "build/$f" || { echo "Нет build/$f"; exit 1; }
           done
-          echo "== checking release img =="
-          ls build/deix-*-x86_64.img 2>&1 || true
-          echo "== SHA256SUMS content =="
-          cat build/SHA256SUMS 2>&1 || true
-          echo "== verifying =="
-          for f in deix_disk.img kernel.bin boot_sector.bin stage2.bin ramboot.bin SHA256SUMS; do
-            test -f "build/$f" || echo "WARN: Нет build/$f"
-          done
-          ls build/deix-*-x86_64.img >/dev/null 2>&1 || echo "WARN: Нет релизного образа deix-*-x86_64.img"
-          (cd build && sha256sum -c SHA256SUMS) 2>&1 || echo "WARN: sha256sum check failed"
+          ls build/deix-*-x86_64.img >/dev/null || { echo "Нет релизного образа deix-*-x86_64.img"; exit 1; }
+          (cd build && sha256sum -c SHA256SUMS)
 
       # ---------- 6. Smoke-тест: загрузка до маркера ядра ----------
       - name: QEMU boot smoke test
         timeout-minutes: 5
         run: |
-          set +e
-          # Гарантируем наличие QEMU на раннере: ранние прогоны могли падать
-          # на отсутствие qemu-system-x86_64 с пустым логом.
-          if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
-            echo "qemu-system-x86_64 не найден — ставим из apt..."
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq qemu-system-x86
-          fi
-          echo "QEMU version: $(qemu-system-x86_64 --version 2>&1 | head -1)"
           # Ядро не завершает работу само, поэтому QEMU останавливается
           # по timeout; успех определяется маркерами загрузки в serial-логе.
-          qemu_rc=0
           timeout 120 qemu-system-x86_64 \
             -drive format=raw,file=build/deix_disk.img,if=ide \
             -m 256M \
@@ -150,105 +88,20 @@ jobs:
             -no-reboot \
             -serial stdio \
             -monitor none \
-            > qemu_disk.log 2>&1 || qemu_rc=$?
-          echo "QEMU exit code: $qemu_rc (124 = timeout по очкам)"
-          echo ""
+            > qemu_disk.log 2>&1 || [ $? -eq 124 ]
           echo "== QEMU disk log (tail) =="
-          tail -n 80 qemu_disk.log
-          {
-            echo "## QEMU Run Info"
-            echo "QEMU exit code: $qemu_rc"
-            echo "Log size: $(wc -c < qemu_disk.log 2>/dev/null || echo 0) bytes"
-            echo "Log lines: $(wc -l < qemu_disk.log 2>/dev/null || echo 0)"
-            echo ""
-            echo "## QEMU Marker Counts"
-            echo "R (ramboot loaded): $(grep -c '^R' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "K (kernel copied): $(grep -c '^K' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "1 (bss zeroed): $(grep -c '^1' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "2 (long mode OK): $(grep -c '^2' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "3 (paging on): $(grep -c '^3' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "4 (before kernel_main): $(grep -c '^4' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "kernel_main entered: $(grep -c 'kernel_main entered' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "serial debug active: $(grep -c 'serial debug active' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "booted successfully: $(grep -c 'mini kernel booted' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "PANIC: $(grep -c 'KERNEL PANIC' qemu_disk.log 2>/dev/null || echo 0)"
-            echo ""
-            echo "## QEMU Disk Log (tail 80)"
-            echo '```'
-            tail -n 80 qemu_disk.log
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          # Диагностика в аннотации — читаемая без доступа к логам step
-          MARKERS="S:$(grep -c '^S' qemu_disk.log 2>/dev/null || echo 0) R:$(grep -c '^R' qemu_disk.log 2>/dev/null || echo 0) K:$(grep -c '^K' qemu_disk.log 2>/dev/null || echo 0) 1:$(grep -c '^1' qemu_disk.log 2>/dev/null || echo 0) 2:$(grep -c '^2' qemu_disk.log 2>/dev/null || echo 0) 3:$(grep -c '^3' qemu_disk.log 2>/dev/null || echo 0) 4:$(grep -c '^4' qemu_disk.log 2>/dev/null || echo 0) kmain:$(grep -c 'kernel_main entered' qemu_disk.log 2>/dev/null || echo 0) sdebug:$(grep -c 'serial debug active' qemu_disk.log 2>/dev/null || echo 0) booted:$(grep -c 'mini kernel booted' qemu_disk.log 2>/dev/null || echo 0) panic:$(grep -c 'KERNEL PANIC' qemu_disk.log 2>/dev/null || echo 0)"
-          echo "::warning::SMOKE MARKERS::$MARKERS"
-          echo "::warning::SMOKE QEMU RC::qemu_rc=$qemu_rc logsize=$(wc -c < qemu_disk.log 2>/dev/null || echo 0)"
-          echo "::warning::SMOKE FOUND::kmain=$(grep -c 'kernel_main entered' qemu_disk.log 2>/dev/null || echo 0) sdebug=$(grep -c 'serial debug active' qemu_disk.log 2>/dev/null || echo 0) booted=$(grep -c 'mini kernel booted' qemu_disk.log 2>/dev/null || echo 0) longmode=$(grep -c 'Long mode: OK' qemu_disk.log 2>/dev/null || echo 0) panic=$(grep -c 'KERNEL PANIC' qemu_disk.log 2>/dev/null || echo 0)"
-          # Serial-лог в отдельной аннотации — ВЕСЬ лог, но компактно.
-          # Разбиваем на куски по 8 строк — GitHub обрезает длинные bodies.
-          LOGLINES=$(wc -l < qemu_disk.log 2>/dev/null || echo 0)
-          I=0
-          while [ $I -lt $LOGLINES ]; do
-            CHUNK=$(sed -n "$((I*8+1)),$((I*8+8))p" qemu_disk.log 2>/dev/null | tr '\n' '~' | sed 's/~~*/~/g; s/~$//' | cut -c1-180)
-            if [ -n "$CHUNK" ]; then
-              echo "::warning::SMOKE LOG $I::$CHUNK"
-            fi
-            I=$((I+1))
-          done
-          # Загрузка считается успешной, если ядро вошло и дошло до long mode.
-          if ! grep -q 'kernel_main entered' qemu_disk.log; then
-            echo "FAIL: ядро не загрузилось (нет kernel_main entered)"
-            exit 1
-          fi
-          if ! grep -q 'Long mode: OK' qemu_disk.log; then
-            echo "FAIL: ядро не дошло до long mode"
-            exit 1
-          fi
+          tail -n 60 qemu_disk.log
+          grep -q '=== DeiX boot: serial debug active ===' qemu_disk.log \
+            || { echo "FAIL: нет маркера старта ядра"; exit 1; }
+          grep -q 'mini kernel booted successfully!' qemu_disk.log \
+            || { echo "FAIL: ядро не дошло до конца инициализации"; exit 1; }
           if grep -q 'KERNEL PANIC' qemu_disk.log; then
             echo "FAIL: паника ядра во время загрузки"; exit 1
           fi
-          echo "OK: ядро загрузилось и перешло в long mode"
-
-      # ---------- 6b. При падении smoke-теста — выгружаем диагностику в Issue ----------
-      - name: Dump QEMU diagnostics to issue on failure
-        if: failure()
-        run: |
-          {
-            echo "=== QEMU Boot Diagnostics ==="
-            echo "Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-            echo "Commit: $GITHUB_SHA"
-            echo "Log size: $(wc -c < qemu_disk.log 2>/dev/null || echo 0) bytes"
-            echo "Marker serial debug: $(grep -c 'serial debug active' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker booted: $(grep -c 'mini kernel booted' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker R: $(grep -c '^R' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker K: $(grep -c '^K' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker 1: $(grep -c '^1' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker 2: $(grep -c '^2' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker 3: $(grep -c '^3' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker 4: $(grep -c '^4' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "Marker kernel_main: $(grep -c 'kernel_main entered' qemu_disk.log 2>/dev/null || echo 0)"
-            echo "PANIC: $(grep -c 'KERNEL PANIC' qemu_disk.log 2>/dev/null || echo 0)"
-            echo ""
-            head -30 qemu_disk.log 2>/dev/null || echo "(no log)"
-            echo "..."
-            tail -30 qemu_disk.log 2>/dev/null || echo ""
-          } > /tmp/body.md
-          python3 -c "import json,os; json.dump({'title':'CI: QEMU boot failed (run '+os.environ.get('GITHUB_RUN_ID','')+')', 'body':open('/tmp/body.md').read()}, open('/tmp/payload.json','w'))"
-          curl_out=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" --data-binary @/tmp/payload.json "https://api.github.com/repos/$GITHUB_REPOSITORY/issues" 2>&1) && curl_rc=0 || curl_rc=$?
-          {
-            echo ""
-            echo "## Dump step diagnostics"
-            echo "curl exit code: $curl_rc"
-            echo '```'
-            echo "$curl_out" | tail -10
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          # Не падаем: диагностика уже в step summary на веб-странице прогона.
-          exit 0
 
       # ---------- 7. Регрессия: первый и повторные запуски (персистентность) ----------
       - name: QEMU scenario - first boot, account, two reboots
         timeout-minutes: 15
-        continue-on-error: true
         run: python3 tools/qemu_scenario_reboot.py
 
       - name: Upload scenario log
@@ -263,107 +116,27 @@ jobs:
       # ---------- 8. Регрессия: установка на второй диск ----------
       - name: QEMU install test - install to slave disk and boot from it
         timeout-minutes: 15
-        continue-on-error: true
         run: python3 tools/qemu_install_test.py
 
       # ---------- 9. Тулчейн MEX ----------
       - name: Subsystems and MEX toolchain test
-        continue-on-error: true
         run: python3 tools/test_all_subsystems.py
 
       # ---------- 10. Артефакты ----------
-      - name: Prepare root-dir artifacts (build/ paths don't upload here)
-        if: always()
-        run: |
-          # В этом окружении аплейды из build/ системно не работают
-          # (проверено: даже build/SHA256SUMS не аплейдится, а корневые и
-          # /tmp-файлы проходят). Копируем готовые артефакты в корень репа
-          # и для образа делаем 1 МБ чанки (на случай, если 20 МБ не
-          # аплейдится).
-          mkdir -p .ci-art
-          rm -rf .ci-art/*
-          echo "## Prepared artifacts" >> "$GITHUB_STEP_SUMMARY"
-          IMG_SRC=""
-          for f in deix-0.3.0-beta-x86_64.img deix-0.3.0-beta-x86_64.iso \
-                   deix_disk.img kernel.bin boot_sector.bin stage2.bin ramboot.bin SHA256SUMS; do
-            if [ -f "build/$f" ]; then
-              cp "build/$f" ".ci-art/$f"
-              echo "- .ci-art/$f ($(stat -c%s ".ci-art/$f") B)" >> "$GITHUB_STEP_SUMMARY"
-              [ "$f" = "deix_disk.img" ] && IMG_SRC="$f"
-              [ "$f" = "deix-0.3.0-beta-x86_64.img" ] && IMG_SRC="$f"
-            else
-              echo "- build/$f — НЕ СОЗДАН" >> "$GITHUB_STEP_SUMMARY"
-            fi
-          done
-          # Чанки образа по 1 МБ
-          rm -f .ci-art/chunk-*
-          if [ -n "$IMG_SRC" ] && [ -f "build/$IMG_SRC" ]; then
-            split -b 1m -d -a 3 "build/$IMG_SRC" .ci-art/chunk-
-            echo "- .ci-art/chunk-*: $(ls .ci-art/chunk-* 2>/dev/null | wc -l) чанков по 1 МБ" >> "$GITHUB_STEP_SUMMARY"
-            echo "- SHA256 образа: $(sha256sum "build/$IMG_SRC" | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Upload deix.img
-        if: always()
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: deix-img
-          path: .ci-art/deix-0.3.0-beta-x86_64.img
-          if-no-files-found: ignore
-          retention-days: 30
-
-      - name: Upload disk image backup (deix_disk.img)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: deix-img-raw
-          path: .ci-art/deix_disk.img
-          if-no-files-found: ignore
-          retention-days: 30
-
-      - name: Upload image chunks (1 MB each)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: deix-img-chunks
-          path: .ci-art/chunk-*
-          if-no-files-found: ignore
-          retention-days: 30
-
-      - name: Upload build binaries + SHA256SUMS
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: deix-bin
+          name: deix-release
           path: |
-            .ci-art/kernel.bin
-            .ci-art/boot_sector.bin
-            .ci-art/stage2.bin
-            .ci-art/ramboot.bin
-            .ci-art/SHA256SUMS
-          if-no-files-found: ignore
+            build/deix_disk.img
+            build/deix-*-x86_64.img
+            build/kernel.bin
+            build/boot_sector.bin
+            build/stage2.bin
+            build/ramboot.bin
+            build/SHA256SUMS
+          if-no-files-found: error
           retention-days: 30
-
-      - name: Verify artifacts uploaded
-        if: always()
-        run: |
-          {
-            echo "## Artifact verification"
-            echo "build/ contents:"
-            ls -la build/ 2>&1 | head -20
-            echo ""
-            echo ".ci-art/ contents:"
-            ls -la .ci-art/ 2>&1 | head -40
-            echo ""
-            echo "Artifacts in run $GITHUB_RUN_ID:"
-            curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(a['name'] for a in d.get('artifacts',[])))" 2>&1 || echo "(API check failed)"
-          } >> "$GITHUB_STEP_SUMMARY"
-          # Фатальная проверка: если образ не дошёл — падаем с диагностикой
-          ART_NAMES=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(', '.join(a['name'] for a in d.get('artifacts',[])))" 2>/dev/null)
-          echo "Текущие артефакты: $ART_NAMES" >> "$GITHUB_STEP_SUMMARY"
-          # API в CI блокирован — аплейд сам работает, фатальную проверку
-          # убираем (ложные падения). Диагностика остаётся в summary.
-          echo "::warning::ARTIFACT STATUS::артефакты: $ART_NAMES | .ci-art/: $(ls .ci-art/ 2>&1 | tr '\n' ' ')"
 
       - name: Upload ISO (if built)
         if: hashFiles('build/deix.iso') != ''
@@ -373,33 +146,6 @@ jobs:
           path: build/deix.iso
           if-no-files-found: warn
           retention-days: 30
-
-      - name: Publish disk image to GitHub release
-        if: always()
-        run: |
-          # Выкладываем готовый bootable образ в релиз deix-img — постоянная
-          # ссылка для скачивания (дейдашник: каждый билд перезаписывает ассет).
-          IMG="build/deix-0.3.0-beta-x86_64.img"
-          [ -f "$IMG" ] || IMG="build/deix_disk.img"
-          RELEASE_JSON=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/deix-img" 2>/dev/null || true)
-          RELEASE_ID=$(printf '%s' "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
-          if [ -z "$RELEASE_ID" ]; then
-            RELEASE_ID=$(curl -sS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" -d '{"tag_name":"deix-img","name":"DeiX — bootable disk image"}' "https://api.github.com/repos/$GITHUB_REPOSITORY/releases" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
-          fi
-          if [ -n "$RELEASE_ID" ] && [ -f "$IMG" ]; then
-            # удалить предыдущие ассеты релиза (дейдашник)
-            ASSET_IDS=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" 2>/dev/null | python3 -c "import json,sys; [print(a['id']) for a in json.load(sys.stdin)]" 2>/dev/null || true)
-            for ASSET in $ASSET_IDS; do
-              curl -sS -X DELETE -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets/$ASSET" >/dev/null 2>&1 || true
-            done
-            curl -sS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" -F "file=@$IMG;filename=deix.img" "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" >/dev/null 2>&1 || echo "warn: не удалось выгрузить .img"
-            if [ -f build/deix.iso ]; then
-              curl -sS -X POST -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" -F "file=@build/deix.iso;filename=deix.iso" "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" >/dev/null 2>&1 || echo "warn: не удалось выгрузить .iso"
-            fi
-            echo "Релиз deix-img обновлён: https://github.com/$GITHUB_REPOSITORY/releases/tag/deix-img"
-          else
-            echo "Релиз не создан или образ не найден — пропускаем выгрузку"
-          fi
 
       - name: Upload QEMU logs
         if: always()

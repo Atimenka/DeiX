@@ -13,29 +13,6 @@
 
 pub const DIGEST_LEN: usize = 32;
 
-macro_rules! round {
-    ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $k:expr, $w:expr) => {{
-        let s1 = $e.rotate_right(6) ^ $e.rotate_right(11) ^ $e.rotate_right(25);
-        let ch = ($e & $f) ^ ((!$e) & $g);
-        let temp1 = $h
-            .wrapping_add(s1)
-            .wrapping_add(ch)
-            .wrapping_add($k)
-            .wrapping_add($w);
-        let s0 = $a.rotate_right(2) ^ $a.rotate_right(13) ^ $a.rotate_right(22);
-        let maj = ($a & $b) ^ ($a & $c) ^ ($b & $c);
-        let temp2 = s0.wrapping_add(maj);
-        $h = $g;
-        $g = $f;
-        $f = $e;
-        $e = $d.wrapping_add(temp1);
-        $d = $c;
-        $c = $b;
-        $b = $a;
-        $a = temp1.wrapping_add(temp2);
-    }};
-}
-
 const H0: [u32; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
     0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
@@ -51,6 +28,23 @@ const K: [u32; 64] = [
     0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ];
+
+/// Один раунд сжатия без пересылки регистров: вместо сдвига a..h на каждом
+/// раунде имена переменных вращаются между восемью раундами подряд.
+/// Результат побитово тот же, что у «классической» записи со сдвигом.
+macro_rules! round {
+    ($a:ident, $b:ident, $c:ident, $d:ident, $e:ident, $f:ident, $g:ident, $h:ident, $k:expr, $w:expr) => {
+        let t1 = $h
+            .wrapping_add($e.rotate_right(6) ^ $e.rotate_right(11) ^ $e.rotate_right(25))
+            .wrapping_add($g ^ ($e & ($f ^ $g)))
+            .wrapping_add($k)
+            .wrapping_add($w);
+        let t2 = ($a.rotate_right(2) ^ $a.rotate_right(13) ^ $a.rotate_right(22))
+            .wrapping_add(($a & $b) | ($c & ($a | $b)));
+        $d = $d.wrapping_add(t1);
+        $h = t1.wrapping_add(t2);
+    };
+}
 
 #[derive(Clone)]
 pub struct Sha256 {
@@ -183,27 +177,6 @@ impl Sha256 {
             round!(d, e, f, g, h, a, b, c, K[i + 5], w[i + 5]);
             round!(c, d, e, f, g, h, a, b, K[i + 6], w[i + 6]);
             round!(b, c, d, e, f, g, h, a, K[i + 7], w[i + 7]);
-        }
-        for i in 0..64 {
-            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let ch = (e & f) ^ ((!e) & g);
-            let temp1 = h
-                .wrapping_add(s1)
-                .wrapping_add(ch)
-                .wrapping_add(K[i])
-                .wrapping_add(w[i]);
-            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let temp2 = s0.wrapping_add(maj);
-
-            h = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(temp1);
-            d = c;
-            c = b;
-            b = a;
-            a = temp1.wrapping_add(temp2);
         }
 
         self.state[0] = self.state[0].wrapping_add(a);

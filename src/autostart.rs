@@ -23,8 +23,6 @@
 //! 3. Экран входа пользователя
 //! 4. CLI
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
 use crate::ext2;
 use crate::cli;
 
@@ -73,19 +71,6 @@ fn migrate_legacy() {
 ///
 /// Вызывается после первого успешного входа. Существующий файл не
 /// трогаем — пользователь мог его отредактировать.
-
-/// Ленивая инициализация: создаёт autostart.cfg только при первом
-/// доступе к CLI. Ускоряет загрузку на ~9 секунд (ext2 формат-чек + vfs ops).
-static DEFERRED_DONE: AtomicBool = AtomicBool::new(false);
-
-pub fn ensure_default_deferred() {
-    if DEFERRED_DONE.load(Ordering::SeqCst) {
-        return;
-    }
-    DEFERRED_DONE.store(true, Ordering::SeqCst);
-    ensure_default();
-}
-
 pub fn ensure_default() {
     if !ext2::is_formatted() {
         return;
