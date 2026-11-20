@@ -100,6 +100,65 @@
         <p class="hint">Published releases are visible to everyone on the Download page. A draft is visible only here.</p>
       </div>
 
+      <div id="manage-section" hidden>
+        <div class="toolbar">
+          <h1 class="title">System <span class="grad">management</span></h1>
+          <div class="right">
+            <button class="btn small" id="mg-refresh-btn" type="button">Refresh</button>
+          </div>
+        </div>
+
+        <div class="panel rel-panel">
+          <h3>Dev mode</h3>
+          <p class="hint">Global dev-mode toggle. If it is off, devices cannot activate dev mode even with a valid key.</p>
+          <label class="switch">
+            <input type="checkbox" id="mg-dev-mode">
+            <span id="mg-dev-mode-label">Dev mode</span>
+          </label>
+          <div class="result" id="mg-dev-result" hidden></div>
+        </div>
+
+        <div class="panel rel-panel">
+          <h3>Feature flags</h3>
+          <p class="hint">Per-feature toggles. A disabled flag switches the corresponding feature off on all devices.</p>
+          <div id="mg-flags-list" class="stack"></div>
+          <div class="result" id="mg-flags-result" hidden></div>
+        </div>
+
+        <div class="panel rel-panel">
+          <h3>User roles</h3>
+          <p class="hint">Roles: owner (100) → curator (60) → admin (50) → moderator (20) → tester (10) → user (1). A curator can assign roles below their own (admin, moderator, tester), but not curator or owner.</p>
+          <p class="hint">You are signed in as <strong id="mg-user-role">—</strong></p>
+          <form id="mg-role-form" class="stack" autocomplete="off">
+            <label>User (UUID or username)
+              <div class="input-row">
+                <input id="mg-user-id" name="user_id" type="text" placeholder="UUID or username" required>
+                <button class="btn small" id="mg-user-lookup" type="button">Find</button>
+              </div>
+            </label>
+            <label>Role
+              <select id="mg-role-select" name="role" required>
+                <option value="admin">admin</option>
+                <option value="moderator">moderator</option>
+                <option value="tester">tester</option>
+                <option value="curator">curator</option>
+              </select>
+            </label>
+            <button class="btn primary" id="mg-role-submit" type="submit">Assign role</button>
+          </form>
+          <div class="result" id="mg-role-result" hidden></div>
+          <div class="table-wrap" style="margin-top:16px">
+            <table>
+              <thead>
+                <tr><th>User</th><th>Email</th><th>Role</th><th>Assigned</th><th>Actions</th></tr>
+              </thead>
+              <tbody id="mg-roles-rows"></tbody>
+            </table>
+            <div class="empty" id="mg-roles-empty" hidden>No roles assigned.</div>
+          </div>
+        </div>
+      </div>
+
       <div id="updates-section" hidden>
         <div class="toolbar">
           <h1 class="title">OS <span class="grad">updates</span></h1>

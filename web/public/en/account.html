@@ -160,6 +160,26 @@
             </form>
             <div class="result" id="pw-result" hidden></div>
           </div>
+
+          <div class="panel">
+            <h3 id="sync-title">Settings sync</h3>
+            <p class="hint" id="sync-hint">Desktop settings are synchronised between devices. In DeiX run <code>cloud sync</code> to send the current settings and <code>cloud pull</code> to load the saved ones.</p>
+            <div id="sync-content"></div>
+          </div>
+
+          <div class="panel">
+            <h3>Shared clipboard</h3>
+            <p class="hint" id="clip-hint">Text between devices. In DeiX: <code>cloud clip set "text"</code> to send, <code>cloud clip get</code> to receive.</p>
+            <div class="row-gap">
+              <textarea id="clip-text" rows="3" maxlength="4000" placeholder="Clipboard text…" aria-label="Clipboard text"></textarea>
+            </div>
+            <div class="row-gap">
+              <button class="btn primary" id="clip-save" type="button">Save</button>
+              <button class="btn" id="clip-copy" type="button">Copy</button>
+              <button class="btn small" id="clip-refresh" type="button">Refresh</button>
+            </div>
+            <div class="result" id="clip-result" hidden></div>
+          </div>
         </section>
       </div>
     </div>

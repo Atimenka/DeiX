@@ -373,6 +373,10 @@
                 <tr><td><code>dev_unlocks</code></td><td>device identifier and name, note, source, status, account id, times of submission, decision and use, who decided</td><td>Dev-mode key requests</td></tr>
                 <tr><td><code>dev_keys</code></td><td>record id, account id, time</td><td>Key issuance limit</td></tr>
                 <tr><td><code>dev_settings</code></td><td>service settings, for example whether requests are open</td><td>Service settings; no personal data</td></tr>
+<tr><td><code>site_meta</code></td><td>setting key, its value, time of change</td><td>System settings of the Service (version, maintenance flag); no personal data</td></tr>
+                <tr><td><code>audit_log</code></td><td>record id, event, who performed the action (account id), details, time</td><td>Service event journal; contains no profile data</td></tr>
+                <tr><td><code>user_settings</code></td><td>account id, theme, accent, wallpaper style, performance profile, language, update time</td><td>Synchronising desktop settings between devices</td></tr>
+                <tr><td><code>cloud_clipboard</code></td><td>account id, clipboard text, creation time</td><td>Shared clipboard between devices</td></tr>
                 <tr><td><code>os_releases</code></td><td>version, title, description, file, size, checksum, publication status, download counter, who created it</td><td>Images for download</td></tr>
                 <tr><td><code>os_updates</code></td><td>build, version, channel, manifest, signature, payload path and size, publication status, download counter, who created it</td><td>The OS update center</td></tr>
               </tbody>

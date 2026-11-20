@@ -503,3 +503,16 @@ document.getElementById('mfa-confirm').addEventListener('submit', async (event) 
     showResult(mfaResult, 'err', err.message);
   }
 });
+
+// Синхронизируем статичные заголовки панелей синхронизации и буфера
+// обмена через i18n, чтобы RU/EN всегда получали переводы из одной таблицы.
+(function localizeSyncPanel() {
+  const setText = (id, key) => {
+    const node = document.getElementById(id);
+    if (node) node.textContent = tr(key);
+  };
+  setText('sync-title', 'Синхронизация настроек');
+  setText('sync-hint', 'Настройки рабочего стола синхронизируются между устройствами. В DeiX выполните «cloud sync» для отправки текущих настроек и «cloud pull» для загрузки сохранённых.');
+  setText('clip-hint', 'Текст между устройствами. В DeiX: «cloud clip set «текст»» для отправки, «cloud clip get» для получения.');
+  setText('clip-save', 'Сохранить');
+})();

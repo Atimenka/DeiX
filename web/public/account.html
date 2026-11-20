@@ -164,14 +164,14 @@
 
         <section class="tabpane" data-pane="sync" hidden>
           <div class="panel">
-            <h3>Синхронизация настроек</h3>
-            <p class="hint">Настройки рабочего стола синхронизируются между устройствами. В DeiX выполните <code>cloud sync</code> для отправки текущих настроек и <code>cloud pull</code> для загрузки сохранённых.</p>
+            <h3 id="sync-title">Синхронизация настроек</h3>
+            <p class="hint" id="sync-hint">Настройки рабочего стола синхронизируются между устройствами. В DeiX выполните <code>cloud sync</code> для отправки текущих настроек и <code>cloud pull</code> для загрузки сохранённых.</p>
             <div id="sync-content"></div>
           </div>
 
           <div class="panel">
             <h3>Общий буфер обмена</h3>
-            <p class="hint">Текст между устройствами. В DeiX: <code>cloud clip set "текст"</code> для отправки, <code>cloud clip get</code> для получения.</p>
+            <p class="hint" id="clip-hint">Текст между устройствами. В DeiX: <code>cloud clip set "текст"</code> для отправки, <code>cloud clip get</code> для получения.</p>
             <div class="row-gap">
               <textarea id="clip-text" rows="3" maxlength="4000" placeholder="Текст буфера обмена…" aria-label="Текст буфера обмена"></textarea>
             </div>

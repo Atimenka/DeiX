@@ -37,7 +37,19 @@ const EN = {
   'Капча не пройдена, попробуйте ещё раз': 'The captcha was not passed, please try again',
   'Требуется вход в аккаунт': 'Sign-in required',
   'Нужны права Owner': 'Owner rights required',
+  'Нужны права Owner или Curator': 'Owner or Curator rights required',
   'Для панели Owner нужна двухфакторная аутентификация: включите её в аккаунте и войдите заново.': 'The Owner panel requires two-factor authentication: enable it in your account and sign in again.',
+  'Для панели нужна двухфакторная аутентификация: включите её в аккаунте и войдите заново.': 'The panel requires two-factor authentication: enable it in your account and sign in again.',
+  'Нужно значение enabled: true или false': 'The value of enabled must be true or false',
+  'Нужно имя флага': 'A flag name is required',
+  'Флаг не найден': 'Flag not found',
+  'Нужно имя пользователя': 'A username is required',
+  'Некорректный идентификатор пользователя': 'Invalid user identifier',
+  'Недопустимая роль': 'Invalid role',
+  'Пользователь не найден': 'User not found',
+  'Нельзя назначить роль равную или выше своей': 'You cannot assign a role equal to or above your own',
+  'Нельзя забрать роль равную или выше своей': 'You cannot revoke a role equal to or above your own',
+  'Не авторизован': 'Not authorised',
   'Подтвердите почту: ссылка отправлена в письме при регистрации.': 'Verify your email: the link was sent in the registration email.',
   'Некорректный Device ID': 'Invalid Device ID',
   'Неизвестное решение': 'Unknown decision',
@@ -125,6 +137,7 @@ const PATTERNS = [
   [/^Не удалось подготовить загрузку в хранилище \(Storage (.+)\)$/, 'Could not prepare the upload to storage (Storage $1)'],
   [/^Пароль должен быть не короче (\d+) символов$/, 'The password must be at least $1 characters long'],
   [/^Не больше (\d+) ключей в час\. Попробуйте позже\.$/, 'No more than $1 keys per hour. Try again later.'],
+  [/^Пользователь не найден: (.+)$/, 'User not found: $1'],
 ];
 
 function translate(text, lang) {
