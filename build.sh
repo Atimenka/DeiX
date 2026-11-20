@@ -189,10 +189,10 @@ KERNEL_SIZE=$(stat -c%s "$BUILD/kernel.bin")
 KERNEL_SECTORS=$(( (KERNEL_SIZE + 511) / 512 ))
 echo "    kernel.bin: $KERNEL_SIZE байт => $KERNEL_SECTORS секторов"
 
-KERNEL_MAX_SECTORS=2048
+KERNEL_MAX_SECTORS=4096
 if [ "$KERNEL_SECTORS" -gt "$KERNEL_MAX_SECTORS" ]; then
     echo "ОШИБКА: kernel.bin ($KERNEL_SECTORS сект) > лимита ($KERNEL_MAX_SECTORS)."
-    echo "Ядро грузится в 0x100000..0x200000 (ниже кучи на 0x300000): лимит 1 МиБ."
+    echo "Ядро грузится в 0x100000..0x300000 (ниже .bss ядра на 0x300000): лимит 2 МиБ."
     exit 1
 fi
 
