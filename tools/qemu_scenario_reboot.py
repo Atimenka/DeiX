@@ -9,9 +9,17 @@
 как при ребуте), диск персистентен. Это честнее и надёжнее, чем
 system_reset при -serial stdio (вывод после reset пропадал).
 
-Примечание: print! (приглашения "Username:", "Password:", "deix> ") идёт
+Примечание: print! (приглашения «Username:», «Password:», «deix> ») идёт
 ТОЛЬКО в VGA; в serial видны только println!/serial_println!. Ввод
 отправляется «вслепую» по маркерам println!.
+
+Вход в 3.0 — графический loginui (Bochs VBE активируется даже в
+headless QEMU). Он читает ввод с COM1: в режиме настройки поля
+USER -> PASS -> CONFIRM, в режиме входа — USER -> PASS. Маркеры
+графического потока: «[loginui] графический вход, создание учётки:
+true/false», «[loginui] шифрование тома включено (XTS-AES-256)»,
+затем ядро печатает «Welcome to DeiX, <name>!», CLI — «Welcome to
+DeiX CLI!».
 """
 import os, pty, subprocess, select, time, sys, signal
 
@@ -109,14 +117,17 @@ try:
     print('=== Фаза 1: первичная настройка (создание пользователя alice) ===', flush=True)
     start_qemu()
     wait_for([b'mini kernel booted successfully!'], desc='первый бут')
-    wait_for([b'No user accounts exist yet'], desc='заводской образ: аккаунтов нет', timeout=60)
-    snapshot('фаза 1 до создания')
+    wait_for([b'[loginui] графический вход, создание учётки: true'],
+             desc='графический вход, режим настройки', timeout=60)
     send('alice\n')
     send('pass123\n')
-    r1 = wait_for([b"Account 'alice' created. Logging in..."], desc='аккаунт создан', timeout=60)
+    send('pass123\n')
+    r1 = wait_for([b'[loginui] шифрование тома включено (XTS-AES-256)'],
+                  desc='шифрование включено', timeout=60)
     if not r1:
-        print('>>> ФАЗА 1 FAIL: аккаунт не создан', flush=True); sys.exit(2)
-    wait_for([b'Disk encryption ENABLED'], desc='шифрование включено', timeout=60)
+        snapshot('фаза 1 до создания')
+        print('>>> ФАЗА 1 FAIL: шифрование не включено', flush=True); sys.exit(2)
+    wait_for([b'Welcome to DeiX, alice!'], desc='вход после создания', timeout=60)
     wait_for([b'Welcome to DeiX CLI'], desc='CLI после первого входа', timeout=60)
     snapshot('фаза 1 после создания (TPM записан)')
     stop_qemu()
@@ -127,17 +138,13 @@ try:
     buf = b''
     start_qemu()
     wait_for([b'mini kernel booted successfully!'], desc='второй бут', timeout=120)
-    wait_for([b'Disk is encrypted'], desc='диск зашифрован (DEIXCRYP найден)', timeout=60)
-    wait_for([b'Login'], desc='экран входа', timeout=30)
-    time.sleep(1.0)
-    if b'No user accounts exist yet' in buf:
-        snapshot('фаза 2: АККАУНТОВ НЕТ')
-        print('>>> ФАЗА 2: NO_ACCOUNTS (баг после 1-го ребута)', flush=True); sys.exit(3)
+    wait_for([b'[loginui] графический вход, создание учётки: false'],
+             desc='графический вход, режим входа (аккаунты есть)', timeout=60)
     snapshot('фаза 2 перед вводом (источник USERS.DB)')
     send('alice\n')
     send('pass123\n')
-    r2 = wait_for([b'Login successful', b'Invalid username or password'], desc='результат входа #1', timeout=60)
-    if not r2 or b'Invalid' in r2:
+    r2 = wait_for([b'Welcome to DeiX, alice!'], desc='результат входа #1', timeout=60)
+    if not r2:
         snapshot('фаза 2: вход НЕ удался')
         print('>>> ФАЗА 2: LOGIN_FAIL (пароль «забыт» после 1-го ребута)', flush=True); sys.exit(4)
     print('  Фаза 2: вход после reboot #1 — OK', flush=True)
@@ -150,17 +157,13 @@ try:
     buf = b''
     start_qemu()
     wait_for([b'mini kernel booted successfully!'], desc='третий бут', timeout=120)
-    wait_for([b'Disk is encrypted'], desc='диск зашифрован (DEIXCRYP найден)', timeout=60)
-    wait_for([b'Login'], desc='экран входа', timeout=30)
-    time.sleep(1.0)
-    if b'No user accounts exist yet' in buf:
-        snapshot('фаза 3: АККАУНТОВ НЕТ')
-        print('>>> ФАЗА 3: NO_ACCOUNTS — БАГ ПОСЛЕ 2-ГО РЕБУТА (пароль «забыт»)', flush=True); sys.exit(5)
+    wait_for([b'[loginui] графический вход, создание учётки: false'],
+             desc='графический вход, режим входа (аккаунты есть)', timeout=60)
     snapshot('фаза 3 перед вводом (источник USERS.DB)')
     send('alice\n')
     send('pass123\n')
-    r3 = wait_for([b'Login successful', b'Invalid username or password'], desc='результат входа #2', timeout=60)
-    if not r3 or b'Invalid' in r3:
+    r3 = wait_for([b'Welcome to DeiX, alice!'], desc='результат входа #2', timeout=60)
+    if not r3:
         snapshot('фаза 3: вход НЕ удался')
         print('>>> ФАЗА 3: LOGIN_FAIL (пароль «забыт» после 2-го ребута)', flush=True); sys.exit(6)
     print('  Фаза 3: вход после reboot #2 — OK', flush=True)
