@@ -244,6 +244,33 @@ function showBanner(parts) {
   nav.after(el('div', { id: 'site-banner', class: 'banner', role: 'status' }, [icon('alert'), ...parts]));
 }
 
+/**
+ * Статус сайта из БД (site_meta): если включен флаг обслуживания —
+ * показываем информативный банер с кнопкой «Понятно».
+ */
+async function siteStatusBanner() {
+  try {
+    const resp = await fetch('/api/status', {
+      headers: { 'x-deix-lang': LANG },
+      credentials: 'same-origin',
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data || !data.maintenance) return;
+    const dismiss = () => {
+      const banner = document.getElementById('site-banner');
+      if (banner) banner.remove();
+    };
+    showBanner([
+      el('b', { text: tr('Временное обслуживание') }),
+      el('span', { class: 'grow', text: tr('Сайт временно недоступен: проводятся обновления. Возвращайтесь через некоторое время.') }),
+      el('button', { class: 'btn small', type: 'button', text: tr('Понятно'), onclick: dismiss }),
+    ]);
+  } catch {
+    /* статус-банер не критичный: при сбое просто ничего не показываем */
+  }
+}
+
 async function resendVerification(button) {
   button.disabled = true;
   try {
@@ -427,3 +454,4 @@ try {
 enhancePasswords();
 enhanceMotion();
 renderNav();
+siteStatusBanner();

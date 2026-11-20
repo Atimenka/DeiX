@@ -12,13 +12,13 @@
   --text: #f3f2ee;
   --muted: #9b9a94;
   --faint: #66655f;
-  --accent: #ff3b30;
-  --ac: 255 59 48;
-  --accent-soft: #ff7a70;
-  --accent-3: #ff7a3c;
+  --accent: #109793;
+  --ac: 16 151 147;
+  --accent-soft: #21e3dc;
+  --accent-3: #1aeaff;
   --accent-2: #f3f2ee;
   --accent-ink: #ffffff;
-  --grad: linear-gradient(135deg, #ff4a3d 0%, #e8261c 55%, #c8101e 100%);
+  --grad: linear-gradient(135deg, #1aeaff 0%, #21e3dc 40%, #109793 100%);
   --ok: #4ade80;
   --warn: #fbbf24;
   --bad: #ff8a80;
@@ -26,7 +26,7 @@
   --glow: 0 0 0 1px rgb(var(--ac) / 0.55), 0 10px 40px -8px rgb(var(--ac) / 0.5);
   --blob-a: rgb(var(--ac) / 0.22);
   --blob-b: rgba(255, 255, 255, 0.05);
-  --blob-c: rgba(255, 120, 60, 0.1);
+  --blob-c: rgba(33, 227, 220, 0.12);
   --grid-line: rgba(255, 255, 255, 0.05);
 }
 
@@ -42,12 +42,12 @@
   --text: #0c0c0c;
   --muted: #55544f;
   --faint: #8a8983;
-  --accent: #e11d2e;
-  --ac: 225 29 46;
-  --accent-soft: #ff6a5e;
-  --accent-3: #ff3b30;
+  --accent: #0b7a77;
+  --ac: 11 122 119;
+  --accent-soft: #0a8f96;
+  --accent-3: #0c9aa0;
   --accent-2: #0c0c0c;
-  --grad: linear-gradient(135deg, #ff3b30 0%, #e11d2e 55%, #b50f1d 100%);
+  --grad: linear-gradient(135deg, #0c9aa0 0%, #0b7a77 55%, #085958 100%);
   --ok: #15803d;
   --warn: #b45309;
   --bad: #c81e1e;
@@ -55,7 +55,7 @@
   --glow: 0 0 0 1px rgb(var(--ac) / 0.5), 0 10px 34px -8px rgb(var(--ac) / 0.35);
   --blob-a: rgb(var(--ac) / 0.16);
   --blob-b: rgba(10, 10, 10, 0.04);
-  --blob-c: rgba(255, 120, 60, 0.1);
+  --blob-c: rgba(12, 154, 160, 0.16);
   --grid-line: rgba(10, 10, 10, 0.06);
 }
 
@@ -635,13 +635,13 @@ main.page > section > .state.auth-card { margin: 40px auto; }
 :root {
   --blob-a: rgb(var(--ac) / 0.5);
   --blob-b: rgba(243, 242, 238, 0.34);
-  --blob-c: rgba(255, 90, 60, 0.26);
-  --grad-hot: linear-gradient(120deg, #ffffff 0%, #ff7a70 35%, #f3f2ee 70%, #ff3b30 100%);
+  --blob-c: rgba(33, 227, 220, 0.26);
+  --grad-hot: linear-gradient(120deg, #ffffff 0%, #21e3dc 35%, #f3f2ee 70%, #109793 100%);
 }
 :root[data-theme="light"] {
   --blob-a: rgb(var(--ac) / 0.34);
   --blob-b: rgba(243, 242, 238, 0.32);
-  --blob-c: rgba(255, 90, 60, 0.2);
+  --blob-c: rgba(12, 154, 160, 0.2);
 }
 
 body::before {
@@ -697,7 +697,7 @@ h1, h2, h3 { text-wrap: balance; }
   background:
     radial-gradient(60% 50% at 20% 15%, rgb(var(--ac) / 0.45), transparent 70%),
     radial-gradient(55% 55% at 85% 80%, rgba(243, 242, 238, 0.32), transparent 70%),
-    radial-gradient(40% 40% at 70% 10%, rgba(255, 90, 60, 0.22), transparent 70%),
+    radial-gradient(40% 40% at 70% 10%, rgba(33, 227, 220, 0.26), transparent 70%),
     var(--glass);
   box-shadow: var(--shadow);
 }
@@ -707,7 +707,7 @@ h1, h2, h3 { text-wrap: balance; }
   inset: -12%;
   z-index: -2;
   border-radius: 50%;
-  background: conic-gradient(from 0deg, rgb(var(--ac) / 0.55), rgba(243, 242, 238, 0.45), rgba(255, 90, 60, 0.4), rgb(var(--ac) / 0.55));
+  background: conic-gradient(from 0deg, rgb(var(--ac) / 0.55), rgba(243, 242, 238, 0.45), rgba(33, 227, 220, 0.42), rgb(var(--ac) / 0.55));
   filter: blur(70px);
   opacity: 0.55;
   animation: spin 22s linear infinite;
@@ -1075,9 +1075,9 @@ html.motion .step:not(.on) { opacity: 0.62; }
 
 
 /* ===== пятый проход: монохром и красный акцент, строгая сетка ===== */
-:root { --grad-hot: linear-gradient(120deg, #ff3b30 0%, #ff7a3c 55%, #f3f2ee 100%); --radius: 4px; --radius-sm: 3px; }
+:root { --grad-hot: linear-gradient(120deg, #109793 0%, #21e3dc 55%, #f3f2ee 100%); --radius: 4px; --radius-sm: 3px; }
 ::selection { background: var(--accent); color: #fff; }
-:root[data-theme="light"] { --grad-hot: linear-gradient(120deg, #e11d2e 0%, #ff3b30 60%, #0c0c0c 100%); }
+:root[data-theme="light"] { --grad-hot: linear-gradient(120deg, #0b7a77 0%, #0c9aa0 60%, #0c0c0c 100%); }
 
 body > .wipe { position: fixed; inset: 0; z-index: 200; background: var(--accent); transform: translateY(101%); transition: transform 0.36s cubic-bezier(0.7, 0, 0.3, 1); pointer-events: none; }
 body > .wipe.go { transform: translateY(0); pointer-events: auto; }
@@ -1436,3 +1436,84 @@ html.has-cursor .bg::after { opacity: 1; }
 .wp-card figcaption { padding: 16px 18px 18px; display: grid; gap: 4px; }
 .wp-card h3 { margin: 0; font-size: 1.05rem; }
 .wp-card .hint { margin: 0 0 8px; }
+
+/* ================= финальный полировочный проход: глубина, свечение, детали ================= */
+
+/* --- заголовок: свечение и более чёткий объём --- */
+.hero h1 { text-shadow: 0 1px 0 rgba(255, 255, 255, 0.06), 0 24px 60px -34px rgb(var(--ac) / 0.9); }
+.hero h1 .grad { filter: drop-shadow(0 6px 24px rgb(var(--ac) / 0.55)); }
+.hero .lead { text-shadow: 0 1px 0 rgba(0, 0, 0, 0.25); }
+
+/* --- чип с анимированным пульсирующим пятном --- */
+.chip .dot {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 rgb(var(--ac) / 0.6);
+  animation: dot-pulse 2.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes dot-pulse {
+  0% { box-shadow: 0 0 0 0 rgb(var(--ac) / 0.55); }
+  70% { box-shadow: 0 0 0 10px rgb(var(--ac) / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(var(--ac) / 0); }
+}
+
+/* --- кнопки: свечение по наведению, чёткий рефлекс --- */
+.btn { transition: transform 0.3s var(--ease), box-shadow 0.3s var(--ease), border-color 0.3s, background 0.3s; }
+.btn.primary { position: relative; overflow: hidden; }
+.btn.primary::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent 30%, rgba(255, 255, 255, 0.28) 50%, transparent 70%);
+  transform: translateX(-130%);
+  transition: transform 0.7s var(--ease);
+}
+.btn.primary:hover { transform: translateY(-3px); box-shadow: 0 14px 34px -10px rgb(var(--ac) / 0.9); }
+.btn.primary:hover::after { transform: translateX(130%); }
+.btn:not(.primary):hover { border-color: rgb(var(--ac) / 0.6); box-shadow: 0 10px 26px -14px rgb(var(--ac) / 0.7); }
+
+/* --- десктоп-макет: лёгкое покачивание окон на наведение --- */
+.win { transition: transform 0.5s var(--ease), box-shadow 0.5s var(--ease); }
+.term { box-shadow: 0 30px 70px -28px rgba(0, 0, 0, 0.9), 0 1px 0 rgba(255, 255, 255, 0.07) inset; }
+.desktop:hover .term { transform: translateY(-5px) rotate(-0.4deg); }
+.desktop:hover .mon { transform: translateY(-3px) rotate(0.4deg); }
+
+/* --- статы: градиентные цифры и акцентная граница --- */
+.stat { position: relative; overflow: hidden; transition: transform 0.4s var(--ease), border-color 0.3s; }
+.stat:hover { transform: translateY(-4px); border-color: rgb(var(--ac) / 0.5); }
+/* --- eyebrow с градиентной полосой --- */
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.78rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  font-weight: 700;
+}
+
+/* --- карточки бенто: глубже наведение --- */
+.card { position: relative; }
+.card:hover { box-shadow: 0 26px 60px -30px rgb(var(--ac) / 0.85); }
+
+/* --- CTA-полоса: градиентный заголовок --- */
+.cta-band h2 { background-image: var(--grad-hot); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+/* --- юридические: таблицы с акцентной штриховкой --- */
+.legal-body .table-wrap table { border-radius: var(--radius-sm); }
+.legal-body th { border-bottom: 1px solid var(--border-strong); }
+.legal-body th code, .legal-body td code { border: 1px solid var(--border); }
+
+/* --- галерея: hover-свечение --- */
+.wp-card { border-radius: var(--radius); border: 1px solid var(--border); background: var(--glass); transition: border-color 0.3s, box-shadow 0.3s; }
+.wp-card:hover { border-color: rgb(var(--ac) / 0.55); box-shadow: 0 24px 56px -30px rgb(var(--ac) / 0.8); }
+
+/* --- уменьшение حرکتа: без лишних эффектов --- */
+@media (prefers-reduced-motion: reduce) {
+  .chip .dot { animation: none; }
+  .btn.primary::after { display: none; }
+}

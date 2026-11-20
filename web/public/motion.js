@@ -27,7 +27,7 @@
 
   function accentColors() {
     const css = getComputedStyle(root);
-    return [css.getPropertyValue('--accent').trim() || '#ff3b30', css.getPropertyValue('--accent-2').trim() || '#f3f2ee', '#ff7a3c', '#ffffff'];
+    return [css.getPropertyValue('--accent').trim() || '#109793', css.getPropertyValue('--accent-2').trim() || '#f3f2ee', '#1aeaff', '#ffffff'];
   }
 
   let confettiFire = null;
