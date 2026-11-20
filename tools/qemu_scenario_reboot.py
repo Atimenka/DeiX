@@ -117,12 +117,12 @@ try:
     print('=== Фаза 1: первичная настройка (создание пользователя alice) ===', flush=True)
     start_qemu()
     wait_for([b'mini kernel booted successfully!'], desc='первый бут')
-    wait_for([b'[loginui] графический вход, создание учётки: true'],
+    wait_for(['[loginui] графический вход, создание учётки: true'],
              desc='графический вход, режим настройки', timeout=60)
     send('alice\n')
     send('pass123\n')
     send('pass123\n')
-    r1 = wait_for([b'[loginui] шифрование тома включено (XTS-AES-256)'],
+    r1 = wait_for(['[loginui] шифрование тома включено (XTS-AES-256)'],
                   desc='шифрование включено', timeout=60)
     if not r1:
         snapshot('фаза 1 до создания')
@@ -138,7 +138,7 @@ try:
     buf = b''
     start_qemu()
     wait_for([b'mini kernel booted successfully!'], desc='второй бут', timeout=120)
-    wait_for([b'[loginui] графический вход, создание учётки: false'],
+    wait_for(['[loginui] графический вход, создание учётки: false'],
              desc='графический вход, режим входа (аккаунты есть)', timeout=60)
     snapshot('фаза 2 перед вводом (источник USERS.DB)')
     send('alice\n')
@@ -157,7 +157,7 @@ try:
     buf = b''
     start_qemu()
     wait_for([b'mini kernel booted successfully!'], desc='третий бут', timeout=120)
-    wait_for([b'[loginui] графический вход, создание учётки: false'],
+    wait_for(['[loginui] графический вход, создание учётки: false'],
              desc='графический вход, режим входа (аккаунты есть)', timeout=60)
     snapshot('фаза 3 перед вводом (источник USERS.DB)')
     send('alice\n')
