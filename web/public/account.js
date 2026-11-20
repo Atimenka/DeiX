@@ -26,6 +26,14 @@ function renderProfile() {
   );
   renderMail();
   renderMfa();
+  // Смена пароля требует код 2FA, когда двухфакторная аутентификация включена.
+  const pwCodeLabel = document.getElementById('pw-code-label');
+  if (pwCodeLabel) {
+    pwCodeLabel.hidden = !me.mfa;
+    pwCodeLabel.title = me.mfa ? tr('Смена пароля требует код из приложения 2FA') : '';
+  }
+  const pwCodeText = document.getElementById('pw-code-text');
+  if (pwCodeText) pwCodeText.textContent = tr('Код 2FA для смены пароля');
 }
 
 function renderMail() {
@@ -217,7 +225,9 @@ document.getElementById('password-form').addEventListener('submit', async (event
   }
   try {
     const current = document.getElementById('pw-current').value;
-    await authApi({ action: 'change_password', current, next });
+    const payload = { action: 'change_password', current, next };
+    if (me && me.mfa) payload.code = document.getElementById('pw-code').value;
+    await authApi(payload);
     event.target.reset();
     const kept = !Vault || !Vault.exists(me.id) || (await Vault.rekey(me.id, current, next));
     showResult(

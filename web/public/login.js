@@ -62,6 +62,7 @@ document.getElementById('login-form').addEventListener('submit', async (event) =
     location.assign(next);
   } catch (err) {
     showResult(result, 'err', err.message);
+    if (err.captcha_required) toast(tr('Подтвердите, что вы не робот, и попробуйте ещё раз'), 'err');
     captcha.reset();
     button.disabled = false;
   }

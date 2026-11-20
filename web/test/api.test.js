@@ -1168,3 +1168,67 @@ test('Rate limit: подделанный X-Forwarded-For не сбрасывае
   }
   assert.equal(last, 429);
 });
+
+test('bot protection: password policy rejects common and identity passwords', async () => {
+  // Распространённый пароль — отклоняется.
+  const common = await call(authHandler, {
+    ...REG, username: 'Grace_1', email: 'grace@example.org', password: 'password123', password2: 'password123',
+  });
+  assert.equal(common.status, 400);
+  assert.match(common.json.error, /распространён/);
+  // Пароль с именем пользователя в себе — отклоняется.
+  const identity = await call(authHandler, {
+    ...REG, username: 'Grace_1', email: 'grace@example.org', password: 'grace-pass-1', password2: 'grace-pass-1',
+  });
+  assert.equal(identity.status, 400);
+  assert.match(identity.json.error, /имя пользователя|почты/);
+  // Нормальный пароль проходит.
+  const ok = await call(authHandler, {
+    ...REG, username: 'Grace_1', email: 'grace@example.org',
+  });
+  assert.equal(ok.status, 200);
+});
+
+test('login: failed attempt escalates the captcha and the account locks after 10 fails', async () => {
+  // Регистрируем аккаунт, чтобы перебор работал по существующему логину.
+  const reg = await call(authHandler, { ...REG, username: 'Heidi_1', email: 'heidi@example.org' }, { headers: FRESH });
+  assert.equal(reg.status, 200);
+  // 10 неудавшихся входов с разных IP: IP-лимит не срабатывает,
+  // но счётчик по аккаунту накапливается.
+  for (let i = 0; i < 10; i++) {
+    const r = await call(authHandler, { action: 'login', identifier: 'heidi_1', password: 'x' }, {
+      headers: { 'x-forwarded-for': `10.0.0.${i + 1}` },
+    });
+    assert.equal(r.status, 401);
+    assert.equal(r.json.captcha_required, true, `attempt ${i + 1} should ask for a fresh captcha`);
+  }
+  // 11-я попытка в течение window — блокировка по аккаунту.
+  const locked = await call(authHandler, { action: 'login', identifier: 'heidi@example.org', password: 'x' }, {
+    headers: { 'x-forwarded-for': '10.0.9.9' },
+  });
+  assert.equal(locked.status, 429);
+  assert.match(locked.json.error, /аккаунта/);
+});
+
+test('password change requires the 2FA code when MFA is enabled', async () => {
+  const reg = await call(authHandler, { ...REG, username: 'Ivan_1', email: 'ivan@example.org' }, { headers: FRESH });
+  assert.equal(reg.status, 200);
+  const jar = sessionOf(reg);
+  const userId = db.tokens.get(jar.deix_at);
+  assert.ok(userId, 'jar should carry a token known to the mock');
+  db.factors.set(userId, [{ id: 'ivan-factor', factor_type: 'totp', status: 'verified' }]);
+
+  // Без кода — отклонение.
+  const noCode = await call(authHandler, { action: 'change_password', current: 'secret-pass', next: 'fresh-pass-77' }, { cookies: jar });
+  assert.equal(noCode.status, 400);
+  // С правильным кодом — смена проходит.
+  const withCode = await call(authHandler, { action: 'change_password', current: 'secret-pass', next: 'fresh-pass-77', code: GOOD_CODE }, { cookies: jar });
+  assert.equal(withCode.status, 200);
+});
+
+test('bot protection: cross-site Sec-Fetch-Site is rejected', async () => {
+  const r = await call(authHandler, { action: 'login', identifier: 'nobody', password: 'x' }, {
+    headers: { 'sec-fetch-site': 'cross-site' },
+  });
+  assert.equal(r.status, 403);
+});

@@ -17,6 +17,40 @@ const USERNAME_RE = /^[A-Za-z0-9_]{3,24}$/;
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/;
 const MIN_PASSWORD = 8;
 
+/** Самые распространённые пароли: регистрация и смена пароля их отклоняют. */
+const COMMON_PASSWORDS = new Set([
+  'password', 'password1', 'password123', 'passw0rd', 'p@ssw0rd', 'passwords',
+  '12345678', '123456789', '1234567890', '1234567', '123456', '12345678910',
+  'qwerty', 'qwertyuiop', 'qwerty123', 'qwertyui', 'asdfghjkl', 'zxcvbnm',
+  'letmein', 'welcome', 'welcome1', 'welcome123', 'admin', 'admin123',
+  'administrator', 'root', 'toor', 'iloveyou', 'monkey', 'dragon', 'sunshine',
+  'princess', 'football', 'baseball', 'superman', 'trustno1', 'abc12345',
+  'abcd1234', 'a1234567', '1q2w3e4r', '1q2w3e4r5t', 'zaq12wsx', 'qazwsx',
+  'michael', 'jennifer', 'jordan', 'harley', 'ranger', 'buster', 'soccer',
+  'master', 'shadow', 'michael1', 'jordan23', 'freedom', 'whatever', 'ncc1701',
+]);
+
+/**
+ * Политика пароля: минимальная длина уже проверена вызывающим модулем,
+ * здесь — блоклист и проверка, что пароль не содержит личные данные
+ * (имя пользователя или часть почты), чтобы защитить от угадывания.
+ * identity — строка с именем пользователя и почтой, через пробел.
+ */
+function checkPasswordStrength(password, identity = '') {
+  const lower = String(password || '').toLowerCase();
+  if (COMMON_PASSWORDS.has(lower)) {
+    return { ok: false, error: 'Пароль слишком распространён: выберите более сложный пароль' };
+  }
+  const parts = String(identity || '').toLowerCase().split(/\s+/).filter(Boolean);
+  for (const part of parts) {
+    const core = part.includes('@') ? part.split('@')[0] : part;
+    if (core.length >= 3 && lower.includes(core)) {
+      return { ok: false, error: 'Пароль не должен содержать имя пользователя или часть почты' };
+    }
+  }
+  return { ok: true };
+}
+
 class HttpError extends Error {
   constructor(status, message, code) {
     super(message);
@@ -208,11 +242,29 @@ function pruneHits() {
   }
 }
 
+/** Сбрасывает счётчик визитов для ключа (например, после удачного входа). */
+function clearHits(key) {
+  hits.delete(key);
+}
+
 function recordHit(key) {
   const list = hits.get(key) || [];
   list.push(Date.now());
   hits.set(key, list);
   pruneHits();
+}
+
+/**
+ * Защита от бот-запросов и CSRF-атак через метаданные запроса браузера:
+ * если браузер передаёт Sec-Fetch-Site, то cross-site POST отклоняется
+ * (кросс-страничный запрос не может быть легитимным для этих API).
+ * Заголовка может не быть (curl и тесты) — тогда проверка пропускается.
+ */
+function verifySecFetch(req) {
+  const site = req.headers['sec-fetch-site'];
+  if (typeof site === 'string' && site.trim().toLowerCase() === 'cross-site') {
+    throw new HttpError(403, 'Запрос отклонён');
+  }
 }
 
 function sameOrigin(req) {
@@ -242,6 +294,7 @@ function floodGuard(req) {
 /** Общая защита всех POST-эндпоинтов: метод, origin и заголовок против CSRF. */
 function guardPost(req, res) {
   res.deixLang = requestLang(req);
+  verifySecFetch(req);
   floodGuard(req);
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -414,6 +467,8 @@ module.exports = {
   MIN_PASSWORD,
   TURNSTILE_SITE_KEY,
   USERNAME_RE,
+  checkPasswordStrength,
+  clearHits,
   auth,
   captchaEnabled,
   clearSession,
@@ -431,6 +486,7 @@ module.exports = {
   rpc,
   sb,
   send,
+  verifySecFetch,
   setSession,
   storage,
   storageBytes,

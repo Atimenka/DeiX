@@ -156,6 +156,7 @@
               <label>Current password <input id="pw-current" type="password" autocomplete="current-password" required></label>
               <label>New password (8+ characters) <input id="pw-next" type="password" autocomplete="new-password" minlength="8" maxlength="72" required></label>
               <label>Repeat the new password <input id="pw-next2" type="password" autocomplete="new-password" minlength="8" maxlength="72" required></label>
+              <label id="pw-code-label" hidden><span id="pw-code-text">Code from your 2FA app</span> <input id="pw-code" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="······" aria-label="2FA code" required></label>
               <div><button class="btn primary" type="submit">Change password</button></div>
             </form>
             <div class="result" id="pw-result" hidden></div>

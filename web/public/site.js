@@ -36,6 +36,8 @@ async function postJson(url, body, extraHeaders) {
     const err = new Error((data && data.error) || tr('Ошибка сервера ({status})', { status: resp.status }));
     err.status = resp.status;
     err.code = data && data.code;
+    // Флаг эскалации капчи: сервер просит свежий Turnstile-вызов.
+    err.captcha_required = Boolean(data && data.captcha_required);
     throw err;
   }
   return data;

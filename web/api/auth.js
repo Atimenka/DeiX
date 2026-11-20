@@ -12,6 +12,8 @@ const {
   USERNAME_RE,
   auth,
   captchaEnabled,
+  checkPasswordStrength,
+  clearHits,
   clearSession,
   cookie,
   cookieValue,
@@ -34,6 +36,7 @@ const {
 const REGISTER_MAX = 5;
 const REGISTER_WINDOW_MS = 60 * 60 * 1000;
 const LOGIN_MAX_FAILS = 8;
+const LOGIN_ACCT_MAX = 10;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
 const ME_CACHE_TTL_MS = 20 * 1000;
@@ -105,9 +108,19 @@ async function register(req, res, body) {
   if (!EMAIL_RE.test(email)) throw new HttpError(400, 'Укажите корректную почту');
   validatePassword(password);
   if (password !== password2) throw new HttpError(400, 'Пароли не совпадают');
+  const strength = checkPasswordStrength(password, `${username} ${email}`);
+  if (!strength.ok) throw new HttpError(400, strength.error);
   await verifyCaptcha(body.captcha, ip);
   await checkEmailDomain(email);
   recordHit(`reg:${ip}`);
+
+  // Лимит по почте: защита от перебора регистраций по одному адресу
+  // (разные IP, один аккаунт — как при credential stuffing на регистрации).
+  const emailKey = `reg-email:${email}`;
+  if (overLimit(emailKey, REGISTER_MAX, REGISTER_WINDOW_MS)) {
+    throw new HttpError(429, 'Слишком много регистраций с этой почтой. Попробуйте позже.');
+  }
+  recordHit(emailKey);
 
   const taken = await sb(`profiles?username=ilike.${encodeURIComponent(username)}&select=id&limit=1`);
   if (Array.isArray(taken) && taken.length) throw new HttpError(409, 'Это имя пользователя уже занято');
@@ -202,12 +215,23 @@ async function login(req, res, body) {
   if (!identifier.includes('@')) {
     email = (await rpc('email_for_username', { p_username: identifier })) || '';
   }
+  // Лимит неудавшихся входов по аккаунту: защита от перебора пароля
+  // с разных IP (credential stuffing), когда IP-лимит не срабатывает.
+  const acctKey = `login-acct:${email}`;
+  if (email && overLimit(acctKey, LOGIN_ACCT_MAX, LOGIN_WINDOW_MS)) {
+    throw new HttpError(429, 'Слишком много неверных попыток входа для этого аккаунта. Подождите 15 минут.');
+  }
   const session = email ? await signIn(email, password) : null;
   if (!session) {
     recordHit(key);
+    if (email) recordHit(acctKey);
     await sleep(400);
-    throw new HttpError(401, 'Неверный логин или пароль');
+    // Эскалация: после неудачи требуем свежий каптча-вызов — бот не сможет
+    // повторить попытку с тем же токеном Turnstile (токены одноразовые).
+    return send(res, 401, { ok: false, error: 'Неверный логин или пароль', captcha_required: true });
   }
+  // Удачный вход сбрасывает счётчик неудач по аккаунту.
+  if (email) clearHits(acctKey);
   const profile = await sb(`profiles?id=eq.${session.user.id}&select=username,role,email_verified`);
   if (!profile[0]) throw new HttpError(403, 'Профиль аккаунта не найден');
   const full = await auth('user', { method: 'GET', token: session.access_token });
@@ -441,6 +465,11 @@ async function changePassword(req, res, body) {
   const next = String(body.next || '');
   validatePassword(next);
   if (next === current) throw new HttpError(400, 'Новый пароль совпадает с текущим');
+  const strength = checkPasswordStrength(next, `${user.username || ''} ${user.email || ''}`);
+  if (!strength.ok) throw new HttpError(400, strength.error);
+  // Смена пароля — критичное действие: при включённой 2FA требуем код
+  // из приложения, чтобы украденная сессия не могла сменить пароль.
+  if (verifiedTotp(user)) await requireTotpCode(user, body);
   if (!(await rpc('verify_user_password', { p_user_id: user.id, p_password: current }))) {
     await sleep(400);
     throw new HttpError(401, 'Текущий пароль указан неверно');
