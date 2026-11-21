@@ -411,10 +411,12 @@ pub fn restart_service(name: &str) -> bool {
 /// Можно вызывать вручную из CLI.
 pub fn run_monitor_tick() -> u32 {
     let dead = heartbeat::HEARTBEATS.lock().check_all();
+    log::debug(&format!("monitor tick: {} service(s) dead", dead.len()));
     let mut restarted = 0;
     for name in &dead {
         if restart_service(name) {
             restarted += 1;
+            log::debug(&format!("monitor tick: service {} restarted", name));
         }
     }
     restarted

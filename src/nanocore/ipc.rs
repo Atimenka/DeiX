@@ -98,6 +98,15 @@ impl Ring {
         self.count == 0
     }
 
+    /// Последнее сообщение в кольце БЕЗ извлечения (peek).
+    fn last(&self) -> Option<Message> {
+        if self.is_empty() {
+            return None;
+        }
+        let idx = (self.head + self.count - 1) % CAPACITY;
+        Some(self.buf[idx])
+    }
+
     fn drops(&self) -> u64 {
         self.drops
     }
@@ -136,6 +145,16 @@ impl Channel {
     /// Количество ждущих сообщений.
     pub fn pending(&self) -> usize {
         self.lock.lock().count
+    }
+
+    /// Последнее сообщение без извлечения (peek) — для отчётов.
+    pub fn last(&self) -> Option<Message> {
+        self.lock.lock().last()
+    }
+
+    /// Пуст ли канал.
+    pub fn is_empty(&self) -> bool {
+        self.lock.lock().is_empty()
     }
 
     /// Счётчик сброшенных из-за переполнения сообщений.
@@ -196,6 +215,26 @@ impl IpcBus {
         }
         0
     }
+
+    /// Последнее сообщение в канале без извлечения (peek).
+    pub fn last(&self, name: &str) -> Option<Message> {
+        for c in self.channels.iter().flatten() {
+            if c.name() == name {
+                return c.last();
+            }
+        }
+        None
+    }
+
+    /// Пуст ли канал.
+    pub fn is_empty(&self, name: &str) -> bool {
+        for c in self.channels.iter().flatten() {
+            if c.name() == name {
+                return c.is_empty();
+            }
+        }
+        true
+    }
 }
 
 /// Глобальная IPC-шина.
@@ -212,13 +251,21 @@ pub fn try_recv(name: &str) -> Option<Message> {
 }
 
 /// Количество ждущих сообщений в канале.
-#[allow(dead_code)] // API-поверхность для отчётов
 pub fn pending(name: &str) -> usize {
     IPC.lock().pending(name)
 }
 
+/// Последнее сообщение в канале без извлечения (peek).
+pub fn last(name: &str) -> Option<Message> {
+    IPC.lock().last(name)
+}
+
+/// Пуст ли канал.
+pub fn is_empty(name: &str) -> bool {
+    IPC.lock().is_empty(name)
+}
+
 /// Имена зарегистрированных каналов (для отчётов).
-#[allow(dead_code)] // API-поверхность для отчётов
 pub fn channel_names() -> Vec<String> {
     let bus = IPC.lock();
     bus.channels

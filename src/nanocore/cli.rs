@@ -9,7 +9,7 @@
 //! - `nc restart <name>` — перезапуск службы;
 //! - `nc stop` — остановка нано-кора.
 
-use crate::nanocore::{heartbeat, log, orchestrator};
+use crate::nanocore::{heartbeat, ipc, log, orchestrator};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -29,6 +29,7 @@ pub fn run(args: &str) {
         "tick" => cmd_tick(),
         "dag" => cmd_dag(),
         "log" => cmd_log(),
+        "ipc" => cmd_ipc(),
         "restart" => {
             let name = words.get(1).map(String::as_str).unwrap_or("");
             cmd_restart(name);
@@ -59,8 +60,8 @@ fn cmd_status() {
             String::from("idle")
         };
         crate::println!(
-            "  {:<14} spawn={:<28} {}",
-            job.manifest.name, job.manifest.spawn, status
+            "  {:<14} spawn={:<28} pid={:<6} {}",
+            job.manifest.name, job.manifest.spawn, job.pid, status
         );
     }
 
@@ -95,15 +96,47 @@ fn cmd_tick() {
 fn cmd_dag() {
     let orch = orchestrator::ORCHESTRATOR.lock();
     crate::println!("=== Nano-Core DAG ===");
-    let order = orch.dag.execution_order();
-    let mut wave = 0u32;
-    for stage in &order {
-        if stage.wave != wave {
-            crate::println!("-- wave {} --", wave);
-            wave = stage.wave;
-        }
+    if orch.dag.is_empty() {
+        crate::println!("(DAG пусто — службы ещё не зарегистрированы)");
+        crate::println!("=== end ===");
+        return;
+    }
+    for stage in orch.dag.stages() {
         let flag = if stage.ok { "OK" } else { "--" };
-        crate::println!("  [{}] {:<14} {}", flag, stage.name, stage.deps.join(", "));
+        let state = if stage.ok {
+            "done"
+        } else if stage.started_ms != 0 {
+            "running"
+        } else {
+            "pending"
+        };
+        crate::println!(
+            "  [{}] {:<14} wave={} deps={} state={}",
+            flag,
+            stage.name,
+            stage.wave,
+            stage.deps.join(", "),
+            state
+        );
+    }
+    crate::println!("=== end ===");
+}
+
+fn cmd_ipc() {
+    crate::println!("=== Nano-Core IPC channels ===");
+    let names = ipc::channel_names();
+    if names.is_empty() {
+        crate::println!("(каналов нет)");
+        crate::println!("=== end ===");
+        return;
+    }
+    for name in &names {
+        let pending = ipc::pending(name);
+        let empty = ipc::is_empty(name);
+        crate::println!("  {:<14} pending={} empty={}", name, pending, empty);
+        if let Some(msg) = ipc::last(name) {
+            crate::println!("    last @{}ms: {}", msg.at_ms, msg.as_str());
+        }
     }
     crate::println!("=== end ===");
 }
