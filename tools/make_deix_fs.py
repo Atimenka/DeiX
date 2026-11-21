@@ -546,6 +546,11 @@ def main():
     zero_start = SECTOR
     zero_end = KERNEL_IMAGE_INFO_LBA * SECTOR
     img[zero_start:zero_end] = bytes(zero_end - zero_start)
+    # Сброс маркера шифрования DEIXCRYP (src/crypto_storage.rs MARKER_LBA=4095):
+    # он лежит в служебной зоне между картой загрузки и /system, и без сброса
+    # заводской образ после включения шифрования считал бы «аккаунты есть»
+    # (has_any_users() проверяет маркер в первую очередь).
+    img[4095 * SECTOR:4096 * SECTOR] = bytes(SECTOR)
     located = init_all_partitions(img, boot_files)
     write_boot_map(img, located)
 
