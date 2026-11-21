@@ -89,13 +89,17 @@ def main():
     os.write(m, b'pass123\n'); time.sleep(1.0)
     os.write(m, b'pass123\n')
     ok &= wait([b'Welcome to DeiX CLI'], 60, 'CLI')
-    # install на slave
+    # install на slave. Wizard 3.0: диск -> размер /userdata -> user ->
+    # pass + confirm -> yes -> migrate [Y/n] (отказываемся — миграция не
+    # нужна для проверки целевого диска).
     os.write(m, b'install\n'); time.sleep(2)
     os.write(m, b'2\n'); time.sleep(1.5)
+    os.write(m, b'16\n'); time.sleep(1.2)
     os.write(m, b'inst_user\n'); time.sleep(1.2)
     os.write(m, b'inst_pass\n'); time.sleep(1.2)
     os.write(m, b'inst_pass\n'); time.sleep(1.2)
-    os.write(m, b'yes\n')
+    os.write(m, b'yes\n'); time.sleep(1.5)
+    os.write(m, b'n\n')
     DONE = 'INSTALL COMPLETE'
     ok &= wait([DONE], 180, 'install done')
     p.terminate(); p.wait(); os.close(m)
