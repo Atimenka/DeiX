@@ -72,6 +72,11 @@ def main():
                     return True
             time.sleep(0.05)
         print(f'  [FAIL] {desc}')
+        # Дамп tail serial-буфера — чтобы видеть, что реально вывело ядро.
+        tail = buf[-3000:].decode('utf-8', 'replace')
+        print(f'  [debug] serial tail ({len(tail)} chars):')
+        for l in tail.splitlines()[-40:]:
+            print('    | ' + l.strip())
         return False
 
     ok = True
