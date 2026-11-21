@@ -76,8 +76,12 @@ def main():
 
     ok = True
     ok &= wait([b'mini kernel booted'], 90, 'boot')
-    ok &= wait([b'No user accounts exist yet'], 60, 'first setup prompt')
+    # 3.0: graphic loginui (Bochs VBE активируется даже в headless QEMU).
+    # Режим настройки: поля USER -> PASS -> CONFIRM по serial.
+    ok &= wait(['[loginui] графический вход, создание учётки: true'], 60,
+               'first setup prompt')
     os.write(m, b'alice\n'); time.sleep(1.0)
+    os.write(m, b'pass123\n'); time.sleep(1.0)
     os.write(m, b'pass123\n')
     ok &= wait([b'Welcome to DeiX CLI'], 60, 'CLI')
     # install на slave
@@ -131,11 +135,13 @@ def main():
     buf = b''
     ok &= wait([b'mini kernel booted'], 90, 'boot from target')
     if ok:
-        wait([b'Login'], 30, 'login banner')
+        # 3.0: graphic loginui, режим входа (аккаунты есть): USER -> PASS.
+        wait(['[loginui] графический вход, создание учётки: false'], 30,
+             'login banner')
         time.sleep(0.8)
         os.write(m2, b'inst_user\n'); time.sleep(1.0)
         os.write(m2, b'inst_pass\n')
-        ok &= wait([b'Login successful', b'Invalid username or password'], 60, 'login')
+        ok &= wait([b'Welcome to DeiX CLI'], 60, 'login')
         ok &= wait([b'Welcome to DeiX CLI'], 60, 'CLI on target')
     p2.terminate(); p2.wait(); os.close(m2)
 
