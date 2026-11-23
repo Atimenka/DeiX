@@ -117,9 +117,16 @@ def snapshot(title):
     txt = buf.decode('utf-8', 'replace')
     lines = [l for l in txt.splitlines()
              if '[dbg]' in l or '[bcb]' in l or 'DX-' in l]
-    print(f'  -- {title} --')
+    print(f'  -- {title} (filtered) --')
     for l in lines[-15:]:
         print('   ' + l.strip(), flush=True)
+    # Полный serial-лог — видно, что печатал загрузчик/ядро до падения.
+    if os.path.exists(LOG_PATH):
+        full = open(LOG_PATH, encoding='utf-8', errors='replace').read()
+        flines = [l for l in full.splitlines() if l.strip()]
+        print(f'  -- {title} (full serial tail) --', flush=True)
+        for l in flines[-60:]:
+            print('   ' + l, flush=True)
 
 
 try:
