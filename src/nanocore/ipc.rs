@@ -179,10 +179,12 @@ impl IpcBus {
     /// Зарегистрировать или получить канал по имени.
     /// Возвращает None, если регистр исчерпан.
     pub fn channel(&mut self, name: &str) -> Option<&mut Channel> {
-        if let Some(existing) = self.channels.iter_mut().find(|c| {
+        // Ищем существующий канал по имени — чтение, бора не удерживаем
+        // до конца метода (позволяет второй посмертный поиск  свободного слота).
+        if let Some(idx) = self.channels.iter().position(|c| {
             c.as_ref().map(|ch| ch.name() == name).unwrap_or(false)
         }) {
-            return existing.as_mut();
+            return self.channels.get_mut(idx).and_then(|c| c.as_mut());
         }
         let slot = self.channels.iter_mut().find(|c| c.is_none())?;
         *slot = Some(Channel::new(name));
