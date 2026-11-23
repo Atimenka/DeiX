@@ -70,7 +70,7 @@ pub fn init() -> bool {
             let map_off = 2047usize * 512;
             let ram_map = unsafe {
                 core::slice::from_raw_parts(
-                    RAMDISK_BASE as *const u8 + map_off,
+                    (RAMDISK_BASE as *const u8).wrapping_add(map_off),
                     512,
                 )
             };
