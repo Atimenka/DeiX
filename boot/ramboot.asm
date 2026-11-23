@@ -10,8 +10,14 @@
 ;
 ; Поток загрузки:
 ;   MBR: карта -> 0x7000, stage2 -> 0x10000, ramboot -> 0x7E00, jmp 0x07E0:0
-;   ramboot: ceil(kernel_size/512) секторов по участкам карты (до 40 штук)
-;            порциями CHUNK_SECTORS -> буфер 0x20000 -> PM rep movsd -> 0x100000
+;   ramboot, ФАЗА 1: ceil(kernel_size/512) секторов по участкам карты
+;            (до 40 штук) порциями CHUNK_SECTORS -> буфер 0x20000 ->
+;            PM rep movsd -> 0x100000
+;   ramboot, ФАЗА 2: ВЕСЬ образ диска (RAMDISK_SECTORS = 40960 секторов
+;            подряд из LBA 0 boot-диска) тем же циклом int13h AH=42h
+;            -> буфер 0x20000 -> PM rep movsd -> 0x2000000 (RAM-диск).
+;            Ядро потом читает все разделы из памяти, если аппаратный
+;            ATA-диск не отвечает (USB/Ventoy) — см. ramdisk::init().
 ;            jmp STAGE2_ADDR
 ;
 ; Карта загрузки (DEIXKIMG v2, docs/BOOTMAP.md): размер ядра u32 @12,
@@ -25,6 +31,17 @@ STAGE2_ADDR equ 0x10000
 %endif
 KERNEL_DST    equ 0x100000        ; база ядра (linker_kernel.ld)
 MAX_KERNEL_SECTORS equ 4096       ; защита от испорченной карты (2 МиБ)
+
+; ---- RAM-ДИСК: весь образ диска (20 МиБ) ----
+; ramboot читает ЛЮБОЙ загрузочный диск (флешку/Ventoy/SATA) не только
+; ядро, но и ПОЛНЫЙ образ диска по LBA подряд из LBA 0 в 0x2000000. Это
+; то, что делает ISO-стаб (boot_sector_iso.asm): ядро потом читает все
+; разделы из памяти, без аппаратного ATA-контроллера (которого нет у
+; флешки). Для обычного диска (QEMU/SATA) ядро всё равно предпочтёт
+; ATA, если контроллер отвечает и LBA 0 совпадает с RAM-копией
+; (см. ramdisk::init) — образ в RAM там только страховка.
+RAMDISK_BASE    equ 0x2000000     ; RAM-диск: весь образ диска
+RAMDISK_SECTORS equ 40960         ; 20 МиБ — окно RAM-диска (build.sh)
 
 BOOTMAP       equ 0x7000          ; карта загрузки, её кладёт MBR
 KERNEL_EXTS   equ BOOTMAP + 192
@@ -119,7 +136,14 @@ start:
     jnc .read_ok
     ; Ошибка чтения: другой диск не пробуем (можно прочитать чужой носитель
     ; как ядро DeiX) — печатаем причину и останавливаемся.
+    ; Исключение — проход заполнения RAM-диска: если чтение образа с
+    ; диска потерялось, ядро пойдёт по ATA (контроллер отвечает) или
+    ; RAM-диск останется частично заполненным — хуже не будет.
+    cmp byte [fill_active], 0
+    jne .fill_err
     jmp disk_error
+.fill_err:
+    jmp .load_complete
 .read_ok:
     ; int13 (BIOS) может оставить DS/ES в другом состоянии — сбрасываем.
     xor ax, ax
@@ -189,13 +213,43 @@ bits 16
     add [cur_lba_lo], ax
     adc word [cur_lba_hi], 0
 
-    jmp .load_loop
+    cmp byte [fill_active], 0
+    je .load_loop
+    ; ФАЗА 2 (заполнение RAM-диска): total_left — общий счётчик,
+    ; истощаем его вместе со sectors_left; когда оба нули — всё готово.
+    sub [total_left], ax
+    test word [total_left], 0
+    jnz .load_loop
+    jmp .load_complete
+
 .load_done:
     cmp word [total_left], 0
-    je .kernel_loaded
+    je .load_complete
     cmp word [ext_cnt], 0
     jne .next_ext
     jmp map_fail
+.load_complete:
+    ; fill_active == 0: ядро загружено — запускаем заполнение RAM-диска.
+    ; fill_active == 1: RAM-диск заполнен — в long mode к stage2.
+    cmp byte [fill_active], 0
+    jne .kernel_loaded
+
+    ; ---- ФАЗА 2: весь образ диска (40960 сек) из LBA 0 в 0x2000000 ----
+    ; Тот же цикл int13h AH=42h + PM rep movsd, что и для ядра, но с
+    ; одним «условным участком»: LBA 0, RAMDISK_SECTORS секторов подряд.
+    ; Источник (буфер 0x20000) и получатель (0x2000000) не пересекаются —
+    ; копирование вперёд безопасно.
+    mov byte [fill_active], 1
+    mov ax, RAMDISK_SECTORS
+    mov [sectors_left], ax
+    mov [total_left], ax
+    xor ax, ax
+    mov [cur_lba_lo], ax
+    mov [cur_lba_hi], ax
+    mov word [ext_cnt], 0
+    mov dword [ram_dst_phys], RAMDISK_BASE
+    jmp .load_loop
+
 .kernel_loaded:
     cli
     lgdt [gdt_descriptor]
@@ -256,6 +310,7 @@ DATA16_SEG equ gdt_data16 - gdt_start  ; 0x20 data16
 
 ; ---------------- данные (DS=0, адреса 0x9000+off) ----------------
 boot_drive:    db 0
+fill_active:   db 0              ; 0 = читаем ядро, 1 = заполняем RAM-диск
 sectors_left:  dw 0
 cur_lba_lo:    dw 0
 cur_lba_hi:    dw 0

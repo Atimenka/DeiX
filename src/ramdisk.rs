@@ -9,9 +9,13 @@
 //! write_sectors обслуживаются из образа в RAM.
 //!
 //! RAM-диск активен, если по адресу RAMDISK_BASE лежит MBR с сигнатурой
-//! 0xAA55 в конце первого сектора. При обычной загрузке с SATA-диска
-//! (без ramboot) там нули/мусор — флаг не ставится, и ядро работает с
-//! диском как раньше (ATA PIO).
+//! 0xAA55 в конце первого сектора И аппаратный ATA-диск не является
+//! тем же образом: ramboot (boot/ramboot.asm) и ISO-стаб
+//! (boot/boot_sector_iso.asm) всегда кладут весь образ в 0x2000000, но
+//! при загрузке с диска (QEMU IDE/SATA) ядро сравнивает LBA 0 и карту
+//! загрузки (LBA 2047) ATA-диска с RAM-копией — при совпадении работает
+//! через ATA (данные сохраняются на диске), иначе (USB/Ventoy или
+//! чужой SATA-диск) — из памяти.
 //!
 //! Записи в RAM-диск живут только до перезагрузки (live-сессия) — это
 //! нормально для загрузки с флешки: пользовательские данные можно не
@@ -37,11 +41,47 @@ static ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::
 /// Инициализирует RAM-диск: проверяет сигнатуру MBR (0xAA55) в первом
 /// секторе образа. Вызывается рано в kernel_main, ДО любых обращений к
 /// диску (bootchain, ext2).
+///
+/// Активация происходит не только по сигнатуре: если аппаратный ATA-диск
+/// отвечает и его LBA 0 **точно совпадает** с RAM-копией — это загрузка с
+/// диска (QEMU IDE/SATA), и тогда лучше работать через ATA: данные
+/// сохраняются на диске, а не в оперативной памяти. Если ATA не отвечает
+/// (USB/Ventoy — контроллера к флешке нет) или содержит другую MBR (ноутбук
+/// со своим SATA-диском, загрузка с USB) — RAM-диск активируется, и все
+/// разделы читаются из памяти.
 pub fn init() -> bool {
     // Безопасно: прерывания ещё выключены или мы не работаем с памятью,
     // которая могла бы быть выдана аллокатором (резерв в mm/phys.rs).
     let mbr = unsafe { core::slice::from_raw_parts(RAMDISK_BASE as *const u8, 512) };
-    let ok = mbr[510] == 0x55 && mbr[511] == 0xAA;
+    let sig_ok = mbr[510] == 0x55 && mbr[511] == 0xAA;
+    let ok = if sig_ok {
+        // ATA-диск — тот же образ или нет? Сравниваем LBA 0 (MBR) и
+        // LBA 2047 (карта загрузки — содержит SHA-256 ядра): если оба
+        // сектора совпадают с RAM-копией, ATA-диск — это тот же образ,
+        // и тогда лучше работать через ATA (данные сохраняются на диске).
+        // Если ATA не отвечает (USB/Ventoy) или содержит другой образ
+        // (ноутбук со своим SATA-диском — другая версия/OS) — RAM-диск.
+        let mut ata_sec = [0u8; 512];
+        let ata_same = crate::ata::read_sectors_from(crate::ata::Drive::Master, 0, 1, &mut ata_sec)
+            .is_ok()
+            && ata_sec[..] == mbr[..];
+        let mut ata_map = [0u8; 512];
+        if ata_same {
+            let map_off = 2047usize * 512;
+            let ram_map = unsafe {
+                core::slice::from_raw_parts(
+                    RAMDISK_BASE as *const u8 + map_off,
+                    512,
+                )
+            };
+            ata_same = crate::ata::read_sectors_from(crate::ata::Drive::Master, 2047, 1, &mut ata_map)
+                .is_ok()
+                && ata_map[..] == ram_map[..];
+        }
+        !ata_same
+    } else {
+        false
+    };
     ACTIVE.store(ok, core::sync::atomic::Ordering::SeqCst);
     if ok {
         crate::println!(
@@ -51,6 +91,8 @@ pub fn init() -> bool {
             RAMDISK_BASE
         );
         crate::serial_println!("[ramdisk] active: {} sectors at 0x{:X}", RAMDISK_SECTORS, RAMDISK_BASE);
+    } else if sig_ok {
+        crate::serial_println!("[ramdisk] образ в памяти, но ATA-диск отвечает — работаем через ATA");
     } else {
         crate::serial_println!("[ramdisk] inactive (обычный диск)");
     }

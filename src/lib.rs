@@ -151,8 +151,11 @@ pub extern "C" fn kernel_main() -> ! {
     println!("Boot step 1/4: interrupts");
     interrupts::init();
 
-    // RAM-диск: при загрузке с USB/Ventoy загрузчик положил весь образ
-    // в 0x2000000. Теперь чтение защищено обработчиками исключений.
+    // RAM-диск: загрузчик (ramboot/ISO-стаб) положил весь образ в
+    // 0x2000000. Если аппаратный ATA-диск отвечает и содержит тот же
+    // образ — работаем через ATA (данные сохраняются); если нет
+    // (USB/Ventoy) — разделы читаются из памяти. Чтение защищено
+    // обработчиками исключений.
     println!("Boot step 2/4: ramdisk");
     crate::ramdisk::init();
 
@@ -185,7 +188,13 @@ pub extern "C" fn kernel_main() -> ! {
     mouse::init(800, 600);
     println!("PS/2 mouse: OK (handled via IRQ12)");
 
-    if ata::is_present() {
+    if crate::ramdisk::is_active() {
+        // Загрузка с USB/Ventoy: разделы читаются из RAM-диска, аппаратный
+        // ATA-контроллер к флешке отношения не имеет — инициализацию
+        // пропускаем (порты 0x1F0 либо не отвечают, либо ведут себя как
+        // чужой диск).
+        println!("ATA disk: not used (RAM-диск активен — загрузка с USB/Ventoy)");
+    } else if ata::is_present() {
         match ata::enable_multiple() {
             0 => crate::serial_println!("[ata] READ MULTIPLE недоступен — чтение по одному сектору"),
             n => crate::serial_println!("[ata] READ MULTIPLE включён: {} секторов за один DRQ", n),
