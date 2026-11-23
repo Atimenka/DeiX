@@ -62,7 +62,7 @@ pub fn init() -> bool {
         // Если ATA не отвечает (USB/Ventoy) или содержит другой образ
         // (ноутбук со своим SATA-диском — другая версия/OS) — RAM-диск.
         let mut ata_sec = [0u8; 512];
-        let ata_same = crate::ata::read_sectors_from(crate::ata::Drive::Master, 0, 1, &mut ata_sec)
+        let mut ata_same = crate::ata::read_sectors_from(crate::ata::Drive::Master, 0, 1, &mut ata_sec)
             .is_ok()
             && ata_sec[..] == mbr[..];
         let mut ata_map = [0u8; 512];
