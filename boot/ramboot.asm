@@ -327,10 +327,21 @@ setup_bios_framebuffer:
     cmp word [0x5014], 600
     jne .next
     cmp byte [0x5019], 32
+    je .depth_ok
+    cmp byte [0x5019], 24
     jne .next
+.depth_ok:
+    cmp byte [0x5019], 32
+    jne .pitch_format_ok
+    test word [0x5010], 3
+    jnz .next
+.pitch_format_ok:
     cmp byte [0x501b], 6
     jne .next
-    cmp word [0x5010], 3200
+    movzx ax, byte [0x5019]
+    shr ax, 3
+    imul ax, ax, 800
+    cmp [0x5010], ax
     jb .next
     cmp word [0x5010], 32768
     ja .next
@@ -352,6 +363,8 @@ setup_bios_framebuffer:
     jc .next
     mov ax, [0x5010]
     mov [0x6808], ax
+    mov al, [0x5019]
+    mov [0x680a], al
     mov bx, [vbe_mode]
     or bx, 0x4000
     mov ax, 0x4f02

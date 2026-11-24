@@ -320,7 +320,26 @@ impl Renderer {
         self.back_buffer[idx] = blend_px(color.0, self.back_buffer[idx], alpha as u32);
     }
 
-    /// Быстрый `memcpy` из RAM back buffer в MMIO Framebuffer только по списку повреждённых областей DamageList.
+    /// Copy one row of RGB pixels into the firmware scanout.
+    fn present_row(&self, row: usize, x0: usize, x1: usize) {
+        let start = row * self.fb.width as usize;
+        let src = &self.back_buffer[start + x0..start + x1];
+        unsafe {
+            if self.fb.bpp == 24 {
+                let dst = (self.fb.addr + row * self.fb.pitch + x0 * 3) as *mut u8;
+                for (i, pixel) in src.iter().enumerate() {
+                    // Direct-color VBE format validated by the loader: B, G, R.
+                    core::ptr::write_volatile(dst.add(i * 3), *pixel as u8);
+                    core::ptr::write_volatile(dst.add(i * 3 + 1), (*pixel >> 8) as u8);
+                    core::ptr::write_volatile(dst.add(i * 3 + 2), (*pixel >> 16) as u8);
+                }
+            } else {
+                let dst = (self.fb.addr + row * self.fb.pitch + x0 * 4) as *mut u32;
+                core::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len());
+            }
+        }
+    }
+
     pub fn present(&mut self) {
         if !self.damage.full_redraw && self.damage.count > 0 {
             for i in 0..self.damage.count {
@@ -329,34 +348,14 @@ impl Renderer {
                 let y1 = ((r.y + r.h as i32).min(self.fb.height as i32)).max(0) as usize;
                 let x0 = r.x.max(0) as usize;
                 let x1 = ((r.x + r.w as i32).min(self.fb.width as i32)).max(0) as usize;
-
-                if y0 >= y1 || x0 >= x1 {
-                    continue;
-                }
-
-                for row in y0..y1 {
-                    let row_offset = row * self.fb.width as usize;
-                    let src = &self.back_buffer[row_offset + x0..row_offset + x1];
-                    let dst = (self.fb.addr + row * self.fb.pitch + x0 * 4) as *mut u32;
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len());
-                    }
-                }
+                if y0 >= y1 || x0 >= x1 { continue; }
+                for row in y0..y1 { self.present_row(row, x0, x1); }
             }
-            self.damage.clear();
-            return;
-        }
-
-        // Полное копирование кадра при смене видеорежима или полном перерисовывании
-        for row in 0..self.fb.height as usize {
-            let row_offset = row * self.fb.width as usize;
-            let src = &self.back_buffer[row_offset..row_offset + self.fb.width as usize];
-            let dst = (self.fb.addr + row * self.fb.pitch) as *mut u32;
-            unsafe {
-                core::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len());
+        } else {
+            for row in 0..self.fb.height as usize {
+                self.present_row(row, 0, self.fb.width as usize);
             }
         }
-
         self.clear_damage();
     }
 
