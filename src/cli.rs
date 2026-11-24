@@ -1164,7 +1164,7 @@ fn cmd_gpu_info() {
         println!("{}", t!(en: "Multiple GPUs detected; acceleration and GPU switching are not supported.",
                           ru: "Обнаружено несколько GPU; ускорение и переключение GPU не поддерживаются."));
     }
-    if let Some(fb) = crate::vbe::get_framebuffer() {
+    if let Some(fb) = crate::vbe::bios_framebuffer().or_else(crate::vbe::get_framebuffer) {
         println_t!(
             en: "Framebuffer active: {}x{} @ {} bpp",
             ru: "Активный framebuffer: {}x{} @ {} bpp";

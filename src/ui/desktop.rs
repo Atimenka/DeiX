@@ -2016,7 +2016,9 @@ impl Desktop {
                     let reclaimed = (screen_w as usize) * (screen_h as usize) * 4 * 2;
                     let margin = 2 * 1024 * 1024;
                     let available = crate::allocator::stats().free + reclaimed;
-                    if needed + margin > available {
+                    if crate::vbe::using_bios_framebuffer() {
+                        *status = Some(String::from("BIOS framebuffer: resolution cannot be changed"));
+                    } else if needed + margin > available {
                         *status = Some(format!(
                             "Not enough kernel memory for {}x{} ({} MiB short)",
                             res_w,
@@ -2621,6 +2623,10 @@ impl Desktop {
                     self.close_start_menu();
                     self.control_center_open = false;
                     self.dirty = true;
+                } else if crate::vbe::using_bios_framebuffer() {
+                    // BIOS scanout cannot be restored to VGA text mode in long mode.
+                    // Keep the current desktop and its windows instead of restarting it.
+                    crate::serial_println!("[desktop] BIOS framebuffer: ignoring exit to text mode");
                 } else {
                     self.should_exit = true;
                 }

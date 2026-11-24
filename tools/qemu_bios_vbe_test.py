@@ -49,6 +49,9 @@ with tempfile.TemporaryDirectory() as tmp:
         for text in (b'alice\n', b'pass123\n', b'pass123\n'):
             os.write(master, text); time.sleep(.8)
         wait_for(b'[desktop] starting BIOS framebuffer desktop', 90)
+        wait_for(b'[desktop] first frame presented', 90)
+        sock.sendall(b'sendkey esc\n'); reply()
+        wait_for(b'[desktop] BIOS framebuffer: ignoring exit to text mode', 30)
         time.sleep(3)
         shot = Path(tmp) / 'desktop.ppm'
         sock.sendall(f'screendump {shot}\n'.encode()); reply()

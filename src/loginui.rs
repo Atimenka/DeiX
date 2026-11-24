@@ -748,6 +748,8 @@ pub fn run() -> Option<String> {
 /// невидимый текстовый буфер поверх графики — именно так выглядела
 /// жалоба «лого не пропадает».
 pub fn back_to_text() {
+    // A firmware-selected scanout cannot safely be restored via Bochs ports.
+    if crate::vbe::using_bios_framebuffer() { return; }
     crate::vbe::restore_text_mode();
     crate::renderer::reset_renderer();
 
