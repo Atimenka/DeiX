@@ -68,6 +68,11 @@ jobs:
           rustc --edition=2021 --test tools/usb2_layout_tests.rs -o /tmp/deix-usb2-tests
           /tmp/deix-usb2-tests
 
+      - name: PS/2 raw scan-set 2 tests
+        run: |
+          rustc --edition=2021 --test src/ps2_set2.rs -o /tmp/deix-ps2-set2-tests
+          /tmp/deix-ps2-set2-tests
+
       # ---------- 4. Сборка ----------
       - name: Run build.sh
         run: |

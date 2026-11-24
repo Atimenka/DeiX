@@ -221,11 +221,11 @@ pub struct MouseSnapshot {
 }
 
 /// Apply a relative HID boot-mouse report (USB Y increases downwards).
-pub fn usb_report(dx: i8, dy: i8, buttons: u8) {
+pub fn usb_report(dx: i32, dy: i32, buttons: u32) {
     without_interrupts(|| {
         let mut state = STATE.lock();
-        state.x = (state.x + dx as i32).clamp(0, state.screen_width.saturating_sub(1).max(0));
-        state.y = (state.y + dy as i32).clamp(0, state.screen_height.saturating_sub(1).max(0));
+        state.x = state.x.saturating_add(dx).clamp(0, state.screen_width.saturating_sub(1).max(0));
+        state.y = state.y.saturating_add(dy).clamp(0, state.screen_height.saturating_sub(1).max(0));
         state.left_button = buttons & 1 != 0;
     });
 }

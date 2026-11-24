@@ -42,6 +42,7 @@ mod install;
 mod interrupts;
 mod jpeg;
 mod keyboard;
+mod ps2_set2;
 mod lang;
 mod linux;
 mod loginui;

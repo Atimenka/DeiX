@@ -6,6 +6,7 @@
 //! These data structures alone do not run a USB host controller.
 
 pub mod descriptor;
+pub mod hid;
 pub mod ehci;
 #[cfg(not(test))]
 pub mod hid_host;

@@ -11,6 +11,8 @@ static INIT_ACK: AtomicBool = AtomicBool::new(false);
 static INPUT_BYTES: AtomicU32 = AtomicU32::new(0);
 static AUX_BYTES: AtomicU32 = AtomicU32::new(0);
 static SET2_ACK: AtomicBool = AtomicBool::new(false);
+static RAW_SET2: AtomicBool = AtomicBool::new(false);
+static SET2_DECODER: SpinLock<crate::ps2_set2::Decoder> = SpinLock::new(crate::ps2_set2::Decoder::new());
 pub fn diagnostic_status() -> (bool, u32, u32, bool) {
     (INIT_ACK.load(Ordering::Relaxed), INPUT_BYTES.load(Ordering::Relaxed),
      AUX_BYTES.load(Ordering::Relaxed), SET2_ACK.load(Ordering::Relaxed))
@@ -198,12 +200,20 @@ pub fn init() -> bool {
         unsafe { crate::port::outb(0x64, 0x60); }
         if !wait_input_empty() { return false; }
         unsafe { crate::port::outb(0x60, (config | 0x41) & !0x10); }
+        // Some real i8042 implementations do not implement translation.
+        // Read the config back rather than assuming the write took effect.
+        let readback = if wait_input_empty() {
+            unsafe { crate::port::outb(0x64, 0x20); }
+            read_controller_response()
+        } else { None };
         // Make the assumed scan set explicit. Always re-enable scanning even
         // when changing the set is unsupported or an ACK is missing.
         let disabled = keyboard_command(0xf5);
         let set2 = if disabled { keyboard_command(0xf0) && keyboard_command(0x02) } else { false };
         let enabled = keyboard_command(0xf4);
         SET2_ACK.store(set2, Ordering::Relaxed);
+        RAW_SET2.store(set2 && readback.is_some_and(|v| v != 0xff && v & 0x40 == 0), Ordering::Relaxed);
+        if RAW_SET2.load(Ordering::Relaxed) { crate::serial_println!("[keyboard] using raw set-2 decoder"); }
         if !set2 { crate::serial_println!("[keyboard] scan set 2 not confirmed"); }
         enabled
     });
@@ -226,7 +236,15 @@ pub fn poll_controller() {
     }
     else {
         INPUT_BYTES.fetch_add(1, Ordering::Relaxed);
-        on_scancode(byte);
+        if RAW_SET2.load(Ordering::Relaxed) {
+            let translated = SET2_DECODER.lock().feed(byte);
+            if let Some((extended, code)) = translated {
+                if extended { on_scancode(0xe0); }
+                on_scancode(code);
+            }
+        } else {
+            on_scancode(byte);
+        }
     }
 }
 
