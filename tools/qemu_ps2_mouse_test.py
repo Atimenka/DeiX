@@ -50,7 +50,8 @@ with tempfile.TemporaryDirectory() as tmp:
         after = Path(tmp) / 'after.ppm'
         sock.sendall(f'screendump {before}\n'.encode()); reply()
         sock.sendall(b'mouse_move 40 30\n'); reply()
-        time.sleep(2)
+        wait_for(b'[mouse] PS/2 movement received', 30)
+        time.sleep(1)
         sock.sendall(f'screendump {after}\n'.encode()); reply()
         if before.read_bytes() == after.read_bytes():
             raise RuntimeError('mouse report did not change the visible screen')

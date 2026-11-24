@@ -23,6 +23,7 @@ const PS2_COMMAND_PORT: u16 = 0x64;
 
 /// true, если бэкдор VMware/QEMU обнаружен и абсолютный режим включён.
 static ABSOLUTE_MODE: AtomicBool = AtomicBool::new(false);
+static PS2_MOVEMENT_LOGGED: AtomicBool = AtomicBool::new(false);
 
 struct MouseState {
     x: i32,
@@ -166,6 +167,10 @@ pub fn on_data_byte(byte: u8) {
         }
         if flags & 0x20 != 0 {
             dy -= 256;
+        }
+
+        if (dx != 0 || dy != 0) && !PS2_MOVEMENT_LOGGED.swap(true, Ordering::Relaxed) {
+            crate::serial_println!("[mouse] PS/2 movement received");
         }
 
         // Биты 0x02 (правая) и 0x04 (средняя) не сохраняются:
