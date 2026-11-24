@@ -133,6 +133,66 @@ const fn build_ascii_table_shift() -> [u8; 128] {
     table
 }
 
+// i8042 can be left disabled or in a non-translated scan set by firmware.
+// Bound every wait: machines without a PS/2 controller must still boot.
+fn wait_input_empty() -> bool {
+    for _ in 0..100_000 {
+        let status = unsafe { crate::port::inb(0x64) };
+        if status == 0xff { return false; }
+        if status & 2 == 0 { return true; }
+        core::hint::spin_loop();
+    }
+    false
+}
+
+fn read_controller_response() -> Option<u8> {
+    for _ in 0..100_000 {
+        let status = unsafe { crate::port::inb(0x64) };
+        if status == 0xff { return None; }
+        if status & 1 != 0 {
+            let byte = unsafe { crate::port::inb(0x60) };
+            if status & 0x20 != 0 { crate::mouse::on_data_byte(byte); continue; }
+            return Some(byte);
+        }
+        core::hint::spin_loop();
+    }
+    None
+}
+
+/// Enable the first PS/2 port, IRQ1, and set-1 translation. Do not reset the
+/// controller or touch firmware/SATA settings; preserve the mouse config.
+pub fn init() -> bool {
+    let ok = without_interrupts(|| {
+        if !wait_input_empty() { return false; }
+        unsafe { crate::port::outb(0x64, 0xae); }
+        if !wait_input_empty() { return false; }
+        unsafe { crate::port::outb(0x64, 0x20); }
+        let Some(config) = read_controller_response() else { return false; };
+        if !wait_input_empty() { return false; }
+        unsafe { crate::port::outb(0x64, 0x60); }
+        if !wait_input_empty() { return false; }
+        unsafe { crate::port::outb(0x60, (config | 0x41) & !0x10); }
+        if !wait_input_empty() { return false; }
+        // Enable keyboard scanning if firmware had disabled it.
+        unsafe { crate::port::outb(0x60, 0xf4); }
+        read_controller_response() == Some(0xfa)
+    });
+    crate::serial_println!("[keyboard] i8042 init {} (IRQ + polling)", if ok { "OK" } else { "unconfirmed" });
+    ok
+}
+
+/// Drain one pending byte using the status AUX bit rather than assuming the
+/// IRQ line identifies its source. Used both by IRQ1/IRQ12 and as a fallback
+/// on machines whose firmware does not deliver an IRQ for every key.
+pub fn poll_controller() {
+    let status = unsafe { crate::port::inb(0x64) };
+    if status == 0xff || status & 1 == 0 { return; }
+    let byte = unsafe { crate::port::inb(0x60) };
+    if status & 0xc0 != 0 { return; } // parity or timeout error
+    if status & 0x20 != 0 { crate::mouse::on_data_byte(byte); }
+    else { on_scancode(byte); }
+}
+
 pub fn on_scancode(scancode: u8) {
     if scancode == EXTENDED_PREFIX_BYTE {
         EXTENDED_PREFIX.store(true, Ordering::Relaxed);
@@ -186,7 +246,10 @@ pub fn on_scancode(scancode: u8) {
 }
 
 pub fn try_read_char() -> Option<u8> {
-    without_interrupts(|| QUEUE.lock().pop())
+    without_interrupts(|| {
+        poll_controller();
+        QUEUE.lock().pop()
+    })
 }
 
 pub fn try_read_escape() -> bool {

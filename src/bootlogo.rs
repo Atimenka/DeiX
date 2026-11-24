@@ -217,6 +217,60 @@ fn compute_layout(screen_w: u32, screen_h: u32, logo_w: u32, logo_h: u32) -> (i3
     (scale, ox, oy, oy + sh)
 }
 
+/// Text-mode fallback using the actual DXLG artwork. Sample the RLE logo
+/// into VGA character cells; real laptops need no Bochs framebuffer driver.
+pub fn show_early_text() {
+    let Some(logo) = parse(LOGO) else { return; };
+    if logo.w == 0 || logo.h == 0 { return; }
+    const COLS: u32 = 32;
+    const ROWS: u32 = 12;
+    const VGA_RGB: [(i32, i32, i32); 16] = [
+        (0,0,0), (0,0,170), (0,170,0), (0,170,170),
+        (170,0,0), (170,0,170), (170,85,0), (170,170,170),
+        (85,85,85), (85,85,255), (85,255,85), (85,255,255),
+        (255,85,85), (255,85,255), (255,255,85), (255,255,255),
+    ];
+    let mut pos = 0u32;
+    let mut i = 0usize;
+    while i + 1 < logo.rle.len() && pos < logo.w.saturating_mul(logo.h) {
+        let count = logo.rle[i] as u32;
+        let index = logo.rle[i + 1] as usize;
+        i += 2;
+        if index >= logo.ncolors { pos = pos.saturating_add(count); continue; }
+        let base = index * 3;
+        let (red, green, blue) = (logo.palette[base] as i32, logo.palette[base+1] as i32, logo.palette[base+2] as i32);
+        let mut color = 0usize;
+        let mut best = i32::MAX;
+        for (n, &(r, g, b)) in VGA_RGB.iter().enumerate() {
+            let diff = (red-r)*(red-r) + (green-g)*(green-g) + (blue-b)*(blue-b);
+            if diff < best { best = diff; color = n; }
+        }
+        for _ in 0..count {
+            if pos >= logo.w.saturating_mul(logo.h) { break; }
+            let x = pos % logo.w;
+            let y = pos / logo.w;
+            let cx = x * COLS / logo.w;
+            let cy = y * ROWS / logo.h;
+            // One representative pixel per text cell, sampled at its centre.
+            if cx < COLS && cy < ROWS && x == ((2*cx+1)*logo.w)/(2*COLS) && y == ((2*cy+1)*logo.h)/(2*ROWS) {
+                let cell = ((3 + cy) * 80 + (80-COLS)/2 + cx) as usize;
+                let value = if index == 0 { 0x0720u16 } else { ((color as u16) << 8) | 0xdb };
+                unsafe { (0xb8000 as *mut u16).add(cell).write_volatile(value); }
+            }
+            pos += 1;
+        }
+    }
+    fn line(row: usize, text: &str, color: u8) {
+        let x = (80usize.saturating_sub(text.len())) / 2;
+        for (i, b) in text.bytes().take(80).enumerate() {
+            unsafe { (0xb8000 as *mut u16).add(row * 80 + x + i).write_volatile(((color as u16) << 8) | b as u16); }
+        }
+    }
+    line(17, "D e i X   O S", 0x0b);
+    line(19, "Starting system...", 0x07);
+    crate::serial_println!("[bootlogo] VGA text artwork active");
+}
+
 /// Показывает загрузочный экран: лого, название и строка состояния.
 ///
 /// Если графики нет (не удалось включить framebuffer) — молча выходит,

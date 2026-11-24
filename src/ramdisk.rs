@@ -96,6 +96,7 @@ pub fn init() -> bool {
         !ata_same
     } else {
         // Не переключаться молча на чужой физический диск при сбое копии.
+        crate::vgaglobal::set_boot_quiet(false);
         crate::println!("RAMBOOT ERROR: RAM disk invalid; boot stopped to protect disks.");
         crate::serial_println!("[ramdisk] invalid image; refusing ATA fallback");
         loop { unsafe { core::arch::asm!("cli", "hlt") } }

@@ -130,6 +130,8 @@ pub extern "C" fn kernel_main() -> ! {
     crate::serial_println!("[deix] B: font done");
 
     vgaglobal::with_writer(|w| w.clear_screen());
+    bootlogo::show_early_text();
+    vgaglobal::set_boot_quiet(true);
     crate::serial_println!("[deix] C: clear done");
 
     println!("{} - mini kernel booted successfully!", OS_RELEASE);
@@ -185,10 +187,12 @@ pub extern "C" fn kernel_main() -> ! {
     diag::init();
     bootprof::mark("diag ring ready");
 
-    println!("PS/2 keyboard: OK (handled via IRQ1)");
-
-    mouse::init(800, 600);
-    println!("PS/2 mouse: OK (handled via IRQ12)");
+    // Mouse/controller commands and their ACKs share port 0x60 with IRQs.
+    // Prevent an IRQ handler from stealing a response during configuration.
+    sync::without_interrupts(|| mouse::init(800, 600));
+    let keyboard_ok = keyboard::init();
+    println!("PS/2 keyboard: {} (IRQ1 + polling)", if keyboard_ok { "initialized" } else { "unconfirmed" });
+    println!("PS/2 mouse: initialization attempted");
 
     if crate::ramdisk::is_active() {
         // Загрузка с USB/Ventoy: разделы читаются из RAM-диска, аппаратный
@@ -348,6 +352,10 @@ pub extern "C" fn kernel_main() -> ! {
     // солёным SHA-256 хэшем, хранящимся на ext2 — см. auth.rs). Реальный
     // пароль нигде не сохраняется на диске в открытом виде.
     // Графический вход сменяет лого (рисуют в один framebuffer).
+    vgaglobal::set_boot_quiet(false);
+    if !renderer::has_active_framebuffer() {
+        vgaglobal::with_writer(|w| w.clear_screen());
+    }
     let username = match loginui::run() {
         Some(name) => {
             // ОБЯЗАТЕЛЬНО возвращаем текстовый режим: иначе графика

@@ -342,14 +342,12 @@ extern "x86-interrupt" fn page_fault_handler(frame: InterruptStackFrame, error_c
 // ---------------- обработчики аппаратных прерываний ----------------
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_frame: InterruptStackFrame) {
-    let scancode = unsafe { inb(0x60) };
-    keyboard::on_scancode(scancode);
+    keyboard::poll_controller();
     send_eoi(1);
 }
 
 extern "x86-interrupt" fn mouse_interrupt_handler(_frame: InterruptStackFrame) {
-    let byte = unsafe { inb(0x60) };
-    crate::mouse::on_data_byte(byte);
+    keyboard::poll_controller();
     send_eoi(12);
 }
 

@@ -13,6 +13,11 @@ use crate::spinlock::SpinLock;
 use crate::sync::without_interrupts;
 use crate::vga::{Color, Writer};
 use alloc::string::String;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+static BOOT_QUIET: AtomicBool = AtomicBool::new(false);
+
+pub fn set_boot_quiet(quiet: bool) { BOOT_QUIET.store(quiet, Ordering::Relaxed); }
 
 pub static WRITER: SpinLock<Writer> = SpinLock::new(Writer::new(Color::LightGreen, Color::Black));
 
@@ -49,7 +54,9 @@ pub fn _print(args: core::fmt::Arguments) {
             let _ = buf.write_fmt(args);
         } else {
             drop(capture);
-            WRITER.lock().write_fmt(args).unwrap();
+            if !BOOT_QUIET.load(Ordering::Relaxed) {
+                WRITER.lock().write_fmt(args).unwrap();
+            }
         }
     });
 }

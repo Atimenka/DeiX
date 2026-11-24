@@ -413,6 +413,7 @@ pub fn rust_panic(info: &core::panic::PanicInfo) -> ! {
 ///
 /// Не возвращает управление.
 pub fn kernel_panic(code: ErrorCode, message: &str, ctx: &PanicContext) -> ! {
+    crate::vgaglobal::set_boot_quiet(false);
     // Прерывания больше недопустимы: любое прерывание поверх паники
     // перезапишет состояние, которое мы собираемся сохранить.
     unsafe { core::arch::asm!("cli") };

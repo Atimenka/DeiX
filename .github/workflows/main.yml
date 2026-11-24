@@ -172,6 +172,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: QEMU text boot artwork and PS/2 keyboard
+        timeout-minutes: 5
+        run: DEIX_USB_IMAGE=/tmp/deix-usb-factory.img python3 tools/qemu_keyboard_text_test.py
+
+      - name: Upload text keyboard test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-keyboard-text-log
+          path: /tmp/qemu_keyboard_text.log
+          if-no-files-found: ignore
+          retention-days: 7
+
       # ---------- 8. Регрессия: установка на второй диск ----------
       - name: QEMU install test - install to slave disk and boot from it
         timeout-minutes: 15
