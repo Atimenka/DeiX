@@ -54,11 +54,16 @@ with tempfile.TemporaryDirectory() as tmp:
         if usb_boot:
             wait_for('RAM-диск активен'.encode(), 90)
         wait_for(b'[usb] boot mouse', 90)
+        before = Path(tmp) / 'before.ppm'
+        after = Path(tmp) / 'after.ppm'
+        sock.sendall(f'screendump {before}\n'.encode()); reply()
         sock.sendall(b'mouse_move 40 30\n'); reply()
         wait_for(b'[usb] mouse report applied', 30)
+        time.sleep(1)
+        sock.sendall(f'screendump {after}\n'.encode()); reply()
+        if before.read_bytes() == after.read_bytes():
+            raise RuntimeError('mouse report did not change the visible screen')
         if b'KERNEL PANIC' in serial: raise RuntimeError('kernel panic')
-        if usb_boot and hashlib.sha256(disk.read_bytes()).digest() != initial_hash:
-            raise RuntimeError('USB boot image was modified')
         print('PASS: EHCI USB mouse reports reach the UI', flush=True)
     except Exception as exc:
         print('FAIL:', exc, '\nSerial tail:', serial[-8000:].decode('utf-8','replace'), flush=True)
@@ -71,3 +76,5 @@ with tempfile.TemporaryDirectory() as tmp:
             proc.kill(); _, err = proc.communicate()
         os.close(master)
         if err: print('QEMU stderr:', err.decode('utf-8','replace')[-2000:])
+        if usb_boot and hashlib.sha256(disk.read_bytes()).digest() != initial_hash:
+            raise RuntimeError('USB boot image was modified')
