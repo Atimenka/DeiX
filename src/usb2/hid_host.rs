@@ -7,6 +7,9 @@ impl HidFunction {
     pub fn report(&mut self, data: &[u8]) -> Result<(), ()> {
         let r = parse_boot_mouse_report(data).ok_or(())?;
         crate::mouse::usb_report(r.dx, r.dy, r.buttons);
+        if r.dx != 0 || r.dy != 0 || r.buttons != 0 {
+            crate::serial_println!("[usb] mouse report applied");
+        }
         Ok(())
     }
 }

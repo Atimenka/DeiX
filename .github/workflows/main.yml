@@ -208,6 +208,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: QEMU EHCI USB mouse
+        timeout-minutes: 5
+        run: DEIX_USB_IMAGE=/tmp/deix-usb-factory.img python3 tools/qemu_ehci_mouse_test.py
+
+      - name: Upload EHCI mouse log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-ehci-mouse-log
+          path: /tmp/qemu_ehci_mouse.log
+          if-no-files-found: ignore
+          retention-days: 7
+
       # ---------- 8. Регрессия: установка на второй диск ----------
       - name: QEMU install test - install to slave disk and boot from it
         timeout-minutes: 15
