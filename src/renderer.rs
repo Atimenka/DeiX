@@ -325,7 +325,15 @@ impl Renderer {
         let start = row * self.fb.width as usize;
         let src = &self.back_buffer[start + x0..start + x1];
         unsafe {
-            if self.fb.bpp == 24 {
+            if self.fb.bpp == 16 {
+                let dst = (self.fb.addr + row * self.fb.pitch + x0 * 2) as *mut u8;
+                for (i, pixel) in src.iter().enumerate() {
+                    let rgb565 = (((pixel >> 19) & 0x1f) << 11)
+                        | (((pixel >> 10) & 0x3f) << 5) | ((pixel >> 3) & 0x1f);
+                    core::ptr::write_volatile(dst.add(i * 2), rgb565 as u8);
+                    core::ptr::write_volatile(dst.add(i * 2 + 1), (rgb565 >> 8) as u8);
+                }
+            } else if self.fb.bpp == 24 {
                 let dst = (self.fb.addr + row * self.fb.pitch + x0 * 3) as *mut u8;
                 for (i, pixel) in src.iter().enumerate() {
                     // Direct-color VBE format validated by the loader: B, G, R.
@@ -999,7 +1007,7 @@ pub fn ensure_framebuffer() {
     if let Some(fb) = crate::vbe::bios_framebuffer() {
         crate::mouse::set_screen_size(fb.width, fb.height);
         set_active_framebuffer(fb);
-        crate::serial_println!("[renderer] BIOS VBE framebuffer 800x600 active");
+        crate::serial_println!("[renderer] BIOS VBE framebuffer 800x600 active ({} bpp)", fb.bpp);
         return;
     }
     if let Some(info) = crate::gpu::detect() {

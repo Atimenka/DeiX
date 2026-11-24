@@ -159,6 +159,22 @@ fn read_controller_response() -> Option<u8> {
     None
 }
 
+// Send keyboard commands with bounded RESEND handling. The keyboard must
+// emit set 2 when controller translation is enabled; firmware may leave a
+// different scan set selected.
+fn keyboard_command(byte: u8) -> bool {
+    for _ in 0..3 {
+        if !wait_input_empty() { return false; }
+        unsafe { crate::port::outb(0x60, byte); }
+        match read_controller_response() {
+            Some(0xfa) => return true,
+            Some(0xfe) => continue,
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// Enable the first PS/2 port, IRQ1, and set-1 translation. Do not reset the
 /// controller or touch firmware/SATA settings; preserve the mouse config.
 pub fn init() -> bool {
@@ -172,10 +188,13 @@ pub fn init() -> bool {
         unsafe { crate::port::outb(0x64, 0x60); }
         if !wait_input_empty() { return false; }
         unsafe { crate::port::outb(0x60, (config | 0x41) & !0x10); }
-        if !wait_input_empty() { return false; }
-        // Enable keyboard scanning if firmware had disabled it.
-        unsafe { crate::port::outb(0x60, 0xf4); }
-        read_controller_response() == Some(0xfa)
+        // Make the assumed scan set explicit. Always re-enable scanning even
+        // when changing the set is unsupported or an ACK is missing.
+        let disabled = keyboard_command(0xf5);
+        let set2 = if disabled { keyboard_command(0xf0) && keyboard_command(0x02) } else { false };
+        let enabled = keyboard_command(0xf4);
+        if !set2 { crate::serial_println!("[keyboard] scan set 2 not confirmed"); }
+        enabled
     });
     crate::serial_println!("[keyboard] i8042 init {} (IRQ + polling)", if ok { "OK" } else { "unconfirmed" });
     ok

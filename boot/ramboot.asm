@@ -258,7 +258,7 @@ bits 16
     jmp CODE_SEG:pm_go
 
 ; VBE handoff at 0x6800 (outside bootmap / transfer buffers).
-; Only accept 32-bit 800x600 packed RGB with linear framebuffer. On any
+; Accept 16-bit RGB565 or 24/32-bit RGB at 800x600 with linear framebuffer. On any
 ; failure leave text mode untouched. Do not touch Bochs DISPI path.
 setup_bios_framebuffer:
     xor ax, ax
@@ -329,6 +329,8 @@ setup_bios_framebuffer:
     cmp byte [0x5019], 32
     je .depth_ok
     cmp byte [0x5019], 24
+    je .depth_ok
+    cmp byte [0x5019], 16
     jne .next
 .depth_ok:
     cmp byte [0x5019], 32
@@ -345,12 +347,23 @@ setup_bios_framebuffer:
     jb .next
     cmp word [0x5010], 32768
     ja .next
+    cmp byte [0x5019], 16
+    je .check_565
     cmp word [0x501f], 0x1008  ; red: 8 bits at bit 16
     jne .next
-    cmp word [0x5021], 0x0808  ; green: 8 bits at bit 8
+    cmp word [0x5021], 0x0808
     jne .next
-    cmp word [0x5023], 0x0008  ; blue: 8 bits at bit 0
+    cmp word [0x5023], 0x0008
     jne .next
+    jmp .masks_ok
+.check_565:
+    cmp word [0x501f], 0x0b05  ; RGB 565
+    jne .next
+    cmp word [0x5021], 0x0506
+    jne .next
+    cmp word [0x5023], 0x0005
+    jne .next
+.masks_ok:
     mov eax, [0x5028]
     cmp eax, 0x40000000       ; PCI aperture, not RAM or kernel image
     jb .next
