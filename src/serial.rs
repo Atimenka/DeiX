@@ -73,15 +73,19 @@ impl fmt::Write for SerialWriter {
 #[macro_export]
 macro_rules! serial_print {
     ($($arg:tt)*) => {{
-        use core::fmt::Write;
-        let _ = write!($crate::serial::SerialWriter, $($arg)*);
+        $crate::sync::without_interrupts(|| {
+            use core::fmt::Write;
+            let _ = write!($crate::serial::SerialWriter, $($arg)*);
+        });
     }};
 }
 
 #[macro_export]
 macro_rules! serial_println {
     ($($arg:tt)*) => {{
-        use core::fmt::Write;
-        let _ = writeln!($crate::serial::SerialWriter, $($arg)*);
+        $crate::sync::without_interrupts(|| {
+            use core::fmt::Write;
+            let _ = writeln!($crate::serial::SerialWriter, $($arg)*);
+        });
     }};
 }
