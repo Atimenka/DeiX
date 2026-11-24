@@ -53,6 +53,7 @@ mod nanocore;
 mod mm;
 mod module;
 mod mouse;
+mod usb_hid_mouse;
 mod microcode;
 mod net;
 mod nouveau;

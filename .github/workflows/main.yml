@@ -58,6 +58,11 @@ jobs:
           workspaces: "."
           cache-on-failure: true
 
+      - name: USB HID boot mouse report parser tests
+        run: |
+          rustc --edition=2021 --test src/usb_hid_mouse.rs -o /tmp/deix-usb-hid-test
+          /tmp/deix-usb-hid-test
+
       # ---------- 4. Сборка ----------
       - name: Run build.sh
         run: |
