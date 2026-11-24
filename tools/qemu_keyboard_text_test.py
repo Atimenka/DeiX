@@ -53,7 +53,7 @@ with tempfile.TemporaryDirectory() as tmp:
             raise RuntimeError('missing marker: ' + repr(needle))
         def type_keys(text):
             for c in text:
-                name = 'ret' if c == '\n' else c
+                name = 'ret' if c == '\n' else ('spc' if c == ' ' else c)
                 sock.sendall(f'sendkey {name}\n'.encode())
                 monitor_reply()
                 time.sleep(0.12)
