@@ -236,7 +236,7 @@ cp "$BUILD/boot_sector.bin" "$DISK_IMG"
 
 # Дополняем образ нулями до размера, кратного 512, а затем до большего из:
 #   - конца последнего раздела (/userdata: LBA 36864 + 32768 = 69632 сект);
-#   - окна RAM-диска ISO-стаба (boot_sector_iso читает 40960 сект = 20 МиБ).
+#   - окна RAM-диска ISO-стаба (boot_sector_iso читает 69632 сект = 34 МиБ).
 python3 - "$DISK_IMG" <<'PYEOF'
 import sys, os
 path = sys.argv[1]
@@ -247,7 +247,7 @@ if pad:
         f.write(b"\x00" * pad)
 
 PARTITIONS_END = 36864 + 32768  # сверяется tools/check_partition_map.py
-RAMDISK_WINDOW = 40960          # окно RAM-диска boot_sector_iso.asm
+RAMDISK_WINDOW = 69632          # окно RAM-диска boot_sector_iso.asm
 min_size = max(PARTITIONS_END, RAMDISK_WINDOW) * 512
 size = os.path.getsize(path)
 if size < min_size:
@@ -266,17 +266,17 @@ if [ -f "$UPDATE_KEY" ] && [ -z "${DEIX_SKIP_PACK:-}" ]; then
         --version "$DEIX_VERSION" --build "$DEIX_BUILD_ID" --out-dir "$BUILD/update"
 fi
 
-echo "==> [8/8] Компилируем ISO-загрузчик (RAM-диск 20 МиБ)"
+echo "==> [8/8] Компилируем ISO-загрузчик (RAM-диск 34 МиБ)"
 # Отдельный маленький загрузчик (boot/boot_sector_iso.asm): BIOS грузит
 # весь boot-образ по 0x7c00, стаб копирует stage2 на 0x10000, kernel.bin
-# на 0x100000 и ПОЛНЫЙ 20-МиБ образ диска (RAM-диск) на 0x2000000 — ядро
+# на 0x100000 и ПОЛНЫЙ 34-МиБ образ диска (RAM-диск) на 0x4000000 — ядро
 # читает все разделы из памяти и работает с любого носителя (Ventoy/USB).
 STAGE2_PAD_SIZE=$(stat -c%s "$BUILD/stage2.pad.bin")
 KERNEL_SIZE=$(stat -c%s "$BUILD/kernel.bin")
 STAGE2_DWORDS=$(( STAGE2_PAD_SIZE / 4 ))
 KERNEL_DWORDS=$(( (KERNEL_SIZE + 3) / 4 ))
 nasm -f bin -D STAGE2_SIZE_DWORDS=$STAGE2_DWORDS -D KERNEL_SIZE_DWORDS=$KERNEL_DWORDS \
-    -D RAMDISK_SIZE_DWORDS=5242880 \
+    -D RAMDISK_SIZE_DWORDS=8912896 \
     boot/boot_sector_iso.asm -o "$BUILD/boot_sector_iso.bin"
 
 echo "==> [8b] Релизные артефакты (DeiX $DEIX_VERSION x86_64)"

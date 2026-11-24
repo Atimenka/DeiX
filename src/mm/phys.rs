@@ -37,7 +37,14 @@ pub fn init() {
         mark_used_inner(&mut bitmap, i);
     }
 
-    // Резервируем RAM-диск (0x2000000, 20 МиБ), если он активен (загрузка
+    // Живые стек и таблицы страниц stage2 (boot/linker_stage2.ld).
+    for addr in (0x2000000..0x2020000).step_by(PAGE_SIZE) {
+        if let Some(fi) = frame_index(addr) {
+            mark_used_inner(&mut bitmap, fi);
+        }
+    }
+
+    // Резервируем RAM-диск (0x4000000, 34 МиБ), если он активен (загрузка
     // с USB/Ventoy): загрузчик положил туда образ, аллокатор не должен
     // раздавать эти страницы (иначе ядро перезапишет собственный диск).
     if crate::ramdisk::is_active() {

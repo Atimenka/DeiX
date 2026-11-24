@@ -13,9 +13,9 @@
 ;   ramboot, ФАЗА 1: ceil(kernel_size/512) секторов по участкам карты
 ;            (до 40 штук) порциями CHUNK_SECTORS -> буфер 0x20000 ->
 ;            PM rep movsd -> 0x100000
-;   ramboot, ФАЗА 2: ВЕСЬ образ диска (RAMDISK_SECTORS = 40960 секторов
+;   ramboot, ФАЗА 2: ВЕСЬ образ диска (RAMDISK_SECTORS = 69632 секторов
 ;            подряд из LBA 0 boot-диска) тем же циклом int13h AH=42h
-;            -> буфер 0x20000 -> PM rep movsd -> 0x2000000 (RAM-диск).
+;            -> буфер 0x20000 -> PM rep movsd -> 0x4000000 (RAM-диск).
 ;            Ядро потом читает все разделы из памяти, если аппаратный
 ;            ATA-диск не отвечает (USB/Ventoy) — см. ramdisk::init().
 ;            jmp STAGE2_ADDR
@@ -32,16 +32,16 @@ STAGE2_ADDR equ 0x10000
 KERNEL_DST    equ 0x100000        ; база ядра (linker_kernel.ld)
 MAX_KERNEL_SECTORS equ 4096       ; защита от испорченной карты (2 МиБ)
 
-; ---- RAM-ДИСК: весь образ диска (20 МиБ) ----
+; ---- RAM-ДИСК: весь образ диска (34 МиБ) ----
 ; ramboot читает ЛЮБОЙ загрузочный диск (флешку/Ventoy/SATA) не только
-; ядро, но и ПОЛНЫЙ образ диска по LBA подряд из LBA 0 в 0x2000000. Это
+; ядро, но и ПОЛНЫЙ образ диска по LBA подряд из LBA 0 в 0x4000000. Это
 ; то, что делает ISO-стаб (boot_sector_iso.asm): ядро потом читает все
 ; разделы из памяти, без аппаратного ATA-контроллера (которого нет у
 ; флешки). Для обычного диска (QEMU/SATA) ядро всё равно предпочтёт
 ; ATA, если контроллер отвечает и LBA 0 совпадает с RAM-копией
 ; (см. ramdisk::init) — образ в RAM там только страховка.
-RAMDISK_BASE    equ 0x2000000     ; RAM-диск: весь образ диска
-RAMDISK_SECTORS equ 40960         ; 20 МиБ — окно RAM-диска (build.sh)
+RAMDISK_BASE    equ 0x4000000     ; RAM-диск: весь образ диска
+RAMDISK_SECTORS equ 69632         ; 34 МиБ — окно RAM-диска (build.sh)
 
 BOOTMAP       equ 0x7000          ; карта загрузки, её кладёт MBR
 KERNEL_EXTS   equ BOOTMAP + 192
@@ -87,7 +87,7 @@ start:
     jz map_fail
     cmp eax, MAX_KERNEL_SECTORS
     ja map_fail
-    mov [total_left], ax
+    mov [total_left], eax
     mov word [ext_ptr], KERNEL_EXTS
     mov word [ext_cnt], KERNEL_EXT_COUNT
 
@@ -103,8 +103,9 @@ start:
     jbe .ext_len
     mov ax, bx
 .ext_len:
-    mov [sectors_left], ax
-    sub [total_left], ax
+    movzx eax, ax
+    mov [sectors_left], eax
+    sub [total_left], eax
     mov ax, [si]
     mov [cur_lba_lo], ax
     mov ax, [si + 2]
@@ -113,13 +114,13 @@ start:
     dec word [ext_cnt]
 
 .load_loop:
-    cmp word [sectors_left], 0
+    cmp dword [sectors_left], 0
     je .load_done
 
-    mov ax, [sectors_left]
-    cmp ax, CHUNK_SECTORS
+    mov eax, [sectors_left]
+    cmp eax, CHUNK_SECTORS
     jbe .use_remaining
-    mov ax, CHUNK_SECTORS
+    mov eax, CHUNK_SECTORS
 .use_remaining:
     mov [dap_count], ax
 
@@ -201,8 +202,8 @@ bits 16
     mov ss, ax
     mov sp, 0xFC00
 
-    mov ax, [dap_count]
-    sub [sectors_left], ax
+    movzx eax, word [dap_count]
+    sub [sectors_left], eax
     add [cur_lba_lo], ax
     adc word [cur_lba_hi], 0
 
@@ -210,13 +211,13 @@ bits 16
     je .load_loop
     ; ФАЗА 2 (заполнение RAM-диска): total_left — общий счётчик,
     ; истощаем его вместе со sectors_left; когда оба нули — всё готово.
-    sub [total_left], ax
-    cmp word [total_left], 0
+    sub [total_left], eax
+    cmp dword [total_left], 0
     jnz .load_loop
     jmp .load_complete
 
 .load_done:
-    cmp word [total_left], 0
+    cmp dword [total_left], 0
     je .load_complete
     cmp word [ext_cnt], 0
     jne .next_ext
@@ -227,15 +228,15 @@ bits 16
     cmp byte [fill_active], 0
     jne .kernel_loaded
 
-    ; ---- ФАЗА 2: весь образ диска (40960 сек) из LBA 0 в 0x2000000 ----
+    ; ---- ФАЗА 2: весь образ диска (69632 сек) из LBA 0 в 0x4000000 ----
     ; Тот же цикл int13h AH=42h + PM rep movsd, что и для ядра, но с
     ; одним «условным участком»: LBA 0, RAMDISK_SECTORS секторов подряд.
-    ; Источник (буфер 0x20000) и получатель (0x2000000) не пересекаются —
+    ; Источник (буфер 0x20000) и получатель (0x4000000) не пересекаются —
     ; копирование вперёд безопасно.
     mov byte [fill_active], 1
-    mov ax, RAMDISK_SECTORS
-    mov [sectors_left], ax
-    mov [total_left], ax
+    mov eax, RAMDISK_SECTORS
+    mov [sectors_left], eax
+    mov [total_left], eax
     xor ax, ax
     mov [cur_lba_lo], ax
     mov [cur_lba_hi], ax
@@ -304,12 +305,12 @@ DATA16_SEG equ gdt_data16 - gdt_start  ; 0x20 data16
 ; ---------------- данные (DS=0, адреса 0x9000+off) ----------------
 boot_drive:    db 0
 fill_active:   db 0              ; 0 = читаем ядро, 1 = заполняем RAM-диск
-sectors_left:  dw 0
+sectors_left:  dd 0
 cur_lba_lo:    dw 0
 cur_lba_hi:    dw 0
 ram_dst_phys:  dd 0
 chunk_bytes:   dd 0
-total_left:    dw 0
+total_left:    dd 0
 ext_ptr:       dw 0
 ext_cnt:       dw 0
 

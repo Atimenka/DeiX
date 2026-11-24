@@ -58,9 +58,9 @@ KERNEL_IMAGE_INFO_MAGIC = b"DEIXKIMG"
 PARTITIONS_END_SECTORS = max(start + secs for _, _, start, secs, _ in PRIMARY)
 
 # RAM-диск (boot/ramboot.asm, boot/boot_sector_iso.asm) копирует в память
-# ровно 20 МиБ (окно 0x2000000..0x3400000), поэтому образ дополняется
-# до 40960 секторов, даже если разделы заканчиваются раньше.
-RAMDISK_WINDOW_SECTORS = 40960
+# ровно 34 МиБ (окно 0x4000000..0x6200000), поэтому образ дополняется
+# до 69632 секторов, даже если разделы заканчиваются раньше.
+RAMDISK_WINDOW_SECTORS = 69632
 
 
 def chs(lba):

@@ -3,7 +3,7 @@
 """Сценарий: загрузка с USB (без ATA-диска) — эмулирует Ventoy/флешку.
 
 Проверяет фикс бага «загрузка с USB/Ventoy»: ramboot должен заполнить
-RAM-диск (весь образ, 40960 секторов из LBA 0 -> 0x2000000), ядро должно
+RAM-диск (весь образ, 69632 секторов из LBA 0 -> 0x4000000), ядро должно
 активировать RAM-диск (ATA не отвечает или содержит другой образ) и
 читать все разделы из памяти — без DX-DISK-0004 / DX-EXT-0006.
 
@@ -15,7 +15,7 @@ QEMU: образ подключён как USB-накопитель (-device usb
 (RAM-диск), поэтому после reboot система снова в режиме настройки —
 это ожидаемо для загрузки с флешки (как live CD).
 
-Маркеры (serial): «[ramdisk] active: ... sectors at 0x2000000»,
+Маркеры (serial): «[ramdisk] active: ... sectors at 0x4000000»,
 «ATA disk: not used (RAM-диск активен...)», «mini kernel booted
 successfully!», «[loginui] графический вход, создание учётки: true/false»,
 «Welcome to DeiX, <name>!», «Welcome to DeiX CLI».
@@ -121,6 +121,10 @@ def snapshot(title):
     txt = buf.decode('utf-8', 'replace')
     lines = [l for l in txt.splitlines()
              if '[dbg]' in l or '[bcb]' in l or '[ramdisk]' in l or 'RAMBOOT:' in l or 'DX-' in l]
+    print(f'  -- {title} (early ramdisk diagnostics) --', flush=True)
+    for l in txt.splitlines():
+        if '[ramdisk]' in l or 'RAMBOOT:' in l:
+            print('   ' + l, flush=True)
     print(f'  -- {title} (filtered) --')
     for l in lines[-15:]:
         print('   ' + l.strip(), flush=True)

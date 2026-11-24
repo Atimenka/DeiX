@@ -39,4 +39,5 @@ SECTIONS {
         . = ALIGN(8);
         __stage2_bss_end = .;
     }
+    ASSERT(__stage2_bss_end <= 0x2020000, "stage2 bss exceeds reserved area")
 }
