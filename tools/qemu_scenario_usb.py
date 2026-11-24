@@ -29,7 +29,7 @@ ERR_PATH = '/tmp/qemu_scenario_usb.err'
 proc = None
 master = None
 buf = b''
-logf = open(LOG_PATH, 'w', encoding='utf-8', errors='replace')
+logf = open(LOG_PATH, 'wb')
 
 
 def start_qemu():
@@ -92,7 +92,7 @@ def pump(timeout=0.2):
             if not chunk:
                 return
             buf += chunk
-            logf.write(chunk.decode('utf-8', 'replace'))
+            logf.write(chunk)
             logf.flush()
 
 
@@ -120,7 +120,7 @@ def send(s, delay=0.6):
 def snapshot(title):
     txt = buf.decode('utf-8', 'replace')
     lines = [l for l in txt.splitlines()
-             if '[dbg]' in l or '[bcb]' in l or 'DX-' in l]
+             if '[dbg]' in l or '[bcb]' in l or '[ramdisk]' in l or 'RAMBOOT:' in l or 'DX-' in l]
     print(f'  -- {title} (filtered) --')
     for l in lines[-15:]:
         print('   ' + l.strip(), flush=True)
@@ -145,7 +145,7 @@ try:
     r = wait_for([b'[ramdisk] active'], desc='RAM-диск активирован', timeout=30)
     if not r:
         snapshot('фаза 1: рамдиск не активировался')
-        print('>>> ФАЗА 1 FAIL: RAM-диск не активирован (ramboot не заполнил образ)', flush=True)
+        print('>>> ФАЗА 1 FAIL: RAM-диск не активирован', flush=True)
         sys.exit(3)
     r = wait_for([b'ATA disk: not used'], desc='ATA не используется', timeout=30)
     if not r:
@@ -162,8 +162,10 @@ try:
 
     # ==== Фаза 2: настройка + вход (live-сессия) ====
     print('=== Фаза 2: настройка + вход (live-сессия с USB) ===', flush=True)
-    wait_for(['[loginui] графический вход, создание учётки: true'],
-             desc='графический вход, режим настройки', timeout=60)
+    if not wait_for(['[loginui] графический вход, создание учётки: true'],
+                    desc='графический вход, режим настройки', timeout=60):
+        snapshot('фаза 2: нет режима настройки')
+        sys.exit(11)
     send('alice\n')
     send('pass123\n')
     send('pass123\n')
@@ -173,8 +175,12 @@ try:
         snapshot('фаза 2 до создания')
         print('>>> ФАЗА 2 FAIL: шифрование не включено', flush=True)
         sys.exit(6)
-    wait_for([b'Welcome to DeiX, alice!'], desc='вход после создания', timeout=60)
-    wait_for([b'Welcome to DeiX CLI'], desc='CLI после первого входа', timeout=60)
+    if not wait_for([b'Welcome to DeiX, alice!'], desc='вход после создания', timeout=60):
+        snapshot('фаза 2: вход не состоялся')
+        sys.exit(12)
+    if not wait_for([b'Welcome to DeiX CLI'], desc='CLI после первого входа', timeout=60):
+        snapshot('фаза 2: CLI не запустился')
+        sys.exit(13)
     print('  [OK] настройка и вход с USB — OK', flush=True)
     stop_qemu()
     print('  [OK] QEMU остановлен (моделируем перезагрузку)', flush=True)
@@ -200,8 +206,10 @@ try:
         sys.exit(10)
     # Live-сессия: после перезагрузки аккаунты в RAM-диске — система снова
     # в режиме настройки. Это ожидаемо для загрузки с флешки.
-    wait_for(['[loginui] графический вход, создание учётки: true'],
-             desc='режим настройки (live: аккаунты в RAM)', timeout=60)
+    if not wait_for(['[loginui] графический вход, создание учётки: true'],
+                    desc='режим настройки (live: аккаунты в RAM)', timeout=60):
+        snapshot('фаза 3: нет режима настройки')
+        sys.exit(14)
     print('  [OK] после перезагрузки — live-режим (настройка), без ATA-ошибок', flush=True)
 
     print('>>> ИТОГ: PASS — загрузка с USB/Ventoy работает из RAM-диска', flush=True)

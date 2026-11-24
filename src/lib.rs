@@ -151,6 +151,9 @@ pub extern "C" fn kernel_main() -> ! {
     println!("Boot step 1/4: interrupts");
     interrupts::init();
 
+    // ATA-проверка RAM-диска может формировать сообщение об ошибке через alloc.
+    allocator::init();
+
     // RAM-диск: загрузчик (ramboot/ISO-стаб) положил весь образ в
     // 0x2000000. Если аппаратный ATA-диск отвечает и содержит тот же
     // образ — работаем через ATA (данные сохраняются); если нет
@@ -171,7 +174,6 @@ pub extern "C" fn kernel_main() -> ! {
     println!("PIT timer (~100 Hz): OK");
     crate::serial_println!("[deix] H: pit ok");
 
-    allocator::init();
     println!("Heap allocator (16 MiB): OK");
     crate::serial_println!("[deix] I: heap ok");
     bootprof::mark("heap ready");
