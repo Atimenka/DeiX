@@ -63,6 +63,22 @@ pub struct Framebuffer {
 
 static LAST_FRAMEBUFFER: crate::spinlock::SpinLock<Option<Framebuffer>> = crate::spinlock::SpinLock::new(None);
 
+/// Handoff written by the BIOS-mode disk loader before long mode.
+/// It describes the firmware-selected scanout, not a native GPU driver.
+pub fn bios_framebuffer() -> Option<Framebuffer> {
+    unsafe {
+        let p = 0x6800usize as *const u8;
+        if core::ptr::read_volatile(p as *const u32) != u32::from_le_bytes(*b"DXFB") { return None; }
+        let addr = core::ptr::read_volatile(p.add(4) as *const u32) as usize;
+        let pitch = core::ptr::read_volatile(p.add(8) as *const u16) as usize;
+        if addr < 0x4000_0000 || addr & 3 != 0 || pitch < 3200 || pitch > 32768 { return None; }
+        if addr.checked_add(pitch.checked_mul(600)?)? > 0x1_0000_0000 { return None; }
+        Some(Framebuffer { addr, width: 800, height: 600, bpp: 32, pitch })
+    }
+}
+
+pub fn using_bios_framebuffer() -> bool { bios_framebuffer().is_some() }
+
 pub fn get_framebuffer() -> Option<Framebuffer> {
     *LAST_FRAMEBUFFER.lock()
 }

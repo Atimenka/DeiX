@@ -121,25 +121,37 @@ set_up_page_tables:
     cmp ecx, 512
     jne .map_l2
 
-    ; GPU MMIO (Bochs VBE framebuffer 0xFC000000-0x100000000, 4-й ГиБ):
-    ; L3[3] -> page_table_l2_gpu, заполняем записи 480..511 (32 x 2 МиБ).
-    ; Это нужно, чтобы графические подсистемы ядра могли писать пиксели
-    ; в framebuffer (без этого — page fault на 0xfd000000).
+    ; Map the remaining 3 GiB for BIOS framebuffer PCI apertures. Mark
+    ; device space uncached (PCD|PWT), including the old Bochs window.
+    mov eax, page_table_l2_1
+    or eax, 0b11
+    mov [page_table_l3 + 8], eax
+    mov eax, page_table_l2_2
+    or eax, 0b11
+    mov [page_table_l3 + 16], eax
     mov eax, page_table_l2_gpu
     or eax, 0b11
     mov [page_table_l3 + 24], eax
-
-    ; Записи 2016..2047 (блоки 0xFC000000..0x100000000, 4-й ГиБ):
-    ; физический адрес блока = (1536 + idx) << 21, где idx = ecx - 2016.
-    mov ecx, 2016
-.map_gpu:
+    xor ecx, ecx
+.map_high:
     mov eax, ecx
-    shl eax, 21               ; ecx * 2 МиБ = 0xFC000000 при ecx=2016
-    or eax, 0b10000011
-    mov [page_table_l2_gpu + (ecx - 1536) * 8], eax
+    add eax, 512
+    shl eax, 21
+    or eax, 0x9b
+    mov [page_table_l2_1 + ecx * 8], eax
+    mov eax, ecx
+    add eax, 1024
+    shl eax, 21
+    or eax, 0x9b
+    mov [page_table_l2_2 + ecx * 8], eax
+    mov eax, ecx
+    add eax, 1536
+    shl eax, 21
+    or eax, 0x9b
+    mov [page_table_l2_gpu + ecx * 8], eax
     inc ecx
-    cmp ecx, 2048
-    jne .map_gpu
+    cmp ecx, 512
+    jne .map_high
     ret
 
 enable_paging:
@@ -205,6 +217,10 @@ page_table_l3:
     resb 4096
 page_table_l2:
     resb 4096        ; P2 нулевого гигабайта
+page_table_l2_1:
+    resb 4096
+page_table_l2_2:
+    resb 4096
 page_table_l2_gpu:
     resb 4096        ; P2 для GPU MMIO (4-й гигабайт)
 

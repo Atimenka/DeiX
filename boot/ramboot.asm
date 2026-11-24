@@ -249,12 +249,130 @@ bits 16
     jmp .load_loop
 
 .kernel_loaded:
+    call setup_bios_framebuffer
     cli
     lgdt [gdt_descriptor]
     mov eax, cr0
     or eax, 1
     mov cr0, eax
     jmp CODE_SEG:pm_go
+
+; VBE handoff at 0x6800 (outside bootmap / transfer buffers).
+; Only accept 32-bit 800x600 packed RGB with linear framebuffer. On any
+; failure leave text mode untouched. Do not touch Bochs DISPI path.
+setup_bios_framebuffer:
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov dword [0x6800], 0
+    mov dx, 0x1ce
+    xor ax, ax
+    out dx, ax
+    mov dx, 0x1cf
+    in ax, dx
+    cmp ax, 0xb0c0
+    jb .probe
+    cmp ax, 0xb0c5
+    jbe .done
+.probe:
+    mov dword [0x6000], 'VBE2'
+    mov di, 0x6000
+    mov ax, 0x4f00
+    sti
+    int 0x10
+    cli
+    cmp ax, 0x004f
+    jne .done
+    xor ax, ax
+    mov ds, ax
+    cmp dword [0x6000], 'VESA'
+    jne .done
+    mov ax, [0x600e]
+    mov [vbe_list_offset], ax
+    mov ax, [0x6010]
+    mov [vbe_list_segment], ax
+    mov word [vbe_tries], 256
+.next:
+    cmp word [vbe_tries], 0
+    je .done
+    dec word [vbe_tries]
+    mov ax, [vbe_list_segment]
+    mov fs, ax
+    mov si, [vbe_list_offset]
+    mov cx, [fs:si]
+    cmp cx, 0xffff
+    je .done
+    add word [vbe_list_offset], 2
+    jnc .no_carry
+    add word [vbe_list_segment], 0x1000
+.no_carry:
+    mov [vbe_mode], cx
+    xor ax, ax
+    mov es, ax
+    mov di, 0x5000
+    mov ax, 0x4f01
+    sti
+    int 0x10
+    cli
+    cmp ax, 0x004f
+    jne .next_reset
+    xor ax, ax
+    mov ds, ax
+    mov ax, [0x5000]
+    and ax, 0x0091
+    cmp ax, 0x0091
+    jne .next
+    cmp word [0x5012], 800
+    jne .next
+    cmp word [0x5014], 600
+    jne .next
+    cmp byte [0x5019], 32
+    jne .next
+    cmp byte [0x501b], 6
+    jne .next
+    cmp word [0x5010], 3200
+    jb .next
+    cmp word [0x5010], 32768
+    ja .next
+    cmp word [0x501f], 0x1008  ; red: 8 bits at bit 16
+    jne .next
+    cmp word [0x5021], 0x0808  ; green: 8 bits at bit 8
+    jne .next
+    cmp word [0x5023], 0x0008  ; blue: 8 bits at bit 0
+    jne .next
+    mov eax, [0x5028]
+    cmp eax, 0x40000000       ; PCI aperture, not RAM or kernel image
+    jb .next
+    test al, 3
+    jnz .next
+    mov [0x6804], eax
+    movzx edx, word [0x5010]
+    imul edx, edx, 600
+    add edx, eax
+    jc .next
+    mov ax, [0x5010]
+    mov [0x6808], ax
+    mov bx, [vbe_mode]
+    or bx, 0x4000
+    mov ax, 0x4f02
+    sti
+    int 0x10
+    cli
+    cmp ax, 0x004f
+    jne .next_reset
+    xor ax, ax
+    mov ds, ax
+    mov dword [0x6800], 'DXFB'
+    jmp .done
+.next_reset:
+    xor ax, ax
+    mov ds, ax
+    jmp .next
+.done:
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    ret
 
 bits 32
 pm_go:
@@ -307,6 +425,10 @@ CODE16_SEG equ gdt_code16 - gdt_start  ; 0x18 code16
 DATA16_SEG equ gdt_data16 - gdt_start  ; 0x20 data16
 
 ; ---------------- данные (DS=0, адреса 0x9000+off) ----------------
+vbe_list_offset: dw 0
+vbe_list_segment: dw 0
+vbe_tries: dw 0
+vbe_mode: dw 0
 boot_drive:    db 0
 fill_active:   db 0              ; 0 = читаем ядро, 1 = заполняем RAM-диск
 requested_count: dw 0            ; DAP count may be modified by BIOS

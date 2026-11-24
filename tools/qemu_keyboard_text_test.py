@@ -16,7 +16,7 @@ with tempfile.TemporaryDirectory() as tmp:
     image = Path(tmp) / 'disk.img'
     shutil.copyfile(source, image)
     monitor = Path(tmp) / 'monitor.sock'
-    command = ['qemu-system-x86_64', '-m', '512', '-vga', 'cirrus',
+    command = ['qemu-system-x86_64', '-m', '512', '-vga', 'none',
                '-drive', f'file={image},format=raw,if=ide',
                '-display', 'none', '-serial', 'stdio',
                '-monitor', f'unix:{monitor},server=on,wait=off', '-no-reboot']

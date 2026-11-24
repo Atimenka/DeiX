@@ -126,11 +126,13 @@ pub extern "C" fn kernel_main() -> ! {
     crate::serial_println!("=== DeiX boot: serial debug active ===");
 
     crate::serial_println!("[deix] A: font start");
-    font::install_cyrillic_font();
+    if !vbe::using_bios_framebuffer() { font::install_cyrillic_font(); }
     crate::serial_println!("[deix] B: font done");
 
-    vgaglobal::with_writer(|w| w.clear_screen());
-    bootlogo::show_early_text();
+    if !vbe::using_bios_framebuffer() {
+        vgaglobal::with_writer(|w| w.clear_screen());
+        bootlogo::show_early_text();
+    }
     vgaglobal::set_boot_quiet(true);
     crate::serial_println!("[deix] C: clear done");
 
@@ -352,7 +354,7 @@ pub extern "C" fn kernel_main() -> ! {
     // солёным SHA-256 хэшем, хранящимся на ext2 — см. auth.rs). Реальный
     // пароль нигде не сохраняется на диске в открытом виде.
     // Графический вход сменяет лого (рисуют в один framebuffer).
-    vgaglobal::set_boot_quiet(false);
+    if !vbe::using_bios_framebuffer() { vgaglobal::set_boot_quiet(false); }
     if !renderer::has_active_framebuffer() {
         vgaglobal::with_writer(|w| w.clear_screen());
     }
@@ -361,7 +363,7 @@ pub extern "C" fn kernel_main() -> ! {
             // ОБЯЗАТЕЛЬНО возвращаем текстовый режим: иначе графика
             // остаётся на мониторе, а CLI пишет в невидимый буфер —
             // это и выглядело как "картинка не пропадает".
-            loginui::back_to_text();
+            if !vbe::using_bios_framebuffer() { loginui::back_to_text(); }
             crate::println!("Welcome to DeiX, {}!", name);
             name
         }
@@ -426,6 +428,12 @@ pub extern "C" fn kernel_main() -> ! {
     }
 
     bootprof::mark("boot sound + cli prompt");
+    if vbe::using_bios_framebuffer() {
+        // Firmware mode cannot be changed after leaving BIOS. Keep the
+        // active scanout; do not program Bochs/VGA ports on real hardware.
+        crate::serial_println!("[desktop] starting BIOS framebuffer desktop");
+        loop { ui::run_desktop_session(|_, _| false); }
+    }
     cli::run();
 }
 
