@@ -98,10 +98,10 @@ pub fn detect() -> Option<GpuInfo> {
 pub fn support_status_message(vendor: GpuVendor) -> (&'static str, &'static str) {
     match vendor {
         GpuVendor::Nvidia => (
-            "NVIDIA GPU detected. See 'gpu nvinfo' for the open nouveau-based chipset \
-             identification and details on what this kernel can/cannot do with it.",
-            "Обнаружен GPU NVIDIA. Смотри 'gpu nvinfo' для открытого определения чипа \
-             (на основе nouveau) и подробностей, что это ядро может и не может с ним сделать.",
+            "NVIDIA GPU detected. See 'gpu nvinfo' for read-only PCI identification. \
+             NVIDIA acceleration and Optimus switching are not implemented.",
+            "Обнаружен GPU NVIDIA. 'gpu nvinfo' показывает идентификаторы PCI без записи. \
+             Ускорение NVIDIA и переключение Optimus не реализованы.",
         ),
         GpuVendor::Amd => (
             "AMD GPU detected. No open modesetting driver is included in this kernel \

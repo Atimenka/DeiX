@@ -66,6 +66,8 @@ with tempfile.TemporaryDirectory() as tmp:
         type_keys('pass123\n')
         wait_for(b"Account 'alice' created.")
         wait_for(b'Welcome to DeiX CLI')
+        type_keys('gpu nvinfo\n')
+        wait_for(b'No NVIDIA display controller found on PCI bus.')
         if b'KERNEL PANIC' in log:
             raise RuntimeError('kernel panic')
         print('PASS: VGA artwork, text login and PS/2 keyboard account creation', flush=True)

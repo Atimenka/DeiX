@@ -537,7 +537,7 @@ fn cmd_help() {
     println!("  sound [list|play <имя>|beep [hz ms]] - {}", t!(en: "UI sound effects via PC speaker", ru: "звуковые эффекты UI через PC speaker"));
     println!("  linux <run|info> <файл> - {}", t!(en: "run a Linux ELF program", ru: "запустить ELF-программу Linux"));
     println!("  gpu info                - {}", t!(en: "show detected GPU info", ru: "показать инфо об обнаруженном GPU"));
-    println!("  gpu nvinfo              - {}", t!(en: "NVIDIA-specific chipset info (open nouveau-based detection)", ru: "инфо о чипе NVIDIA (открытое определение на основе nouveau)"));
+    println!("  gpu nvinfo              - {}", t!(en: "NVIDIA PCI identification (no register access)", ru: "идентификация NVIDIA PCI (без чтения регистров)"));
     println!("  gpu mode [WxH]          - {}", t!(en: "switch to graphics mode (opens resolution picker if no WxH given)", ru: "переключиться в графику (без WxH откроет выбор разрешения)"));
     println!("  ls                      - {}", t!(en: "list files on the ext2 disk", ru: "список файлов на диске ext2"));
     println!("  cat <file>              - {}", t!(en: "print a text file", ru: "вывести содержимое текстового файла"));
@@ -1063,93 +1063,28 @@ fn cmd_gpu(arg: &str) {
     }
 }
 
-/// `gpu nvinfo` — открытое определение архитектуры NVIDIA-чипа через
-/// регистр NV_PMC_BOOT_0 (см. nouveau.rs) и честный статус, что именно
-/// это ядро может сделать с найденной картой: для классических карт
-/// (NV04-NV40) сообщает о наличии ЭКСПЕРИМЕНТАЛЬНОГО modesetting-кода
-/// (не протестированного на реальном железе — честно предупреждаем), а
-/// для всего современного (Fermi и новее, включая GT 520M) объясняет,
-/// почему EVO/NVDisplay-архитектура несовместима с этим простым
-/// подходом.
+/// Inspect NVIDIA display devices without waking them or touching MMIO. In
+/// an Optimus laptop the Intel controller is typically enumerated first.
 fn cmd_gpu_nvinfo() {
-    let info = match gpu::detect() {
-        Some(info) => info,
-        None => {
-            println!("{}", t!(en: "No display controller found on PCI bus.", ru: "Видеоконтроллер на шине PCI не найден."));
-            return;
-        }
-    };
-
-    if info.vendor != gpu::GpuVendor::Nvidia {
+    let mut found = false;
+    crate::pci::visit_devices_by_class(gpu::PCI_CLASS_DISPLAY, |device| {
+        if device.vendor_id != gpu::VENDOR_NVIDIA { return; }
+        found = true;
         println_t!(
-            en: "Found GPU vendor is {}, not NVIDIA — 'gpu nvinfo' only applies to NVIDIA hardware.",
-            ru: "Найденный GPU — {}, не NVIDIA — 'gpu nvinfo' применима только к железу NVIDIA.";
-            info.vendor.name()
+            en: "NVIDIA PCI device {:02x}:{:02x}.{} (vendor {:04x}, device {:04x})",
+            ru: "PCI устройство NVIDIA {:02x}:{:02x}.{} (vendor {:04x}, device {:04x})";
+            device.bus, device.slot, device.function, device.vendor_id, device.device_id
         );
+    });
+    if !found {
+        println!("{}", t!(en: "No NVIDIA display controller found on PCI bus.",
+                          ru: "Видеоконтроллер NVIDIA на шине PCI не найден."));
         return;
     }
-
-    let nv = crate::nouveau::detect(info.device);
-
-    println_t!(
-        en: "NVIDIA PCI device {:02x}:{:02x}.{}, BAR0 MMIO {:#010x}",
-        ru: "PCI устройство NVIDIA {:02x}:{:02x}.{}, BAR0 MMIO {:#010x}";
-        nv.device.bus, nv.device.slot, nv.device.function, nv.bar0_mmio
-    );
-    println_t!(
-        en: "NVIDIA chipset ID: {:#04x} (read from NV_PMC_BOOT_0, an open/documented register)",
-        ru: "ID чипа NVIDIA: {:#04x} (прочитан из NV_PMC_BOOT_0, открытого/задокументированного регистра)";
-        nv.chipset_id
-    );
-    println_t!(
-        en: "Architecture: {}",
-        ru: "Архитектура: {}";
-        nv.architecture.name()
-    );
-
-    if nv.architecture.supports_legacy_modesetting() {
-        println!(
-            "{}",
-            t!(
-                en: "This is a classic (pre-G80) architecture, whose PCRTC0/PRAMDAC0 \\
-                     registers are publicly documented by the nouveau project. This \\
-                     kernel does NOT include a modesetting driver for it — only the \\
-                     chipset identification you see above. Use the Bochs VBE framebuffer \\
-                     driver (see 'gpu mode') under QEMU/Bochs/VirtualBox.",
-                ru: "Это классическая (до-G80) архитектура, регистры PCRTC0/PRAMDAC0 \\
-                     которой открыто задокументированы проектом nouveau. Драйвера \\
-                     модесеттинга для неё в этом ядре НЕТ — только определение чипа, \\
-                     показанное выше. Используй драйвер Bochs VBE framebuffer \\
-                     (см. 'gpu mode') под QEMU/Bochs/VirtualBox."
-            )
-        );
-    } else {
-        println!(
-            "{}",
-            t!(
-                en: "This architecture (G80/Tesla and newer — includes Fermi, Kepler, \\
-                     Maxwell, Pascal, Turing+) uses the EVO/NVDisplay display engine: \\
-                     command push-buffers and GPU virtual memory, not simple CRTC/RAMDAC \\
-                     registers. Supporting it requires thousands of lines of code (the \\
-                     real nouveau driver took years to get here) and, from Turing onward, \\
-                     a signed closed-source GSP firmware blob from NVIDIA itself, without \\
-                     which modesetting is impossible even in principle. This kernel \\
-                     cannot bundle either. Use the Bochs VBE framebuffer driver instead \\
-                     (see 'gpu mode') — it works under QEMU/Bochs/VirtualBox with the \\
-                     standard VGA adapter, not on real NVIDIA hardware.",
-                ru: "Эта архитектура (G80/Tesla и новее — включает Fermi, Kepler, \\
-                     Maxwell, Pascal, Turing+) использует display engine EVO/NVDisplay: \\
-                     push-буферы команд и виртуальную память GPU, а не простые регистры \\
-                     CRTC/RAMDAC. Её поддержка требует тысяч строк кода (у самого \\
-                     проекта nouveau на это ушли годы) и, начиная с Turing, подписанную \\
-                     закрытую прошивку GSP от самой NVIDIA, без которой модесеттинг \\
-                     невозможен в принципе. Это ядро не может встроить ни то, ни другое. \\
-                     Используй драйвер Bochs VBE framebuffer (см. 'gpu mode') — он \\
-                     работает под QEMU/Bochs/VirtualBox со стандартной VGA-картой, но не \\
-                     на реальном железе NVIDIA."
-            )
-        );
-    }
+    println!("{}", t!(
+        en: "PCI identification only; GPU registers were not accessed. NVIDIA acceleration and Optimus switching are not implemented.",
+        ru: "Только определение PCI; регистры GPU не считывались. Ускорение NVIDIA и переключение Optimus не реализованы."
+    ));
 }
 
 fn cmd_gpu_info() {
