@@ -127,6 +127,28 @@ pub fn find_device_by_class(class_code: u8) -> Option<PciDevice> {
     None
 }
 
+/// Visit all devices of a class, including secondary display controllers.
+/// Configuration reads only: this does not enable, wake or reconfigure devices.
+pub fn visit_devices_by_class(class_code: u8, mut visit: impl FnMut(PciDevice)) {
+    for bus in 0..=255u16 {
+        let bus = bus as u8;
+        for slot in 0..32u8 {
+            if read_config_u16(bus, slot, 0, 0x00) == 0xffff { continue; }
+            let header = (read_config_u32(bus, slot, 0, 0x0c) >> 16) & 0xff;
+            let functions = if header & 0x80 != 0 { 8 } else { 1 };
+            for function in 0..functions {
+                let vendor_id = read_config_u16(bus, slot, function, 0x00);
+                if vendor_id == 0xffff { continue; }
+                let class = read_config_u32(bus, slot, function, 0x08);
+                if (class >> 24) as u8 == class_code {
+                    visit(PciDevice { bus, slot, function, vendor_id,
+                        device_id: read_config_u16(bus, slot, function, 0x02) });
+                }
+            }
+        }
+    }
+}
+
 /// Ищет устройство по паре Class + Subclass (например, Class 0x04 + Subclass 0x03
 /// для аудиоконтроллера Intel High Definition Audio).
 pub fn find_device_by_class_subclass(class_code: u8, subclass_code: u8) -> Option<PciDevice> {

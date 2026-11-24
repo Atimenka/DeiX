@@ -1153,6 +1153,17 @@ fn cmd_gpu_nvinfo() {
 }
 
 fn cmd_gpu_info() {
+    println!("{}", t!(en: "PCI display controllers (detection only):", ru: "Видеоконтроллеры PCI (только обнаружение):"));
+    let mut count = 0usize;
+    crate::pci::visit_devices_by_class(gpu::PCI_CLASS_DISPLAY, |device| {
+        count += 1;
+        println!("  {:02x}:{:02x}.{} vendor={:04x} device={:04x}",
+            device.bus, device.slot, device.function, device.vendor_id, device.device_id);
+    });
+    if count > 1 {
+        println!("{}", t!(en: "Multiple GPUs detected; acceleration and GPU switching are not supported.",
+                          ru: "Обнаружено несколько GPU; ускорение и переключение GPU не поддерживаются."));
+    }
     if let Some(fb) = crate::vbe::get_framebuffer() {
         println_t!(
             en: "Framebuffer active: {}x{} @ {} bpp",
