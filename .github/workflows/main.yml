@@ -137,11 +137,14 @@ jobs:
 
       # ---------- 7b. Регрессия: загрузка с USB/Ventoy (без ATA-диска) ----------
       # Проверяет путь, по которому загрузчик (ramboot) заполняет RAM-диск
-      # (весь образ в 0x2000000), а ядро читает разделы из памяти — это
+      # (весь образ в 0x4000000), а ядро читает разделы из памяти — это
       # сценарий загрузки с флешки/Ventoy, где нет аппаратного ATA.
       - name: QEMU scenario - boot from USB (no ATA disk, RAM-disk path)
         timeout-minutes: 15
-        run: python3 tools/qemu_scenario_usb.py
+        run: |
+          # Релизная копия создана до QEMU-тестов и не содержит их аккаунтов.
+          cp build/deix-*-x86_64.img /tmp/deix-usb-factory.img
+          DEIX_USB_IMAGE=/tmp/deix-usb-factory.img python3 tools/qemu_scenario_usb.py
 
       - name: Upload USB scenario log
         if: always()

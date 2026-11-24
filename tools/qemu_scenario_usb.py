@@ -22,7 +22,7 @@ successfully!», «[loginui] графический вход, создание �
 """
 import os, pty, subprocess, select, time, sys, signal
 
-IMG = 'build/deix_disk.img'
+IMG = os.environ.get('DEIX_USB_IMAGE', 'build/deix_disk.img')
 LOG_PATH = '/tmp/qemu_scenario_usb.log'
 ERR_PATH = '/tmp/qemu_scenario_usb.err'
 
