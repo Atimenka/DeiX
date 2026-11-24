@@ -67,10 +67,18 @@ pub fn init() -> bool {
         // и тогда лучше работать через ATA (данные сохраняются на диске).
         // Если ATA не отвечает (USB/Ventoy) или содержит другой образ
         // (ноутбук со своим SATA-диском — другая версия/OS) — RAM-диск.
+        // На AHCI-only машинах legacy ATA-порты не управляют диском и могут
+        // возвращать 0xff (BSY навсегда). Не отправляем им ATA-команды.
+        // Неизвестные контроллеры безопасно остаются в live-режиме RAM.
+        let ide = crate::pci::find_device_by_class_subclass(0x01, 0x01).is_some();
         let mut ata_sec = [0u8; 512];
-        let mut ata_same = crate::ata::read_sectors_from(crate::ata::Drive::Master, 0, 1, &mut ata_sec)
-            .is_ok()
+        let mut ata_same = ide
+            && crate::ata::read_sectors_from(crate::ata::Drive::Master, 0, 1, &mut ata_sec)
+                .is_ok()
             && ata_sec[..] == mbr[..];
+        if !ide {
+            crate::serial_println!("[ramdisk] no PCI IDE controller; using RAM disk");
+        }
         let mut ata_map = [0u8; 512];
         if ata_same {
             let map_off = 2047usize * 512;
