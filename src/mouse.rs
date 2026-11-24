@@ -44,47 +44,50 @@ static STATE: SpinLock<MouseState> = SpinLock::new(MouseState {
     screen_height: 480,
 });
 
-fn wait_for_write() {
-    // Ждём, пока input buffer контроллера освободится (бит 1 статуса == 0).
+// Controller commands and mouse ACKs share the same port as the keyboard.
+// Never write after a timeout and never consume a keyboard byte as a mouse ACK.
+fn wait_for_write() -> bool {
     for _ in 0..100_000 {
-        unsafe {
-            if inb(PS2_STATUS_PORT) & 0x02 == 0 {
-                return;
-            }
+        let status = unsafe { inb(PS2_STATUS_PORT) };
+        if status == 0xff { return false; }
+        if status & 0x02 == 0 { return true; }
+        core::hint::spin_loop();
+    }
+    false
+}
+fn write_command(cmd: u8) -> bool {
+    if !wait_for_write() { return false; }
+    unsafe { outb(PS2_COMMAND_PORT, cmd); }
+    true
+}
+fn write_data(data: u8) -> bool {
+    if !wait_for_write() { return false; }
+    unsafe { outb(PS2_DATA_PORT, data); }
+    true
+}
+fn read_response(aux: bool) -> Option<u8> {
+    for _ in 0..100_000 {
+        let status = unsafe { inb(PS2_STATUS_PORT) };
+        if status == 0xff { return None; }
+        if status & 1 == 0 { core::hint::spin_loop(); continue; }
+        let byte = unsafe { inb(PS2_DATA_PORT) };
+        if status & 0xc0 != 0 { continue; }
+        if (status & 0x20 != 0) == aux { return Some(byte); }
+        if status & 0x20 != 0 { on_data_byte(byte); }
+        else { crate::keyboard::on_scancode(byte); }
+    }
+    None
+}
+fn mouse_command(data: u8) -> bool {
+    for _ in 0..3 {
+        if !write_command(0xd4) || !write_data(data) { return false; }
+        match read_response(true) {
+            Some(0xfa) => return true,
+            Some(0xfe) => continue,
+            _ => return false,
         }
     }
-}
-
-fn wait_for_read() {
-    // Ждём, пока output buffer будет заполнен (бит 0 статуса == 1).
-    for _ in 0..100_000 {
-        unsafe {
-            if inb(PS2_STATUS_PORT) & 0x01 != 0 {
-                return;
-            }
-        }
-    }
-}
-
-fn write_command(cmd: u8) {
-    wait_for_write();
-    unsafe { outb(PS2_COMMAND_PORT, cmd) };
-}
-
-fn write_data(data: u8) {
-    wait_for_write();
-    unsafe { outb(PS2_DATA_PORT, data) };
-}
-
-fn read_data() -> u8 {
-    wait_for_read();
-    unsafe { inb(PS2_DATA_PORT) }
-}
-
-/// Отправляет байт-команду самой мыши (через "прокси" 0xD4) и ждёт ACK (0xFA).
-fn mouse_write(data: u8) {
-    write_command(0xD4);
-    write_data(data);
+    false
 }
 
 pub fn init(screen_width: u32, screen_height: u32) {
@@ -96,25 +99,17 @@ pub fn init(screen_width: u32, screen_height: u32) {
         state.y = screen_height as i32 / 2;
     });
 
-    // 1. Включаем вспомогательное устройство (aux, т.е. мышь) на контроллере.
-    write_command(0xA8);
-
-    // 2. Читаем текущий Compaq Status byte, выставляем бит "Enable IRQ12"
-    // и на всякий случай убеждаемся, что бит "Disable Mouse Clock" сброшен.
-    write_command(0x20);
-    let mut status = read_data();
-    status |= 0x02; // Enable IRQ12
-    status &= !0x20; // Enable mouse clock
-    write_command(0x60);
-    write_data(status);
-
-    // 3. Просим мышь использовать настройки по умолчанию и включаем поток
-    // данных (Enable Data Reporting).
-    mouse_write(0xF6);
-    let _ack1 = read_data();
-
-    mouse_write(0xF4);
-    let _ack2 = read_data();
+    let configured = if write_command(0xa8) && write_command(0x20) {
+        if let Some(config) = read_response(false) {
+            write_command(0x60) && write_data((config | 0x02) & !0x20)
+        } else { false }
+    } else { false };
+    // Always attempt to re-enable streaming, even if the defaults command
+    // fails. Both operations are bounded and ACKed by the auxiliary device.
+    let defaults = configured && mouse_command(0xf6);
+    let enabled = configured && mouse_command(0xf4);
+    crate::serial_println!("[mouse] PS/2 config {} defaults {} reporting {}",
+        configured, defaults, enabled);
 
     // Пытаемся включить абсолютное позиционирование через VMware/QEMU
     // backdoor. Это НЕ реальное железо и НЕ часть PS/2-протокола — это

@@ -213,6 +213,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: QEMU PS/2 mouse cursor
+        timeout-minutes: 5
+        run: DEIX_USB_IMAGE=/tmp/deix-usb-factory.img python3 tools/qemu_ps2_mouse_test.py
+
+      - name: Upload PS/2 mouse log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-ps2-mouse-log
+          path: /tmp/qemu_ps2_mouse.log
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: QEMU EHCI USB mouse
         timeout-minutes: 5
         run: |
