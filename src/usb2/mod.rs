@@ -16,6 +16,9 @@ pub mod host;
 pub enum Speed { Full, Low, High, Super, SuperPlus }
 
 impl Speed {
+    pub fn name(self) -> &'static str {
+        match self { Speed::Low => "low", Speed::Full => "full", Speed::High => "high", Speed::Super => "super", Speed::SuperPlus => "super-plus" }
+    }
     pub fn default_max_packet0(self) -> u16 {
         match self { Speed::Low | Speed::Full => 8, Speed::High => 64, _ => 512 }
     }
