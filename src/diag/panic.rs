@@ -516,6 +516,11 @@ pub fn user_fault(ctx: &PanicContext) -> ! {
 ///
 /// Возвращает `true`, если отчёт удалось сохранить хотя бы одним способом.
 fn save_report(data: &[u8]) -> bool {
+    if !crate::ramdisk::boot_storage_verified() {
+        // При ранней панике загрузочный ATA-диск ещё не идентифицирован.
+        // Нельзя записывать дамп на потенциально чужой диск пользователя.
+        return false;
+    }
     // Сырые сектора — основной путь: он не зависит от состояния ФС.
     let mut raw_saved = true;
 
@@ -528,7 +533,8 @@ fn save_report(data: &[u8]) -> bool {
     let n = body.min(data.len());
     first[16..16 + n].copy_from_slice(&data[..n]);
     if crate::ata::write_sectors(PANIC_LBA, 1, &first).is_err() {
-        raw_saved = false;
+        // Не продолжать десятки операций и не вызывать VFS на мёртвом диске.
+        return false;
     }
     let mut offset = n;
 
@@ -536,7 +542,10 @@ fn save_report(data: &[u8]) -> bool {
         if offset >= data.len() {
             // Хвост затираем нулями, чтобы старый дамп не читался как новый.
             let zeros = [0u8; 512];
-            let _ = crate::ata::write_sectors(PANIC_LBA + i, 1, &zeros);
+            if crate::ata::write_sectors(PANIC_LBA + i, 1, &zeros).is_err() {
+                raw_saved = false;
+                break;
+            }
             continue;
         }
         let end = (offset + 512).min(data.len());
@@ -544,9 +553,12 @@ fn save_report(data: &[u8]) -> bool {
         sector[..end - offset].copy_from_slice(&data[offset..end]);
         if crate::ata::write_sectors(PANIC_LBA + i, 1, &sector).is_err() {
             raw_saved = false;
+            break;
         }
         offset = end;
     }
+
+    if !raw_saved { return false; }
 
     // Файл — дополнительный путь: он удобнее для просмотра из оболочки,
     // но доступен только если EXT2 и выделитель в порядке.
@@ -684,6 +696,9 @@ fn draw_panic_screen(code: ErrorCode, message: &str, ctx: &PanicContext, saved: 
     crate::println!("  detail:  {}", message);
     if ctx.vector != 0 {
         crate::println!("  except:  {} (rip {:#x})", vector_name(ctx.vector), ctx.rip);
+        if ctx.vector == 14 {
+            crate::println!("  CR2:     {:#x}  error: {:#x}", ctx.fault_address, ctx.error_code);
+        }
     }
     crate::println!(
         "  report:  {}",

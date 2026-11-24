@@ -91,6 +91,9 @@ jobs:
           set -e
           echo "== build/ =="
           ls -lh build/
+          echo "Diagnostic symbol near reported RIP 0x19edca (addresses vary by build):"
+          addr2line -f -C -e build/kernel.elf 0x19edca || true
+          nm -n build/kernel.elf | awk '$1 <= "000000000019edca" {line=$0} END {print line}'
           for f in deix_disk.img kernel.bin boot_sector.bin stage2.bin ramboot.bin SHA256SUMS; do
             test -f "build/$f" || { echo "Нет build/$f"; exit 1; }
           done
@@ -152,6 +155,20 @@ jobs:
         with:
           name: qemu-scenario-usb-log
           path: /tmp/qemu_scenario_usb.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: QEMU laptop-like USB boot with AHCI and HDA
+        timeout-minutes: 5
+        run: |
+          DEIX_USB_IMAGE=/tmp/deix-usb-factory.img python3 tools/qemu_laptop_smoke.py
+
+      - name: Upload laptop-like boot log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-laptop-smoke-log
+          path: /tmp/qemu_laptop_smoke.log
           if-no-files-found: ignore
           retention-days: 7
 

@@ -123,6 +123,7 @@ start:
     mov eax, CHUNK_SECTORS
 .use_remaining:
     mov [dap_count], ax
+    mov [requested_count], ax
 
     mov word [dap_segment], BUF_SEG
     mov ax, [cur_lba_lo]
@@ -133,7 +134,10 @@ start:
     mov ah, 0x42
     mov dl, [boot_drive]
     mov si, dap
+    ; BIOS USB implementations may depend on hardware interrupts.
+    sti
     int 0x13
+    cli                          ; CLI preserves the BIOS carry flag
     jnc .read_ok
     ; Не продолжать с частичным образом: сигнатура MBR в первом чанке
     ; не подтверждает, что остальные разделы успешно скопированы.
@@ -145,7 +149,7 @@ start:
     mov es, ax
 
     ; копируем чанк в RAM-диск (PM, плоские сегменты: linear = IP)
-    mov eax, [dap_count]
+    movzx eax, word [requested_count]
     shl eax, 9
     mov [chunk_bytes], eax
 
@@ -202,7 +206,7 @@ bits 16
     mov ss, ax
     mov sp, 0xFC00
 
-    movzx eax, word [dap_count]
+    movzx eax, word [requested_count]
     sub [sectors_left], eax
     add [cur_lba_lo], ax
     adc word [cur_lba_hi], 0
@@ -305,6 +309,7 @@ DATA16_SEG equ gdt_data16 - gdt_start  ; 0x20 data16
 ; ---------------- данные (DS=0, адреса 0x9000+off) ----------------
 boot_drive:    db 0
 fill_active:   db 0              ; 0 = читаем ядро, 1 = заполняем RAM-диск
+requested_count: dw 0            ; DAP count may be modified by BIOS
 sectors_left:  dd 0
 cur_lba_lo:    dw 0
 cur_lba_hi:    dw 0

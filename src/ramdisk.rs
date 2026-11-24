@@ -37,6 +37,12 @@ const SECTOR_SIZE: usize = 512;
 
 /// Активен ли RAM-диск (устанавливается один раз при инициализации).
 static ACTIVE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+// Не писать на Master до подтверждения, что это загрузочный образ.
+static ATA_BOOT_VERIFIED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+pub fn boot_storage_verified() -> bool {
+    is_active() || ATA_BOOT_VERIFIED.load(core::sync::atomic::Ordering::SeqCst)
+}
 
 /// Инициализирует RAM-диск: проверяет сигнатуру MBR (0xAA55) в первом
 /// секторе образа. Вызывается рано в kernel_main, ДО любых обращений к
@@ -78,9 +84,13 @@ pub fn init() -> bool {
                 .is_ok()
                 && ata_map[..] == ram_map[..];
         }
+        ATA_BOOT_VERIFIED.store(ata_same, core::sync::atomic::Ordering::SeqCst);
         !ata_same
     } else {
-        false
+        // Не переключаться молча на чужой физический диск при сбое копии.
+        crate::println!("RAMBOOT ERROR: RAM disk invalid; boot stopped to protect disks.");
+        crate::serial_println!("[ramdisk] invalid image; refusing ATA fallback");
+        loop { unsafe { core::arch::asm!("cli", "hlt") } }
     };
     ACTIVE.store(ok, core::sync::atomic::Ordering::SeqCst);
     if ok {

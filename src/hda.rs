@@ -261,17 +261,24 @@ pub fn init() -> bool {
         pci_dev.bus, pci_dev.slot, pci_dev.function, pci_dev.vendor_id, pci_dev.device_id
     );
 
-    // Включаем Bus Master и Memory Space
-    pci::enable_bus_mastering(pci_dev.bus, pci_dev.slot, pci_dev.function);
-    pci::enable_memory_space(pci_dev.bus, pci_dev.slot, pci_dev.function);
-
-    let mmio_bar = pci::read_bar_mmio(pci_dev.bus, pci_dev.slot, pci_dev.function, 0);
-    if mmio_bar == 0 {
-        crate::serial_println!("[hda] Ошибка: BAR0 равен 0");
+    // Не трогаем BAR, который stage2 не отобразил: на реальных ноутбуках
+    // HDA часто находится в PCI-окне между 1 ГиБ и 0xFC000000.
+    // Драйвер пока не умеет отображать произвольные/64-битные BAR.
+    let raw_bar = pci::read_config_u32(pci_dev.bus, pci_dev.slot, pci_dev.function, 0x10);
+    if raw_bar & 1 != 0 || raw_bar & 0x6 != 0 {
+        crate::serial_println!("[hda] unsupported BAR type; using PC speaker");
         return false;
     }
-    let mmio_base = mmio_bar as usize;
+    let mmio_base = (raw_bar & 0xffff_fff0) as usize;
+    // Доступ к регистрам и stream descriptors ограничен первыми 16 KiB.
+    let Some(end) = mmio_base.checked_add(0x4000) else { return false; };
+    if mmio_base == 0 || !((end <= 0x4000_0000) || (mmio_base >= 0xfc00_0000 && end <= 0x1_0000_0000)) {
+        crate::serial_println!("[hda] BAR {:#X} not mapped; using PC speaker", mmio_base);
+        return false;
+    }
     crate::serial_println!("[hda] BAR0 MMIO база: {:#X}", mmio_base);
+    pci::enable_bus_mastering(pci_dev.bus, pci_dev.slot, pci_dev.function);
+    pci::enable_memory_space(pci_dev.bus, pci_dev.slot, pci_dev.function);
 
     // 2. Аппаратный сброс контроллера (GCTL.CRST)
     unsafe {
