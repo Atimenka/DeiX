@@ -7,6 +7,16 @@
 
 pub mod descriptor;
 pub mod ehci;
+#[cfg(not(test))]
+pub mod hid_host;
+#[cfg(not(test))]
+pub mod host;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Speed { Full, Low, High, Super, SuperPlus }
+
+impl Speed {
+    pub fn default_max_packet0(self) -> u16 {
+        match self { Speed::Low | Speed::Full => 8, Speed::High => 64, _ => 512 }
+    }
+}

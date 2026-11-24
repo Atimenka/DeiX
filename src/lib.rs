@@ -306,6 +306,7 @@ pub extern "C" fn kernel_main() -> ! {
 
     // ПЛАНИРОВЩИК: включаем вытесняющую многозадачность.
     sched::start();
+    usb2::host::init();
     bootprof::mark("usermode+sched start");
 
     // Самопроверки sched/ring3 из загрузки УБРАНЫ: они своё отработали

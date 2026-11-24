@@ -220,6 +220,16 @@ pub struct MouseSnapshot {
     pub left_button: bool,
 }
 
+/// Apply a relative HID boot-mouse report (USB Y increases downwards).
+pub fn usb_report(dx: i8, dy: i8, buttons: u8) {
+    without_interrupts(|| {
+        let mut state = STATE.lock();
+        state.x = (state.x + dx as i32).clamp(0, state.screen_width.saturating_sub(1).max(0));
+        state.y = (state.y + dy as i32).clamp(0, state.screen_height.saturating_sub(1).max(0));
+        state.left_button = buttons & 1 != 0;
+    });
+}
+
 pub fn snapshot() -> MouseSnapshot {
     without_interrupts(|| {
         let state = STATE.lock();
