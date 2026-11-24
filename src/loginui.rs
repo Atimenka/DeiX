@@ -243,9 +243,12 @@ fn redraw(
 
         // Count only, never scan codes or typed characters. Helps distinguish
         // an absent controller from an untranslated scan set on real hardware.
-        let (ack, count) = crate::keyboard::diagnostic_status();
-        let diag = alloc::format!("PS2: {}  EVENTS: {}", if ack { "ACK" } else { "NO ACK" }, count);
+        let (ack, count, aux, set2) = crate::keyboard::diagnostic_status();
+        let diag = alloc::format!("PS2: {} SET2: {} KEYS: {} AUX: {}", if ack { "ACK" } else { "NO ACK" }, if set2 { "ACK" } else { "NO ACK" }, count, aux);
         r.draw_text(8, h - 18, &diag, HINT, None);
+        for (index, line) in crate::usb2::host::status().iter().take(2).enumerate() {
+            r.draw_text(8, h - 42 + index as i32 * 12, line, HINT, None);
+        }
 
         // Курсор рисуем последним, чтобы он был поверх панели.
         let m = crate::mouse::snapshot();
@@ -440,7 +443,9 @@ pub fn run() -> Option<String> {
     // курсор реально сдвинулся, иначе 60 кадров в секунду впустую.
     let mut last_mouse = (-1i32, -1i32);
     let mut last_click = false;
-    let mut last_ps2_count = crate::keyboard::diagnostic_status().1;
+    let mut last_ps2_count = crate::keyboard::diagnostic_status();
+    let mut last_usb = crate::usb2::host::status();
+    let mut next_usb_check = crate::timer::uptime_ms();
 
     loop {
         let mode = Mode { cloud: cloud_mode, totp: totp_pending, disk: disk_unlock };
@@ -451,9 +456,17 @@ pub fn run() -> Option<String> {
                 // Клавиш нет — обслуживаем мышь.
                 let m = crate::mouse::snapshot();
                 let moved = (m.x, m.y) != last_mouse;
-                let count = crate::keyboard::diagnostic_status().1;
+                let count = crate::keyboard::diagnostic_status();
                 let input_changed = count != last_ps2_count;
                 last_ps2_count = count;
+                let now = crate::timer::uptime_ms();
+                let mut usb_changed = false;
+                if now >= next_usb_check {
+                    next_usb_check = now.saturating_add(500);
+                    let usb = crate::usb2::host::status();
+                    usb_changed = usb != last_usb;
+                    last_usb = usb;
+                }
 
                 // Клик по полю переводит на него фокус. Клик по строке
                 // переключателя (LOCAL/CLOUD) включает облачный режим.
@@ -483,7 +496,7 @@ pub fn run() -> Option<String> {
                 }
                 last_click = m.left_button;
 
-                if moved || m.left_button || input_changed {
+                if moved || m.left_button || input_changed || usb_changed {
                     last_mouse = (m.x, m.y);
                     let mode = Mode { cloud: cloud_mode, totp: totp_pending, disk: disk_unlock };
                     redraw(&user, &pass, &confirm, focus, setup, mode, &status, status_color);

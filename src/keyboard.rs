@@ -9,8 +9,11 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 // Diagnostic counters only; never retain or log the scan codes or text.
 static INIT_ACK: AtomicBool = AtomicBool::new(false);
 static INPUT_BYTES: AtomicU32 = AtomicU32::new(0);
-pub fn diagnostic_status() -> (bool, u32) {
-    (INIT_ACK.load(Ordering::Relaxed), INPUT_BYTES.load(Ordering::Relaxed))
+static AUX_BYTES: AtomicU32 = AtomicU32::new(0);
+static SET2_ACK: AtomicBool = AtomicBool::new(false);
+pub fn diagnostic_status() -> (bool, u32, u32, bool) {
+    (INIT_ACK.load(Ordering::Relaxed), INPUT_BYTES.load(Ordering::Relaxed),
+     AUX_BYTES.load(Ordering::Relaxed), SET2_ACK.load(Ordering::Relaxed))
 }
 
 const ESCAPE_SCANCODE: u8 = 0x01;
@@ -200,6 +203,7 @@ pub fn init() -> bool {
         let disabled = keyboard_command(0xf5);
         let set2 = if disabled { keyboard_command(0xf0) && keyboard_command(0x02) } else { false };
         let enabled = keyboard_command(0xf4);
+        SET2_ACK.store(set2, Ordering::Relaxed);
         if !set2 { crate::serial_println!("[keyboard] scan set 2 not confirmed"); }
         enabled
     });
@@ -216,7 +220,10 @@ pub fn poll_controller() {
     if status == 0xff || status & 1 == 0 { return; }
     let byte = unsafe { crate::port::inb(0x60) };
     if status & 0xc0 != 0 { return; } // parity or timeout error
-    if status & 0x20 != 0 { crate::mouse::on_data_byte(byte); }
+    if status & 0x20 != 0 {
+        AUX_BYTES.fetch_add(1, Ordering::Relaxed);
+        crate::mouse::on_data_byte(byte);
+    }
     else {
         INPUT_BYTES.fetch_add(1, Ordering::Relaxed);
         on_scancode(byte);

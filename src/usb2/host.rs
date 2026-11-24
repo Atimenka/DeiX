@@ -312,8 +312,15 @@ pub fn init() {
         let class = read32(&d, 0x08);
         if (class >> 8) & 0xffff == 0x0320 { DEVICES.lock().push(d); }
     });
+    let count = DEVICES.lock().len();
+    if count == 0 { set_status(0, String::from("EHCI: NONE")); }
     for (i, entry) in [worker0 as extern "C" fn(), worker1, worker2, worker3].iter().enumerate() {
-        if i < DEVICES.lock().len() { let _ = sched::spawn("usb-ehci", *entry); }
+        if i < count {
+            set_status(i, alloc::format!("EHCI{}: STARTING", i));
+            if sched::spawn("usb-ehci", *entry).is_none() {
+                set_status(i, alloc::format!("EHCI{}: NO TASK", i));
+            }
+        }
     }
 }
 fn worker(index: usize) {
@@ -321,7 +328,10 @@ fn worker(index: usize) {
     if let Some(dev) = dev {
         match Ehci::new(index, &dev) {
             Ok(mut h) => h.run(),
-            Err(e) => kprintln!("[ehci] controller {} unavailable: {}", index, e),
+            Err(e) => {
+                kprintln!("[ehci] controller {} unavailable: {}", index, e);
+                set_status(index, alloc::format!("EHCI{}: {}", index, e));
+            },
         }
     }
 }
@@ -999,7 +1009,7 @@ impl Ehci {
         let functions: usize = self.devices.values().map(|d| d.pipes.iter().filter(|p| matches!(p.kind, PipeKind::Hid(_))).count()).sum();
         set_status(
             self.index,
-            alloc::format!("ehci{}: running, {} devices, {} HID functions", self.index, self.devices.len(), functions),
+            alloc::format!("EHCI{}: DEV {} MOUSE {}", self.index, self.devices.len(), functions),
         );
     }
 
