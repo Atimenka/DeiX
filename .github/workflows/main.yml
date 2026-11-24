@@ -210,7 +210,9 @@ jobs:
 
       - name: QEMU EHCI USB mouse
         timeout-minutes: 5
-        run: DEIX_USB_IMAGE=/tmp/deix-usb-factory.img python3 tools/qemu_ehci_mouse_test.py
+        run: |
+          DEIX_USB_IMAGE=/tmp/deix-usb-factory.img python3 tools/qemu_ehci_mouse_test.py
+          DEIX_USB_IMAGE=/tmp/deix-usb-factory.img DEIX_EHCI_USB_BOOT=1 python3 tools/qemu_ehci_mouse_test.py
 
       - name: Upload EHCI mouse log
         if: always()

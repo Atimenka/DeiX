@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Test USB EHCI mouse enumeration and relative motion."""
-import os, pty, select, socket, subprocess, tempfile, time, shutil
+import os, pty, select, socket, subprocess, tempfile, time, shutil, hashlib
 from pathlib import Path
 
 source = os.environ.get('DEIX_USB_IMAGE', 'build/deix_disk.img')
@@ -10,8 +10,13 @@ with tempfile.TemporaryDirectory() as tmp:
     shutil.copyfile(source, disk)
     mon = Path(tmp) / 'monitor.sock'
     master, slave = pty.openpty()
+    usb_boot = os.environ.get('DEIX_EHCI_USB_BOOT') == '1'
+    initial_hash = hashlib.sha256(disk.read_bytes()).digest()
+    drive = (['-drive', f'file={disk},format=raw,if=none,id=bootdisk',
+              '-device', 'usb-storage,drive=bootdisk,bus=ehci.0', '-boot', 'order=c']
+             if usb_boot else ['-drive', f'file={disk},format=raw,if=ide'])
     proc = subprocess.Popen(['qemu-system-x86_64', '-m', '512', '-vga', 'cirrus',
-        '-drive', f'file={disk},format=raw,if=ide', '-device', 'usb-ehci,id=ehci',
+        '-device', 'usb-ehci,id=ehci'] + drive + [
         '-device', 'usb-mouse,bus=ehci.0', '-display', 'none',
         '-serial', 'stdio', '-monitor', f'unix:{mon},server=on,wait=off', '-no-reboot'],
         stdin=slave, stdout=slave, stderr=subprocess.PIPE)
@@ -46,10 +51,14 @@ with tempfile.TemporaryDirectory() as tmp:
                     serial.extend(data)
             raise RuntimeError('missing marker: ' + repr(needle))
         wait_for('[loginui] графический вход, создание учётки: true'.encode())
+        if usb_boot:
+            wait_for('RAM-диск активен'.encode(), 90)
         wait_for(b'[usb] boot mouse', 90)
         sock.sendall(b'mouse_move 40 30\n'); reply()
         wait_for(b'[usb] mouse report applied', 30)
         if b'KERNEL PANIC' in serial: raise RuntimeError('kernel panic')
+        if usb_boot and hashlib.sha256(disk.read_bytes()).digest() != initial_hash:
+            raise RuntimeError('USB boot image was modified')
         print('PASS: EHCI USB mouse reports reach the UI', flush=True)
     except Exception as exc:
         print('FAIL:', exc, '\nSerial tail:', serial[-8000:].decode('utf-8','replace'), flush=True)
