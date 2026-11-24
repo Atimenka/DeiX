@@ -185,6 +185,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: QEMU BIOS VBE non-Bochs graphics
+        timeout-minutes: 5
+        run: DEIX_USB_IMAGE=/tmp/deix-usb-factory.img python3 tools/qemu_bios_vbe_test.py
+
+      - name: Upload BIOS VBE graphics log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-bios-vbe-log
+          path: /tmp/qemu_bios_vbe.log
+          if-no-files-found: ignore
+          retention-days: 7
+
       # ---------- 8. Регрессия: установка на второй диск ----------
       - name: QEMU install test - install to slave disk and boot from it
         timeout-minutes: 15
