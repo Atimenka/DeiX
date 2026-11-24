@@ -40,6 +40,10 @@ def start_qemu():
             'qemu-system-x86_64', '-m', '512',
             # USB-накопитель вместо if=ide: ATA-диска нет — эмулирует
             # загрузку с флешки/Ventoy.
+            # -usb: явно включает USB-поддержку в SeaBIOS. Без него
+            # SeaBIOS не сканирует usb-storage как загрузочное устройство
+            # (ни MBR, ни ядро не стартуют — serial пуст).
+            '-usb',
             '-drive', f'file={IMG},format=raw,if=none,id=disk0',
             '-device', 'usb-storage,drive=disk0',
             '-display', 'none', '-serial', 'stdio', '-monitor', 'none',
