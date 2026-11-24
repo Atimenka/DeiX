@@ -44,7 +44,7 @@ with tempfile.TemporaryDirectory() as tmp:
                     if not data: break
                     serial.extend(data)
             raise RuntimeError('missing marker: ' + repr(needle))
-        wait_for(b'[renderer] BIOS VBE framebuffer 800x600 active')
+        wait_for(b'[renderer] BIOS VBE framebuffer 800x600 active (16 bpp)')
         wait_for('[loginui] графический вход, создание учётки: true'.encode())
         for text in (b'alice\n', b'pass123\n', b'pass123\n'):
             os.write(master, text); time.sleep(.8)
