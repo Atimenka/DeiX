@@ -241,6 +241,12 @@ fn redraw(
             1,
         );
 
+        // Count only, never scan codes or typed characters. Helps distinguish
+        // an absent controller from an untranslated scan set on real hardware.
+        let (ack, count) = crate::keyboard::diagnostic_status();
+        let diag = alloc::format!("PS2: {}  EVENTS: {}", if ack { "ACK" } else { "NO ACK" }, count);
+        r.draw_text(8, h - 18, &diag, HINT, None);
+
         // Курсор рисуем последним, чтобы он был поверх панели.
         let m = crate::mouse::snapshot();
         draw_cursor(r, m.x, m.y);
@@ -434,6 +440,7 @@ pub fn run() -> Option<String> {
     // курсор реально сдвинулся, иначе 60 кадров в секунду впустую.
     let mut last_mouse = (-1i32, -1i32);
     let mut last_click = false;
+    let mut last_ps2_count = crate::keyboard::diagnostic_status().1;
 
     loop {
         let mode = Mode { cloud: cloud_mode, totp: totp_pending, disk: disk_unlock };
@@ -444,6 +451,9 @@ pub fn run() -> Option<String> {
                 // Клавиш нет — обслуживаем мышь.
                 let m = crate::mouse::snapshot();
                 let moved = (m.x, m.y) != last_mouse;
+                let count = crate::keyboard::diagnostic_status().1;
+                let input_changed = count != last_ps2_count;
+                last_ps2_count = count;
 
                 // Клик по полю переводит на него фокус. Клик по строке
                 // переключателя (LOCAL/CLOUD) включает облачный режим.
@@ -473,7 +483,7 @@ pub fn run() -> Option<String> {
                 }
                 last_click = m.left_button;
 
-                if moved || m.left_button {
+                if moved || m.left_button || input_changed {
                     last_mouse = (m.x, m.y);
                     let mode = Mode { cloud: cloud_mode, totp: totp_pending, disk: disk_unlock };
                     redraw(&user, &pass, &confirm, focus, setup, mode, &status, status_color);
