@@ -63,6 +63,11 @@ jobs:
           rustc --edition=2021 --test src/usb_hid_mouse.rs -o /tmp/deix-usb-hid-test
           /tmp/deix-usb-hid-test
 
+      - name: USB 2.0 descriptor and EHCI layout tests
+        run: |
+          rustc --edition=2021 --test tools/usb2_layout_tests.rs -o /tmp/deix-usb2-tests
+          /tmp/deix-usb2-tests
+
       # ---------- 4. Сборка ----------
       - name: Run build.sh
         run: |

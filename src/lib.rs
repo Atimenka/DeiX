@@ -54,6 +54,7 @@ mod mm;
 mod module;
 mod mouse;
 mod usb_hid_mouse;
+mod usb2;
 mod microcode;
 mod net;
 mod nouveau;
