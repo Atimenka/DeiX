@@ -1,7 +1,7 @@
 //! Host test for the real process table, with scheduler and I/O mocked.
 #![allow(dead_code, unused_variables)]
 extern crate alloc;
-#[macro_export] macro_rules! println { ($($arg:tt)*) => {}; }
+#[macro_export] macro_rules! println { ($($arg:tt)*) => {{}}; }
 mod spinlock {
     pub struct SpinLock<T>(std::sync::Mutex<T>);
     impl<T> SpinLock<T> {
