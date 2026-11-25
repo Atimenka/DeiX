@@ -11,6 +11,15 @@ __attribute__((noreturn)) void _start(void) {
 #ifdef DEIX_PROBE_FAULT
     (void)*(volatile unsigned char *)0x100000;
     call4(60, 99, 0, 0, 0);
+#elif defined(DEIX_PROBE_DENIED)
+    struct message message;
+    long pid = call4(0x44580003, 0, 0, 0, 0);
+    if (pid <= 0 || call4(0x44580001, pid, 1, 2, 3) != -1 ||
+        call4(0x44580002, (unsigned long)&message, 0, 0, 0) != -1)
+        call4(60, 42, 0, 0, 0);
+    unsigned long cs;
+    __asm__ volatile("mov %%cs, %0" : "=r"(cs));
+    call4(0x4458564d, 0x72, cs, 0, 0);
 #else
     struct message message;
     long pid = call4(0x44580003, 0, 0, 0, 0);

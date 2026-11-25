@@ -697,6 +697,17 @@ pub fn private_elf_selftest() -> bool {
         && process::info(pid).map_or(false, |p| p.state == ProcessState::Zombie && p.exit_code == Some(0));
     let reaped = process::reap(pid).ok() == Some(Some(0));
     if !ok || !reaped { return false; }
+    let denied_req = SpawnRequest { caps: 0, image_path: String::from("/system/tests/private_elf_denied.elf"), ..req.clone() };
+    RING3_TEST_RESULTS[1].store(0, Ordering::SeqCst);
+    let Ok(denied_pid) = process::spawn(&denied_req) else { return false; };
+    if process::exec(denied_pid).is_err() { let _ = process::kill(denied_pid, -1); let _ = process::reap(denied_pid); return false; }
+    let Ok(denied_info) = process::info(denied_pid) else { return false; };
+    let Some(denied_id) = denied_info.sched_id else { return false; };
+    join(denied_id);
+    let denied_ok = RING3_TEST_RESULTS[1].load(Ordering::SeqCst) == 1
+        && process::info(denied_pid).map_or(false, |p| p.state == ProcessState::Zombie && p.exit_code == Some(0));
+    let denied_reaped = process::reap(denied_pid).ok() == Some(Some(0));
+    if !denied_ok || !denied_reaped { return false; }
     let fault_req = SpawnRequest { image_path: String::from("/system/tests/private_elf_fault.elf"), ..req };
     let Ok(fault_pid) = process::spawn(&fault_req) else { return false; };
     if process::exec(fault_pid).is_err() { let _ = process::kill(fault_pid, -1); let _ = process::reap(fault_pid); return false; }
