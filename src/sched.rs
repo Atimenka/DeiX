@@ -684,7 +684,16 @@ pub fn private_elf_selftest() -> bool {
     let ok = RING3_TEST_RESULTS[0].load(Ordering::SeqCst) == 1
         && process::info(pid).map_or(false, |p| p.state == ProcessState::Zombie && p.exit_code == Some(0));
     let reaped = process::reap(pid).ok() == Some(Some(0));
-    ok && reaped
+    if !ok || !reaped { return false; }
+    let fault_req = SpawnRequest { image_path: String::from("/system/tests/private_elf_fault.elf"), ..req };
+    let Ok(fault_pid) = process::spawn(&fault_req) else { return false; };
+    if process::exec(fault_pid).is_err() { let _ = process::kill(fault_pid, -1); let _ = process::reap(fault_pid); return false; }
+    let Ok(fault_info) = process::info(fault_pid) else { return false; };
+    let Some(fault_id) = fault_info.sched_id else { return false; };
+    join(fault_id);
+    let faulted = process::info(fault_pid).map_or(false, |p| p.state == ProcessState::Zombie && p.exit_code == Some(-14));
+    let reaped_fault = process::reap(fault_pid).ok() == Some(Some(-14));
+    faulted && reaped_fault
 }
 
 // Real CR3 context-switch smoke test; it runs only in explicitly enabled
