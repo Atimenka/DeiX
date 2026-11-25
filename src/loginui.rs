@@ -247,7 +247,9 @@ fn redraw(
         let diag = alloc::format!("PS2: {} SET2: {} KEYS: {} AUX: {}", if ack { "ACK" } else { "NO ACK" }, if set2 { "ACK" } else { "NO ACK" }, count, aux);
         r.draw_text(8, h - 18, &diag, HINT, None);
         for (index, line) in crate::usb2::host::status().iter().take(2).enumerate() {
-            r.draw_text(8, h - 42 + index as i32 * 12, line, HINT, None);
+            let max_cells = ((w - 16).max(0) / 8) as usize;
+            let text = crate::ui::text::truncate_to_cells(line, max_cells).0;
+            r.draw_text(8, h - 58 + index as i32 * 16, text, HINT, None);
         }
 
         // Курсор рисуем последним, чтобы он был поверх панели.
@@ -472,6 +474,7 @@ pub fn run() -> Option<String> {
 
                 // Клик по полю переводит на него фокус. Клик по строке
                 // переключателя (LOCAL/CLOUD) включает облачный режим.
+                let click_changed = m.left_button != last_click;
                 if m.left_button && !last_click {
                     let hit = crate::renderer::with_renderer_ret(|r| {
                         let l = layout(r, setup);
@@ -498,7 +501,7 @@ pub fn run() -> Option<String> {
                 }
                 last_click = m.left_button;
 
-                if moved || m.left_button || input_changed || usb_changed {
+                if moved || click_changed || input_changed || usb_changed {
                     last_mouse = (m.x, m.y);
                     let mode = Mode { cloud: cloud_mode, totp: totp_pending, disk: disk_unlock };
                     redraw(&user, &pass, &confirm, focus, setup, mode, &status, status_color);
