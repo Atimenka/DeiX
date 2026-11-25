@@ -2339,20 +2339,14 @@ impl Desktop {
         for i in 0..self.windows.len() {
             if !self.windows[i].minimized {
                 let is_focused = self.is_focused(i);
-                draw_window(r, &theme, &self.windows[i], is_focused, is_dragging);
-            }
-        }
-
-        // Содержимое окна Updates: рисует desktop из общего центра
-        // обновлений (badge в Dock и окно видят одно состояние).
-        if let Some(center) = self.updates_center.as_ref() {
-            for w in self.windows.iter() {
-                if let WindowContent::Updates = w.content {
-                    if !w.minimized {
-                        let ui_m = crate::ui::metrics::UiMetrics::fluent();
-                        let content_y = w.y + ui_m.titlebar_height;
-                        updates_ui::draw_updates(r, &theme, w, center, content_y);
-                    }
+                let w = &self.windows[i];
+                draw_window(r, &theme, w, is_focused, is_dragging);
+                // Draw updates at its own Z position, not over every other window.
+                if let (WindowContent::Updates, Some(center)) = (&w.content, self.updates_center.as_ref()) {
+                    let content_y = w.y + crate::ui::metrics::UiMetrics::fluent().titlebar_height;
+                    let previous_clip = r.set_clip(Rect::new(w.x, content_y, w.width, w.height));
+                    updates_ui::draw_updates(r, &theme, w, center, content_y);
+                    r.set_clip(previous_clip);
                 }
             }
         }

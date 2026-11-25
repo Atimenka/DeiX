@@ -1636,6 +1636,9 @@ pub fn draw_window(
 
     let content_y = w.y + titlebar_h;
 
+    // Applications may draw long text or controls at fixed offsets. Keep every
+    // primitive inside the content rectangle, including partially visible glyphs.
+    let previous_clip = r.set_clip(crate::renderer::Rect::new(w.x, content_y, w.width, w.height));
     match &w.content {
         WindowContent::Terminal { lines, current_line } => {
             apps::draw_terminal(r, theme, w, lines, current_line, content_y);
@@ -1762,4 +1765,5 @@ pub fn draw_window(
             apps::media::draw_music_player(r, theme, w, list, *idx, status.as_ref(), content_y);
         }
     }
+    r.set_clip(previous_clip);
 }

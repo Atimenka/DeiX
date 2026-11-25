@@ -261,6 +261,7 @@ pub struct Renderer {
     pub back_buffer: Vec<u32>,
     pub damage: crate::ui::surface::DamageList,
     blur_scratch: Vec<u32>,
+    clip: Rect,
 }
 
 impl Renderer {
@@ -272,6 +273,7 @@ impl Renderer {
             back_buffer,
             damage: crate::ui::surface::DamageList::new(),
             blur_scratch: Vec::new(),
+            clip: Rect::new(0, 0, fb.width, fb.height),
         }
     }
 
@@ -281,6 +283,25 @@ impl Renderer {
 
     pub fn height(&self) -> u32 {
         self.fb.height
+    }
+
+    /// Restrict subsequent drawing to a screen-clamped rectangle. Returns the
+    /// previous clip so callers can restore it after drawing a window.
+    pub fn set_clip(&mut self, rect: Rect) -> Rect {
+        let old = self.clip;
+        let x0 = (rect.x as i64).clamp(0, self.fb.width as i64);
+        let y0 = (rect.y as i64).clamp(0, self.fb.height as i64);
+        let x1 = (rect.x as i64 + rect.w as i64).clamp(x0, self.fb.width as i64);
+        let y1 = (rect.y as i64 + rect.h as i64).clamp(y0, self.fb.height as i64);
+        self.clip = Rect::new(x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32);
+        old
+    }
+
+    #[inline]
+    fn in_clip(&self, x: i32, y: i32) -> bool {
+        x >= self.clip.x && y >= self.clip.y
+            && x < self.clip.x + self.clip.w as i32
+            && y < self.clip.y + self.clip.h as i32
     }
 
     pub fn add_damage(&mut self, rect: Rect) {
@@ -296,7 +317,7 @@ impl Renderer {
 
     #[inline]
     pub fn put_pixel(&mut self, x: i32, y: i32, color: Color) {
-        if x < 0 || y < 0 || x as u32 >= self.fb.width || y as u32 >= self.fb.height {
+        if !self.in_clip(x, y) {
             return;
         }
         let idx = y as usize * self.fb.width as usize + x as usize;
@@ -305,7 +326,7 @@ impl Renderer {
 
     #[inline]
     pub fn put_pixel_alpha(&mut self, x: i32, y: i32, color: Color, alpha: u8) {
-        if x < 0 || y < 0 || x as u32 >= self.fb.width || y as u32 >= self.fb.height {
+        if !self.in_clip(x, y) {
             return;
         }
         // Крайние значения альфы — без чтения фона и смешивания.
@@ -368,10 +389,10 @@ impl Renderer {
     }
 
     pub fn fill_rect(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) {
-        let x0 = x.max(0);
-        let y0 = y.max(0);
-        let x1 = (x + w as i32).min(self.fb.width as i32);
-        let y1 = (y + h as i32).min(self.fb.height as i32);
+        let x0 = x.max(self.clip.x);
+        let y0 = y.max(self.clip.y);
+        let x1 = x.saturating_add(w.min(i32::MAX as u32) as i32).min(self.clip.x + self.clip.w as i32);
+        let y1 = y.saturating_add(h.min(i32::MAX as u32) as i32).min(self.clip.y + self.clip.h as i32);
         if x0 >= x1 || y0 >= y1 {
             return;
         }
@@ -395,10 +416,10 @@ impl Renderer {
             self.fill_rect(x, y, w, h, color);
             return;
         }
-        let x0 = x.max(0);
-        let y0 = y.max(0);
-        let x1 = (x + w as i32).min(self.fb.width as i32);
-        let y1 = (y + h as i32).min(self.fb.height as i32);
+        let x0 = x.max(self.clip.x);
+        let y0 = y.max(self.clip.y);
+        let x1 = x.saturating_add(w.min(i32::MAX as u32) as i32).min(self.clip.x + self.clip.w as i32);
+        let y1 = y.saturating_add(h.min(i32::MAX as u32) as i32).min(self.clip.y + self.clip.h as i32);
         if x0 >= x1 || y0 >= y1 {
             return;
         }
@@ -415,11 +436,11 @@ impl Renderer {
 
     /// Смешивание горизонтального отрезка без учёта damage.
     fn blend_span(&mut self, x: i32, y: i32, w: i32, color: Color, alpha: u8) {
-        if w <= 0 || alpha == 0 || y < 0 || y as u32 >= self.fb.height {
+        if w <= 0 || alpha == 0 || y < self.clip.y || y >= self.clip.y + self.clip.h as i32 {
             return;
         }
-        let x0 = x.max(0);
-        let x1 = (x + w).min(self.fb.width as i32);
+        let x0 = x.max(self.clip.x);
+        let x1 = x.saturating_add(w).min(self.clip.x + self.clip.w as i32);
         if x0 >= x1 {
             return;
         }
@@ -457,10 +478,10 @@ impl Renderer {
     /// 2x2, размывается двумя проходами скользящего «ящика» и
     /// растягивается обратно. Стоимость линейна по числу пикселей.
     pub fn apply_blur_rect(&mut self, x: i32, y: i32, w: u32, h: u32, radius: usize) {
-        let x0 = x.max(0) as usize;
-        let y0 = y.max(0) as usize;
-        let x1 = ((x + w as i32).min(self.fb.width as i32)).max(0) as usize;
-        let y1 = ((y + h as i32).min(self.fb.height as i32)).max(0) as usize;
+        let x0 = x.max(self.clip.x) as usize;
+        let y0 = y.max(self.clip.y) as usize;
+        let x1 = x.saturating_add(w.min(i32::MAX as u32) as i32).min(self.clip.x + self.clip.w as i32).max(0) as usize;
+        let y1 = y.saturating_add(h.min(i32::MAX as u32) as i32).min(self.clip.y + self.clip.h as i32).max(0) as usize;
         if x0 >= x1 || y0 >= y1 || radius == 0 {
             return;
         }
@@ -508,10 +529,10 @@ impl Renderer {
     }
 
     pub fn shade_rect(&mut self, x: i32, y: i32, w: u32, h: u32, strength: u8) {
-        let x0 = x.max(0);
-        let y0 = y.max(0);
-        let x1 = (x + w as i32).min(self.fb.width as i32);
-        let y1 = (y + h as i32).min(self.fb.height as i32);
+        let x0 = x.max(self.clip.x);
+        let y0 = y.max(self.clip.y);
+        let x1 = x.saturating_add(w.min(i32::MAX as u32) as i32).min(self.clip.x + self.clip.w as i32);
+        let y1 = y.saturating_add(h.min(i32::MAX as u32) as i32).min(self.clip.y + self.clip.h as i32);
         if x0 >= x1 || y0 >= y1 {
             return;
         }
@@ -656,11 +677,11 @@ impl Renderer {
     }
 
     pub fn draw_hline(&mut self, x: i32, y: i32, w: u32, color: Color) {
-        if y < 0 || y as u32 >= self.fb.height {
+        if y < self.clip.y || y >= self.clip.y + self.clip.h as i32 {
             return;
         }
-        let x0 = x.max(0);
-        let x1 = (x + w as i32).min(self.fb.width as i32);
+        let x0 = x.max(self.clip.x);
+        let x1 = x.saturating_add(w.min(i32::MAX as u32) as i32).min(self.clip.x + self.clip.w as i32);
         if x0 >= x1 {
             return;
         }
@@ -932,8 +953,10 @@ impl Renderer {
             self.fill_rect(x, y, 8, 16, bg);
         }
         let glyph = crate::font::read_glyph(ch);
-        let (fw, fh) = (self.fb.width as i32, self.fb.height as i32);
-        if x >= 0 && y >= 0 && x + 8 <= fw && y + 16 <= fh {
+        let fw = self.fb.width as i32;
+        if x >= self.clip.x && y >= self.clip.y
+            && x.saturating_add(8) <= self.clip.x + self.clip.w as i32
+            && y.saturating_add(16) <= self.clip.y + self.clip.h as i32 {
             let stride = fw as usize;
             for (row, &byte) in glyph.iter().enumerate() {
                 if byte == 0 {

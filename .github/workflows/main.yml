@@ -73,6 +73,11 @@ jobs:
           rustc --edition=2021 --test src/ps2_set2.rs -o /tmp/deix-ps2-set2-tests
           /tmp/deix-ps2-set2-tests
 
+      - name: Renderer window clipping tests
+        run: |
+          rustc --edition=2021 --test tools/renderer_clip_tests.rs -o /tmp/deix-renderer-clip-tests
+          /tmp/deix-renderer-clip-tests
+
       # ---------- 4. Сборка ----------
       - name: Run build.sh
         run: |
