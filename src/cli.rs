@@ -1075,6 +1075,23 @@ fn cmd_gpu_nvinfo() {
             ru: "PCI устройство NVIDIA {:02x}:{:02x}.{} (vendor {:04x}, device {:04x})";
             device.bus, device.slot, device.function, device.vendor_id, device.device_id
         );
+        if crate::nvidia_probe::is_gt_520m(device.device_id) {
+            println!("  GeForce GT 520M PCI ID (silicon revision not verified)");
+        }
+        let read = |offset| crate::pci::read_config_u32(device.bus, device.slot, device.function, offset);
+        let command = read(0x04);
+        let bar0 = read(0x10);
+        let bar1 = if bar0 & 7 == 4 { read(0x14) } else { 0 };
+        if command != u32::MAX {
+            println!("  PCI memory decoding: {}, bus mastering: {}",
+                command & 2 != 0, command & 4 != 0);
+        }
+        if let Some(bar) = crate::nvidia_probe::decode_bar0(bar0, bar1) {
+            println!("  BAR0: {:#x} ({}-bit, prefetchable: {}; size unknown)",
+                bar.base, if bar.is_64_bit { 64 } else { 32 }, bar.prefetchable);
+        } else {
+            println!("  BAR0: unavailable or not a usable memory BAR");
+        }
     });
     if !found {
         println!("{}", t!(en: "No NVIDIA display controller found on PCI bus.",

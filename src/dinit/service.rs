@@ -152,18 +152,9 @@ impl ServiceDescriptor {
 
     /// Проверка, готов ли сервис к перезапуску с учётом backoff
     pub fn can_restart(&self, now: u64) -> bool {
-        if self.status == ServiceStatus::Stopped {
-            return false;
-        }
-        if self.crash_count >= self.max_restarts {
-            return false;
-        }
-        match self.restart_policy {
-            RestartPolicy::UnlessStopped => true,
-            RestartPolicy::Always | RestartPolicy::OnFailure => {
-                now.saturating_sub(self.last_crash_time) >= self.restart_backoff_ms
-            }
-        }
+        self.status == ServiceStatus::Restarting
+            && self.crash_count < self.max_restarts
+            && now.saturating_sub(self.last_crash_time) >= self.restart_backoff_ms
     }
 
     /// Отметка активности встроенной службы (подсистема ядра работает)
@@ -178,11 +169,6 @@ impl ServiceDescriptor {
         self.status = ServiceStatus::Running;
         self.pid = Some(pid);
         self.last_start_time = now;
-        // Если служба проработала достаточно долго (более 30 секунд), сбрасываем счётчик крашей
-        if now.saturating_sub(self.last_crash_time) > 30_000 {
-            self.crash_count = 0;
-            self.restart_backoff_ms = 500;
-        }
     }
 
     /// Обработка штатного завершения
@@ -197,9 +183,17 @@ impl ServiceDescriptor {
 
     /// Обработка аварийного падения / ликвидации
     pub fn mark_crashed(&mut self, signal: i32, now: u64) -> bool {
+        // Reset only after an actually running process survives the window;
+        // time spent waiting to restart does not count as healthy uptime.
+        if self.status == ServiceStatus::Running
+            && now.saturating_sub(self.last_start_time) >= 30_000
+        {
+            self.crash_count = 0;
+            self.restart_backoff_ms = 500;
+        }
         self.last_crash_time = now;
-        self.crash_count += 1;
-        self.restart_backoff_ms = (self.restart_backoff_ms * 2).min(10_000);
+        self.crash_count = self.crash_count.saturating_add(1);
+        self.restart_backoff_ms = self.restart_backoff_ms.saturating_mul(2).min(10_000);
         self.pid = None;
 
         if signal != 0 {

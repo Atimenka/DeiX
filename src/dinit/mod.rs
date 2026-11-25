@@ -293,6 +293,7 @@ impl Dinit {
             if !dead {
                 continue;
             }
+            self.namespace.detach_process(pid);
             let exit_code = crate::process::info(pid).ok().and_then(|i| i.exit_code).unwrap_or(-1);
 
             // Штатное завершение (код 0) при политике без принудительного
@@ -377,6 +378,11 @@ impl Dinit {
                     );
                 }
                 Err(e) => {
+                    // A failed launch consumes an attempt too: otherwise a missing
+                    // image is retried forever on every supervisor tick.
+                    if let Some(desc) = self.services.get_mut(&name) {
+                        desc.mark_crashed(-1, now);
+                    }
                     crate::diag::error(
                         crate::diag::ErrorCode::new(crate::diag::Subsystem::Dinit, 1),
                         &alloc::format!("dinit: служба {} не перезапущена: {}", name, e),

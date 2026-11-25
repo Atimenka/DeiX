@@ -73,6 +73,16 @@ jobs:
           rustc --edition=2021 --test src/ps2_set2.rs -o /tmp/deix-ps2-set2-tests
           /tmp/deix-ps2-set2-tests
 
+      - name: NVIDIA PCI resource decoding tests
+        run: |
+          rustc --edition=2021 --test src/nvidia_probe.rs -o /tmp/deix-nvidia-probe-tests
+          /tmp/deix-nvidia-probe-tests
+
+      - name: Dinit service lifecycle policy tests
+        run: |
+          rustc --edition=2021 --test tools/dinit_service_tests.rs -o /tmp/deix-dinit-tests
+          /tmp/deix-dinit-tests
+
       - name: Nano-Core IPC safety tests
         run: |
           rustc --edition=2021 --test tools/ipc_tests.rs -o /tmp/deix-ipc-tests

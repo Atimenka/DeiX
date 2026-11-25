@@ -62,6 +62,7 @@ mod usb2;
 mod microcode;
 mod net;
 mod nouveau;
+mod nvidia_probe;
 mod partition_map;
 mod pci;
 mod pkg;
