@@ -42,9 +42,10 @@ private address space, authenticated process IPC or bootstrap gate.
 * `src/usermode.rs` changes the active page tables in place for user memory,
   and the legacy Ring-3 return state and syscall stack are global. The
   scheduler can now switch owned CR3 roots and launch a low-level CPL3 task
-  with a task-specific kernel entry stack. This path is not yet wired into the
-  process manager, ELF loader or Dinit. Its syscall surface only handles exit
-  and a CI-only test call; it is not a Dinit ABI.
+  with a task-specific kernel entry stack. The private ELF loader can populate these pages and a CI-only QEMU test
+  reads a separately built probe from `/system/tests` and executes it at CPL3.
+  This path is not wired into the process manager or Dinit. Its syscall surface
+  only handles exit and a CI-only test call; it is not a Dinit ABI.
 * Nano-Core IPC is an in-kernel named queue, not a bounded authenticated
   process request/reply interface. VFS, logs, timers, process state, session
   events and security monitoring are currently accessed as internal functions.
@@ -79,3 +80,12 @@ do not cover all syscalls, devices, or scheduler interactions. NX is not
 enabled and Dinit does not use these spaces. Slot reuse frees a finished task's
 tables only after it is no longer current. This does not establish Dinit
 isolation or a working user-process API.
+
+## Private ELF probe
+
+`load_private` maps validated static PIE load segments into owned private
+pages, applies supported relative relocations and creates a zeroed stack.
+`DEIX_TEST_ADDRESS_SPACE=1` adds a separately compiled test ELF to the image
+and QEMU verifies execution from the system VFS in CPL3. This probe is not
+Dinit, does not implement its policy or ABI, and is not included in normal
+images. NX is not enabled; page permissions do not enforce non-executable data.
