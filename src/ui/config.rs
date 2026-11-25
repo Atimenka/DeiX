@@ -53,13 +53,14 @@ pub fn save() {
         t.accent.0 & 0xFF,
     );
     let data = format!(
-        "theme={}\naccent={},{},{}\nwallpaper={}\nprofile={}\n",
+        "theme={}\naccent={},{},{}\nwallpaper={}\nprofile={}\nmouse_speed={}\n",
         preset_token(t.preset),
         ar,
         ag,
         ab,
         t.wallpaper_style,
         effects::current().token(),
+        crate::mouse::speed(),
     );
     // Каталог может уже существовать — это не ошибка записи.
     let _ = ext2::mkdir_p(CONFIG_DIR);
@@ -115,6 +116,11 @@ pub fn load_once() {
                     if (i as usize) < theme::WALLPAPER_STYLES.len() {
                         t.wallpaper_style = i;
                     }
+                }
+            }
+            "mouse_speed" => {
+                if let Ok(n) = value.trim().parse::<u16>() {
+                    if (50..=300).contains(&n) { crate::mouse::set_speed(n); }
                 }
             }
             "profile" => {

@@ -876,7 +876,7 @@ impl Window {
     }
 
     pub fn new_display_settings(x: i32, _y: i32, cur_h: u32) -> Self {
-        let height = RESOLUTION_PRESETS.len() as u32 * 28 + 40;
+        let height = crate::ui::apps::settings::MOUSE_SPEED_Y as u32 + 38;
         let y_pos = (cur_h as i32 - height as i32) / 2;
         Window {
             id: 0,

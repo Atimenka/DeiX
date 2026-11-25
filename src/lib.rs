@@ -54,6 +54,7 @@ mod nanocore;
 mod mm;
 mod module;
 mod mouse;
+mod mouse_speed;
 mod usb_hid_mouse;
 mod usb2;
 mod microcode;

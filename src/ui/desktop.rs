@@ -404,7 +404,7 @@ impl Desktop {
     }
 
     pub fn open_display_settings(&mut self, screen_w: i32, screen_h: i32) {
-        let dh = RESOLUTION_PRESETS.len() as u32 * 28 + 40;
+        let dh = settings_ui::MOUSE_SPEED_Y as u32 + 38;
         self.open_placed(240, dh, screen_w, screen_h, |x, y| {
             let mut w = Window::new_display_settings(x, 0, screen_h as u32);
             w.y = y;
@@ -1997,6 +1997,14 @@ impl Desktop {
                 }
             }
             WindowContent::DisplaySettings { status } => {
+                for (i, speed) in settings_ui::MOUSE_SPEED_CHOICES.iter().enumerate() {
+                    if settings_ui::mouse_speed_rect(i).contains(rel_x, rel_y) {
+                        crate::mouse::set_speed(*speed);
+                        crate::ui::config::save();
+                        self.dirty = true;
+                        return;
+                    }
+                }
                 // Строки рисуются с content_y + 32 шагом 28 (см.
                 // draw_display_settings); клики выше первой строки
                 // (заголовок) не должны выбирать режим.
@@ -3225,7 +3233,7 @@ const METRICS_H: u32 = 96;
 
 /// Виджет обновлений: статус центра + клик → открыть Updates.
 const UPDATES_W: i32 = 200;
-const UPDATES_H: u32 = 72;
+const UPDATES_H: u32 = 82;
 /// Масштаб цифр и шаг между ними (глиф 8x16 увеличивается в целое число раз).
 const CLOCK_SCALE: i32 = 4;
 const CLOCK_ADVANCE: i32 = 7 * CLOCK_SCALE;
@@ -3346,11 +3354,9 @@ fn draw_metrics_widget(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_
     } else {
         0
     };
-    r.draw_text(
-        x + 12, y + 26,
-        &format!("CPU top: {:>2}% ({})  idle {}%", busy_pct, busy_name, idle_pct),
-        theme.text_primary, None,
-    );
+    let cpu_line = format!("CPU {}% {}", busy_pct, busy_name);
+    let _ = idle_pct;
+    r.draw_text(x + 12, y + 26, crate::ui::text::truncate_to_cells(&cpu_line, ((area.w - 24) / 8) as usize).0, theme.text_primary, None);
 
     // Полоса загрузки CPU.
     let bar_w: u32 = 120;
@@ -3363,7 +3369,7 @@ fn draw_metrics_widget(r: &mut Renderer, theme: &UiTheme, screen_w: i32, screen_
     let ram_pct = if total > 0 { (allocated * 100) / total } else { 0 };
     r.draw_text(
         x + 12, y + 58,
-        &format!("RAM: {} KB / {} KB ({}%)", allocated / 1024, total / 1024, ram_pct),
+        &format!("RAM: {} / {} KB", allocated / 1024, total / 1024),
         theme.text_secondary, None,
     );
     r.fill_rounded_rect(x + 12, y + 72, bar_w, 6, 2, theme.titlebar_inactive);
@@ -3428,12 +3434,9 @@ fn draw_updates_widget(
         _ => theme.text_secondary,
     };
     r.draw_text(x + 12, y + 28, status_line, color, None);
-    r.draw_text(
-        x + 12, y + 44,
-        &format!("{}  |  {}", crate::OS_RELEASE, desktop.updates_center.as_ref().map(|c| c.installed_line()).unwrap_or_default()),
-        theme.text_secondary, None,
-    );
-    r.draw_text(x + 12, y + 56, "click to open", theme.text_secondary, None);
+    let installed = format!("{}", crate::OS_RELEASE);
+    r.draw_text(x + 12, y + 44, crate::ui::text::truncate_to_cells(&installed, ((area.w - 24) / 8) as usize).0, theme.text_secondary, None);
+    r.draw_text(x + 12, y + 62, "click to open", theme.text_secondary, None);
 
     r.add_damage(area);
 }

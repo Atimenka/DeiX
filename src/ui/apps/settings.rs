@@ -389,6 +389,10 @@ fn draw_wallpaper_swatch(
     }
 }
 
+pub const MOUSE_SPEED_CHOICES: [u16; 5] = [50, 100, 150, 200, 300];
+pub const MOUSE_SPEED_Y: i32 = 32 + RESOLUTION_PRESETS.len() as i32 * 28 + 42;
+pub fn mouse_speed_rect(i: usize) -> Rect { Rect::new(12 + i as i32 * 43, MOUSE_SPEED_Y, 40, 26) }
+
 pub fn draw_display_settings(
     r: &mut Renderer,
     theme: &UiTheme,
@@ -417,6 +421,16 @@ pub fn draw_display_settings(
         }
 
         ry += 28;
+    }
+
+    r.draw_text(w.x + 12, content_y + MOUSE_SPEED_Y - 20, "MOUSE SPEED (RELATIVE)", theme.accent, None);
+    for (i, speed) in MOUSE_SPEED_CHOICES.iter().enumerate() {
+        let rect = mouse_speed_rect(i);
+        let selected = crate::mouse::speed() == *speed;
+        let bg = if selected { theme.accent } else { theme.titlebar_inactive };
+        let fg = if selected { Color::WHITE } else { theme.text_primary };
+        r.fill_rounded_rect(w.x + rect.x, content_y + rect.y, rect.w, rect.h, 4, bg);
+        r.draw_text(w.x + rect.x + 4, content_y + rect.y + 5, &format!("{}", speed), fg, None);
     }
 
     // Причина отказа последней попытки (нехватка памяти ядра) — реальное

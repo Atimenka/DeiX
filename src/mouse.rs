@@ -33,6 +33,7 @@ struct MouseState {
     packet_index: usize,
     screen_width: i32,
     screen_height: i32,
+    speed: crate::mouse_speed::MotionScaler,
 }
 
 static STATE: SpinLock<MouseState> = SpinLock::new(MouseState {
@@ -43,6 +44,7 @@ static STATE: SpinLock<MouseState> = SpinLock::new(MouseState {
     packet_index: 0,
     screen_width: 640,
     screen_height: 480,
+    speed: crate::mouse_speed::MotionScaler::new(),
 });
 
 // Controller commands and mouse ACKs share the same port as the keyboard.
@@ -179,8 +181,9 @@ pub fn on_data_byte(byte: u8) {
 
         // PS/2 мышь считает Y вверх положительным — экранные координаты
         // растут вниз, поэтому инвертируем.
-        state.x = (state.x + dx).clamp(0, state.screen_width - 1);
-        state.y = (state.y - dy).clamp(0, state.screen_height - 1);
+        let (dx, dy) = state.speed.scale(dx, -dy);
+        state.x = state.x.saturating_add(dx).clamp(0, state.screen_width.saturating_sub(1).max(0));
+        state.y = state.y.saturating_add(dy).clamp(0, state.screen_height.saturating_sub(1).max(0));
     }
 }
 
@@ -224,10 +227,19 @@ pub struct MouseSnapshot {
 pub fn usb_report(dx: i32, dy: i32, buttons: u32) {
     without_interrupts(|| {
         let mut state = STATE.lock();
+        let (dx, dy) = state.speed.scale(dx, dy);
         state.x = state.x.saturating_add(dx).clamp(0, state.screen_width.saturating_sub(1).max(0));
         state.y = state.y.saturating_add(dy).clamp(0, state.screen_height.saturating_sub(1).max(0));
         state.left_button = buttons & 1 != 0;
     });
+}
+
+/// Sensitivity affects relative PS/2 and USB reports, not absolute VM pointers.
+pub fn set_speed(percent: u16) {
+    without_interrupts(|| STATE.lock().speed.set_percent(percent));
+}
+pub fn speed() -> u16 {
+    without_interrupts(|| STATE.lock().speed.percent())
 }
 
 pub fn snapshot() -> MouseSnapshot {
