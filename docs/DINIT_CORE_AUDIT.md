@@ -45,11 +45,14 @@ private address space, authenticated process IPC or bootstrap gate.
   with a task-specific kernel entry stack. The private ELF loader can populate these pages and a CI-only QEMU test
   reads a separately built probe from `/system/tests` and executes it at CPL3.
   ELF tasks are now linked to the process table and exit/fault accounting,
-  but Dinit does not use this path. Its syscall surface only handles exit
-  and a CI-only test call; it is not a Dinit ABI.
-* Nano-Core IPC is an in-kernel named queue, not a bounded authenticated
-  process request/reply interface. VFS, logs, timers, process state, session
-  events and security monitoring are currently accessed as internal functions.
+  but Dinit does not use this path. Its restricted syscall surface supports
+  exit and the experimental bounded mailbox ABI in `PROCESS_IPC_V1.md`; this
+  is not yet a Dinit control protocol.
+* Nano-Core IPC is an in-kernel named queue. Separately, an experimental
+  bounded private-process mailbox authenticates its sender and checks IPC
+  capabilities; it does not yet implement a Dinit request/reply protocol.
+  VFS, logs, timers, process state, session events and security monitoring
+  are currently accessed as internal functions.
 * The heartbeat trackers monitor Nano-Core services; they do not supervise an
   independent Dinit process. Current Dinit startup returns no bootstrap result
   and does not reconcile surviving services after Dinit failure.
