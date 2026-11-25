@@ -72,11 +72,15 @@ pub fn bios_framebuffer() -> Option<Framebuffer> {
         let addr = core::ptr::read_volatile(p.add(4) as *const u32) as usize;
         let pitch = core::ptr::read_volatile(p.add(8) as *const u16) as usize;
         let bpp = core::ptr::read_volatile(p.add(10)) as u16;
+        let width = core::ptr::read_volatile(p.add(12) as *const u16) as u32;
+        let height = core::ptr::read_volatile(p.add(14) as *const u16) as u32;
         if bpp != 16 && bpp != 24 && bpp != 32 { return None; }
-        if addr < 0x4000_0000 || addr & 3 != 0 || pitch < 800 * (bpp as usize / 8) || pitch > 32768 { return None; }
+        // Bound memory use and reject corrupted handoffs before allocation.
+        if !matches!((width, height), (1366, 768) | (1360, 768) | (1280, 720) | (800, 600)) { return None; }
+        if addr < 0x4000_0000 || addr & 3 != 0 || pitch < width as usize * (bpp as usize / 8) || pitch > 32768 { return None; }
         if bpp == 32 && pitch & 3 != 0 { return None; }
-        if addr.checked_add(pitch.checked_mul(600)?)? > 0x1_0000_0000 { return None; }
-        Some(Framebuffer { addr, width: 800, height: 600, bpp, pitch })
+        if addr.checked_add(pitch.checked_mul(height as usize)?)? > 0x1_0000_0000 { return None; }
+        Some(Framebuffer { addr, width, height, bpp, pitch })
     }
 }
 

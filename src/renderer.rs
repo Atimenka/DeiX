@@ -1030,7 +1030,7 @@ pub fn ensure_framebuffer() {
     if let Some(fb) = crate::vbe::bios_framebuffer() {
         crate::mouse::set_screen_size(fb.width, fb.height);
         set_active_framebuffer(fb);
-        crate::serial_println!("[renderer] BIOS VBE framebuffer 800x600 active ({} bpp)", fb.bpp);
+        crate::serial_println!("[renderer] BIOS VBE framebuffer {}x{} active ({} bpp)", fb.width, fb.height, fb.bpp);
         return;
     }
     if let Some(info) = crate::gpu::detect() {

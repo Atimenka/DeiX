@@ -258,13 +258,15 @@ bits 16
     jmp CODE_SEG:pm_go
 
 ; VBE handoff at 0x6800 (outside bootmap / transfer buffers).
-; Accept 16-bit RGB565 or 24/32-bit RGB at 800x600 with linear framebuffer. On any
-; failure leave text mode untouched. Do not touch Bochs DISPI path.
+; Prefer common laptop HD modes, then retain 800x600 as a safe fallback.
+; Only accept RGB565 or 24/32-bit RGB with a validated linear framebuffer.
+; On failure leave text mode untouched. Do not touch the Bochs DISPI path.
 setup_bios_framebuffer:
     xor ax, ax
     mov ds, ax
     mov es, ax
     mov dword [0x6800], 0
+%ifndef FORCE_BIOS_VBE
     mov dx, 0x1ce
     xor ax, ax
     out dx, ax
@@ -274,6 +276,7 @@ setup_bios_framebuffer:
     jb .probe
     cmp ax, 0xb0c5
     jbe .done
+%endif
 .probe:
     mov dword [0x6000], 'VBE2'
     mov di, 0x6000
@@ -287,6 +290,15 @@ setup_bios_framebuffer:
     mov ds, ax
     cmp dword [0x6000], 'VESA'
     jne .done
+    mov word [vbe_resolution_index], 0
+.resolution:
+    mov si, [vbe_resolution_index]
+    cmp si, 16                   ; four width/height pairs, best first
+    jae .done
+    mov ax, [vbe_resolutions + si]
+    mov [vbe_width], ax
+    mov ax, [vbe_resolutions + si + 2]
+    mov [vbe_height], ax
     mov ax, [0x600e]
     mov [vbe_list_offset], ax
     mov ax, [0x6010]
@@ -294,14 +306,14 @@ setup_bios_framebuffer:
     mov word [vbe_tries], 256
 .next:
     cmp word [vbe_tries], 0
-    je .done
+    je .next_resolution
     dec word [vbe_tries]
     mov ax, [vbe_list_segment]
     mov fs, ax
     mov si, [vbe_list_offset]
     mov cx, [fs:si]
     cmp cx, 0xffff
-    je .done
+    je .next_resolution
     add word [vbe_list_offset], 2
     jnc .no_carry
     add word [vbe_list_segment], 0x1000
@@ -322,9 +334,11 @@ setup_bios_framebuffer:
     and ax, 0x0091
     cmp ax, 0x0091
     jne .next
-    cmp word [0x5012], 800
+    mov ax, [vbe_width]
+    cmp word [0x5012], ax
     jne .next
-    cmp word [0x5014], 600
+    mov ax, [vbe_height]
+    cmp word [0x5014], ax
     jne .next
     cmp byte [0x5019], 32
     je .depth_ok
@@ -340,10 +354,12 @@ setup_bios_framebuffer:
 .pitch_format_ok:
     cmp byte [0x501b], 6
     jne .next
-    movzx ax, byte [0x5019]
-    shr ax, 3
-    imul ax, ax, 800
-    cmp [0x5010], ax
+    movzx eax, byte [0x5019]
+    shr eax, 3
+    movzx edx, word [vbe_width]
+    imul eax, edx
+    movzx edx, word [0x5010]
+    cmp edx, eax
     jb .next
     cmp word [0x5010], 32768
     ja .next
@@ -371,13 +387,18 @@ setup_bios_framebuffer:
     jnz .next
     mov [0x6804], eax
     movzx edx, word [0x5010]
-    imul edx, edx, 600
+    movzx ecx, word [vbe_height]
+    imul edx, ecx
     add edx, eax
     jc .next
     mov ax, [0x5010]
     mov [0x6808], ax
     mov al, [0x5019]
     mov [0x680a], al
+    mov ax, [vbe_width]
+    mov [0x680c], ax
+    mov ax, [vbe_height]
+    mov [0x680e], ax
     mov bx, [vbe_mode]
     or bx, 0x4000
     mov ax, 0x4f02
@@ -394,6 +415,9 @@ setup_bios_framebuffer:
     xor ax, ax
     mov ds, ax
     jmp .next
+.next_resolution:
+    add word [vbe_resolution_index], 4
+    jmp .resolution
 .done:
     xor ax, ax
     mov ds, ax
@@ -455,6 +479,10 @@ vbe_list_offset: dw 0
 vbe_list_segment: dw 0
 vbe_tries: dw 0
 vbe_mode: dw 0
+vbe_resolution_index: dw 0
+vbe_width: dw 0
+vbe_height: dw 0
+vbe_resolutions: dw 1366, 768, 1360, 768, 1280, 720, 800, 600
 boot_drive:    db 0
 fill_active:   db 0              ; 0 = читаем ядро, 1 = заполняем RAM-диск
 requested_count: dw 0            ; DAP count may be modified by BIOS

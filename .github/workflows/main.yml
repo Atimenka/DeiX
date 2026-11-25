@@ -229,6 +229,10 @@ jobs:
         timeout-minutes: 5
         run: DEIX_USB_IMAGE=/tmp/deix-usb-factory.img python3 tools/qemu_bios_vbe_test.py
 
+      - name: QEMU BIOS VBE HD selection
+        timeout-minutes: 5
+        run: DEIX_USB_IMAGE=/tmp/deix-usb-factory.img python3 tools/qemu_bios_hd_test.py
+
       - name: Upload BIOS VBE graphics log
         if: always()
         uses: actions/upload-artifact@v4
