@@ -393,28 +393,33 @@ impl Dinit {
 
         // 2. Обработка очереди сигналов ликвидации от Security Monitor
         while let Some(kill) = self.security.kill_signals.pop() {
-            crate::diag::critical_with(
-                crate::diag::ErrorCode::new(crate::diag::Subsystem::Security, 5),
-                crate::diag::Action::TerminateProcess,
-                &alloc::format!("security: ликвидация pid {} — {}", kill.pid, kill.reason),
-            );
-            crate::serial_println!("[dinit:security] ИСПОЛНЕНИЕ: {}", kill.describe());
-            self.audit.record(
-                now,
-                kill.pid,
-                0,
-                AuditOp::KillDispatched,
-                &kill.reason,
-                AuditResult::Terminated,
-                "Ликвидация вредоносного процесса",
-            );
-            // Ликвидация в планировщике ядра
-            crate::sched::terminate(kill.pid as usize);
-
-            // Обновление состояния службы, если этот PID принадлежал ей
-            for (_, desc) in self.services.iter_mut() {
-                if desc.pid == Some(kill.pid) {
-                    desc.mark_crashed(kill.signal, now);
+            // The signal carries a PID, not a scheduler slot. Resolve through
+            // the process manager so only the target's task is terminated.
+            match crate::process::kill(kill.pid, kill.signal) {
+                Ok(()) => {
+                    crate::diag::critical_with(
+                        crate::diag::ErrorCode::new(crate::diag::Subsystem::Security, 5),
+                        crate::diag::Action::TerminateProcess,
+                        &alloc::format!("security: ликвидация pid {} — {}", kill.pid, kill.reason),
+                    );
+                    self.audit.record(now, kill.pid, 0, AuditOp::KillDispatched,
+                        &kill.reason, AuditResult::Terminated, "Процесс остановлен");
+                    let mut managed = false;
+                    for desc in self.services.values_mut() {
+                        if desc.pid == Some(kill.pid) {
+                            desc.mark_crashed(kill.signal, now);
+                            managed = true;
+                        }
+                    }
+                    if managed {
+                        self.namespace.detach_process(kill.pid);
+                        let _ = crate::process::reap(kill.pid);
+                    }
+                }
+                Err(e) => {
+                    self.audit.record(now, kill.pid, 0, AuditOp::KillDispatched,
+                        &kill.reason, AuditResult::Failed, "Процесс не остановлен");
+                    crate::serial_println!("[dinit:security] PID {} не остановлен: {}", kill.pid, e.message());
                 }
             }
         }
