@@ -46,7 +46,10 @@ pub fn write_byte(byte: u8) {
 
 /// Есть ли принятый байт в приёмном буфере COM1 (LSR bit 0 — Data Ready).
 pub fn is_data_ready() -> bool {
-    unsafe { inb(COM1 + 5) & 0x01 != 0 }
+    let status = unsafe { inb(COM1 + 5) };
+    // An unimplemented I/O port commonly reads as all ones. Treating 0xff
+    // as "data ready" starves the PS/2 and mouse pollers on real laptops.
+    status != 0xff && status & 0x01 != 0
 }
 
 /// Блокирующее чтение одного байта из COM1.

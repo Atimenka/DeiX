@@ -358,10 +358,12 @@ fn mode_toggle_y(r: &crate::renderer::Renderer) -> i32 {
 
 /// Читает байт из PS/2 или COM1. `None`, если ввода нет.
 fn poll_key() -> Option<u8> {
-    if crate::serial::is_data_ready() {
+    if let Some(key) = crate::keyboard::try_read_char() {
+        Some(key)
+    } else if crate::serial::is_data_ready() {
         Some(crate::serial::read_byte())
     } else {
-        crate::keyboard::try_read_char()
+        None
     }
 }
 

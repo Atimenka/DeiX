@@ -241,6 +241,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: QEMU input with COM1 absent
+        timeout-minutes: 5
+        run: |
+          DEIX_USB_IMAGE=/tmp/deix-usb-factory.img python3 tools/qemu_no_uart_input_test.py
+          DEIX_USB_IMAGE=/tmp/deix-usb-factory.img DEIX_USB_MOUSE=1 python3 tools/qemu_no_uart_input_test.py
+
       # ---------- 8. Регрессия: установка на второй диск ----------
       - name: QEMU install test - install to slave disk and boot from it
         timeout-minutes: 15
