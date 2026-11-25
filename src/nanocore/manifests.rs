@@ -85,6 +85,10 @@ pub fn parse(text: &str) -> Option<Vec<ServiceManifest>> {
             continue;
         }
         if line.starts_with('[') && line.ends_with(']') {
+            if let Some(cur) = current.take() {
+                if cur.name.is_empty() || cur.spawn.is_empty() { return None; }
+                services.push(cur);
+            }
             let title = line[1..line.len() - 1].trim().to_ascii_lowercase();
             if title == "service" {
                 current = Some(ServiceManifest::new("", ""));
@@ -130,9 +134,8 @@ pub fn parse(text: &str) -> Option<Vec<ServiceManifest>> {
 
     // Завершаем последний блок (имя обязательно).
     if let Some(cur) = current {
-        if !cur.name.is_empty() && !cur.spawn.is_empty() {
-            services.push(cur);
-        }
+        if cur.name.is_empty() || cur.spawn.is_empty() { return None; }
+        services.push(cur);
     }
     if services.is_empty() {
         None

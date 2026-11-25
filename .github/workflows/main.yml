@@ -78,6 +78,11 @@ jobs:
           rustc --edition=2021 --test src/nvidia_probe.rs -o /tmp/deix-nvidia-probe-tests
           /tmp/deix-nvidia-probe-tests
 
+      - name: Service dependency and manifest tests
+        run: |
+          rustc --edition=2021 --test tools/nanocore_policy_tests.rs -o /tmp/deix-nanocore-policy-tests
+          /tmp/deix-nanocore-policy-tests
+
       - name: Dinit service lifecycle policy tests
         run: |
           rustc --edition=2021 --test tools/dinit_service_tests.rs -o /tmp/deix-dinit-tests

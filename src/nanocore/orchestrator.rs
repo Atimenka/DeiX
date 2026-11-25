@@ -156,6 +156,11 @@ pub fn init(mode: RunMode) -> bool {
             });
         }
 
+        if let Some((service, dependency)) = orch.dag.missing_dependency() {
+            log::error(&format!("DAG: service {} has unknown dependency {}", service, dependency));
+            dag_ok = false;
+        }
+
         // IPC-каналы.
         {
             let mut bus = ipc::IPC.lock();
@@ -204,6 +209,17 @@ pub fn boot_chain() {
         let Some(spawn_spec) = spawn_spec else {
             continue;
         };
+        let ready = ORCHESTRATOR.lock().dag.dependencies_ready(name);
+        if !ready {
+            let mut orch = ORCHESTRATOR.lock();
+            if let Some(job) = orch.jobs.iter_mut().find(|j| &j.manifest.name == name) {
+                job.running = false;
+                job.stop_reason = Some(String::from("dependency failed"));
+            }
+            orch.boot_failures += 1;
+            log::error(&format!("service {} blocked by failed dependency", name));
+            continue;
+        }
 
         let result = match spawn_spec.as_str() {
             sp if sp.starts_with("proc:") => spawn_proc_task(&sp[5..]),
@@ -261,16 +277,13 @@ pub fn boot_chain() {
 fn spawn_proc_task(fn_name: &str) -> bool {
     match fn_name {
         "nanocore_hb_monitor" => {
-            sched::spawn("nanocore-hb-monitor", hb_monitor_task);
-            true
+            sched::spawn("nanocore-hb-monitor", hb_monitor_task).is_some()
         }
         "nanocore_ipc_drain" => {
-            sched::spawn("nanocore-ipc-drain", ipc_drain_task);
-            true
+            sched::spawn("nanocore-ipc-drain", ipc_drain_task).is_some()
         }
         "nanocore_log_report" => {
-            sched::spawn("nanocore-log-report", log_report_task);
-            true
+            sched::spawn("nanocore-log-report", log_report_task).is_some()
         }
         _ => {
             log::error(&format!("unknown proc task '{}'", fn_name));
@@ -291,8 +304,18 @@ fn spawn_process(cmd: &str) -> bool {
     };
     match process::spawn(&req) {
         Ok(pid) => {
-            log::info(&format!("process '{}' spawned pid {}", cmd, pid));
-            true
+            match process::exec(pid) {
+                Ok(()) => {
+                    log::info(&format!("process '{}' started pid {}", cmd, pid));
+                    true
+                }
+                Err(e) => {
+                    log::error(&format!("process exec '{}' failed: {}", cmd, e.message()));
+                    let _ = process::kill(pid, -1);
+                    let _ = process::reap(pid);
+                    false
+                }
+            }
         }
         Err(e) => {
             log::error(&format!("process spawn '{}' failed: {}", cmd, e.message()));

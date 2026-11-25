@@ -94,13 +94,17 @@ impl Dag {
         if self.get(&name).is_some() {
             return true; // уже есть — обновление пропускаем
         }
-        // Проверка циклов: DFS по зависимостям с отметкой «в работе».
-        let mut on_stack = alloc::collections::BTreeSet::new();
-        if !self.detect_cycle(&name, &mut on_stack) {
-            // Цикл — этап не добавляем.
+        // Validate with the prospective node present: earlier nodes may
+        // reference it already, including direct and indirect cycles.
+        self.stages.push(StageRecord::new(name, deps.iter().map(|d| String::from(*d)).collect()));
+        let valid = self.stages.iter().all(|stage| {
+            let mut on_stack = alloc::collections::BTreeSet::new();
+            self.detect_cycle(&stage.name, &mut on_stack)
+        });
+        if !valid {
+            self.stages.pop();
             return false;
         }
-        self.stages.push(StageRecord::new(name, deps.iter().map(|d| String::from(*d)).collect()));
         self.recompute_waves();
         true
     }
@@ -157,6 +161,23 @@ impl Dag {
         }
         memo.insert(String::from(name), max);
         max
+    }
+
+    /// Unknown dependency names must be rejected after all nodes are added.
+    pub fn missing_dependency(&self) -> Option<(&str, &str)> {
+        for stage in &self.stages {
+            for dep in &stage.deps {
+                if self.get(dep).is_none() { return Some((&stage.name, dep)); }
+            }
+        }
+        None
+    }
+
+    /// Whether all dependencies completed successfully, not merely exist.
+    pub fn dependencies_ready(&self, name: &str) -> bool {
+        self.get(name).map_or(false, |stage| stage.deps.iter().all(|dep| {
+            self.get(dep).map_or(false, |record| record.ok)
+        }))
     }
 
     /// Порядок выполнения: этапы в порядке возрастания волн (стабильный
