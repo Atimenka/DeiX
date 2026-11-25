@@ -40,10 +40,11 @@ private address space, authenticated process IPC or bootstrap gate.
   restart reconciliation. Capabilities are recorded but the required scoped
   process-facing Dinit API is not implemented.
 * `src/usermode.rs` changes the active page tables in place for user memory,
-  and its Ring-3 return state and syscall stack are global. `src/sched.rs`
-  can switch a task's owned CR3, but there is no integrated Ring-3 process
-  launcher using this facility. These mechanisms do not establish isolation
-  for a separately running Dinit.
+  and the legacy Ring-3 return state and syscall stack are global. The
+  scheduler can now switch owned CR3 roots and launch a low-level CPL3 task
+  with a task-specific kernel entry stack. This path is not yet wired into the
+  process manager, ELF loader or Dinit. Its syscall surface only handles exit
+  and a CI-only test call; it is not a Dinit ABI.
 * Nano-Core IPC is an in-kernel named queue, not a bounded authenticated
   process request/reply interface. VFS, logs, timers, process state, session
   events and security monitoring are currently accessed as internal functions.
@@ -72,7 +73,9 @@ host tests exercise construction and allocation ownership, not CPU privilege
 checks. The scheduler can retain and switch these roots. A CI-only QEMU boot
 self-test runs two kernel-mode tasks at the same virtual address with different
 backing pages, yielding between them, and verifies that the kernel root is
-restored. This is not a Ring-3 test. NX is not enabled and Dinit does not use
-these spaces. Slot reuse frees a finished task's tables only after it is no
-longer the current task. This does not establish Dinit isolation or a working
-user-process API.
+restored. A second QEMU test executes two CPL3 tasks using distinct pages and
+checks that a third CPL3 task faults when reading kernel memory. These tests
+do not cover all syscalls, devices, or scheduler interactions. NX is not
+enabled and Dinit does not use these spaces. Slot reuse frees a finished task's
+tables only after it is no longer current. This does not establish Dinit
+isolation or a working user-process API.
