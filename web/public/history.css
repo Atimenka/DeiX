@@ -15,3 +15,6 @@
 .milestone-number { font-size: .7rem; font-weight: 750; letter-spacing: .13em; color: #168a80; }
 .milestone-tag { display: inline-block; margin-top: 12px; padding: 7px 11px; border: 1px solid rgba(39, 180, 168, .35); border-radius: 999px; font-size: .75rem; font-weight: 700; }
 @media (max-width: 720px) { .history-layout { grid-template-columns: 1fr; gap: 24px; } .milestone-card { border-radius: 16px; } }
+.milestone-photo { margin: 24px 0 0; }
+.milestone-photo img { display: block; width: 100%; height: auto; border-radius: 14px; }
+.milestone-photo figcaption { margin-top: 10px; font-size: .8rem; line-height: 1.5; opacity: .8; }
