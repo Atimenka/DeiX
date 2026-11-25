@@ -56,6 +56,7 @@ mod module;
 mod mouse;
 mod mouse_speed;
 mod usb_hid_mouse;
+mod usb_keyboard;
 mod usb2;
 mod microcode;
 mod net;

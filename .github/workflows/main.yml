@@ -73,6 +73,11 @@ jobs:
           rustc --edition=2021 --test src/ps2_set2.rs -o /tmp/deix-ps2-set2-tests
           /tmp/deix-ps2-set2-tests
 
+      - name: USB boot keyboard tests
+        run: |
+          rustc --edition=2021 --test tools/usb_keyboard_tests.rs -o /tmp/deix-usb-keyboard-tests
+          /tmp/deix-usb-keyboard-tests
+
       - name: Relative mouse speed tests
         run: |
           rustc --edition=2021 --test src/mouse_speed.rs -o /tmp/deix-mouse-speed-tests
@@ -235,6 +240,9 @@ jobs:
           path: /tmp/qemu_ps2_mouse.log
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: QEMU EHCI USB keyboard without PS/2
+        run: DEIX_USB_IMAGE=/tmp/deix-usb-factory.img python3 tools/qemu_ehci_keyboard_test.py
 
       - name: QEMU EHCI USB mouse
         timeout-minutes: 5

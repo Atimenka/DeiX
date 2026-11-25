@@ -4,18 +4,29 @@ use super::hid::{self, MouseLayout};
 use alloc::vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 static FIRST_MOVEMENT_LOGGED: AtomicBool = AtomicBool::new(false);
+static FIRST_KEYBOARD_LOGGED: AtomicBool = AtomicBool::new(false);
 
-pub struct HidFunction { pub input_id: u32, layout: Option<MouseLayout> }
+enum Kind { Mouse(Option<MouseLayout>), Keyboard(crate::usb_keyboard::Keyboard) }
+pub struct HidFunction { kind: Kind }
 impl HidFunction {
     pub fn report(&mut self, data: &[u8]) -> Result<(), ()> {
-        let r = match &self.layout {
-            Some(layout) => layout.decode(data),
-            None => hid::boot_mouse(data),
-        }.map_err(|_| ())?;
-        crate::mouse::usb_report(r.dx, r.dy, r.buttons);
-        if (r.dx != 0 || r.dy != 0 || r.buttons != 0)
-            && !FIRST_MOVEMENT_LOGGED.swap(true, Ordering::Relaxed) {
-            crate::serial_println!("[usb] mouse report applied");
+        match &mut self.kind {
+            Kind::Keyboard(keyboard) => {
+                let mut events = alloc::vec::Vec::new();
+                keyboard.report(data, &mut events)?;
+                for event in events { crate::keyboard::usb_input(event); }
+                if !FIRST_KEYBOARD_LOGGED.swap(true, Ordering::Relaxed) {
+                    crate::serial_println!("[usb] keyboard report received");
+                }
+            }
+            Kind::Mouse(layout) => {
+                let r = match layout { Some(layout) => layout.decode(data), None => hid::boot_mouse(data) }.map_err(|_| ())?;
+                crate::mouse::usb_report(r.dx, r.dy, r.buttons);
+                if (r.dx != 0 || r.dy != 0 || r.buttons != 0)
+                    && !FIRST_MOVEMENT_LOGGED.swap(true, Ordering::Relaxed) {
+                    crate::serial_println!("[usb] mouse report applied");
+                }
+            }
         }
         Ok(())
     }
@@ -26,6 +37,12 @@ pub trait ControlPipe {
     fn control_out(&mut self, setup: SetupPacket, data: &[u8]) -> Result<(), Self::Error>;
 }
 pub fn setup<P: ControlPipe>(pipe: &mut P, iface: &Interface, _name: &str, devname: &str) -> Result<Option<HidFunction>, P::Error> {
+    if iface.is_hid_boot(descriptor::HID_PROTOCOL_KEYBOARD) {
+        pipe.control_out(SetupPacket::hid_set_protocol(iface.number, false), &[])?;
+        let _ = pipe.control_out(SetupPacket::hid_set_idle(iface.number, 0), &[]);
+        crate::serial_println!("[usb] boot keyboard {} interface {} ready", devname, iface.number);
+        return Ok(Some(HidFunction { kind: Kind::Keyboard(crate::usb_keyboard::Keyboard::new()) }));
+    }
     let is_boot = iface.is_hid_boot(descriptor::HID_PROTOCOL_MOUSE);
     let report_len = iface.hid.map_or(0, |h| h.report_length).min(1024);
     let mut layout = None;
@@ -51,5 +68,5 @@ pub fn setup<P: ControlPipe>(pipe: &mut P, iface: &Interface, _name: &str, devna
     }
     let _ = pipe.control_out(SetupPacket::hid_set_idle(iface.number, 0), &[]);
     crate::serial_println!("[usb] boot mouse {} interface {} ready", devname, iface.number);
-    Ok(Some(HidFunction { input_id: 0, layout }))
+    Ok(Some(HidFunction { kind: Kind::Mouse(layout) }))
 }

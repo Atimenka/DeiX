@@ -300,6 +300,16 @@ pub fn on_scancode(scancode: u8) {
     }
 }
 
+/// HID keyboards feed the same queue as PS/2 without sharing shift state.
+/// The EHCI worker can be interrupted by IRQ1, so protect the queue lock.
+pub fn usb_input(input: crate::usb_keyboard::Input) {
+    without_interrupts(|| match input {
+        crate::usb_keyboard::Input::Byte(b) => QUEUE.lock().push(b),
+        crate::usb_keyboard::Input::Escape => ESCAPE_PRESSED.store(true, Ordering::Relaxed),
+        crate::usb_keyboard::Input::Super => SUPER_PRESSED.store(true, Ordering::Relaxed),
+    });
+}
+
 pub fn try_read_char() -> Option<u8> {
     without_interrupts(|| {
         poll_controller();
