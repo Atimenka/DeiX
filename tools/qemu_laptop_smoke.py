@@ -59,11 +59,12 @@ with tempfile.TemporaryDirectory() as tmp:
             print(line)
     if err:
         print('QEMU stderr:', err.decode('utf-8', errors='replace')[-3000:])
-    required = [b'[ramdisk] active', b'ATA disk: not used', b'[hda]', b'[ OK ] STORAGE', b'BOOT COMPLETE', b'[loginui]']
+    required = [b'[ramdisk] active', b'ATA disk: not used', b'[hda]', b'[ OK ] STORAGE', b'BOOT COMPLETE', b'[loginui]',
+                b'boot chain done: 3 launched, 0 failed']
     missing = [x.decode() for x in required if x not in data]
     unchanged = hashlib.sha256(disk.read_bytes()).digest() == original
     if missing or not unchanged or b'KERNEL PANIC' in data or b'DX-DISK-0004' in data:
         print('FAIL: missing markers:', missing, 'internal disk unchanged:', unchanged, flush=True)
         print('Serial tail:', text[-5000:], flush=True)
         sys.exit(1)
-    print('PASS: RAM-disk booted, HDA probed, internal disk unchanged', flush=True)
+    print('PASS: RAM-disk booted, dependency chain launched, HDA probed, internal disk unchanged', flush=True)
