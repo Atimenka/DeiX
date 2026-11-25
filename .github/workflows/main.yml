@@ -73,6 +73,11 @@ jobs:
           rustc --edition=2021 --test src/ps2_set2.rs -o /tmp/deix-ps2-set2-tests
           /tmp/deix-ps2-set2-tests
 
+      - name: Nano-Core IPC safety tests
+        run: |
+          rustc --edition=2021 --test tools/ipc_tests.rs -o /tmp/deix-ipc-tests
+          /tmp/deix-ipc-tests
+
       - name: USB boot keyboard tests
         run: |
           rustc --edition=2021 --test tools/usb_keyboard_tests.rs -o /tmp/deix-usb-keyboard-tests

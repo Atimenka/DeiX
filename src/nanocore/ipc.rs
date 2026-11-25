@@ -39,7 +39,9 @@ impl Message {
     pub fn from_str(text: &str) -> Self {
         let mut buf = [0u8; MSG_SIZE];
         let bytes = text.as_bytes();
-        let len = bytes.len().min(MSG_SIZE - 1);
+        let mut len = bytes.len().min(MSG_SIZE - 1);
+        // Never cut a multibyte character: messages can contain Cyrillic.
+        while !text.is_char_boundary(len) { len -= 1; }
         buf[..len].copy_from_slice(&bytes[..len]);
         Message {
             text: buf,
@@ -49,8 +51,9 @@ impl Message {
     }
 
     pub fn as_str(&self) -> &str {
-        // Содержимое точно в ASCII (лог и статусы) — безопасно.
-        unsafe { core::str::from_utf8_unchecked(&self.text[..self.len]) }
+        // Fields are public, so callers can construct malformed messages.
+        // Reject invalid UTF-8 or an invalid length instead of invoking UB.
+        self.text.get(..self.len).and_then(|bytes| core::str::from_utf8(bytes).ok()).unwrap_or("")
     }
 }
 
@@ -275,4 +278,34 @@ pub fn channel_names() -> Vec<String> {
         .flatten()
         .map(|c| String::from(c.name()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn utf8_is_truncated_on_a_character_boundary() {
+        let text = alloc::format!("{}я!", "a".repeat(MSG_SIZE - 2));
+        let msg = Message::from_str(&text);
+        assert_eq!(msg.as_str(), "a".repeat(MSG_SIZE - 2));
+        let msg = Message::from_str(&"ж".repeat(80));
+        assert_eq!(msg.as_str(), "ж".repeat(47));
+    }
+    #[test]
+    fn malformed_public_fields_are_safe() {
+        let mut msg = Message::ZERO;
+        msg.text[0] = 0xff; msg.len = 1;
+        assert_eq!(msg.as_str(), "");
+        msg.len = MSG_SIZE + 1;
+        assert_eq!(msg.as_str(), "");
+    }
+    #[test]
+    fn queue_preserves_messages_and_counts_drops() {
+        let channel = Channel::new("test");
+        for _ in 0..CAPACITY { channel.send("Привет"); }
+        channel.send("overflow");
+        assert_eq!(channel.drops(), 1);
+        for _ in 0..CAPACITY { assert_eq!(channel.try_recv().unwrap().as_str(), "Привет"); }
+        assert!(channel.is_empty());
+    }
 }
