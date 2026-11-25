@@ -68,3 +68,20 @@ fn kill_pid_terminates_its_scheduler_slot_not_pid() {
     assert_eq!(info.exit_code, Some(9));
     assert_eq!(process::reap(pid).unwrap(), Some(9));
 }
+
+#[test]
+fn private_exit_records_code_without_terminating_another_slot() {
+    let req = process::SpawnRequest {
+        name: "private-elf".into(), uid: 0, parent: 1, caps: 0,
+        cwd: "/".into(), image_path: "/private.elf".into(),
+    };
+    let pid = process::spawn(&req).unwrap();
+    process::mark_running(pid, 52).unwrap();
+    process::notify_private_exit(52, -14);
+    let info = process::info(pid).unwrap();
+    assert_eq!(info.state, process::ProcessState::Zombie);
+    assert_eq!(info.exit_code, Some(-14));
+    // Duplicate notifications must not overwrite the first exit status.
+    process::notify_private_exit(52, 0);
+    assert_eq!(process::reap(pid).unwrap(), Some(-14));
+}

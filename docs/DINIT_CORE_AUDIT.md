@@ -35,8 +35,8 @@ private address space, authenticated process IPC or bootstrap gate.
 ## Kernel interface and execution gaps
 
 * `process::spawn/exec/info/kill/reap` are direct Rust calls, not a stable
-  userspace ABI. `exec` rejects ELF; MEX uses one fixed shared region and one
-  launch context. `ProcInfo` does not provide a stable service identity for
+  userspace ABI. `exec` supports isolated static PIE ELF with a restricted
+  syscall surface; MEX uses one fixed shared region and one launch context. `ProcInfo` does not provide a stable service identity for
   restart reconciliation. Capabilities are recorded but the required scoped
   process-facing Dinit API is not implemented.
 * `src/usermode.rs` changes the active page tables in place for user memory,
@@ -44,8 +44,9 @@ private address space, authenticated process IPC or bootstrap gate.
   scheduler can now switch owned CR3 roots and launch a low-level CPL3 task
   with a task-specific kernel entry stack. The private ELF loader can populate these pages and a CI-only QEMU test
   reads a separately built probe from `/system/tests` and executes it at CPL3.
-  This path is not wired into the process manager or Dinit. Its syscall surface
-  only handles exit and a CI-only test call; it is not a Dinit ABI.
+  ELF tasks are now linked to the process table and exit/fault accounting,
+  but Dinit does not use this path. Its syscall surface only handles exit
+  and a CI-only test call; it is not a Dinit ABI.
 * Nano-Core IPC is an in-kernel named queue, not a bounded authenticated
   process request/reply interface. VFS, logs, timers, process state, session
   events and security monitoring are currently accessed as internal functions.
@@ -86,6 +87,7 @@ isolation or a working user-process API.
 `load_private` maps validated static PIE load segments into owned private
 pages, applies supported relative relocations and creates a zeroed stack.
 `DEIX_TEST_ADDRESS_SPACE=1` adds a separately compiled test ELF to the image
-and QEMU verifies execution from the system VFS in CPL3. This probe is not
+and QEMU verifies execution from the system VFS in CPL3, plus process exit
+and page-fault accounting. This probe is not
 Dinit, does not implement its policy or ABI, and is not included in normal
 images. NX is not enabled; page permissions do not enforce non-executable data.
