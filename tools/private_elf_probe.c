@@ -23,13 +23,13 @@ __attribute__((noreturn)) void _start(void) {
 #else
     struct message message;
     long pid = call4(0x44580003, 0, 0, 0, 0);
-    if (pid <= 0 || call4(0x44580001, pid, 123, 456, 789) != 0 ||
-        call4(0x44580002, 0x100000, 0, 0, 0) != -14 ||
-        call4(0x44580002, (unsigned long)&message, 0, 0, 0) != 0 ||
-        message.sender != (unsigned)pid || message.reserved != 0 ||
-        message.tag != 123 || message.a != 456 || message.b != 789 ||
-        call4(0x44580002, (unsigned long)&message, 0, 0, 0) != -11)
-        call4(60, 42, 0, 0, 0);
+    if (pid <= 0) call4(60, 41, 0, 0, 0);
+    if (call4(0x44580001, pid, 123, 456, 789) != 0) call4(60, 42, 0, 0, 0);
+    if (call4(0x44580002, 0x100000, 0, 0, 0) != -14) call4(60, 43, 0, 0, 0);
+    if (call4(0x44580002, (unsigned long)&message, 0, 0, 0) != 0) call4(60, 44, 0, 0, 0);
+    if (message.sender != (unsigned)pid || message.reserved != 0 ||
+        message.tag != 123 || message.a != 456 || message.b != 789) call4(60, 45, 0, 0, 0);
+    if (call4(0x44580002, (unsigned long)&message, 0, 0, 0) != -11) call4(60, 46, 0, 0, 0);
     unsigned long cs;
     __asm__ volatile("mov %%cs, %0" : "=r"(cs));
     call4(0x4458564d, 0x31, cs, 0, 0);

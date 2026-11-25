@@ -693,8 +693,10 @@ pub fn private_elf_selftest() -> bool {
     let Ok(info) = process::info(pid) else { return false; };
     let Some(id) = info.sched_id else { return false; };
     join(id);
+    let info = process::info(pid).ok();
     let ok = RING3_TEST_RESULTS[0].load(Ordering::SeqCst) == 1
-        && process::info(pid).map_or(false, |p| p.state == ProcessState::Zombie && p.exit_code == Some(0));
+        && info.as_ref().map_or(false, |p| p.state == ProcessState::Zombie && p.exit_code == Some(0));
+    if !ok { crate::serial_println!("[vm-test] ELF IPC probe failed: exit={:?}", info.as_ref().and_then(|p| p.exit_code)); }
     let reaped = process::reap(pid).ok() == Some(Some(0));
     if !ok || !reaped { return false; }
     let denied_req = SpawnRequest { caps: 0, image_path: String::from("/system/tests/private_elf_denied.elf"), ..req.clone() };
