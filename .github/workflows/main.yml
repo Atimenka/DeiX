@@ -89,6 +89,11 @@ jobs:
           rustc --edition=2021 --test tools/elf_loader_tests.rs -o /tmp/deix-elf-tests
           DEIX_TEST_ELF=/tmp/deix-test.elf /tmp/deix-elf-tests
 
+      - name: Process termination mapping tests
+        run: |
+          rustc --edition=2021 --test tools/process_lifecycle_tests.rs -o /tmp/deix-process-tests
+          /tmp/deix-process-tests
+
       - name: Dinit service lifecycle policy tests
         run: |
           rustc --edition=2021 --test tools/dinit_service_tests.rs -o /tmp/deix-dinit-tests
