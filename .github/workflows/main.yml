@@ -89,6 +89,11 @@ jobs:
           rustc --edition=2021 --test tools/elf_loader_tests.rs -o /tmp/deix-elf-tests
           DEIX_TEST_ELF=/tmp/deix-test.elf /tmp/deix-elf-tests
 
+      - name: Private page table construction tests
+        run: |
+          rustc --edition=2021 --test tools/address_space_tests.rs -o /tmp/deix-address-space-tests
+          /tmp/deix-address-space-tests
+
       - name: Process termination mapping tests
         run: |
           rustc --edition=2021 --test tools/process_lifecycle_tests.rs -o /tmp/deix-process-tests

@@ -62,3 +62,13 @@ CLI, session and service lifecycle preservation. Validate core-only recovery
 and normal boot in QEMU before using the image; physical ASUS testing remains
 separate. Merely adding an ELS file, a PID, or an `execution_ring` field does
 not satisfy these tests.
+
+## Page-table construction work
+
+`src/mm/address_space.rs` constructs owned page tables and separate user pages
+in an unused PML4 slot, with inherited kernel mappings supervisor-only. Its
+host tests exercise construction and allocation ownership, not CPU privilege
+checks. It is not wired into the scheduler, does not switch CR3, does not set
+NX, and is not used to launch Dinit. Its lifetime contract requires the caller
+to switch away before freeing it. Therefore it is not evidence that Dinit is
+isolated or that any user process runs in a private address space.

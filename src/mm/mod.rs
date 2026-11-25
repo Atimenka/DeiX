@@ -18,6 +18,7 @@
 //! - Использует linked-list аллокатор (allocator.rs)
 
 pub mod phys;
+pub mod address_space;
 
 use crate::spinlock::SpinLock;
 
