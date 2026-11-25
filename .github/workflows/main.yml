@@ -83,6 +83,11 @@ jobs:
           rustc --edition=2021 --test tools/usb_keyboard_tests.rs -o /tmp/deix-usb-keyboard-tests
           /tmp/deix-usb-keyboard-tests
 
+      - name: Mouse button source and hotplug tests
+        run: |
+          rustc --edition=2021 --test src/mouse_buttons.rs -o /tmp/deix-mouse-buttons-tests
+          /tmp/deix-mouse-buttons-tests
+
       - name: Relative mouse speed tests
         run: |
           rustc --edition=2021 --test src/mouse_speed.rs -o /tmp/deix-mouse-speed-tests

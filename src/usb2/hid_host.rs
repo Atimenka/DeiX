@@ -6,7 +6,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 static FIRST_MOVEMENT_LOGGED: AtomicBool = AtomicBool::new(false);
 static FIRST_KEYBOARD_LOGGED: AtomicBool = AtomicBool::new(false);
 
-enum Kind { Mouse(Option<MouseLayout>), Keyboard(crate::usb_keyboard::Keyboard) }
+enum Kind { Mouse { layout: Option<MouseLayout>, source: u8 }, Keyboard(crate::usb_keyboard::Keyboard) }
 pub struct HidFunction { kind: Kind }
 impl HidFunction {
     pub fn report(&mut self, data: &[u8]) -> Result<(), ()> {
@@ -19,9 +19,9 @@ impl HidFunction {
                     crate::serial_println!("[usb] keyboard report received");
                 }
             }
-            Kind::Mouse(layout) => {
+            Kind::Mouse { layout, source } => {
                 let r = match layout { Some(layout) => layout.decode(data), None => hid::boot_mouse(data) }.map_err(|_| ())?;
-                crate::mouse::usb_report(r.dx, r.dy, r.buttons);
+                crate::mouse::usb_report(*source, r.dx, r.dy, r.buttons);
                 if (r.dx != 0 || r.dy != 0 || r.buttons != 0)
                     && !FIRST_MOVEMENT_LOGGED.swap(true, Ordering::Relaxed) {
                     crate::serial_println!("[usb] mouse report applied");
@@ -29,6 +29,11 @@ impl HidFunction {
             }
         }
         Ok(())
+    }
+}
+impl Drop for HidFunction {
+    fn drop(&mut self) {
+        if let Kind::Mouse { source, .. } = &self.kind { crate::mouse::unregister_usb(*source); }
     }
 }
 pub trait ControlPipe {
@@ -68,5 +73,9 @@ pub fn setup<P: ControlPipe>(pipe: &mut P, iface: &Interface, _name: &str, devna
     }
     let _ = pipe.control_out(SetupPacket::hid_set_idle(iface.number, 0), &[]);
     crate::serial_println!("[usb] boot mouse {} interface {} ready", devname, iface.number);
-    Ok(Some(HidFunction { kind: Kind::Mouse(layout) }))
+    let Some(source) = crate::mouse::register_usb() else {
+        crate::serial_println!("[usb] mouse {}: no free input source", devname);
+        return Ok(None);
+    };
+    Ok(Some(HidFunction { kind: Kind::Mouse { layout, source } }))
 }

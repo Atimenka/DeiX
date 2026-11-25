@@ -55,6 +55,7 @@ mod mm;
 mod module;
 mod mouse;
 mod mouse_speed;
+mod mouse_buttons;
 mod usb_hid_mouse;
 mod usb_keyboard;
 mod usb2;

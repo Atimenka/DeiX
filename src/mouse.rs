@@ -28,7 +28,7 @@ static PS2_MOVEMENT_LOGGED: AtomicBool = AtomicBool::new(false);
 struct MouseState {
     x: i32,
     y: i32,
-    left_button: bool,
+    buttons: crate::mouse_buttons::Buttons,
     packet: [u8; 3],
     packet_index: usize,
     screen_width: i32,
@@ -39,7 +39,7 @@ struct MouseState {
 static STATE: SpinLock<MouseState> = SpinLock::new(MouseState {
     x: 0,
     y: 0,
-    left_button: false,
+    buttons: crate::mouse_buttons::Buttons::new(),
     packet: [0; 3],
     packet_index: 0,
     screen_width: 640,
@@ -177,7 +177,7 @@ pub fn on_data_byte(byte: u8) {
 
         // Биты 0x02 (правая) и 0x04 (средняя) не сохраняются:
         // интерфейс пока реагирует только на левую кнопку.
-        state.left_button = flags & 0x01 != 0;
+        state.buttons.set_ps2(flags & 0x01 != 0);
 
         // PS/2 мышь считает Y вверх положительным — экранные координаты
         // растут вниз, поэтому инвертируем.
@@ -199,7 +199,7 @@ fn on_absolute_event() {
 
         state.x = scaled_x as i32;
         state.y = scaled_y as i32;
-        state.left_button = packet.buttons & vmmouse::LEFT_BUTTON != 0;
+        state.buttons.set_ps2(packet.buttons & vmmouse::LEFT_BUTTON != 0);
     }
 }
 
@@ -223,14 +223,19 @@ pub struct MouseSnapshot {
     pub left_button: bool,
 }
 
+/// Reserve a button source for an attached USB HID pointing interface.
+pub fn register_usb() -> Option<u8> { without_interrupts(|| STATE.lock().buttons.allocate()) }
+/// Release its held button when a device or its endpoint disappears.
+pub fn unregister_usb(source: u8) { without_interrupts(|| STATE.lock().buttons.release(source)); }
+
 /// Apply a relative HID boot-mouse report (USB Y increases downwards).
-pub fn usb_report(dx: i32, dy: i32, buttons: u32) {
+pub fn usb_report(source: u8, dx: i32, dy: i32, buttons: u32) {
     without_interrupts(|| {
         let mut state = STATE.lock();
         let (dx, dy) = state.speed.scale(dx, dy);
         state.x = state.x.saturating_add(dx).clamp(0, state.screen_width.saturating_sub(1).max(0));
         state.y = state.y.saturating_add(dy).clamp(0, state.screen_height.saturating_sub(1).max(0));
-        state.left_button = buttons & 1 != 0;
+        state.buttons.set_usb(source, buttons & 1 != 0);
     });
 }
 
@@ -248,7 +253,7 @@ pub fn snapshot() -> MouseSnapshot {
         MouseSnapshot {
             x: state.x,
             y: state.y,
-            left_button: state.left_button,
+            left_button: state.buttons.down(),
         }
     })
 }
