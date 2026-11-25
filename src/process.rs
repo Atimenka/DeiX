@@ -20,15 +20,14 @@
 //! [`notify_exit`]: завершение задачи помечает процесс завершённым, и
 //! Dinit может применить свою политику перезапуска.
 //!
-//! Запуск ELF-образов через планировщик ядра не поддерживается: кадры
-//! `sched::spawn_pid` создаются для Ring 0 (CS=0x08/SS=0x10), и выдавать
-//! такое исполнение за пользовательский процесс нельзя (DX-ELF-0009).
+//! Static PIE ELF processes use private page tables and a dedicated CPL3
+//! scheduler frame. Their syscall interface is still intentionally restricted.
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::spinlock::SpinLock;
+use crate::spinlock::{SpinLock, IrqSpinLock};
 
 /// Максимум одновременно живых процессов.
 const MAX_PROCS: usize = 32;
@@ -208,7 +207,7 @@ impl Process {
 
 // ==================== Таблица процессов ====================
 
-static PROCS: SpinLock<[Process; MAX_PROCS]> = SpinLock::new([const { Process::blank(0) }; MAX_PROCS]);
+static PROCS: IrqSpinLock<[Process; MAX_PROCS]> = IrqSpinLock::new([const { Process::blank(0) }; MAX_PROCS]);
 static NEXT_PID: SpinLock<u32> = SpinLock::new(2);
 
 /// Ошибки менеджера процессов.
@@ -320,11 +319,8 @@ extern "C" fn launch_trampoline() {
 
 /// Загружает образ процесса и создаёт для него задачу планировщика.
 ///
-/// Поддерживаются только MEX-образы: они исполняются в Ring 3 через
-/// `mex::run_ring3`. Запуск ELF-процессов через планировщик ядра
-/// недоступен: кадры `sched::spawn_pid` создаются с CS=0x08/SS=0x10
-/// (Ring 0), и исполнять в них пользовательский код нельзя
-/// (DX-ELF-0009).
+/// MEX uses the legacy shared mapping; static PIE ELF uses private CPL3 pages.
+/// The private ELF syscall ABI currently supports only termination.
 pub fn exec(pid: u32) -> Result<(), ProcessError> {
     let path = {
         let table = PROCS.lock();
@@ -344,13 +340,22 @@ pub fn exec(pid: u32) -> Result<(), ProcessError> {
     let is_mex = path.ends_with(".mex") || crate::mex::is_mex_image(&img);
 
     if !is_mex {
-        crate::diag::error(
-            crate::diag::ErrorCode::new(crate::diag::Subsystem::Elf, 9),
-            &format!("{}: запуск ELF-процессов через планировщик ядра недоступен", path),
-        );
-        return Err(ProcessError::BadImage(String::from(
-            "запуск ELF-процессов пока недоступен: поддерживаются только MEX-образы (Ring 3)",
-        )));
+        let mut space = crate::sched::new_user_address_space()
+            .map_err(|_| ProcessError::BadImage(String::from("не удалось создать адресное пространство")))?;
+        let loaded = crate::linux::elf::load_private(&img, &mut space)
+            .map_err(ProcessError::BadImage)?;
+        // Disable preemption until the scheduler slot and process record are
+        // linked: otherwise a short-lived ELF can exit before mark_running.
+        return crate::sync::without_interrupts(|| {
+            let mut table = PROCS.lock();
+            let p = table.iter_mut().find(|p| p.pid == pid && p.state == ProcessState::Created)
+                .ok_or(ProcessError::NotFound(pid))?;
+            let slot = crate::sched::spawn_private_user_pid(&p.name, loaded.entry,
+                loaded.stack_top, space, pid).ok_or(ProcessError::TableFull)?;
+            p.sched_id = Some(slot);
+            p.state = ProcessState::Running;
+            Ok(())
+        });
     }
 
     // MEX слинкован на фиксированный адрес и не является PIC, поэтому
@@ -447,6 +452,17 @@ pub fn notify_exit(sched_id: usize, code: i32) {
     };
     if let Some(pid) = pid {
         let _ = kill(pid, code);
+    }
+}
+
+/// Completes an isolated task from a syscall/fault without touching the
+/// scheduler or legacy MEX locks. Safe when called with interrupts disabled.
+pub fn notify_private_exit(sched_id: usize, code: i32) {
+    let mut table = PROCS.lock();
+    if let Some(p) = table.iter_mut().find(|p| p.state == ProcessState::Running && p.sched_id == Some(sched_id)) {
+        p.exit_code = Some(code);
+        p.state = ProcessState::Zombie;
+        p.fds = FdTable::new();
     }
 }
 

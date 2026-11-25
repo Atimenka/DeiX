@@ -4,15 +4,24 @@ extern crate alloc;
 #[macro_export] macro_rules! println { ($($arg:tt)*) => {{}}; }
 mod spinlock {
     pub struct SpinLock<T>(std::sync::Mutex<T>);
+    pub type IrqSpinLock<T> = SpinLock<T>;
     impl<T> SpinLock<T> {
         pub const fn new(value: T) -> Self { Self(std::sync::Mutex::new(value)) }
         pub fn lock(&self) -> std::sync::MutexGuard<'_, T> { self.0.lock().unwrap() }
         pub fn try_lock(&self) -> Option<std::sync::MutexGuard<'_, T>> { self.0.try_lock().ok() }
     }
 }
+mod sync { pub fn without_interrupts<F: FnOnce() -> R, R>(f: F) -> R { f() } }
+mod mm { pub mod address_space { pub struct AddressSpace; } }
+mod linux { pub mod elf {
+    pub struct Loaded { pub entry: u64, pub stack_top: u64 }
+    pub fn load_private(_: &[u8], _: &mut crate::mm::address_space::AddressSpace) -> Result<Loaded, alloc::string::String> { Err("invalid".into()) }
+} }
 mod timer { pub fn uptime_ms() -> u64 { 0 } }
 mod sched {
     pub static TERMINATED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+    pub fn new_user_address_space() -> Result<crate::mm::address_space::AddressSpace, ()> { Ok(crate::mm::address_space::AddressSpace) }
+    pub fn spawn_private_user_pid(_: &str, _: u64, _: u64, _: crate::mm::address_space::AddressSpace, _: u32) -> Option<usize> { None }
     pub fn current_id() -> usize { 0 }
     pub fn spawn_pid(_: &str, _: extern "C" fn(), _: u32) -> Option<usize> { None }
     pub fn terminate(id: usize) { TERMINATED.lock().unwrap().push(id); }

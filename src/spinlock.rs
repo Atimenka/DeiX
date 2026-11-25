@@ -91,7 +91,7 @@ pub struct IrqSpinLock<T> {
 }
 
 pub struct IrqSpinLockGuard<'a, T> {
-    inner: SpinLockGuard<'a, T>,
+    inner: core::mem::ManuallyDrop<SpinLockGuard<'a, T>>,
     /// Состояние флага IF до взятия лока.
     saved_flags: u64,
 }
@@ -113,8 +113,24 @@ impl<T> IrqSpinLock<T> {
             core::arch::asm!("cli", options(nomem, nostack));
         }
         IrqSpinLockGuard {
-            inner: self.inner.lock(),
+            inner: core::mem::ManuallyDrop::new(self.inner.lock()),
             saved_flags,
+        }
+    }
+
+    pub fn try_lock(&self) -> Option<IrqSpinLockGuard<'_, T>> {
+        let saved_flags: u64;
+        unsafe {
+            core::arch::asm!("pushfq", "pop {}", out(reg) saved_flags, options(nomem, preserves_flags));
+            core::arch::asm!("cli", options(nomem, nostack));
+        }
+        if let Some(inner) = self.inner.try_lock() {
+            Some(IrqSpinLockGuard { inner: core::mem::ManuallyDrop::new(inner), saved_flags })
+        } else {
+            if saved_flags & (1 << 9) != 0 {
+                unsafe { core::arch::asm!("sti", options(nomem, nostack)); }
+            }
+            None
         }
     }
 }
@@ -136,11 +152,9 @@ impl<'a, T> Drop for IrqSpinLockGuard<'a, T> {
     fn drop(&mut self) {
         const IF_BIT: u64 = 1 << 9;
         let restore = self.saved_flags & IF_BIT != 0;
-        // Лок обязан быть свободен ДО восстановления прерываний: иначе
-        // обработчик, вошедший сразу после `sti`, увидит занятым лок,
-        // который уже никто не держит. Поле `inner` снимется ещё раз
-        // при выходе из Drop — повторная запись `false` идемпотентна.
-        self.inner.lock.locked.store(false, Ordering::Release);
+        // Drop exactly once before restoring IF. A second unlock after STI
+        // could release a lock acquired by a newly scheduled task.
+        unsafe { core::mem::ManuallyDrop::drop(&mut self.inner); }
         if restore {
             unsafe { core::arch::asm!("sti", options(nomem, nostack)) };
         }

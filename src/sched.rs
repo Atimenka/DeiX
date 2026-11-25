@@ -405,9 +405,23 @@ pub fn spawn_with_address_space(name: &str, func: extern "C" fn(), pid: u32,
 /// mechanism; it is not yet connected to the process manager or Dinit ABI.
 pub fn spawn_private_user(name: &str, entry: u64, stack: u64,
     space: crate::mm::address_space::AddressSpace) -> Option<usize> {
+    spawn_private_user_pid(name, entry, stack, space, 0)
+}
+
+/// Caller must link the slot to the process atomically before enabling IRQs.
+pub fn spawn_private_user_pid(name: &str, entry: u64, stack: u64,
+    space: crate::mm::address_space::AddressSpace, pid: u32) -> Option<usize> {
     if !space.user_accessible(entry, false) || stack == 0
         || !space.user_accessible(stack - 1, true) { return None; }
-    spawn_inner(name, None, 0, Some(Box::new(space)), Some((entry, stack)))
+    spawn_inner(name, None, pid, Some(Box::new(space)), Some((entry, stack)))
+}
+
+/// Construct a private root from the scheduler's kernel page table.
+pub fn new_user_address_space() -> Result<crate::mm::address_space::AddressSpace, crate::mm::address_space::Error> {
+    let root = KERNEL_CR3.load(Ordering::SeqCst) & 0x000f_ffff_ffff_f000;
+    if root == 0 { return Err(crate::mm::address_space::Error::InvalidPhysicalAddress); }
+    let table = unsafe { &*(root as *const [u64; 512]) };
+    crate::mm::address_space::AddressSpace::new(table)
 }
 
 fn spawn_inner(name: &str, func: Option<extern "C" fn()>, pid: u32,
@@ -587,6 +601,9 @@ pub fn current_is_private_user() -> bool {
 /// timer to switch away. The finished slot retains its tables until reused.
 pub fn finish_private_user(code: i64) -> ! {
     let cur = CURRENT.load(Ordering::Relaxed);
+    // Faults can arrive with interrupts disabled. The process table is protected
+    // by an IRQ-safe lock; do not invoke scheduler termination from this path.
+    crate::process::notify_private_exit(cur, code as i32);
     unsafe {
         let task = &mut (*(&raw mut TASKS))[cur];
         task.exit_code = code;
@@ -655,22 +672,19 @@ pub fn ring3_address_space_selftest() -> bool {
 /// map its segments into private pages, and execute its actual entry in CPL3.
 /// The probe does not implement Dinit or any production supervisor policy.
 pub fn private_elf_selftest() -> bool {
-    use crate::mm::address_space::AddressSpace;
-    let image = match crate::vfs::read_file("/system/tests/private_elf_probe.elf") {
-        Ok(img) => img, Err(_) => return false,
-    };
-    let root = KERNEL_CR3.load(Ordering::SeqCst) & 0x000f_ffff_ffff_f000;
-    if root == 0 { return false; }
-    let root_table = unsafe { &*(root as *const [u64; 512]) };
-    let mut space = match AddressSpace::new(root_table) { Ok(v) => v, Err(_) => return false };
-    let loaded = match crate::linux::elf::load_private(&image, &mut space) {
-        Ok(v) => v, Err(_) => return false,
-    };
+    use crate::process::{self, ProcessState, SpawnRequest};
+    let req = SpawnRequest { name: String::from("elf-test"), uid: 0, parent: 0,
+        caps: 0, cwd: String::from("/"), image_path: String::from("/system/tests/private_elf_probe.elf") };
     RING3_TEST_RESULTS[0].store(0, Ordering::SeqCst);
-    let Some(id) = spawn_private_user("elf-test", loaded.entry, loaded.stack_top, space) else { return false; };
+    let Ok(pid) = process::spawn(&req) else { return false; };
+    if process::exec(pid).is_err() { let _ = process::kill(pid, -1); let _ = process::reap(pid); return false; }
+    let Ok(info) = process::info(pid) else { return false; };
+    let Some(id) = info.sched_id else { return false; };
     join(id);
-    RING3_TEST_RESULTS[0].load(Ordering::SeqCst) == 1
-        && unsafe { (*(&raw const TASKS))[id].exit_code == 0 }
+    let ok = RING3_TEST_RESULTS[0].load(Ordering::SeqCst) == 1
+        && process::info(pid).map_or(false, |p| p.state == ProcessState::Zombie && p.exit_code == Some(0));
+    let reaped = process::reap(pid).ok() == Some(Some(0));
+    ok && reaped
 }
 
 // Real CR3 context-switch smoke test; it runs only in explicitly enabled
