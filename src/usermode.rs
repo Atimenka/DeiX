@@ -323,6 +323,15 @@ global_asm!(
     "  push r13",
     "  push r14",
     "  push r15",
+    // x86-64 syscall ABI preserves argument registers (except RCX/R11).
+    // The Rust handler may freely clobber caller-saved registers, so save
+    // all six here before rearranging syscall arguments for the C ABI.
+    "  push rdi",
+    "  push rsi",
+    "  push rdx",
+    "  push r8",
+    "  push r9",
+    "  push r10",
     // Перекладываем регистры соглашения syscall в соглашение System V C:
     //   syscall: nr=rax, a1=rdi, a2=rsi, a3=rdx, a4=r10, a5=r8
     //            (4-й аргумент приходит в r10: rcx затирается самой
@@ -336,6 +345,12 @@ global_asm!(
     "  mov rsi, rdi",
     "  mov rdi, rax",
     "  call {handler}",
+    "  pop r10",
+    "  pop r9",
+    "  pop r8",
+    "  pop rdx",
+    "  pop rsi",
+    "  pop rdi",
     "  pop r15",
     "  pop r14",
     "  pop r13",
