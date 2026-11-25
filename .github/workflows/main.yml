@@ -83,6 +83,12 @@ jobs:
           rustc --edition=2021 --test tools/nanocore_policy_tests.rs -o /tmp/deix-nanocore-policy-tests
           /tmp/deix-nanocore-policy-tests
 
+      - name: ELF loader validation tests
+        run: |
+          gcc -nostdlib -nostartfiles -static-pie -fPIE -Os -Wl,--build-id=none -Wl,-z,noseparate-code -o /tmp/deix-test.elf tools/linux_hello.c
+          rustc --edition=2021 --test tools/elf_loader_tests.rs -o /tmp/deix-elf-tests
+          DEIX_TEST_ELF=/tmp/deix-test.elf /tmp/deix-elf-tests
+
       - name: Dinit service lifecycle policy tests
         run: |
           rustc --edition=2021 --test tools/dinit_service_tests.rs -o /tmp/deix-dinit-tests

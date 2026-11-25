@@ -87,9 +87,13 @@ fn parse_phdrs(img: &[u8]) -> Result<Vec<Phdr>, String> {
         return Err(format!("странный размер phdr: {}", phentsize));
     }
 
+    let start = usize::try_from(phoff).map_err(|_| "неверное смещение phdr")?;
+    let table_size = phnum.checked_mul(phentsize).ok_or("переполнение таблицы phdr")?;
+    let end = start.checked_add(table_size).ok_or("переполнение таблицы phdr")?;
+    if end > img.len() { return Err("обрезанная таблица программ".to_string()); }
     let mut out = Vec::with_capacity(phnum);
     for i in 0..phnum {
-        let o = phoff as usize + i * phentsize;
+        let o = start + i * phentsize;
         out.push(Phdr {
             p_type: rd_u32(img, o).ok_or("обрезанная таблица программ")?,
             p_flags: rd_u32(img, o + 4).ok_or("обрезанная таблица программ")?,
@@ -147,9 +151,7 @@ pub fn inspect(img: &[u8]) -> Result<Vec<String>, String> {
     let interp = phdrs.iter().find(|p| p.p_type == PT_INTERP);
     match interp {
         Some(p) => {
-            let s = img
-                .get(p.p_offset as usize..(p.p_offset + p.p_filesz) as usize)
-                .unwrap_or(&[]);
+            let s = file_range(img, p.p_offset, p.p_filesz).unwrap_or(&[]);
             let name: String = s.iter().take_while(|&&c| c != 0).map(|&c| c as char).collect();
             out.push(format!("интерпретатор: {} (динамический)", name));
         }
@@ -174,71 +176,58 @@ pub fn inspect(img: &[u8]) -> Result<Vec<String>, String> {
 ///
 /// У статического PIE все релокации — `R_X86_64_RELATIVE`: в память по
 /// адресу `base + r_offset` кладётся `base + r_addend`.
-fn apply_relocations(img: &[u8], phdrs: &[Phdr], base: u64) -> Result<usize, String> {
-    let dynseg = match phdrs.iter().find(|p| p.p_type == PT_DYNAMIC) {
-        Some(d) => d,
-        None => return Ok(0),
-    };
+fn file_range(img: &[u8], offset: u64, length: u64) -> Option<&[u8]> {
+    let start = usize::try_from(offset).ok()?;
+    let end = start.checked_add(usize::try_from(length).ok()?)?;
+    img.get(start..end)
+}
 
-    let mut rela: Option<u64> = None;
-    let mut relasz: u64 = 0;
-    let mut relaent: u64 = 24;
-
-    let mut o = dynseg.p_offset as usize;
-    let end = o + dynseg.p_filesz as usize;
-    while o + 16 <= end {
-        let tag = rd_u64(img, o).ok_or("обрезанная .dynamic")?;
-        let val = rd_u64(img, o + 8).ok_or("обрезанная .dynamic")?;
+/// Validate every relocation before any memory is written. The resulting
+/// offsets refer to the original ELF virtual address space, not kernel memory.
+fn relocation_plan(img: &[u8], phdrs: &[Phdr]) -> Result<Vec<(u64, i64)>, String> {
+    let mut plan = Vec::new();
+    let mut dynamic = phdrs.iter().filter(|p| p.p_type == PT_DYNAMIC);
+    let Some(dynseg) = dynamic.next() else { return Ok(plan); };
+    if dynamic.next().is_some() { return Err("несколько сегментов .dynamic".to_string()); }
+    let data = file_range(img, dynseg.p_offset, dynseg.p_filesz).ok_or("обрезанная .dynamic")?;
+    if data.len() % 16 != 0 { return Err("неверная длина .dynamic".to_string()); }
+    let mut rela = None;
+    let mut relasz = 0u64;
+    let mut relaent = 24u64;
+    let mut terminated = false;
+    for entry in data.chunks_exact(16) {
+        let tag = rd_u64(entry, 0).ok_or("обрезанная .dynamic")?;
+        let value = rd_u64(entry, 8).ok_or("обрезанная .dynamic")?;
         match tag {
-            DT_NULL => break,
-            DT_RELA => rela = Some(val),
-            DT_RELASZ => relasz = val,
-            DT_RELAENT => relaent = val,
+            DT_NULL => { terminated = true; break; }
+            DT_RELA => rela = Some(value),
+            DT_RELASZ => relasz = value,
+            DT_RELAENT => relaent = value,
             _ => {}
         }
-        o += 16;
     }
-
-    let rela = match rela {
-        Some(r) if relasz > 0 && relaent >= 24 => r,
-        _ => return Ok(0),
-    };
-
-    // rela — виртуальный адрес; переводим в смещение в файле по PT_LOAD.
-    let file_off = |vaddr: u64| -> Option<u64> {
-        for p in phdrs.iter().filter(|p| p.p_type == PT_LOAD) {
-            if vaddr >= p.p_vaddr && vaddr < p.p_vaddr + p.p_filesz {
-                return Some(p.p_offset + (vaddr - p.p_vaddr));
-            }
-        }
-        None
-    };
-    let mut ro = file_off(rela).ok_or("RELA вне сегментов PT_LOAD")? as usize;
-    let count = (relasz / relaent) as usize;
-    let mut applied = 0usize;
-
-    for _ in 0..count {
-        let r_offset = rd_u64(img, ro).ok_or("обрезанная RELA")?;
-        let r_info = rd_u64(img, ro + 8).ok_or("обрезанная RELA")?;
-        let r_addend = rd_u64(img, ro + 16).ok_or("обрезанная RELA")?;
-        ro += relaent as usize;
-
-        let r_type = (r_info & 0xFFFF_FFFF) as u32;
-        if r_type != R_X86_64_RELATIVE {
-            // Внешние символы означают, что нужен динамический линковщик.
-            return Err(format!(
-                "релокация типа {} не поддерживается (нужен ld.so)",
-                r_type
-            ));
-        }
-        let target = base + r_offset;
-        if target < USER_IMAGE_BASE || target + 8 > USER_IMAGE_BASE + USER_IMAGE_MAX {
-            return Err("релокация указывает вне образа".to_string());
-        }
-        unsafe { core::ptr::write_unaligned(target as *mut u64, base + r_addend) };
-        applied += 1;
+    if !terminated { return Err(".dynamic без DT_NULL".to_string()); }
+    if relasz == 0 { return Ok(plan); }
+    let rela = rela.ok_or("DT_RELA отсутствует")?;
+    if relaent != 24 || relasz % relaent != 0 { return Err("неверная таблица RELA".to_string()); }
+    let rela_end = rela.checked_add(relasz).ok_or("переполнение RELA")?;
+    let owner = phdrs.iter().filter(|p| p.p_type == PT_LOAD).find(|p| {
+        p.p_vaddr <= rela && p.p_vaddr.checked_add(p.p_filesz).map_or(false, |end| rela_end <= end)
+    }).ok_or("RELA вне сегментов PT_LOAD")?;
+    let off = owner.p_offset.checked_add(rela - owner.p_vaddr).ok_or("переполнение RELA")?;
+    let data = file_range(img, off, relasz).ok_or("обрезанная RELA")?;
+    for item in data.chunks_exact(24) {
+        let offset = rd_u64(item, 0).ok_or("обрезанная RELA")?;
+        let info = rd_u64(item, 8).ok_or("обрезанная RELA")?;
+        let addend = rd_u64(item, 16).ok_or("обрезанная RELA")? as i64;
+        if info != R_X86_64_RELATIVE as u64 { return Err("неподдерживаемая релокация".to_string()); }
+        let end = offset.checked_add(8).ok_or("переполнение цели RELA")?;
+        if !phdrs.iter().filter(|p| p.p_type == PT_LOAD && p.p_flags & PF_W != 0).any(|p| {
+            p.p_vaddr <= offset && p.p_vaddr.checked_add(p.p_memsz).map_or(false, |v| end <= v)
+        }) { return Err("цель RELA вне записываемого сегмента".to_string()); }
+        plan.push((offset, addend));
     }
-    Ok(applied)
+    Ok(plan)
 }
 
 /// Загружает программу в глобальную область Ring 3 и готовит стек.
@@ -252,8 +241,8 @@ pub fn load(img: &[u8]) -> Result<Loaded, String> {
 }
 
 /// Размещает PIE-образ по произвольной базе `base` и возвращает точку
-/// входа. Используется менеджером процессов: у каждого процесса своё
-/// адресное пространство, а не одна глобальная область.
+/// входа. Буфер должен быть доступен ядру для записи; эта функция сама
+/// не создаёт отдельное адресное пространство или изоляцию.
 ///
 /// Работает только с PIE (`ET_DYN`): у таких образов все абсолютные
 /// ссылки исправляются релокациями `R_X86_64_RELATIVE`, поэтому базу
@@ -271,81 +260,67 @@ pub fn load_into(img: &[u8], base: u64, capacity: u64) -> Result<Loaded, String>
         );
     }
 
+    if e_type != ET_DYN {
+        return Err("поддерживаются только статические PIE (ET_DYN)".to_string());
+    }
     let loads: Vec<&Phdr> = phdrs.iter().filter(|p| p.p_type == PT_LOAD).collect();
-    if loads.is_empty() {
-        return Err("нет сегментов PT_LOAD".to_string());
+    if loads.is_empty() { return Err("нет сегментов PT_LOAD".to_string()); }
+    if capacity < USER_STACK_SIZE || capacity > isize::MAX as u64 {
+        return Err("неверный размер области процесса".to_string());
     }
-
-    let min_vaddr = loads.iter().map(|p| p.p_vaddr).min().unwrap();
-    let max_vaddr = loads.iter().map(|p| p.p_vaddr + p.p_memsz).max().unwrap();
-    let span = max_vaddr - min_vaddr;
-
-    if span > capacity {
-        return Err(format!(
-            "образ {} КиБ больше области процесса {} КиБ",
-            span / 1024,
-            capacity / 1024
-        ));
-    }
-
-    let base = match e_type {
-        ET_DYN => base.wrapping_sub(min_vaddr),
-        ET_EXEC => {
-            return Err(format!(
-                "статический не-PIE: слинкован по {:#x} и не перемещаем. \
-                 Пересоберите с -static-pie",
-                min_vaddr
-            ))
-        }
-        _ => return Err("неподдерживаемый тип ELF".to_string()),
-    };
-
-    let area_end = base + capacity;
-
-    // Очищаем область и раскладываем сегменты.
-    unsafe {
-        core::ptr::write_bytes(base as *mut u8, 0, capacity as usize);
-    }
-
-    for p in loads.iter() {
-        let dst = base + p.p_vaddr;
-        if dst < base || dst + p.p_memsz > area_end {
-            return Err("сегмент выходит за пределы области процесса".to_string());
-        }
-        let src = img
-            .get(p.p_offset as usize..(p.p_offset + p.p_filesz) as usize)
-            .ok_or("сегмент выходит за границы файла")?;
-        unsafe {
-            core::ptr::copy_nonoverlapping(src.as_ptr(), dst as *mut u8, src.len());
-            // .bss — разница memsz и filesz — уже обнулена выше.
-        }
-    }
-
-    let relocs = apply_relocations(img, &phdrs, base)?;
-    if relocs > 0 {
-        crate::println!("  [linux] применено релокаций: {}", relocs);
-    }
-
-    // Стек кладётся сразу за образом: у процесса своя область, и
-    // глобальный USER_STACK_TOP ему не принадлежит.
+    let area_end = base.checked_add(capacity).ok_or("переполнение области процесса")?;
     let stack_bottom = area_end - USER_STACK_SIZE;
+    let min_vaddr = loads.iter().map(|p| p.p_vaddr).min().unwrap();
+    let bias = base.checked_sub(min_vaddr).ok_or("неверная база образа")?;
+    let mut entry_ok = false;
+    for (index, p) in loads.iter().enumerate() {
+        if p.p_filesz > p.p_memsz { return Err("filesz больше memsz".to_string()); }
+        file_range(img, p.p_offset, p.p_filesz).ok_or("сегмент вне файла")?;
+        let end = p.p_vaddr.checked_add(p.p_memsz).ok_or("переполнение сегмента")?;
+        let dst = bias.checked_add(p.p_vaddr).ok_or("переполнение адреса сегмента")?;
+        let dst_end = bias.checked_add(end).ok_or("переполнение адреса сегмента")?;
+        if dst < base || dst_end > stack_bottom { return Err("сегмент пересекает стек или выходит за область".to_string()); }
+        if p.p_flags & PF_X != 0 && entry >= p.p_vaddr && entry < end { entry_ok = true; }
+        for other in loads.iter().take(index) {
+            let other_end = other.p_vaddr.checked_add(other.p_memsz).ok_or("переполнение сегмента")?;
+            if p.p_memsz != 0 && other.p_memsz != 0 && p.p_vaddr < other_end && other.p_vaddr < end {
+                return Err("перекрывающиеся сегменты".to_string());
+            }
+        }
+    }
+    if !entry_ok { return Err("точка входа вне исполняемого сегмента".to_string()); }
+    let entry_address = bias.checked_add(entry).ok_or("переполнение точки входа")?;
+    let relocations = relocation_plan(img, &phdrs)?;
+    let mut writes = Vec::with_capacity(relocations.len());
+    for (offset, addend) in relocations {
+        let target = bias.checked_add(offset).ok_or("переполнение цели RELA")?;
+        let value = if addend >= 0 { bias.checked_add(addend as u64) }
+            else { bias.checked_sub(addend.unsigned_abs()) }
+            .ok_or("переполнение значения RELA")?;
+        writes.push((target, value));
+    }
+
+    // All file, layout, entry and relocation checks precede writes.
+    unsafe { core::ptr::write_bytes(base as *mut u8, 0, capacity as usize); }
+    for p in &loads {
+        let src = file_range(img, p.p_offset, p.p_filesz).unwrap();
+        unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), (bias + p.p_vaddr) as *mut u8, src.len()); }
+    }
+    for (target, value) in writes {
+        unsafe { core::ptr::write_unaligned(target as *mut u64, value); }
+    }
     let stack_top = area_end & !0xF;
     unsafe {
-        core::ptr::write_bytes(
-            stack_bottom as *mut u8,
-            0,
-            (stack_top - stack_bottom) as usize,
-        );
         let sp = (stack_top - 64) as *mut u64;
-        core::ptr::write(sp, 0); // argc = 0
-        core::ptr::write(sp.add(1), 0); // argv[0] = NULL
-        core::ptr::write(sp.add(2), 0); // envp[0] = NULL
-        core::ptr::write(sp.add(3), 0); // auxv: AT_NULL
+        core::ptr::write(sp, 0);
+        core::ptr::write(sp.add(1), 0);
+        core::ptr::write(sp.add(2), 0);
+        core::ptr::write(sp.add(3), 0);
         core::ptr::write(sp.add(4), 0);
     }
 
     Ok(Loaded {
-        entry: base + entry,
+        entry: entry_address,
         stack_top: stack_top - 64,
         segments: loads.len(),
     })
