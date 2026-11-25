@@ -1,0 +1,17 @@
+/* A chronological board: add each new achievement as another list item. */
+.history-section { position: relative; }
+.history-layout { display: grid; grid-template-columns: minmax(200px, .8fr) minmax(0, 1.2fr); gap: clamp(32px, 6vw, 96px); align-items: start; }
+.history-heading h2 { margin-bottom: 12px; }
+.history-jump { display: inline-flex; align-items: center; gap: 8px; margin-top: 20px; color: var(--accent, #109793); font-weight: 650; text-decoration: none; }
+.history-jump:hover, .history-jump:focus-visible { text-decoration: underline; }
+.milestone-list { list-style: none; margin: 0; padding: 0 0 0 26px; border-left: 1px solid rgba(34, 185, 174, .38); }
+.milestone { position: relative; padding: 0 0 26px; }
+.milestone:last-child { padding-bottom: 0; }
+.milestone::before { content: ""; position: absolute; left: -32px; top: 5px; width: 11px; height: 11px; border-radius: 50%; background: #27c7b6; box-shadow: 0 0 0 5px rgba(39,199,182,.14); }
+.milestone time { display: block; margin: 0 0 13px; font-size: .82rem; font-weight: 700; letter-spacing: .04em; }
+.milestone-card { padding: clamp(22px, 3vw, 34px); border: 1px solid rgba(45, 176, 165, .3); border-radius: 22px; background: linear-gradient(135deg, rgba(26, 164, 153, .13), rgba(80, 120, 190, .04)); }
+.milestone-card h3 { margin: 10px 0; font-size: clamp(1.35rem, 2.5vw, 2rem); line-height: 1.2; }
+.milestone-card p { max-width: 42rem; line-height: 1.65; }
+.milestone-number { font-size: .7rem; font-weight: 750; letter-spacing: .13em; color: #168a80; }
+.milestone-tag { display: inline-block; margin-top: 12px; padding: 7px 11px; border: 1px solid rgba(39, 180, 168, .35); border-radius: 999px; font-size: .75rem; font-weight: 700; }
+@media (max-width: 720px) { .history-layout { grid-template-columns: 1fr; gap: 24px; } .milestone-card { border-radius: 16px; } }

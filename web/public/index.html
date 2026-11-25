@@ -13,6 +13,7 @@
   <link rel="preload" href="/vendor/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/vendor/fonts/inter-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/history.css">
 </head>
 <body data-page="home">
   <main>
@@ -26,6 +27,7 @@
             <a class="btn primary large" href="https://github.com/Atimenka/DeiX" rel="noopener"><svg class="icon"><use href="/icons.svg#github"/></svg>Исходный код</a>
             <a class="btn large" href="/request">Получить ключ dev-режима<svg class="icon"><use href="/icons.svg#arrow"/></svg></a>
           </div>
+          <a class="history-jump" href="#history">История проекта <span aria-hidden="true">↗</span></a>
           <div class="hero-meta reveal d3">
             <span><svg class="icon"><use href="/icons.svg#shield"/></svg>TLS 1.3 без libc</span>
             <span><svg class="icon"><use href="/icons.svg#lock"/></svg>EROFS только для чтения</span>
@@ -78,6 +80,27 @@
         <div class="stat reveal d3"><b>EROFS + ext2/4</b><span>/system и /userdata</span></div>
       </div>
     </div>
+
+    <section class="block history-section" id="history" aria-labelledby="history-title">
+      <div class="wrap history-layout">
+        <div class="history-heading">
+          <span class="eyebrow">История DeiX</span>
+          <h2 id="history-title">Важные моменты</h2>
+          <p class="sub">Путь проекта — от первых шагов до новых достижений.</p>
+        </div>
+        <ol class="milestone-list" aria-label="Достижения DeiX">
+          <li class="milestone">
+            <time datetime="2026-11-25">25 ноября 2026</time>
+            <div class="milestone-card">
+              <span class="milestone-number" aria-hidden="true">01 / НОВАЯ ЭРА ПРОВЕРКИ НА ЖЕЛЕЗЕ</span>
+              <h3>Первый запуск на реальном железе</h3>
+              <p>DeiX впервые загрузилась на физическом компьютере — начало новой эры проверки системы на реальном оборудовании.</p>
+              <span class="milestone-tag">Реальное оборудование</span>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
 
     <section class="block" id="features">
       <div class="wrap">
