@@ -41,8 +41,9 @@ private address space, authenticated process IPC or bootstrap gate.
   process-facing Dinit API is not implemented.
 * `src/usermode.rs` changes the active page tables in place for user memory,
   and its Ring-3 return state and syscall stack are global. `src/sched.rs`
-  switches task stacks, not independent CR3/address-space contexts. These
-  mechanisms do not establish isolation for a separately running Dinit.
+  can switch a task's owned CR3, but there is no integrated Ring-3 process
+  launcher using this facility. These mechanisms do not establish isolation
+  for a separately running Dinit.
 * Nano-Core IPC is an in-kernel named queue, not a bounded authenticated
   process request/reply interface. VFS, logs, timers, process state, session
   events and security monitoring are currently accessed as internal functions.
@@ -68,7 +69,10 @@ not satisfy these tests.
 `src/mm/address_space.rs` constructs owned page tables and separate user pages
 in an unused PML4 slot, with inherited kernel mappings supervisor-only. Its
 host tests exercise construction and allocation ownership, not CPU privilege
-checks. It is not wired into the scheduler, does not switch CR3, does not set
-NX, and is not used to launch Dinit. Its lifetime contract requires the caller
-to switch away before freeing it. Therefore it is not evidence that Dinit is
-isolated or that any user process runs in a private address space.
+checks. The scheduler can retain and switch these roots. A CI-only QEMU boot
+self-test runs two kernel-mode tasks at the same virtual address with different
+backing pages, yielding between them, and verifies that the kernel root is
+restored. This is not a Ring-3 test. NX is not enabled and Dinit does not use
+these spaces. Slot reuse frees a finished task's tables only after it is no
+longer the current task. This does not establish Dinit isolation or a working
+user-process API.
