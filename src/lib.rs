@@ -322,6 +322,11 @@ pub extern "C" fn kernel_main() -> ! {
         } else {
             crate::serial_println!("[vm-test] FAIL: CPL3 isolation test");
         }
+        if sched::private_elf_selftest() {
+            crate::serial_println!("[vm-test] PASS: system VFS ELF executed in private CPL3");
+        } else {
+            crate::serial_println!("[vm-test] FAIL: system VFS ELF execution");
+        }
     }
     usb2::host::init();
     bootprof::mark("usermode+sched start");

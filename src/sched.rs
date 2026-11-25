@@ -651,6 +651,28 @@ pub fn ring3_address_space_selftest() -> bool {
     code == -14
 }
 
+/// QEMU integration: read a separately built ELF through the system VFS,
+/// map its segments into private pages, and execute its actual entry in CPL3.
+/// The probe does not implement Dinit or any production supervisor policy.
+pub fn private_elf_selftest() -> bool {
+    use crate::mm::address_space::AddressSpace;
+    let image = match crate::vfs::read_file("/system/tests/private_elf_probe.elf") {
+        Ok(img) => img, Err(_) => return false,
+    };
+    let root = KERNEL_CR3.load(Ordering::SeqCst) & 0x000f_ffff_ffff_f000;
+    if root == 0 { return false; }
+    let root_table = unsafe { &*(root as *const [u64; 512]) };
+    let mut space = match AddressSpace::new(root_table) { Ok(v) => v, Err(_) => return false };
+    let loaded = match crate::linux::elf::load_private(&image, &mut space) {
+        Ok(v) => v, Err(_) => return false,
+    };
+    RING3_TEST_RESULTS[0].store(0, Ordering::SeqCst);
+    let Some(id) = spawn_private_user("elf-test", loaded.entry, loaded.stack_top, space) else { return false; };
+    join(id);
+    RING3_TEST_RESULTS[0].load(Ordering::SeqCst) == 1
+        && unsafe { (*(&raw const TASKS))[id].exit_code == 0 }
+}
+
 // Real CR3 context-switch smoke test; it runs only in explicitly enabled
 // test builds. This is a supervisor-mode test, not proof of Ring-3 isolation.
 static VM_TEST_RESULTS: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];

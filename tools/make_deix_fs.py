@@ -476,6 +476,10 @@ def init_all_partitions(img, boot_files):
                 "etc/init.deix":       b"# DeiX OS init script\nmount /system\nmount /userdata\n",
                 "services/dinit.cfg":  b"# Dinit services config\n",
             })
+            # Test-only guest binary; do not ship a probe in normal images.
+            if os.environ.get("DEIX_TEST_ADDRESS_SPACE") == "1":
+                with open(os.path.join("build", "private_elf_probe.elf"), "rb") as probe:
+                    system_files["tests/private_elf_probe.elf"] = probe.read()
             # UI-звуки лежат ТОЛЬКО в /system/media/audio/ui/ —
             # этот путь читает src/sound.rs.
             snd_dir = os.path.join("build", "sounds")

@@ -325,3 +325,84 @@ pub fn load_into(img: &[u8], base: u64, capacity: u64) -> Result<Loaded, String>
         segments: loads.len(),
     })
 }
+
+/// Load a static PIE into an already-created private address space.
+/// This populates owned pages via their kernel mappings; it does not activate
+/// the address space, create a process, or provide a syscall ABI.
+pub fn load_private(img: &[u8], space: &mut crate::mm::address_space::AddressSpace) -> Result<Loaded, String> {
+    use crate::mm::address_space::USER_BASE;
+    use alloc::collections::BTreeMap;
+    const PAGE: u64 = 4096;
+    const LIMIT: u64 = 4 * 1024 * 1024;
+    const STACK: u64 = 64 * 1024;
+    let (kind, entry) = check_header(img)?;
+    if kind != ET_DYN { return Err("нужен ELF static PIE".to_string()); }
+    let headers = parse_phdrs(img)?;
+    if headers.iter().any(|p| p.p_type == PT_INTERP) { return Err("динамический интерпретатор не поддерживается".to_string()); }
+    let loads: Vec<&Phdr> = headers.iter().filter(|p| p.p_type == PT_LOAD).collect();
+    if loads.is_empty() { return Err("нет сегментов PT_LOAD".to_string()); }
+    let mut pages: BTreeMap<u64, bool> = BTreeMap::new();
+    let mut executable_entry = false;
+    for (idx, p) in loads.iter().enumerate() {
+        if p.p_filesz > p.p_memsz { return Err("filesz больше memsz".to_string()); }
+        file_range(img, p.p_offset, p.p_filesz).ok_or("сегмент вне файла")?;
+        let end = p.p_vaddr.checked_add(p.p_memsz).ok_or("переполнение сегмента")?;
+        if end > LIMIT - STACK { return Err("сегмент пересекает стек или выходит за область".to_string()); }
+        if p.p_flags & PF_X != 0 && p.p_vaddr <= entry && entry < end { executable_entry = true; }
+        for other in loads.iter().take(idx) {
+            let other_end = other.p_vaddr.checked_add(other.p_memsz).ok_or("переполнение сегмента")?;
+            if p.p_memsz != 0 && other.p_memsz != 0 && p.p_vaddr < other_end && other.p_vaddr < end {
+                return Err("перекрывающиеся сегменты".to_string());
+            }
+        }
+        if p.p_memsz != 0 {
+            let start = p.p_vaddr & !(PAGE - 1);
+            let page_end = end.checked_add(PAGE - 1).ok_or("переполнение сегмента")? & !(PAGE - 1);
+            let mut page = start;
+            while page < page_end {
+                let writable = p.p_flags & PF_W != 0;
+                pages.entry(page).and_modify(|old| *old |= writable).or_insert(writable);
+                page += PAGE;
+            }
+        }
+    }
+    if !executable_entry { return Err("точка входа вне исполняемого сегмента".to_string()); }
+    let relocations = relocation_plan(img, &headers)?;
+    let mut writes = Vec::with_capacity(relocations.len());
+    for (offset, addend) in relocations {
+        let value = if addend >= 0 { USER_BASE.checked_add(addend as u64) }
+            else { USER_BASE.checked_sub(addend.unsigned_abs()) }
+            .ok_or("переполнение значения RELA")?;
+        writes.push((offset, value));
+    }
+    for (offset, writable) in pages {
+        space.map_zeroed(USER_BASE + offset, writable).map_err(|_| "не удалось выделить страницу")?;
+    }
+    let mut stack = LIMIT - STACK;
+    while stack < LIMIT {
+        space.map_zeroed(USER_BASE + stack, true).map_err(|_| "не удалось выделить стек")?;
+        stack += PAGE;
+    }
+    for p in &loads {
+        let bytes = file_range(img, p.p_offset, p.p_filesz).ok_or("сегмент вне файла")?;
+        let mut copied = 0usize;
+        while copied < bytes.len() {
+            let addr = USER_BASE + p.p_vaddr + copied as u64;
+            let page = addr & !(PAGE - 1);
+            let offset = (addr & (PAGE - 1)) as usize;
+            let size = (PAGE as usize - offset).min(bytes.len() - copied);
+            space.page_for_loading(page).map_err(|_| "страница сегмента отсутствует")?[offset..offset+size]
+                .copy_from_slice(&bytes[copied..copied+size]);
+            copied += size;
+        }
+    }
+    for (offset, value) in writes {
+        for (i, byte) in value.to_le_bytes().iter().enumerate() {
+            let addr = USER_BASE + offset + i as u64;
+            let page = addr & !(PAGE - 1);
+            space.page_for_loading(page).map_err(|_| "страница RELA отсутствует")?[(addr & (PAGE - 1)) as usize] = *byte;
+        }
+    }
+    // The zeroed stack provides argc, argv terminator and an empty environment.
+    Ok(Loaded { entry: USER_BASE + entry, stack_top: USER_BASE + LIMIT - 64, segments: loads.len() })
+}

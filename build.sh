@@ -99,6 +99,14 @@ else
     : > "$BUILD/linux_hello.elf"
 fi
 
+# CI-only independent ELF, used to verify actual VFS loading and CPL3 execution.
+# It is a test probe, not Dinit and not part of ordinary release builds.
+if [ "${DEIX_TEST_ADDRESS_SPACE:-}" = "1" ]; then
+    gcc -nostdlib -nostartfiles -static-pie -fPIE -Os \
+        -Wl,--build-id=none -Wl,-z,noseparate-code \
+        -o "$BUILD/private_elf_probe.elf" tools/private_elf_probe.c
+fi
+
 echo "==> [2d/8] Готовим загрузочное лого (assets/logo.dxlg или assets/logo.png -> DXLG+RLE)"
 # Декодера PNG в ядре нет, а сырой RGB не влезает в лимит kernel.bin,
 # поэтому лого хранится как палитра + RLE. Готовый сглаженный assets/logo.dxlg

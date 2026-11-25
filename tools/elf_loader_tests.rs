@@ -5,6 +5,8 @@ extern crate alloc;
 const USER_IMAGE_BASE: u64 = 0x0180_0000;
 const USER_IMAGE_MAX: u64 = 0x0040_0000;
 const USER_STACK_SIZE: u64 = 256 * 1024;
+#[path = "../src/mm/address_space.rs"] pub mod address_space;
+mod mm { pub use crate::address_space; }
 #[path = "../src/linux/elf.rs"] mod elf;
 fn put16(b: &mut [u8], o: usize, v: u16) { b[o..o+2].copy_from_slice(&v.to_le_bytes()); }
 fn put32(b: &mut [u8], o: usize, v: u32) { b[o..o+4].copy_from_slice(&v.to_le_bytes()); }
@@ -51,4 +53,19 @@ fn attempt(bytes: &[u8]) -> (bool, Vec<u8>) {
 #[test] fn rejects_segment_stack_overlap_without_mutating_destination() {
     let mut b=image(); put64(&mut b,104,300_000);
     let (ok,dst)=attempt(&b); assert!(!ok); assert!(dst.iter().all(|&v|v==0xa5));
+}
+
+#[test] fn loads_valid_pie_into_private_space() {
+    let mut space=address_space::AddressSpace::new(&[0;512]).unwrap();
+    let loaded=elf::load_private(&image(), &mut space).unwrap();
+    assert_eq!(loaded.entry, address_space::USER_BASE + 0x80);
+    assert_eq!(space.page_for_loading(address_space::USER_BASE).unwrap()[128], 0xc3);
+    assert!(space.user_accessible(loaded.stack_top, true));
+    assert!(!space.user_accessible(address_space::USER_BASE, true));
+}
+#[test] fn private_loader_rejects_out_of_range_and_bad_entry() {
+    let mut image=image(); put64(&mut image,104, 0x400000);
+    let mut space=address_space::AddressSpace::new(&[0;512]).unwrap();
+    assert!(elf::load_private(&image, &mut space).is_err());
+    assert!(!space.user_accessible(address_space::USER_BASE, false));
 }
