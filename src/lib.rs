@@ -311,6 +311,13 @@ pub extern "C" fn kernel_main() -> ! {
 
     // ПЛАНИРОВЩИК: включаем вытесняющую многозадачность.
     sched::start();
+    if option_env!("DEIX_TEST_ADDRESS_SPACE") == Some("1") {
+        if sched::address_space_selftest() {
+            crate::serial_println!("[vm-test] PASS: private CR3 switched between tasks");
+        } else {
+            crate::serial_println!("[vm-test] FAIL: private CR3 test");
+        }
+    }
     usb2::host::init();
     bootprof::mark("usermode+sched start");
 

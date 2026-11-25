@@ -136,6 +136,7 @@ jobs:
           bash ./build.sh 2>&1 | tee /tmp/build_log.txt
         env:
           RUST_BACKTRACE: "1"
+          DEIX_TEST_ADDRESS_SPACE: "1"
 
       - name: Dump build log (diagnostics)
         if: always()

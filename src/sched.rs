@@ -40,7 +40,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use crate::spinlock::SpinLock;
 
@@ -70,6 +70,10 @@ struct Task {
     rsp: u64,
     /// Владение стеком: держим Box, чтобы память не освободилась.
     _stack: Option<Box<[u8]>>,
+    /// Owns the private page tables while the scheduler slot is live.
+    _address_space: Option<Box<crate::mm::address_space::AddressSpace>>,
+    /// Root switched by the IRQ scheduler; zero means the kernel root.
+    cr3: u64,
     name: String,
     /// Сколько тиков PIT эта задача реально провела на процессоре.
     /// Увеличивается в `schedule_from_irq`, то есть учитывается именно
@@ -91,6 +95,8 @@ impl Task {
             state: State::Empty,
             rsp: 0,
             _stack: None,
+            _address_space: None,
+            cr3: 0,
             name: String::new(),
             runtime_ticks: 0,
             pid: 0,
@@ -105,6 +111,7 @@ impl Task {
 static mut TASKS: [Task; MAX_TASKS] = [const { Task::empty() }; MAX_TASKS];
 /// Индекс текущей задачи.
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
+static KERNEL_CR3: AtomicU64 = AtomicU64::new(0);
 /// Планировщик включён (заглушка IRQ0 переключает контекст).
 static SCHED_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Счётчик переключений — для доказательства, что они реально идут.
@@ -259,6 +266,16 @@ extern "C" fn schedule_from_irq(rsp: u64) -> u64 {
             return rsp;
         }
 
+        let root = if tasks[next].cr3 == 0 {
+            KERNEL_CR3.load(Ordering::Relaxed)
+        } else { tasks[next].cr3 };
+        let current_root: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) current_root, options(nostack, preserves_flags));
+        if current_root != root {
+            // Both roots map all kernel code, data and task stacks. Never
+            // deallocate the next root here or touch user memory in IRQ.
+            core::arch::asm!("mov cr3, {}", in(reg) root, options(nostack, preserves_flags));
+        }
         CURRENT.store(next, Ordering::Relaxed);
         SWITCHES.fetch_add(1, Ordering::Relaxed);
         tasks[next].rsp
@@ -365,6 +382,19 @@ pub fn spawn(name: &str, func: extern "C" fn()) -> Option<usize> {
 /// Создаёт задачу, привязанную к процессу `pid` (0 — задача ядра).
 /// Возвращает идентификатор задачи (индекс слота планировщика).
 pub fn spawn_pid(name: &str, func: extern "C" fn(), pid: u32) -> Option<usize> {
+    spawn_inner(name, func, pid, None)
+}
+
+/// Runs a task with privately owned page tables. The caller must ensure all
+/// kernel mappings are present; this is not yet a Ring-3 process launcher.
+pub fn spawn_with_address_space(name: &str, func: extern "C" fn(), pid: u32,
+    space: crate::mm::address_space::AddressSpace) -> Option<usize> {
+    spawn_inner(name, func, pid, Some(Box::new(space)))
+}
+
+fn spawn_inner(name: &str, func: extern "C" fn(), pid: u32,
+    mut space: Option<Box<crate::mm::address_space::AddressSpace>>) -> Option<usize> {
+    crate::sync::without_interrupts(|| {
     let _g = TABLE_LOCK.lock();
     unsafe {
         let tasks = &mut *(&raw mut TASKS);
@@ -372,8 +402,8 @@ pub fn spawn_pid(name: &str, func: extern "C" fn(), pid: u32) -> Option<usize> {
             if t.state != State::Empty && t.state != State::Finished {
                 continue;
             }
-            if i == 0 {
-                continue; // слот 0 — главная задача ядра
+            if i == 0 || i == CURRENT.load(Ordering::Relaxed) {
+                continue; // Never reclaim the currently active page tables.
             }
             let stack: Box<[u8]> = vec![0u8; STACK_SIZE].into_boxed_slice();
             let top = stack.as_ptr() as u64 + STACK_SIZE as u64;
@@ -381,6 +411,8 @@ pub fn spawn_pid(name: &str, func: extern "C" fn(), pid: u32) -> Option<usize> {
 
             t.rsp = rsp;
             t._stack = Some(stack);
+            t.cr3 = space.as_ref().map_or(0, |s| s.root_physical());
+            t._address_space = space.take();
             t.name = String::from(name);
             t.runtime_ticks = 0;
             t.pid = pid;
@@ -392,6 +424,7 @@ pub fn spawn_pid(name: &str, func: extern "C" fn(), pid: u32) -> Option<usize> {
         }
     }
     None
+    })
 }
 
 /// Усыпляет текущую задачу на `ms` миллисекунд.
@@ -414,6 +447,9 @@ pub fn yield_now() {
 
 /// Включает вытесняющее переключение. Слот 0 — текущий поток ядра.
 pub fn start() {
+    let root: u64;
+    unsafe { core::arch::asm!("mov {}, cr3", out(reg) root, options(nostack, preserves_flags)); }
+    KERNEL_CR3.store(root, Ordering::SeqCst);
     unsafe {
         let tasks = &mut *(&raw mut TASKS);
         tasks[0].state = State::Ready;
@@ -455,6 +491,7 @@ pub struct TaskInfo {
 
 /// Список задач со снимком их состояния.
 pub fn list() -> Vec<TaskInfo> {
+    crate::sync::without_interrupts(|| {
     let _g = TABLE_LOCK.lock();
     let mut out = Vec::new();
     unsafe {
@@ -471,6 +508,7 @@ pub fn list() -> Vec<TaskInfo> {
         }
     }
     out
+    })
 }
 
 /// Всего тиков PIT, учтённых планировщиком с момента старта.
@@ -505,6 +543,46 @@ pub fn state_str(state: State) -> &'static str {
         State::Sleeping(_) => "sleeping",
         State::Finished => "finished",
     }
+}
+
+// Real CR3 context-switch smoke test; it runs only in explicitly enabled
+// test builds. This is a supervisor-mode test, not proof of Ring-3 isolation.
+static VM_TEST_RESULTS: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
+extern "C" fn vm_worker0() { vm_worker(0, 0x31); }
+extern "C" fn vm_worker1() { vm_worker(1, 0x72); }
+fn vm_worker(index: usize, expected: u8) {
+    for _ in 0..8 {
+        let value = unsafe { core::ptr::read_volatile(crate::mm::address_space::USER_BASE as *const u8) };
+        if value != expected { VM_TEST_RESULTS[index].store(2, Ordering::SeqCst); return; }
+        yield_now();
+    }
+    VM_TEST_RESULTS[index].store(1, Ordering::SeqCst);
+}
+
+pub fn address_space_selftest() -> bool {
+    use crate::mm::address_space::{AddressSpace, USER_BASE};
+    let root = KERNEL_CR3.load(Ordering::SeqCst) & 0x000f_ffff_ffff_f000;
+    if root == 0 { return false; }
+    let root_table = unsafe { &*(root as *const [u64; 512]) };
+    let make = |value| -> Result<AddressSpace, crate::mm::address_space::Error> {
+        let mut space = AddressSpace::new(root_table)?;
+        space.map_zeroed(USER_BASE, true)?;
+        space.page_for_loading(USER_BASE)?[0] = value;
+        Ok(space)
+    };
+    let Ok(a) = make(0x31) else { return false; };
+    let Ok(b) = make(0x72) else { return false; };
+    VM_TEST_RESULTS[0].store(0, Ordering::SeqCst);
+    VM_TEST_RESULTS[1].store(0, Ordering::SeqCst);
+    let Some(a_id) = spawn_with_address_space("vm-test-a", vm_worker0, 0, a) else { return false; };
+    let b_id = spawn_with_address_space("vm-test-b", vm_worker1, 0, b);
+    join(a_id);
+    let Some(b_id) = b_id else { return false; };
+    join(b_id);
+    let after: u64;
+    unsafe { core::arch::asm!("mov {}, cr3", out(reg) after, options(nostack, preserves_flags)); }
+    after == KERNEL_CR3.load(Ordering::SeqCst)
+        && VM_TEST_RESULTS.iter().all(|v| v.load(Ordering::SeqCst) == 1)
 }
 
 // ==================== Демонстрация и проверка ====================
