@@ -99,6 +99,11 @@ jobs:
           rustc --edition=2021 --test tools/process_lifecycle_tests.rs -o /tmp/deix-process-tests
           /tmp/deix-process-tests
 
+      - name: Process IPC queue tests
+        run: |
+          rustc --edition=2021 --test tools/process_ipc_tests.rs -o /tmp/deix-process-ipc-tests
+          /tmp/deix-process-ipc-tests
+
       - name: Dinit service lifecycle policy tests
         run: |
           rustc --edition=2021 --test tools/dinit_service_tests.rs -o /tmp/deix-dinit-tests

@@ -120,6 +120,33 @@ impl AddressSpace {
             && (!write || entry & WRITE != 0)
             && self.owned_index(entry).is_ok()
     }
+    /// Validate the complete range before writing, so an invalid trailing page
+    /// cannot cause partial user-visible output. Zero length needs no mapping.
+    pub fn user_range_accessible(&self, address: u64, len: usize, write: bool) -> bool {
+        if len == 0 { return true; }
+        let Some(last) = address.checked_add((len - 1) as u64) else { return false; };
+        let mut page = address & !(PAGE as u64 - 1);
+        let last_page = last & !(PAGE as u64 - 1);
+        loop {
+            if !self.user_accessible(page, write) { return false; }
+            if page == last_page { return true; }
+            let Some(next) = page.checked_add(PAGE as u64) else { return false; };
+            page = next;
+        }
+    }
+    pub fn copy_to_user(&mut self, address: u64, data: &[u8]) -> Result<(), Error> {
+        if !self.user_range_accessible(address, data.len(), true) { return Err(Error::InvalidAddress); }
+        let mut copied = 0;
+        while copied < data.len() {
+            let va = address + copied as u64;
+            let offset = (va & (PAGE as u64 - 1)) as usize;
+            let n = (PAGE - offset).min(data.len() - copied);
+            self.page_for_loading(va & !(PAGE as u64 - 1))?[offset..offset+n]
+                .copy_from_slice(&data[copied..copied+n]);
+            copied += n;
+        }
+        Ok(())
+    }
     /// Kernel-side initialization of a mapped user page, including read-only
     /// code pages. This privileged loader access bypasses the user PTE flags.
     pub fn page_for_loading(&mut self, va: u64) -> Result<&mut [u8; PAGE], Error> {
@@ -145,6 +172,17 @@ mod tests {
         a.page_for_loading(USER_BASE).unwrap()[8] = 42;
         assert_eq!(b.page_for_loading(USER_BASE).unwrap()[8], 0);
         assert_eq!(a.page_for_loading(USER_BASE).unwrap()[8], 42);
+    }
+    #[test]
+    fn copy_checks_every_page_and_never_partially_writes() {
+        let mut a = AddressSpace::new(&[0; ENTRIES]).unwrap();
+        a.map_zeroed(USER_BASE, true).unwrap();
+        a.map_zeroed(USER_BASE + PAGE as u64, false).unwrap();
+        assert_eq!(a.copy_to_user(USER_BASE + PAGE as u64 - 1, &[7, 8]), Err(Error::InvalidAddress));
+        assert_eq!(a.page_for_loading(USER_BASE).unwrap()[PAGE - 1], 0);
+        assert!(!a.user_range_accessible(u64::MAX, 2, true));
+        assert!(a.copy_to_user(USER_BASE + 8, &[7, 8]).is_ok());
+        assert_eq!(&a.page_for_loading(USER_BASE).unwrap()[8..10], &[7, 8]);
     }
     #[test]
     fn rejects_conflicts_and_non_user_addresses() {

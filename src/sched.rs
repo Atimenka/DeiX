@@ -597,6 +597,18 @@ pub fn current_is_private_user() -> bool {
     unsafe { (*(&raw const TASKS))[cur].user_mode }
 }
 
+/// Only call from a private-task syscall while interrupts are disabled.
+pub fn current_user_range_writable(address: u64, len: usize) -> bool {
+    let cur = CURRENT.load(Ordering::Relaxed);
+    let task = unsafe { &(*(&raw const TASKS))[cur] };
+    task.user_mode && task._address_space.as_ref().map_or(false, |s| s.user_range_accessible(address, len, true))
+}
+pub fn current_copy_to_user(address: u64, data: &[u8]) -> bool {
+    let cur = CURRENT.load(Ordering::Relaxed);
+    let task = unsafe { &mut (*(&raw mut TASKS))[cur] };
+    task.user_mode && task._address_space.as_mut().map_or(false, |s| s.copy_to_user(address, data).is_ok())
+}
+
 /// Terminate a private user task from a syscall or fault, then wait for the
 /// timer to switch away. The finished slot retains its tables until reused.
 pub fn finish_private_user(code: i64) -> ! {
@@ -674,7 +686,7 @@ pub fn ring3_address_space_selftest() -> bool {
 pub fn private_elf_selftest() -> bool {
     use crate::process::{self, ProcessState, SpawnRequest};
     let req = SpawnRequest { name: String::from("elf-test"), uid: 0, parent: 0,
-        caps: 0, cwd: String::from("/"), image_path: String::from("/system/tests/private_elf_probe.elf") };
+        caps: process::cap::IPC_SEND | process::cap::IPC_RECEIVE, cwd: String::from("/"), image_path: String::from("/system/tests/private_elf_probe.elf") };
     RING3_TEST_RESULTS[0].store(0, Ordering::SeqCst);
     let Ok(pid) = process::spawn(&req) else { return false; };
     if process::exec(pid).is_err() { let _ = process::kill(pid, -1); let _ = process::reap(pid); return false; }

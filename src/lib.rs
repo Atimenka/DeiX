@@ -69,6 +69,7 @@ mod pkg;
 mod png;
 mod port;
 mod process;
+mod process_ipc;
 mod renderer;
 mod rng;
 mod rtc;

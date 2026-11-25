@@ -85,6 +85,10 @@ pub mod cap {
     pub const MANAGE_SERVICES: u64 = 1 << 5;
     /// Установка пакетов.
     pub const INSTALL: u64 = 1 << 6;
+    /// Отправка сообщений другим процессам с включённым приёмом.
+    pub const IPC_SEND: u64 = 1 << 7;
+    /// Приём адресованных этому процессу сообщений.
+    pub const IPC_RECEIVE: u64 = 1 << 8;
     /// Полный набор для системных служб Dinit.
     pub const SYSTEM: u64 = READ_ANY
         | WRITE_USERDATA
@@ -251,7 +255,7 @@ pub fn spawn(req: &SpawnRequest) -> Result<u32, ProcessError> {
     let pid = {
         let mut next = NEXT_PID.lock();
         let pid = *next;
-        *next = next.wrapping_add(1);
+        *next = next.checked_add(1).ok_or(ProcessError::TableFull)?;
         pid
     };
 
@@ -301,7 +305,7 @@ const MEX_IMAGE_SIZE: u64 = 4 * 1024 * 1024;
 
 /// PID процесса, который сейчас занимает фиксированную область MEX.
 /// Формат MEX не позиционно-независим, поэтому область одна на систему.
-static MEX_IN_USE: SpinLock<Option<u32>> = SpinLock::new(None);
+static MEX_IN_USE: IrqSpinLock<Option<u32>> = IrqSpinLock::new(None);
 
 /// Точка входа задачи нового процесса. Берёт контекст запуска,
 /// исполняет образ и помечает процесс завершённым.
@@ -415,6 +419,7 @@ pub fn mark_running(pid: u32, sched_id: usize) -> Result<(), ProcessError> {
 }
 /// Завершает процесс. Задача планировщика тоже снимается.
 pub fn kill(pid: u32, code: i32) -> Result<(), ProcessError> {
+    crate::sync::without_interrupts(|| {
     let sched_id = {
         let mut table = PROCS.lock();
         let p = table
@@ -436,7 +441,9 @@ pub fn kill(pid: u32, code: i32) -> Result<(), ProcessError> {
     if let Some(id) = sched_id {
         crate::sched::terminate(id);
     }
+    crate::process_ipc::purge(pid);
     Ok(())
+    })
 }
 
 /// Сообщает о завершении задачи планировщика. Вызывается из
@@ -458,12 +465,16 @@ pub fn notify_exit(sched_id: usize, code: i32) {
 /// Completes an isolated task from a syscall/fault without touching the
 /// scheduler or legacy MEX locks. Safe when called with interrupts disabled.
 pub fn notify_private_exit(sched_id: usize, code: i32) {
-    let mut table = PROCS.lock();
-    if let Some(p) = table.iter_mut().find(|p| p.state == ProcessState::Running && p.sched_id == Some(sched_id)) {
-        p.exit_code = Some(code);
-        p.state = ProcessState::Zombie;
-        p.fds = FdTable::new();
-    }
+    let pid = {
+        let mut table = PROCS.lock();
+        if let Some(p) = table.iter_mut().find(|p| p.state == ProcessState::Running && p.sched_id == Some(sched_id)) {
+            p.exit_code = Some(code);
+            p.state = ProcessState::Zombie;
+            p.fds = FdTable::new();
+            Some(p.pid)
+        } else { None }
+    };
+    if let Some(pid) = pid { crate::process_ipc::purge(pid); }
 }
 
 /// То же, но PID уже известен вызывающему (трамплин запуска).
@@ -565,6 +576,24 @@ pub fn current_pid() -> Option<u32> {
         .iter()
         .find(|p| p.sched_id == Some(sid) && p.state.occupies_slot())
         .map(|p| p.pid)
+}
+
+/// Authenticates the current task and checks both endpoints under one lock.
+/// Only a running process with RECEIVE can be a mailbox destination.
+pub fn ipc_sender_and_target(target: u32) -> Option<u32> {
+    let sid = crate::sched::current_id();
+    let table = PROCS.lock();
+    let sender = table.iter().find(|p| p.state == ProcessState::Running && p.sched_id == Some(sid)
+        && p.caps & cap::IPC_SEND != 0)?;
+    table.iter().find(|p| p.pid == target && p.state == ProcessState::Running
+        && p.caps & cap::IPC_RECEIVE != 0)?;
+    Some(sender.pid)
+}
+pub fn ipc_receiver() -> Option<u32> {
+    let sid = crate::sched::current_id();
+    let table = PROCS.lock();
+    table.iter().find(|p| p.state == ProcessState::Running && p.sched_id == Some(sid)
+        && p.caps & cap::IPC_RECEIVE != 0).map(|p| p.pid)
 }
 
 /// Имя процесса по PID.

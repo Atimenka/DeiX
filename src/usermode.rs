@@ -416,6 +416,29 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u
             crate::sched::finish_private_user(0);
         }
         if nr == 60 || nr == 231 { crate::sched::finish_private_user(a1 as i64); }
+        // Version 1 process mailbox ABI. Sender identity is derived from the
+        // current scheduler slot, never accepted from userspace.
+        match nr {
+            0x4458_0001 => { // send(destination, tag, word0, word1)
+                let Ok(target) = u32::try_from(a1) else { return (-22i64) as u64; };
+                let Some(sender) = crate::process::ipc_sender_and_target(target) else { return (-1i64) as u64; };
+                let msg = crate::process_ipc::Message { sender, receiver: target, tag: a2, a: a3, b: a4 };
+                return if crate::process_ipc::send(msg) { 0 } else { (-11i64) as u64 };
+            }
+            0x4458_0002 => { // receive(out: *mut 32 bytes)
+                let Some(receiver) = crate::process::ipc_receiver() else { return (-1i64) as u64; };
+                if !crate::sched::current_user_range_writable(a1, 32) { return (-14i64) as u64; }
+                let Some(msg) = crate::process_ipc::receive(receiver) else { return (-11i64) as u64; };
+                let mut out = [0u8; 32];
+                out[..4].copy_from_slice(&msg.sender.to_le_bytes());
+                out[8..16].copy_from_slice(&msg.tag.to_le_bytes());
+                out[16..24].copy_from_slice(&msg.a.to_le_bytes());
+                out[24..32].copy_from_slice(&msg.b.to_le_bytes());
+                return if crate::sched::current_copy_to_user(a1, &out) { 0 } else { (-14i64) as u64 };
+            }
+            0x4458_0003 => return crate::process::current_pid().map_or((-1i64) as u64, |pid| pid as u64),
+            _ => {}
+        }
         return (-38i64) as u64; // ENOSYS
     }
     match nr {

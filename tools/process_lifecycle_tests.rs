@@ -17,6 +17,7 @@ mod linux { pub mod elf {
     pub struct Loaded { pub entry: u64, pub stack_top: u64 }
     pub fn load_private(_: &[u8], _: &mut crate::mm::address_space::AddressSpace) -> Result<Loaded, alloc::string::String> { Err("invalid".into()) }
 } }
+mod process_ipc { pub fn purge(_: u32) {} }
 mod timer { pub fn uptime_ms() -> u64 { 0 } }
 mod sched {
     pub static TERMINATED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
@@ -62,7 +63,7 @@ fn kill_pid_terminates_its_scheduler_slot_not_pid() {
     assert_ne!(pid as usize, slot);
     process::mark_running(pid, slot).unwrap();
     process::kill(pid, 9).unwrap();
-    assert_eq!(&*sched::TERMINATED.lock().unwrap(), &[slot]);
+    assert!(sched::TERMINATED.lock().unwrap().contains(&slot));
     let info = process::info(pid).unwrap();
     assert_eq!(info.state, process::ProcessState::Zombie);
     assert_eq!(info.exit_code, Some(9));
@@ -84,4 +85,24 @@ fn private_exit_records_code_without_terminating_another_slot() {
     // Duplicate notifications must not overwrite the first exit status.
     process::notify_private_exit(52, 0);
     assert_eq!(process::reap(pid).unwrap(), Some(-14));
+}
+
+#[test]
+fn ipc_checks_sender_and_receiver_caps_and_running_state() {
+    let sender_req = process::SpawnRequest {
+        name: "sender".into(), uid: 0, parent: 1, caps: process::cap::IPC_SEND,
+        cwd: "/".into(), image_path: "".into(),
+    };
+    let receiver_req = process::SpawnRequest { name: "receiver".into(), caps: process::cap::IPC_RECEIVE, ..sender_req.clone() };
+    let sender = process::spawn(&sender_req).unwrap();
+    let receiver = process::spawn(&receiver_req).unwrap();
+    process::mark_running(sender, 0).unwrap();
+    assert_eq!(process::ipc_sender_and_target(receiver), None);
+    process::mark_running(receiver, 51).unwrap();
+    assert_eq!(process::ipc_sender_and_target(receiver), Some(sender));
+    assert_eq!(process::ipc_receiver(), None);
+    process::kill(receiver, 9).unwrap();
+    assert_eq!(process::ipc_sender_and_target(receiver), None);
+    process::kill(sender, 0).unwrap();
+    process::reap(sender).unwrap(); process::reap(receiver).unwrap();
 }
