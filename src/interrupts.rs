@@ -293,6 +293,9 @@ extern "x86-interrupt" fn machine_check_handler(frame: InterruptStackFrame) -> !
 fn dispatch_fault(frame: &InterruptStackFrame, vector: u8, error_code: u64) -> ! {
     let ctx = crate::diag::panic::PanicContext::from_frame(frame, vector, error_code);
     if ctx.from_user() {
+        if crate::sched::current_is_private_user() {
+            crate::sched::finish_private_user(-(vector as i64));
+        }
         crate::diag::panic::user_fault(&ctx)
     } else {
         crate::diag::panic::kernel_panic(

@@ -74,6 +74,9 @@ struct Task {
     _address_space: Option<Box<crate::mm::address_space::AddressSpace>>,
     /// Root switched by the IRQ scheduler; zero means the kernel root.
     cr3: u64,
+    user_mode: bool,
+    kernel_stack_top: u64,
+    exit_code: i64,
     name: String,
     /// Сколько тиков PIT эта задача реально провела на процессоре.
     /// Увеличивается в `schedule_from_irq`, то есть учитывается именно
@@ -97,6 +100,9 @@ impl Task {
             _stack: None,
             _address_space: None,
             cr3: 0,
+            user_mode: false,
+            kernel_stack_top: 0,
+            exit_code: 0,
             name: String::new(),
             runtime_ticks: 0,
             pid: 0,
@@ -276,6 +282,9 @@ extern "C" fn schedule_from_irq(rsp: u64) -> u64 {
             // deallocate the next root here or touch user memory in IRQ.
             core::arch::asm!("mov cr3, {}", in(reg) root, options(nostack, preserves_flags));
         }
+        crate::usermode::set_task_kernel_stack(if tasks[next].user_mode {
+            tasks[next].kernel_stack_top
+        } else { 0 });
         CURRENT.store(next, Ordering::Relaxed);
         SWITCHES.fetch_add(1, Ordering::Relaxed);
         tasks[next].rsp
@@ -382,18 +391,28 @@ pub fn spawn(name: &str, func: extern "C" fn()) -> Option<usize> {
 /// Создаёт задачу, привязанную к процессу `pid` (0 — задача ядра).
 /// Возвращает идентификатор задачи (индекс слота планировщика).
 pub fn spawn_pid(name: &str, func: extern "C" fn(), pid: u32) -> Option<usize> {
-    spawn_inner(name, func, pid, None)
+    spawn_inner(name, Some(func), pid, None, None)
 }
 
 /// Runs a task with privately owned page tables. The caller must ensure all
 /// kernel mappings are present; this is not yet a Ring-3 process launcher.
 pub fn spawn_with_address_space(name: &str, func: extern "C" fn(), pid: u32,
     space: crate::mm::address_space::AddressSpace) -> Option<usize> {
-    spawn_inner(name, func, pid, Some(Box::new(space)))
+    spawn_inner(name, Some(func), pid, Some(Box::new(space)), None)
 }
 
-fn spawn_inner(name: &str, func: extern "C" fn(), pid: u32,
-    mut space: Option<Box<crate::mm::address_space::AddressSpace>>) -> Option<usize> {
+/// Schedule code in a private address space at CPL 3. This is a low-level
+/// mechanism; it is not yet connected to the process manager or Dinit ABI.
+pub fn spawn_private_user(name: &str, entry: u64, stack: u64,
+    space: crate::mm::address_space::AddressSpace) -> Option<usize> {
+    if !space.user_accessible(entry, false) || stack == 0
+        || !space.user_accessible(stack - 1, true) { return None; }
+    spawn_inner(name, None, 0, Some(Box::new(space)), Some((entry, stack)))
+}
+
+fn spawn_inner(name: &str, func: Option<extern "C" fn()>, pid: u32,
+    mut space: Option<Box<crate::mm::address_space::AddressSpace>>,
+    user: Option<(u64, u64)>) -> Option<usize> {
     crate::sync::without_interrupts(|| {
     let _g = TABLE_LOCK.lock();
     unsafe {
@@ -407,9 +426,22 @@ fn spawn_inner(name: &str, func: extern "C" fn(), pid: u32,
             }
             let stack: Box<[u8]> = vec![0u8; STACK_SIZE].into_boxed_slice();
             let top = stack.as_ptr() as u64 + STACK_SIZE as u64;
-            let rsp = build_initial_frame(top, task_entry as *const () as u64, func as *const () as u64);
+            let rsp = if let Some((entry, stack)) = user {
+                let rsp = build_initial_frame(top, entry, 0);
+                let frame = rsp as *mut u64;
+                *frame.add(16) = crate::usermode::USER_CS as u64;
+                *frame.add(18) = stack;
+                *frame.add(19) = crate::usermode::USER_DS as u64;
+                rsp
+            } else {
+                let func = func?;
+                build_initial_frame(top, task_entry as *const () as u64, func as *const () as u64)
+            };
 
             t.rsp = rsp;
+            t.user_mode = user.is_some();
+            t.kernel_stack_top = top & !0xf;
+            t.exit_code = 0;
             t._stack = Some(stack);
             t.cr3 = space.as_ref().map_or(0, |s| s.root_physical());
             t._address_space = space.take();
@@ -543,6 +575,80 @@ pub fn state_str(state: State) -> &'static str {
         State::Sleeping(_) => "sleeping",
         State::Finished => "finished",
     }
+}
+
+/// True only for the scheduler's new private Ring-3 task type.
+pub fn current_is_private_user() -> bool {
+    let cur = CURRENT.load(Ordering::Relaxed);
+    unsafe { (*(&raw const TASKS))[cur].user_mode }
+}
+
+/// Terminate a private user task from a syscall or fault, then wait for the
+/// timer to switch away. The finished slot retains its tables until reused.
+pub fn finish_private_user(code: i64) -> ! {
+    let cur = CURRENT.load(Ordering::Relaxed);
+    unsafe {
+        let task = &mut (*(&raw mut TASKS))[cur];
+        task.exit_code = code;
+        task.state = State::Finished;
+        core::arch::asm!("sti", options(nomem, nostack));
+        loop { core::arch::asm!("hlt", options(nomem, nostack)); }
+    }
+}
+
+static RING3_TEST_RESULTS: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
+pub fn record_ring3_test(value: u64, cs: u64) {
+    if cs & 3 != 3 { return; }
+    match value {
+        0x31 => RING3_TEST_RESULTS[0].store(1, Ordering::SeqCst),
+        0x72 => RING3_TEST_RESULTS[1].store(1, Ordering::SeqCst),
+        _ => {}
+    }
+}
+
+/// QEMU-only live CPL3 and page-fault isolation test. Two tasks execute the
+/// same machine code at the same VA, but read different private data pages.
+/// The third task attempts to read supervisor-only kernel memory and must #PF.
+pub fn ring3_address_space_selftest() -> bool {
+    use crate::mm::address_space::{AddressSpace, Error, USER_BASE};
+    const CODE: &[u8] = &[
+        0x48,0xbb,0x00,0x10,0x00,0x00,0x80,0x00,0x00,0x00,
+        0xb9,0x00,0x00,0x80,0x00,0xf3,0x90,0xff,0xc9,0x75,0xfa,
+        0x0f,0xb6,0x3b,0x66,0x8c,0xc8,0x0f,0xb7,0xf0,
+        0xb8,0x4d,0x56,0x58,0x44,0x0f,0x05,0x0f,0x0b,
+    ];
+    const FAULT: &[u8] = &[
+        0x48,0xb8,0x00,0x00,0x10,0x00,0x00,0x00,0x00,0x00,0x8a,0x00,
+        0xb8,0x3c,0x00,0x00,0x00,0xbf,0x01,0x00,0x00,0x00,0x0f,0x05,0x0f,0x0b,
+    ];
+    let root = KERNEL_CR3.load(Ordering::SeqCst) & 0x000f_ffff_ffff_f000;
+    if root == 0 { return false; }
+    let table = unsafe { &*(root as *const [u64; 512]) };
+    let make = |code: &[u8], value| -> Result<AddressSpace, Error> {
+        let mut space = AddressSpace::new(table)?;
+        space.map_zeroed(USER_BASE, false)?;
+        space.map_zeroed(USER_BASE + 0x1000, false)?;
+        space.map_zeroed(USER_BASE + 0x3000, true)?;
+        space.page_for_loading(USER_BASE)?[..code.len()].copy_from_slice(code);
+        space.page_for_loading(USER_BASE + 0x1000)?[0] = value;
+        Ok(space)
+    };
+    let Ok(a) = make(CODE, 0x31) else { return false; };
+    let Ok(b) = make(CODE, 0x72) else { return false; };
+    RING3_TEST_RESULTS[0].store(0, Ordering::SeqCst);
+    RING3_TEST_RESULTS[1].store(0, Ordering::SeqCst);
+    let stack = USER_BASE + 0x4000 - 16;
+    let Some(a_id) = spawn_private_user("ring3-test-a", USER_BASE, stack, a) else { return false; };
+    let b_id = spawn_private_user("ring3-test-b", USER_BASE, stack, b);
+    join(a_id);
+    let Some(b_id) = b_id else { return false; };
+    join(b_id);
+    if !RING3_TEST_RESULTS.iter().all(|r| r.load(Ordering::SeqCst) == 1) { return false; }
+    let Ok(fault_space) = make(FAULT, 0) else { return false; };
+    let Some(fault_id) = spawn_private_user("ring3-fault-test", USER_BASE, stack, fault_space) else { return false; };
+    join(fault_id);
+    let code = unsafe { (*(&raw const TASKS))[fault_id].exit_code };
+    code == -14
 }
 
 // Real CR3 context-switch smoke test; it runs only in explicitly enabled

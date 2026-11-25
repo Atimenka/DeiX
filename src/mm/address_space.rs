@@ -111,6 +111,15 @@ impl AddressSpace {
         self.user_pages += 1;
         Ok(())
     }
+    /// Check an address against this space's owned PTEs, without dereferencing it.
+    pub fn user_accessible(&self, address: u64, write: bool) -> bool {
+        let page = address & !(PAGE as u64 - 1);
+        let Ok((table, index)) = self.leaf_table(page) else { return false; };
+        let entry = self.pages[table].entries()[index];
+        entry & (PRESENT | USER) == (PRESENT | USER)
+            && (!write || entry & WRITE != 0)
+            && self.owned_index(entry).is_ok()
+    }
     /// Kernel-side initialization of a mapped user page, including read-only
     /// code pages. This privileged loader access bypasses the user PTE flags.
     pub fn page_for_loading(&mut self, va: u64) -> Result<&mut [u8; PAGE], Error> {

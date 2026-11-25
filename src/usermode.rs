@@ -361,6 +361,16 @@ static mut CPU_LOCAL: CpuLocal = CpuLocal {
     user_rsp: 0,
 };
 
+/// Scheduler calls this with interrupts disabled before resuming a task.
+/// Zero restores the legacy shared stack for existing synchronous programs.
+pub unsafe fn set_task_kernel_stack(stack_top: u64) {
+    let top = if stack_top == 0 {
+        (core::ptr::addr_of!(KERNEL_STACK.bytes) as u64) + KSTACK_SIZE as u64
+    } else { stack_top };
+    (*(&raw mut TSS)).rsp0 = top;
+    (*(&raw mut CPU_LOCAL)).kernel_rsp = top;
+}
+
 /// Признак того, что Ring 3 завершился через `exit`.
 static mut USER_EXITED: bool = false;
 /// Куда вернуться из `exit` (стек ядра на момент входа в Ring 3).
@@ -397,6 +407,17 @@ pub unsafe fn abort_user_program(code: i64) -> ! {
 /// Диапазон 0x4D58_xxxx («MX») зарезервирован под MEX API: его вызывают
 /// стабы, которые ядро кладёт в shim-страницу MEX-программы.
 extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> u64 {
+    if crate::sched::current_is_private_user() {
+        // This isolated task interface is deliberately narrow until a proper
+        // capability-checked process ABI exists. Never fall through to MEX or
+        // Linux handlers that assume the legacy shared user mapping.
+        if nr == 0x4458_564d && option_env!("DEIX_TEST_ADDRESS_SPACE") == Some("1") {
+            crate::sched::record_ring3_test(a1, a2);
+            crate::sched::finish_private_user(0);
+        }
+        if nr == 60 || nr == 231 { crate::sched::finish_private_user(a1 as i64); }
+        return (-38i64) as u64; // ENOSYS
+    }
     match nr {
         1000 => {
             crate::println!(

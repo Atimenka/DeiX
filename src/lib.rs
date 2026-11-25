@@ -317,6 +317,11 @@ pub extern "C" fn kernel_main() -> ! {
         } else {
             crate::serial_println!("[vm-test] FAIL: private CR3 test");
         }
+        if sched::ring3_address_space_selftest() {
+            crate::serial_println!("[vm-test] PASS: CPL3 private pages and kernel access fault");
+        } else {
+            crate::serial_println!("[vm-test] FAIL: CPL3 isolation test");
+        }
     }
     usb2::host::init();
     bootprof::mark("usermode+sched start");
