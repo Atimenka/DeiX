@@ -159,3 +159,10 @@ the process can exit immediately afterwards; compare PID again for subsequent
 actions. A pathname is not a cryptographic identity of executable bytes, and
 this interface does not independently authenticate a changed disk image, list
 all identities, or implement adoption, recovery or restart policy.
+
+### Monotonic time
+
+`0x44580010` returns kernel monotonic uptime in milliseconds, saturated at
+`i64::MAX`, for any running private process; it requires no extra capability.
+It returns -1 if no running process corresponds to the calling task. This is
+not a wall clock and does not provide sleeping or scheduling policy.

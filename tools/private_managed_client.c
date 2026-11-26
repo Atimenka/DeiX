@@ -68,6 +68,11 @@ __attribute__((noreturn)) void _start(void) {
         }
     }
     if (!code) {
+        long first = call4(0x44580010UL, 0, 0, 0, 0);
+        long second = call4(0x44580010UL, 0, 0, 0, 0);
+        if (first < 0 || second < first) code = 21;
+    }
+    if (!code) {
         unsigned char config[8];
         long token = call4(0x4458000dUL, 0, 0, 0, 0);
         if (token <= 0 || wait_result(token, &result) != 0 || result.status != 0 ||

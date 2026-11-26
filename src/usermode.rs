@@ -530,6 +530,10 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u
                 out[12..16].copy_from_slice(&(snapshot.exit_code.is_some() as u32).to_le_bytes());
                 return if crate::sched::current_copy_to_user(a2, &out) { 0 } else { (-14i64) as u64 };
             }
+            0x4458_0010 => { // monotonic uptime in milliseconds
+                if crate::process::current_pid().is_none() { return (-1i64) as u64; }
+                return crate::timer::uptime_ms().min(i64::MAX as u64);
+            }
             0x4458_000f => { // managed identity snapshot (name, len, out)
                 if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
                 let Ok(len) = usize::try_from(a2) else { return (-22i64) as u64; };
