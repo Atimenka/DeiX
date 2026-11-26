@@ -132,6 +132,9 @@ if [ "${DEIX_TEST_ADDRESS_SPACE:-}" = "1" ]; then
     gcc -nostdlib -nostartfiles -static-pie -fPIE -Os \
         -Wl,--build-id=none -Wl,-z,noseparate-code \
         -o "$BUILD/private_session_probe.elf" tools/private_session_probe.c
+    gcc -nostdlib -nostartfiles -static-pie -fPIE -Os \
+        -Wl,--build-id=none -Wl,-z,noseparate-code \
+        -o "$BUILD/private_exit_probe.elf" tools/private_exit_probe.c
 fi
 
 echo "==> [2d/8] Готовим загрузочное лого (assets/logo.dxlg или assets/logo.png -> DXLG+RLE)"

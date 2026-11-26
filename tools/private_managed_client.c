@@ -17,6 +17,7 @@ static inline long find(const void *ptr, unsigned long len) { return call4(0x445
 struct managed_snapshot { unsigned pid, state, uid, path_len; unsigned long caps; char path[256]; };
 struct process_status { unsigned pid, state; int exit_code; unsigned has_exit; };
 struct result { int status; unsigned pid; };
+struct zombie { unsigned pid, name_len; int code; unsigned reserved; char name[128]; };
 static long wait_result(long token, struct result *out) {
     for (unsigned i = 0; i < 200000; i++) {
         long r = call4(0x4458000aUL, token, (unsigned long)out, 0, 0);
@@ -65,6 +66,26 @@ __attribute__((noreturn)) void _start(void) {
                     if (token <= 0 || wait_result(token, &result) != 0 || result.status != 0 || result.pid != child || find(rpc, sizeof(rpc)-1) != -2) code = 12;
                 }
             }
+        }
+    }
+    if (!code) {
+        static const char dead_name[] = "exited-service-test";
+        static const char dead_image[] = "/system/tests/private_exit_probe.elf";
+        struct zombie z;
+        int exit_code = 0;
+        long token = call4(0x44580008UL, (unsigned long)dead_name, sizeof(dead_name)-1, (unsigned long)dead_image, sizeof(dead_image)-1);
+        if (token <= 0 || wait_result(token, &result) != 0 || result.status != 0 || !result.pid) code = 24;
+        else {
+            unsigned dead = result.pid;
+            long r = -2;
+            for (unsigned i = 0; i < 200000 && r == -2; i++)
+                r = call4(0x44580015UL, dead-1, (unsigned long)&z, 0, 0);
+            if (r != 0 || z.pid != dead || z.code != 37 || z.name_len != sizeof(dead_name)-1 || z.reserved) code = 25;
+            for (unsigned i = 0; !code && i < sizeof(dead_name)-1; i++) if (z.name[i] != dead_name[i]) code = 25;
+            if (!code && (call4(0x44580014UL, (unsigned long)rpc, sizeof(rpc)-1, dead, (unsigned long)&exit_code) != -2 ||
+                call4(0x44580014UL, (unsigned long)dead_name, sizeof(dead_name)-1, dead, 0x100000) != -14 ||
+                call4(0x44580014UL, (unsigned long)dead_name, sizeof(dead_name)-1, dead, (unsigned long)&exit_code) != 0 || exit_code != 37 ||
+                call4(0x44580014UL, (unsigned long)dead_name, sizeof(dead_name)-1, dead, (unsigned long)&exit_code) != -2)) code = 26;
         }
     }
     if (!code) {

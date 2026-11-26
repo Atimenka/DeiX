@@ -537,6 +537,28 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u
                 out[12..16].copy_from_slice(&(snapshot.exit_code.is_some() as u32).to_le_bytes());
                 return if crate::sched::current_copy_to_user(a2, &out) { 0 } else { (-14i64) as u64 };
             }
+            0x4458_0014 => { // reap exact managed zombie (name, len, pid, out)
+                if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
+                let Ok(len) = usize::try_from(a2) else { return (-22i64) as u64; };
+                let Ok(pid) = u32::try_from(a3) else { return (-22i64) as u64; };
+                if len == 0 || len > crate::service_rpc::MAX_NAME { return (-22i64) as u64; }
+                let mut name = [0u8; crate::service_rpc::MAX_NAME];
+                if !crate::sched::current_copy_from_user(a1, &mut name[..len]) || !crate::sched::current_user_range_writable(a4, 4) { return (-14i64) as u64; }
+                let Ok(name) = core::str::from_utf8(&name[..len]) else { return (-22i64) as u64; };
+                let code = match crate::process::reap_managed(name, pid) { Ok(code) => code, Err(e) => return e as i64 as u64 };
+                return if crate::sched::current_copy_to_user(a4, &code.to_le_bytes()) { 0 } else { (-14i64) as u64 };
+            }
+            0x4458_0015 => { // enumerate managed zombies (after PID, out)
+                if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
+                let Ok(after) = u32::try_from(a1) else { return (-22i64) as u64; };
+                let Some((pid, code, name, len)) = crate::process::next_managed_zombie(after) else { return (-2i64) as u64; };
+                let mut out = [0u8; 144];
+                out[..4].copy_from_slice(&pid.to_le_bytes());
+                out[4..8].copy_from_slice(&(len as u32).to_le_bytes());
+                out[8..12].copy_from_slice(&code.to_le_bytes());
+                out[16..].copy_from_slice(&name);
+                return if crate::sched::current_copy_to_user(a2, &out) { 0 } else { (-14i64) as u64 };
+            }
             0x4458_0013 => { // authenticated local session snapshot
                 if !crate::process::current_has_capability(crate::process::cap::READ_SESSION) { return (-1i64) as u64; }
                 let snapshot = match crate::session_snapshot::snapshot() { Ok(v) => v, Err(e) => return e as i64 as u64 };

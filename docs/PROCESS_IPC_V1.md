@@ -194,3 +194,25 @@ private process. This is a single local-login snapshot, not a session event
 stream, logout API, authorization gate, policy implementation or Dinit session
 ownership. Current UI has no corresponding logout path. A replacement manager
 must still handle future session lifecycle and reconciliation explicitly.
+
+### Finished managed processes
+
+`0x44580015` enumerates unreaped managed zombies using `(after_pid, out_ptr)`
+and requires `MANAGE_SERVICES`. The next PID strictly greater than the cursor
+is returned in a 144-byte little-endian record: PID and UTF-8 name length (u32),
+exit code (i32), four reserved zero bytes, and a zero-padded 128-byte name.
+Return values are 0, -1 for missing permission, -2 if no later zombie exists,
+-14 for invalid output memory, and -22 if the cursor does not fit u32. Ordinary
+unmanaged processes are not listed. Enumeration is not a stable snapshot:
+processes can exit or be reaped between calls, so rescan from zero to discover
+late exits with lower PIDs. Names can recur after an earlier instance exits;
+PIDs never repeat.
+
+`0x44580014` reaps `(name_ptr, name_len, expected_pid, exit_code_ptr)`, also
+requiring `MANAGE_SERVICES`. The kernel checks identity, PID and zombie state
+and removes that exact process under one lock. It returns 0 with the i32 exit
+code, -1 without permission, -2 for an absent or mismatched identity/PID, -11
+for a still-live instance, -14 for invalid memory, -22 for invalid input, or
+-5 for a zombie lacking exit status. Output memory is checked before removal.
+This provides bounded discovery and cleanup, not restart policy or a reliable
+event stream; another authorized manager may reap an entry first.

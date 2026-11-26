@@ -587,6 +587,32 @@ pub fn reap(pid: u32) -> Result<Option<i32>, ProcessError> {
     Ok(code)
 }
 
+/// Reap only the exact named managed zombie. The identity, PID, state and
+/// mutation are checked under one lock so a replacement is never reaped.
+pub fn reap_managed(service: &str, pid: u32) -> Result<i32, i32> {
+    let mut table = PROCS.lock();
+    let Some(p) = table.iter_mut().find(|p| p.pid == pid && p.service_identity.as_deref() == Some(service)
+        && !matches!(p.state, ProcessState::Empty | ProcessState::Reaped)) else { return Err(-2); };
+    if p.state != ProcessState::Zombie { return Err(-11); }
+    let Some(code) = p.exit_code else { return Err(-5); };
+    *p = Process::blank(pid);
+    p.state = ProcessState::Reaped;
+    Ok(code)
+}
+
+/// Return the least managed zombie PID strictly greater than the cursor.
+/// PIDs never wrap or repeat. A rescan is required for later exits.
+pub fn next_managed_zombie(after: u32) -> Option<(u32, i32, [u8; 128], usize)> {
+    let table = PROCS.lock();
+    let p = table.iter().filter(|p| p.pid > after && p.state == ProcessState::Zombie
+        && p.service_identity.is_some() && p.exit_code.is_some()).min_by_key(|p| p.pid)?;
+    let bytes = p.service_identity.as_ref()?.as_bytes();
+    if bytes.len() > 128 { return None; } // spawn_managed enforces this bound
+    let mut name = [0u8; 128];
+    name[..bytes.len()].copy_from_slice(bytes);
+    Some((p.pid, p.exit_code?, name, bytes.len()))
+}
+
 /// Снимок состояния процесса для отчётов.
 #[derive(Debug, Clone)]
 pub struct ProcInfo {

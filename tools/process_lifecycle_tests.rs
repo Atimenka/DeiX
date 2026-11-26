@@ -246,3 +246,22 @@ fn managed_snapshot_rejects_oversized_path_without_truncation() {
     assert!(process::managed_snapshot(&req.name).is_err());
     process::kill(pid, 0).unwrap(); process::reap(pid).unwrap();
 }
+
+#[test]
+fn managed_zombie_discovery_and_exact_reap_survive_replacement() {
+    let req = process::SpawnRequest { name: "zombie-reconcile-test".into(), uid: 0, parent: 1,
+        caps: 0, cwd: "/".into(), image_path: "/system/test.elf".into() };
+    let old = process::spawn_managed(&req).unwrap();
+    process::mark_running(old, 63).unwrap();
+    assert_eq!(process::reap_managed(&req.name, old), Err(-11));
+    process::notify_private_exit(63, 37);
+    let new = process::spawn_managed(&req).unwrap();
+    let (found, code, name, len) = process::next_managed_zombie(old - 1).unwrap();
+    assert_eq!((found, code, &name[..len]), (old, 37, req.name.as_bytes()));
+    assert_eq!(process::reap_managed("wrong-name", old), Err(-2));
+    assert_eq!(process::reap_managed(&req.name, new), Err(-11));
+    assert_eq!(process::reap_managed(&req.name, old), Ok(37));
+    assert_eq!(process::reap_managed(&req.name, old), Err(-2));
+    assert_eq!(process::managed_pid(&req.name), Some(new));
+    process::kill(new, 0).unwrap(); process::reap(new).unwrap();
+}
