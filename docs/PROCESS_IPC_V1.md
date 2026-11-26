@@ -69,3 +69,37 @@ code (i32), and exit-code-present (u32, 0 or 1). Returns 0 on success, -1
 without the capability, -2 for an absent or reaped PID, -14 for an invalid
 output range, and -22 if the PID does not fit u32. A snapshot can become
 stale immediately after the call; it cannot be used as a guarantee of liveness.
+
+## Experimental asynchronous service operations
+
+These calls require `MANAGE_SERVICES` and run only in private ELF tasks. They
+submit bounded requests to a kernel worker so that VFS and process creation do
+not execute inside the interrupt-disabled syscall handler. The worker provides
+mechanisms only: dependency ordering, restart and reconciliation are policy for
+Dinit. This interface is experimental and does not yet replace the existing
+in-kernel Dinit calls.
+
+* `0x44580008`: submit start `(name_ptr, name_len, path_ptr, path_len)`.
+  Returns a positive request token, or a negative errno. Names are UTF-8,
+  1–128 bytes, without control characters or slashes. Images must be static PIE
+  `.elf` files below `/system/services/`; traversal, empty components and
+  control characters are rejected. CI-only builds also permit `/system/tests/`.
+* `0x44580009`: submit stop `(name_ptr, name_len, expected_pid)`. It only stops
+  the managed process whose identity and PID both match; it cannot stop the
+  caller. It does not set a restart policy.
+* `0x4458000a`: poll `(token, result_ptr)`. The result is eight bytes:
+  little-endian signed i32 status and u32 PID. Returns 0 and consumes a completed
+  result, -11 if pending, -2 for an unknown token, or -14 for an invalid output
+  range. Only the submitting PID can poll. Validating the output precedes
+  consumption. Each caller may retain four requests; the global limit is 16.
+
+Submission can return -1 for missing permission, -5 if no worker is available,
+-11 if full, -14 for invalid memory, -22 for invalid arguments or -75 if tokens
+are exhausted. Completion status is 0 on success, -17 for an already-reserved
+identity (PID returned), -2 for an absent/mismatched stop target, -5 on image
+load failure, -12 on allocation/table failure, or -1 if the caller is no longer
+authorized. New children start with **zero capabilities**; there is no delegated
+capability-granting ABI yet. Failed starts are killed and reaped. Requests are
+purged when a caller exits; in-flight operations may already have taken effect,
+so a replacement supervisor must reconcile actual process state rather than
+assuming cancellation. The worker rechecks the caller before and after a start.

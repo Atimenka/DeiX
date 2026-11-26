@@ -70,6 +70,7 @@ mod png;
 mod port;
 mod process;
 mod process_ipc;
+mod service_rpc;
 mod process_heartbeat;
 mod boot_config;
 mod renderer;
@@ -320,6 +321,9 @@ pub extern "C" fn kernel_main() -> ! {
 
     // ПЛАНИРОВЩИК: включаем вытесняющую многозадачность.
     sched::start();
+    if !service_rpc::start_worker() {
+        crate::serial_println!("[service-rpc] worker unavailable; service requests will fail");
+    }
     if option_env!("DEIX_TEST_ADDRESS_SPACE") == Some("1") {
         if crate::vfs::read_file("/system/etc/init.deix")
             .map_or(false, |script| script.as_slice() == crate::init_parser::INIT_DEIX_SCRIPT.as_bytes()) {

@@ -503,6 +503,7 @@ pub fn kill(pid: u32, code: i32) -> Result<(), ProcessError> {
         crate::sched::terminate(id);
     }
     crate::process_ipc::purge(pid);
+    crate::service_rpc::purge(pid);
     Ok(())
     })
 }
@@ -535,7 +536,7 @@ pub fn notify_private_exit(sched_id: usize, code: i32) {
             Some(p.pid)
         } else { None }
     };
-    if let Some(pid) = pid { crate::process_ipc::purge(pid); }
+    if let Some(pid) = pid { crate::process_ipc::purge(pid); crate::service_rpc::purge(pid); }
 }
 
 /// То же, но PID уже известен вызывающему (трамплин запуска).
@@ -659,6 +660,12 @@ pub fn ipc_receiver() -> Option<u32> {
     let table = PROCS.lock();
     table.iter().find(|p| p.state == ProcessState::Running && p.sched_id == Some(sid)
         && p.caps & cap::IPC_RECEIVE != 0).map(|p| p.pid)
+}
+
+pub fn pid_has_capability(pid: u32, capability: u64) -> bool {
+    let table = PROCS.lock();
+    table.iter().any(|p| p.pid == pid && p.state == ProcessState::Running
+        && p.caps & capability == capability)
 }
 
 pub fn current_has_capability(capability: u64) -> bool {

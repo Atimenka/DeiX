@@ -18,6 +18,7 @@ mod linux { pub mod elf {
     pub fn load_private(_: &[u8], _: &mut crate::mm::address_space::AddressSpace) -> Result<Loaded, alloc::string::String> { Err("invalid".into()) }
 } }
 mod process_ipc { pub fn purge(_: u32) {} }
+mod service_rpc { pub fn purge(_: u32) {} }
 mod timer {
     std::thread_local! { static NOW: core::cell::Cell<u64> = const { core::cell::Cell::new(0) }; }
     pub fn uptime_ms() -> u64 { NOW.with(|n| n.get()) }

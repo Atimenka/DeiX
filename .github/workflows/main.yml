@@ -114,6 +114,11 @@ jobs:
           rustc --edition=2021 --test tools/boot_config_tests.rs -o /tmp/deix-boot-config-tests
           /tmp/deix-boot-config-tests
 
+      - name: Service request queue tests
+        run: |
+          rustc --edition=2021 --test tools/service_rpc_tests.rs -o /tmp/deix-service-rpc-tests
+          /tmp/deix-service-rpc-tests
+
       - name: Process IPC queue tests
         run: |
           rustc --edition=2021 --test tools/process_ipc_tests.rs -o /tmp/deix-process-ipc-tests
