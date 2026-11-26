@@ -166,3 +166,16 @@ all identities, or implement adoption, recovery or restart policy.
 `i64::MAX`, for any running private process; it requires no extra capability.
 It returns -1 if no running process corresponds to the calling task. This is
 not a wall clock and does not provide sleeping or scheduling policy.
+
+### Consistent multi-chunk configuration reads
+
+`0x44580011` returns the current positive snapshot generation (or -2 when no
+snapshot exists); `0x44580012` reads `(out_ptr, offset, length, generation)`.
+Both require `READ_BOOT_CONFIG`. The latter has the same bounds and errors as
+`0x44580004`, and returns -116 without copying if a refresh replaced the
+snapshot since the caller obtained its generation. Each chunk's generation
+check and copy are atomic against refresh; clients must discard **all** earlier
+chunks and retry on -116. Generations increase on each successful refresh,
+including an identical file, never wrap, and a failed refresh preserves the
+last good snapshot and generation. The older read call does not offer this
+consistency guarantee.

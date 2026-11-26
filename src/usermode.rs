@@ -537,6 +537,14 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u
                 out[12..16].copy_from_slice(&(snapshot.exit_code.is_some() as u32).to_le_bytes());
                 return if crate::sched::current_copy_to_user(a2, &out) { 0 } else { (-14i64) as u64 };
             }
+            0x4458_0011 => { // boot config generation
+                if !crate::process::current_has_capability(crate::process::cap::READ_BOOT_CONFIG) { return (-1i64) as u64; }
+                return crate::boot_config::generation() as u64;
+            }
+            0x4458_0012 => { // read config with expected generation
+                if !crate::process::current_has_capability(crate::process::cap::READ_BOOT_CONFIG) { return (-1i64) as u64; }
+                return crate::boot_config::read_generation_to_user(a1, a2, a3, a4) as u64;
+            }
             0x4458_0010 => { // monotonic uptime in milliseconds
                 if crate::process::current_pid().is_none() { return (-1i64) as u64; }
                 return crate::timer::uptime_ms().min(i64::MAX as u64);

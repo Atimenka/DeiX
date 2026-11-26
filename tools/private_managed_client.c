@@ -74,10 +74,16 @@ __attribute__((noreturn)) void _start(void) {
     }
     if (!code) {
         unsigned char config[8];
+        long old_generation = call4(0x44580011UL, 0, 0, 0, 0);
         long token = call4(0x4458000dUL, 0, 0, 0, 0);
-        if (token <= 0 || wait_result(token, &result) != 0 || result.status != 0 ||
+        if (old_generation <= 0 || token <= 0 || wait_result(token, &result) != 0 || result.status != 0 ||
             call4(0x44580004UL, (unsigned long)config, 0, sizeof(config), 0) != sizeof(config) ||
             config[0] != '#' || config[1] != ' ') code = 17;
+        long generation = call4(0x44580011UL, 0, 0, 0, 0);
+        if (!code && (generation <= old_generation ||
+            call4(0x44580012UL, (unsigned long)config, 0, sizeof(config), old_generation) != -116 ||
+            call4(0x44580012UL, (unsigned long)config, 0, sizeof(config), generation) != sizeof(config) ||
+            call4(0x44580012UL, 0x100000, 0, 1, generation) != -14)) code = 22;
     }
     if (!code) {
         static const char event[] = "dinit-prep-event";
