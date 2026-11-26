@@ -98,3 +98,13 @@ and page-fault accounting. A second QEMU test exchanges authenticated
 mailbox messages between two separate CPL3 ELF processes. These probes are not
 Dinit, does not implement its policy or ABI, and is not included in normal
 images. NX is not enabled; page permissions do not enforce non-executable data.
+
+## Managed service reconciliation
+
+The process manager reserves a trusted service identity atomically for Created
+and Running processes. A fresh legacy Dinit instance can adopt the live process
+only if its configured executable, UID and capabilities match, and otherwise
+refuses to duplicate it. A CI-only QEMU test exercises that path with a real
+CPL3 ELF process, including stop and reap. This does not yet persist service
+policy across crashes, transfer service ownership to isolated Dinit, supervise
+PID 1, or implement heartbeat-triggered recovery.
