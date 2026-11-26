@@ -25,7 +25,9 @@ no private address space or process IPC used by Dinit, and no bootstrap gate.
   kernel Vault and diagnostics. Bootstrap and `dinit reload` use that constant.
   `system/etc/init.deix` is the single source for both the kernel fallback
   and the on-disk `/system/etc/init.deix`; a QEMU test compares their bytes.
-  Dinit still consumes the embedded fallback, not the disk file.
+  Dinit still consumes the embedded fallback, not the disk file. A bounded
+  boot-time snapshot of the disk file is available to capability-authorized
+  private processes, but no Dinit process consumes it yet; reload is absent.
 * `src/nanocore/orchestrator.rs` separately implements service dependency
   ordering, launch and restart policy for its built-in manifests; that policy
   must be accounted for rather than silently duplicated in the final design.
