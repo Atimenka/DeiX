@@ -1,4 +1,4 @@
-//! Bounded immutable boot-time snapshot of /system/etc/init.deix.
+//! Bounded, explicitly refreshable snapshot of /system/etc/init.deix.
 //! The kernel supplies bytes, not parsing or supervisor policy, to authorized
 //! private processes. Dinit still uses the legacy in-kernel path today.
 use crate::spinlock::IrqSpinLock;
@@ -23,7 +23,7 @@ impl Snapshot {
     }
 }
 static SNAPSHOT: IrqSpinLock<Snapshot> = IrqSpinLock::new(Snapshot::new());
-/// Load before the scheduler starts; no VFS operation happens in the syscall.
+/// Load at boot or on the service worker; never perform VFS I/O in a syscall.
 pub fn init() -> bool {
     const PATH: &str = "/system/etc/init.deix";
     let Ok(stat) = crate::vfs::stat(PATH) else { return false; };

@@ -12,7 +12,7 @@ pub const MAX_PATH: usize = 256;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State { Pending, Working, Complete }
 #[derive(Clone, Copy)]
-enum Action { Start, Stop, ReloadConfig }
+enum Action { Start, Stop, ReloadConfig, WriteLog }
 #[derive(Clone, Copy)]
 struct Request {
     token: u64, caller: u32, state: State, action: Action,
@@ -101,6 +101,22 @@ pub fn submit_config_reload(caller: u32) -> Result<u64, i32> {
         name: [0; MAX_NAME], name_len: 0, path: [0; MAX_PATH], path_len: 0,
         target: 0, grant: 0, result: 0, result_pid: 0 })
 }
+fn valid_log(message: &[u8]) -> bool {
+    !message.is_empty() && message.len() <= crate::diag::record::MESSAGE_LEN
+        && core::str::from_utf8(message).map_or(false, |text| !text.chars().any(|c| c.is_control()))
+}
+/// Log messages are bounded UTF-8, cannot inject control characters, and are
+/// emitted by the worker with the authenticated caller PID as context.
+pub fn submit_log(caller: u32, message: &[u8]) -> Result<u64, i32> {
+    if !WORKER_ACTIVE.load(Ordering::Acquire) { return Err(-5); }
+    if !crate::process::pid_has_capability(caller, crate::process::cap::WRITE_LOG) { return Err(-1); }
+    if !valid_log(message) { return Err(-22); }
+    let mut req = Request { token: 0, caller, state: State::Pending, action: Action::WriteLog,
+        name: [0; MAX_NAME], name_len: 0, path: [0; MAX_PATH], path_len: message.len(),
+        target: 0, grant: 0, result: 0, result_pid: 0 };
+    req.path[..message.len()].copy_from_slice(message);
+    QUEUE.lock().submit(req)
+}
 pub fn take(caller: u32, token: u64) -> Result<(i32, u32), i32> { QUEUE.lock().take(caller, token) }
 pub fn purge(caller: u32) { QUEUE.lock().purge(caller); }
 
@@ -122,9 +138,16 @@ extern "C" fn worker() {
 }
 fn execute(req: Request) -> (i32, u32) {
     use crate::process::{self, ProcessError};
-    if !process::pid_has_capability(req.caller, process::cap::MANAGE_SERVICES) { return (-1, 0); }
+    let needed = if matches!(req.action, Action::WriteLog) { process::cap::WRITE_LOG } else { process::cap::MANAGE_SERVICES };
+    if !process::pid_has_capability(req.caller, needed) { return (-1, 0); }
     let Ok(name) = core::str::from_utf8(&req.name[..req.name_len]) else { return (-22, 0); };
     match req.action {
+        Action::WriteLog => {
+            let Ok(text) = core::str::from_utf8(&req.path[..req.path_len]) else { return (-22, 0); };
+            let event = crate::diag::log::log_ctx(crate::diag::Severity::Info, crate::diag::NONE,
+                crate::diag::Action::None, text, req.caller, 0, 0, 0);
+            match event { Some(id) => (0, id), None => (-5, 0) }
+        }
         Action::ReloadConfig => {
             if !process::pid_has_capability(req.caller, process::cap::READ_BOOT_CONFIG) { return (-1, 0); }
             if crate::boot_config::init() { (0, 0) } else { (-5, 0) }
@@ -174,6 +197,13 @@ mod tests {
         q.complete(a, -5, 7);
         assert_eq!(q.take(1, a), Ok((-5, 7))); assert_eq!(q.take(1, a), Err(-2));
         q.purge(1); assert!(q.slots.iter().all(Option::is_none));
+    }
+    #[test] fn validates_log_messages() {
+        assert!(valid_log("служба запущена".as_bytes()));
+        assert!(!valid_log(b""));
+        assert!(!valid_log(b"first\nforged"));
+        assert!(!valid_log(&[0xff]));
+        assert!(!valid_log(&[b'x'; 97]));
     }
     #[test] fn validates_service_names_and_paths() {
         assert!(valid_name(b"network")); assert!(!valid_name(b"  "));

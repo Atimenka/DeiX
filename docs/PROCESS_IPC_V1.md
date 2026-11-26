@@ -109,7 +109,7 @@ path_len, capability_mask)` in RDI, RSI, RDX, R10 and R8. It has the same
 request/result semantics as `0x44580008`. A nonzero grant additionally requires
 `DELEGATE_SERVICES`, must be a subset of the caller's own capabilities, and
 may contain only `IPC_SEND`, `IPC_RECEIVE`, `HEARTBEAT` and
-`READ_BOOT_CONFIG`. In particular, service-management, delegation and install
+`READ_BOOT_CONFIG`, and `WRITE_LOG`. In particular, service-management, delegation and install
 rights cannot be delegated. The kernel checks authority at submission, before
 execution and after the image starts. This limited whitelist covers only
 currently implemented private-process interfaces; it does not yet provide the
@@ -128,3 +128,15 @@ performs the VFS access outside syscall context. Status 0 means the bounded
 snapshot was replaced; -5 means reading or size validation failed, in which
 case the last valid snapshot remains available. This does not itself parse or
 apply configuration: that is the future Dinit process's responsibility.
+
+### Diagnostic log submission
+
+`0x4458000e` accepts `(message_ptr, byte_len)` and queues an informational
+entry in the existing kernel diagnostic ring. `WRITE_LOG` is required; messages
+must be nonempty UTF-8, at most 96 bytes and contain no control characters.
+The kernel attributes the entry to the caller PID; identical records from
+different PIDs are not aggregated together. Poll the returned token with
+`0x4458000a` (also available to `WRITE_LOG` holders); a successful result has
+the diagnostic event ID in the result's second field. Queue quotas and purge on
+caller exit apply. This supplies log writing, not Dinit's full log policy,
+query API, or durable audit guarantees.

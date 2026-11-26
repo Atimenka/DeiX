@@ -95,9 +95,11 @@ pub mod cap {
     pub const HEARTBEAT: u64 = 1 << 10;
     /// Permission to grant a bounded subset of the caller's own rights.
     pub const DELEGATE_SERVICES: u64 = 1 << 11;
+    /// Submit bounded messages to the kernel diagnostic log.
+    pub const WRITE_LOG: u64 = 1 << 12;
     /// Only capabilities with implemented isolated-process interfaces are
     /// currently delegable. Supervisor/installer authority is never delegated.
-    pub const DELEGABLE: u64 = IPC_SEND | IPC_RECEIVE | HEARTBEAT | READ_BOOT_CONFIG;
+    pub const DELEGABLE: u64 = IPC_SEND | IPC_RECEIVE | HEARTBEAT | READ_BOOT_CONFIG | WRITE_LOG;
     /// Полный набор для системных служб Dinit.
     pub const SYSTEM: u64 = READ_ANY
         | WRITE_USERDATA

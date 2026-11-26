@@ -109,7 +109,7 @@ pub fn push(record: &mut ErrorRecord, now_ms: u64) -> u32 {
         // Идём от самой свежей записи назад.
         let idx = (ring.head + CAPACITY - 1 - step) % CAPACITY;
         let existing = &mut ring.slots[idx];
-        if existing.identity() != identity || existing.severity != record.severity {
+        if existing.identity() != identity || existing.severity != record.severity || existing.pid != record.pid {
             continue;
         }
         if now_ms.saturating_sub(existing.last_seen_ms) > AGGREGATE_WINDOW_MS {

@@ -66,6 +66,14 @@ __attribute__((noreturn)) void _start(void) {
             config[0] != '#' || config[1] != ' ') code = 17;
     }
     if (!code) {
+        static const char event[] = "dinit-prep-event";
+        static const char bad_event[] = "forged\nrecord";
+        long token = call4(0x4458000eUL, (unsigned long)event, sizeof(event)-1, 0, 0);
+        if (token <= 0 || wait_result(token, &result) != 0 || result.status != 0 || !result.pid ||
+            call4(0x4458000eUL, (unsigned long)bad_event, sizeof(bad_event)-1, 0, 0) != -22 ||
+            call4(0x4458000eUL, 0x100000, 1, 0, 0) != -14) code = 18;
+    }
+    if (!code) {
         static const char delegated[] = "delegated-ipc-test";
         static const char delegated_image[] = "/system/tests/private_delegated_probe.elf";
         const unsigned long ipc_send = 1UL << 7;

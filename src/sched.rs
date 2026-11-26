@@ -772,13 +772,15 @@ pub fn managed_service_selftest() -> bool {
     let duplicate_blocked = matches!(process::spawn_managed(&req), Err(ProcessError::AlreadyManaged(p)) if p == pid);
     let client_req = SpawnRequest { name: String::from("managed-lookup-test"), uid: 0, parent: 1,
         caps: process::cap::MANAGE_SERVICES | process::cap::DELEGATE_SERVICES
-            | process::cap::IPC_SEND | process::cap::IPC_RECEIVE | process::cap::READ_BOOT_CONFIG,
+            | process::cap::IPC_SEND | process::cap::IPC_RECEIVE | process::cap::READ_BOOT_CONFIG | process::cap::WRITE_LOG,
         cwd: String::from("/userdata"), image_path: String::from("/system/tests/private_managed_client.elf") };
     let lookup_ok = if let Ok(client) = process::spawn(&client_req) {
         if process::exec(client).is_ok() {
             if let Some(id) = process::info(client).ok().and_then(|p| p.sched_id) { join(id); }
         }
-        let ok = process::info(client).map_or(false, |p| p.state == ProcessState::Zombie && p.exit_code == Some(0));
+        let logged = crate::diag::ring::snapshot(64).iter().any(|entry|
+            entry.pid == client && entry.message() == "dinit-prep-event");
+        let ok = logged && process::info(client).map_or(false, |p| p.state == ProcessState::Zombie && p.exit_code == Some(0));
         if !ok { let _ = process::kill(client, -1); }
         let _ = process::reap(client);
         ok

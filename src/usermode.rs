@@ -455,6 +455,15 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u
             0x4458_0005 => { // heartbeat; identity and time are kernel-derived
                 return if crate::process::heartbeat_current() { 0 } else { (-1i64) as u64 };
             }
+            0x4458_000e => { // asynchronous log submission (message ptr, len)
+                if !crate::process::current_has_capability(crate::process::cap::WRITE_LOG) { return (-1i64) as u64; }
+                let Some(pid) = crate::process::current_pid() else { return (-1i64) as u64; };
+                let Ok(len) = usize::try_from(a2) else { return (-22i64) as u64; };
+                if len == 0 || len > crate::diag::record::MESSAGE_LEN { return (-22i64) as u64; }
+                let mut text = [0u8; crate::diag::record::MESSAGE_LEN];
+                if !crate::sched::current_copy_from_user(a1, &mut text[..len]) { return (-14i64) as u64; }
+                return crate::service_rpc::submit_log(pid, &text[..len]).map_or_else(|e| e as i64 as u64, |token| token);
+            }
             0x4458_000d => { // async reload boot config from disk
                 if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES | crate::process::cap::READ_BOOT_CONFIG) { return (-1i64) as u64; }
                 let Some(pid) = crate::process::current_pid() else { return (-1i64) as u64; };
@@ -495,7 +504,8 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u
                 return crate::service_rpc::submit_stop(pid, &name[..name_len], target).map_or_else(|e| e as i64 as u64, |token| token);
             }
             0x4458_000a => { // poll(token, output pointer)
-                if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
+                if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES)
+                    && !crate::process::current_has_capability(crate::process::cap::WRITE_LOG) { return (-1i64) as u64; }
                 let Some(pid) = crate::process::current_pid() else { return (-1i64) as u64; };
                 if !crate::sched::current_user_range_writable(a2, 8) { return (-14i64) as u64; }
                 let (result, result_pid) = match crate::service_rpc::take(pid, a1) { Ok(v) => v, Err(e) => return e as i64 as u64 };
