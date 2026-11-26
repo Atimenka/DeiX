@@ -23,7 +23,8 @@ Dinit bootstrap, no Dinit watchdog, and no login gate.
   checks this with a real CPL3 service; this is not Dinit restart recovery.
 * `system/etc/init.deix` is the source for both the system-image file and the
   current kernel fallback. The private ABI provides a boot-time snapshot; it
-  does not implement live reload.
+  supports explicit asynchronous refresh. Applying the refreshed content still
+  belongs to the future Dinit process.
 
 ## Work required before the switch
 

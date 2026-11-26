@@ -23,7 +23,8 @@ __attribute__((noreturn)) void _start(void) {
         call4(0x44580008, (unsigned long)&message, 1, (unsigned long)&message, 1) != -1 ||
         call4(0x44580009, (unsigned long)&message, 1, 1, 0) != -1 ||
         call4(0x4458000a, 1, (unsigned long)&message, 0, 0) != -1 ||
-        call4(0x4458000b, (unsigned long)&message, 1, (unsigned long)&message, 1) != -1)
+        call4(0x4458000b, (unsigned long)&message, 1, (unsigned long)&message, 1) != -1 ||
+        call4(0x4458000d, 0, 0, 0, 0) != -1)
         call4(60, 42, 0, 0, 0);
     unsigned long cs;
     __asm__ volatile("mov %%cs, %0" : "=r"(cs));

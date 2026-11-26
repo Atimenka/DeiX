@@ -12,7 +12,7 @@ pub const MAX_PATH: usize = 256;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State { Pending, Working, Complete }
 #[derive(Clone, Copy)]
-enum Action { Start, Stop }
+enum Action { Start, Stop, ReloadConfig }
 #[derive(Clone, Copy)]
 struct Request {
     token: u64, caller: u32, state: State, action: Action,
@@ -93,6 +93,14 @@ pub fn submit_stop(caller: u32, name: &[u8], target: u32) -> Result<u64, i32> {
     if target == 0 || target == caller { return Err(-22); }
     request(caller, Action::Stop, name, &[], target, 0)
 }
+/// Reload reads the actual disk file on the worker, not in syscall context.
+pub fn submit_config_reload(caller: u32) -> Result<u64, i32> {
+    if !WORKER_ACTIVE.load(Ordering::Acquire) { return Err(-5); }
+    if !crate::process::pid_has_capability(caller, crate::process::cap::MANAGE_SERVICES | crate::process::cap::READ_BOOT_CONFIG) { return Err(-1); }
+    QUEUE.lock().submit(Request { token: 0, caller, state: State::Pending, action: Action::ReloadConfig,
+        name: [0; MAX_NAME], name_len: 0, path: [0; MAX_PATH], path_len: 0,
+        target: 0, grant: 0, result: 0, result_pid: 0 })
+}
 pub fn take(caller: u32, token: u64) -> Result<(i32, u32), i32> { QUEUE.lock().take(caller, token) }
 pub fn purge(caller: u32) { QUEUE.lock().purge(caller); }
 
@@ -117,6 +125,10 @@ fn execute(req: Request) -> (i32, u32) {
     if !process::pid_has_capability(req.caller, process::cap::MANAGE_SERVICES) { return (-1, 0); }
     let Ok(name) = core::str::from_utf8(&req.name[..req.name_len]) else { return (-22, 0); };
     match req.action {
+        Action::ReloadConfig => {
+            if !process::pid_has_capability(req.caller, process::cap::READ_BOOT_CONFIG) { return (-1, 0); }
+            if crate::boot_config::init() { (0, 0) } else { (-5, 0) }
+        }
         Action::Start => {
             let Ok(path) = core::str::from_utf8(&req.path[..req.path_len]) else { return (-22, 0); };
             // Recheck at execution time as well as submission time.

@@ -8,8 +8,7 @@ struct Snapshot { bytes: [u8; MAX_SIZE], len: usize, valid: bool }
 impl Snapshot {
     const fn new() -> Self { Self { bytes: [0; MAX_SIZE], len: 0, valid: false } }
     fn set(&mut self, bytes: &[u8]) -> bool {
-        self.valid = false;
-        self.len = 0;
+        // Keep the last good snapshot if a refresh is too large.
         if bytes.len() > MAX_SIZE { return false; }
         self.bytes[..bytes.len()].copy_from_slice(bytes);
         self.len = bytes.len();
@@ -54,6 +53,6 @@ mod tests {
         assert_eq!(s.chunk(usize::MAX, 5), Some(&b""[..]));
         assert!(s.chunk(0, MAX_READ + 1).is_none());
         assert!(!s.set(&[0; MAX_SIZE + 1]));
-        assert!(s.chunk(0, 1).is_none());
+        assert_eq!(s.chunk(0, 6), Some(&b"abcdef"[..]));
     }
 }

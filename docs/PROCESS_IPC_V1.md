@@ -36,8 +36,7 @@ Each read is limited to 1024 bytes. The return value is the number of bytes
 copied (zero at EOF), -1 for missing capability, -2 when the snapshot is
 unavailable, -22 for an invalid length, or -14 for an invalid output buffer.
 The complete output range is checked before copying. This is a byte transport;
-the existing kernel Dinit still parses its embedded fallback. The snapshot does
-not reflect later on-disk edits or implement reload.
+the existing kernel Dinit still parses its embedded fallback. The snapshot changes only after an authorized asynchronous reload.
 
 ## Process heartbeat
 
@@ -119,3 +118,13 @@ full authority needed to preserve every legacy service.
 `0x4458000c` returns the current process's parent PID derived from the process
 table, or -1 if the current task has no running process record. Userspace
 cannot set its own parent PID through this interface.
+
+### Configuration snapshot reload
+
+`0x4458000d` submits an asynchronous reload of `/system/etc/init.deix` and
+returns a request token. It requires both `MANAGE_SERVICES` and
+`READ_BOOT_CONFIG`; completion is retrieved through `0x4458000a`. A worker
+performs the VFS access outside syscall context. Status 0 means the bounded
+snapshot was replaced; -5 means reading or size validation failed, in which
+case the last valid snapshot remains available. This does not itself parse or
+apply configuration: that is the future Dinit process's responsibility.

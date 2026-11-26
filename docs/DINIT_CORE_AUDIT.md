@@ -27,7 +27,8 @@ no private address space or process IPC used by Dinit, and no bootstrap gate.
   and the on-disk `/system/etc/init.deix`; a QEMU test compares their bytes.
   Dinit still consumes the embedded fallback, not the disk file. A bounded
   boot-time snapshot of the disk file is available to capability-authorized
-  private processes, but no Dinit process consumes it yet; reload is absent.
+  private processes and supports authorized asynchronous snapshot reload; no
+  Dinit process consumes or applies the snapshot yet.
 * `src/nanocore/orchestrator.rs` separately implements service dependency
   ordering, launch and restart policy for its built-in manifests; that policy
   must be accounted for rather than silently duplicated in the final design.

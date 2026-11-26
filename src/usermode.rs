@@ -455,6 +455,11 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u
             0x4458_0005 => { // heartbeat; identity and time are kernel-derived
                 return if crate::process::heartbeat_current() { 0 } else { (-1i64) as u64 };
             }
+            0x4458_000d => { // async reload boot config from disk
+                if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES | crate::process::cap::READ_BOOT_CONFIG) { return (-1i64) as u64; }
+                let Some(pid) = crate::process::current_pid() else { return (-1i64) as u64; };
+                return crate::service_rpc::submit_config_reload(pid).map_or_else(|e| e as i64 as u64, |token| token);
+            }
             0x4458_000c => return crate::process::current_parent().map_or((-1i64) as u64, |pid| pid as u64),
             0x4458_000b => { // async start with explicit delegated caps in a5
                 if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }

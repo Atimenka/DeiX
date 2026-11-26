@@ -14,7 +14,7 @@ mod sched {
 }
 mod process {
     use alloc::string::String;
-    pub mod cap { pub const MANAGE_SERVICES: u64 = 1; }
+    pub mod cap { pub const MANAGE_SERVICES: u64 = 1; pub const READ_BOOT_CONFIG: u64 = 2; }
     pub enum ProcessError { AlreadyManaged(u32), Other }
     pub struct SpawnRequest { pub name: String, pub uid: u32, pub parent: u32, pub caps: u64, pub cwd: String, pub image_path: String }
     pub struct ManagedProcess { pub pid: u32 }
@@ -26,4 +26,5 @@ mod process {
     pub fn reap(_: u32) -> Result<Option<i32>, ()> { Err(()) }
     pub fn managed_process(_: &str) -> Option<ManagedProcess> { None }
 }
+mod boot_config { pub fn init() -> bool { false } }
 #[path = "../src/service_rpc.rs"] mod service_rpc;

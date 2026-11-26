@@ -59,6 +59,13 @@ __attribute__((noreturn)) void _start(void) {
         }
     }
     if (!code) {
+        unsigned char config[8];
+        long token = call4(0x4458000dUL, 0, 0, 0, 0);
+        if (token <= 0 || wait_result(token, &result) != 0 || result.status != 0 ||
+            call4(0x44580004UL, (unsigned long)config, 0, sizeof(config), 0) != sizeof(config) ||
+            config[0] != '#' || config[1] != ' ') code = 17;
+    }
+    if (!code) {
         static const char delegated[] = "delegated-ipc-test";
         static const char delegated_image[] = "/system/tests/private_delegated_probe.elf";
         const unsigned long ipc_send = 1UL << 7;
