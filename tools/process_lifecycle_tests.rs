@@ -18,12 +18,18 @@ mod linux { pub mod elf {
     pub fn load_private(_: &[u8], _: &mut crate::mm::address_space::AddressSpace) -> Result<Loaded, alloc::string::String> { Err("invalid".into()) }
 } }
 mod process_ipc { pub fn purge(_: u32) {} }
-mod timer { pub fn uptime_ms() -> u64 { 0 } }
+mod timer {
+    std::thread_local! { static NOW: core::cell::Cell<u64> = const { core::cell::Cell::new(0) }; }
+    pub fn uptime_ms() -> u64 { NOW.with(|n| n.get()) }
+    pub fn set(value: u64) { NOW.with(|n| n.set(value)); }
+}
 mod sched {
     pub static TERMINATED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
     pub fn new_user_address_space() -> Result<crate::mm::address_space::AddressSpace, ()> { Ok(crate::mm::address_space::AddressSpace) }
     pub fn spawn_private_user_pid(_: &str, _: u64, _: u64, _: crate::mm::address_space::AddressSpace, _: u32) -> Option<usize> { None }
-    pub fn current_id() -> usize { 0 }
+    std::thread_local! { static CURRENT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) }; }
+    pub fn current_id() -> usize { CURRENT.with(|v| v.get()) }
+    pub fn set_current(id: usize) { CURRENT.with(|v| v.set(id)); }
     pub fn spawn_pid(_: &str, _: extern "C" fn(), _: u32) -> Option<usize> { None }
     pub fn terminate(id: usize) { TERMINATED.lock().unwrap().push(id); }
 }
@@ -126,4 +132,26 @@ fn repeated_kill_and_slot_reuse_cannot_terminate_the_new_owner() {
     assert_eq!(process::info(new).unwrap().exit_code, Some(23));
     assert_eq!(process::reap(old).unwrap(), Some(17));
     assert_eq!(process::reap(new).unwrap(), Some(23));
+}
+
+#[test]
+fn heartbeat_uses_current_task_capability_and_kernel_time() {
+    use process_heartbeat::Health;
+    let req = process::SpawnRequest { name: "heartbeat".into(), uid: 0, parent: 1,
+        caps: process::cap::HEARTBEAT, cwd: "/".into(), image_path: "".into() };
+    let pid = process::spawn(&req).unwrap();
+    timer::set(100); process::mark_running(pid, 58).unwrap();
+    assert_eq!(process::heartbeat_health(pid, 50), Some(Health::Starting));
+    sched::set_current(59);
+    assert!(!process::heartbeat_current());
+    timer::set(151);
+    assert_eq!(process::heartbeat_health(pid, 50), Some(Health::TimedOut));
+    sched::set_current(58);
+    assert!(process::heartbeat_current());
+    assert_eq!(process::info(pid).unwrap().last_heartbeat_ms, Some(151));
+    assert_eq!(process::heartbeat_health(pid, 50), Some(Health::Alive));
+    process::kill(pid, 9).unwrap();
+    assert!(!process::heartbeat_current());
+    assert_eq!(process::heartbeat_health(pid, 50), None);
+    process::reap(pid).unwrap();
 }
