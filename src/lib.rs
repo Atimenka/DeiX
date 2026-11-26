@@ -313,6 +313,12 @@ pub extern "C" fn kernel_main() -> ! {
     // ПЛАНИРОВЩИК: включаем вытесняющую многозадачность.
     sched::start();
     if option_env!("DEIX_TEST_ADDRESS_SPACE") == Some("1") {
+        if crate::vfs::read_file("/system/etc/init.deix")
+            .map_or(false, |script| script.as_slice() == crate::init_parser::INIT_DEIX_SCRIPT.as_bytes()) {
+            crate::serial_println!("[vm-test] PASS: system init configuration matches fallback");
+        } else {
+            crate::serial_println!("[vm-test] FAIL: system init configuration mismatch");
+        }
         if sched::address_space_selftest() {
             crate::serial_println!("[vm-test] PASS: private CR3 switched between tasks");
         } else {

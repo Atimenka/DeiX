@@ -60,7 +60,8 @@ with tempfile.TemporaryDirectory() as tmp:
     if err:
         print('QEMU stderr:', err.decode('utf-8', errors='replace')[-3000:])
     required = [b'[ramdisk] active', b'ATA disk: not used', b'[hda]', b'[ OK ] STORAGE', b'BOOT COMPLETE', b'[loginui]',
-                b'boot chain done: 3 launched, 0 failed', b'[vm-test] PASS: private CR3 switched between tasks',
+                b'boot chain done: 3 launched, 0 failed', b'[vm-test] PASS: system init configuration matches fallback',
+                b'[vm-test] PASS: private CR3 switched between tasks',
                 b'[vm-test] PASS: CPL3 private pages and kernel access fault',
                 b'[vm-test] PASS: system VFS ELF executed in private CPL3',
                 b'[vm-test] PASS: IPC exchanged between isolated processes']

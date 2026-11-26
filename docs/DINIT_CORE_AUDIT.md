@@ -23,9 +23,9 @@ no private address space or process IPC used by Dinit, and no bootstrap gate.
   hold the corresponding data structures and policy.
 * `src/init_parser.rs` parses the built-in `INIT_DEIX_SCRIPT`; it uses the
   kernel Vault and diagnostics. Bootstrap and `dinit reload` use that constant.
-  The `/system/etc/init.deix` created by `tools/make_deix_fs.py` is a different
-  placeholder, so changing the consumer to read it without migrating the
-  script would change current behaviour.
+  `system/etc/init.deix` is the single source for both the kernel fallback
+  and the on-disk `/system/etc/init.deix`; a QEMU test compares their bytes.
+  Dinit still consumes the embedded fallback, not the disk file.
 * `src/nanocore/orchestrator.rs` separately implements service dependency
   ordering, launch and restart policy for its built-in manifests; that policy
   must be accounted for rather than silently duplicated in the final design.

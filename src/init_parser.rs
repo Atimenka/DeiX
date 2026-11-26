@@ -763,17 +763,13 @@ impl InitParser {
     }
 }
 
-/// Эталонный скрипт init.deix (встроен в ядро).
+/// Эталонный init.deix: пока встроен в ядро как резервная копия.
+/// Сборщик образа кладёт эти же байты в /system/etc/init.deix.
 // Служебные демоны (security_monitor, net_daemon и др.) являются встроенными
 // подсистемами ядра и регистрируются Dinit напрямую; сценарий описывает
 // только точки монтирования. Process-службы появятся здесь, когда в образе
 // /system появятся их исполняемые файлы.
-pub const INIT_DEIX_SCRIPT: &str = concat!(
-    "# Скрипт инициализации и развертывания DeiX OS\n",
-    "on boot\n",
-    "    mount erofs /dev/block/by-name/system /system ro\n",
-    "    mount ext2 /dev/block/by-name/userdata /userdata rw\n",
-);
+pub const INIT_DEIX_SCRIPT: &str = include_str!("../system/etc/init.deix");
 
 /// СТАДИЯ BOOT (PID 1, Ring 0): разбор карты разделов init.deix и вывод
 /// диагностики в консоль ядра.

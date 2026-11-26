@@ -1,0 +1,4 @@
+# Скрипт инициализации и развертывания DeiX OS
+on boot
+    mount erofs /dev/block/by-name/system /system ro
+    mount ext2 /dev/block/by-name/userdata /userdata rw

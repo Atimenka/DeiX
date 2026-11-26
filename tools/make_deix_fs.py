@@ -472,10 +472,13 @@ def init_all_partitions(img, boot_files):
             system_files = {
                 BOOT_FILES[k]: padded[k] for k in BOOT_FILES
             }
-            system_files.update({
-                "etc/init.deix":       b"# DeiX OS init script\nmount /system\nmount /userdata\n",
-                "services/dinit.cfg":  b"# Dinit services config\n",
-            })
+            # Keep the on-disk configuration byte-for-byte identical to the
+            # current kernel fallback. A missing source is a build failure.
+            config = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                  "system", "etc", "init.deix")
+            with open(config, "rb") as source:
+                system_files["etc/init.deix"] = source.read()
+            system_files["services/dinit.cfg"] = b"# Dinit services config\n"
             # Test-only guest binary; do not ship a probe in normal images.
             if os.environ.get("DEIX_TEST_ADDRESS_SPACE") == "1":
                 for name in ("private_elf_probe.elf", "private_elf_fault.elf", "private_elf_denied.elf", "private_ipc_sender.elf", "private_ipc_receiver.elf"):
