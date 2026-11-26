@@ -155,3 +155,43 @@ fn heartbeat_uses_current_task_capability_and_kernel_time() {
     assert_eq!(process::heartbeat_health(pid, 50), None);
     process::reap(pid).unwrap();
 }
+
+#[test]
+fn managed_identity_prevents_duplicates_and_survives_supervisor_recreation() {
+    let req = process::SpawnRequest { name: "managed-identity-test".into(), uid: 0, parent: 1,
+        caps: 7, cwd: "/".into(), image_path: "/system/svc.elf".into() };
+    let pid = process::spawn_managed(&req).unwrap();
+    assert_eq!(process::spawn_managed(&req), Err(process::ProcessError::AlreadyManaged(pid)));
+    let created = process::managed_process(&req.name).unwrap();
+    assert_eq!(created.state, process::ProcessState::Created);
+    process::mark_running(pid, 60).unwrap();
+    let recovered = process::managed_process(&req.name).unwrap();
+    assert_eq!(recovered.pid, pid);
+    assert_eq!(recovered.state, process::ProcessState::Running);
+    assert_eq!(recovered.image_path, req.image_path);
+    assert_eq!(recovered.caps, req.caps);
+    process::kill(pid, 7).unwrap();
+    assert!(process::managed_process(&req.name).is_none());
+    let replacement = process::spawn_managed(&req).unwrap();
+    assert_ne!(pid, replacement);
+    process::kill(replacement, 0).unwrap();
+    process::reap(pid).unwrap(); process::reap(replacement).unwrap();
+}
+
+#[test]
+fn competing_service_reservations_have_exactly_one_winner() {
+    let req = process::SpawnRequest { name: "managed-race-test".into(), uid: 0, parent: 1,
+        caps: 0, cwd: "/".into(), image_path: "/system/svc.elf".into() };
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let b = barrier.clone(); let a = req.clone();
+    let thread = std::thread::spawn(move || { b.wait(); process::spawn_managed(&a) });
+    barrier.wait();
+    let other = process::spawn_managed(&req);
+    let first = thread.join().unwrap();
+    let winner = match (first, other) {
+        (Ok(pid), Err(process::ProcessError::AlreadyManaged(other))) |
+        (Err(process::ProcessError::AlreadyManaged(other)), Ok(pid)) if pid == other => pid,
+        pair => panic!("unexpected results: {:?}", pair),
+    };
+    process::kill(winner, 0).unwrap(); process::reap(winner).unwrap();
+}

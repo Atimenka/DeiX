@@ -342,6 +342,11 @@ pub extern "C" fn kernel_main() -> ! {
         } else {
             crate::serial_println!("[vm-test] FAIL: isolated process IPC exchange");
         }
+        if sched::managed_service_selftest() {
+            crate::serial_println!("[vm-test] PASS: live managed service reconciled without duplication");
+        } else {
+            crate::serial_println!("[vm-test] FAIL: managed service reconciliation");
+        }
         if sched::private_elf_selftest() {
             crate::serial_println!("[vm-test] PASS: system VFS ELF executed in private CPL3");
         } else {

@@ -43,3 +43,16 @@ fn healthy_running_service_resets_crash_history() {
     assert_eq!(s.crash_count, 1);
     assert_eq!(s.restart_backoff_ms, 1_000);
 }
+
+#[test]
+fn reconciliation_requires_exact_image_and_authority() {
+    let mut service = ServiceDescriptor::new("svc", "/system/svc.elf", 3);
+    assert!(service.can_reconcile("/system/svc.elf", 0, 7, 7));
+    assert!(!service.can_reconcile("/system/other.elf", 0, 7, 7));
+    assert!(!service.can_reconcile("/system/svc.elf", 1000, 7, 7));
+    assert!(!service.can_reconcile("/system/svc.elf", 0, 15, 7));
+    service.binary_path.clear();
+    assert!(!service.can_reconcile("", 0, 7, 7));
+    let builtin = ServiceDescriptor::builtin("svc", RestartPolicy::Always, true);
+    assert!(!builtin.can_reconcile("", 0, 7, 7));
+}

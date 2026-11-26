@@ -175,6 +175,8 @@ pub struct Process {
     heartbeat: Option<crate::process_heartbeat::Heartbeat>,
     /// Путь к образу, из которого процесс запущен.
     pub image_path: String,
+    /// Stable kernel-assigned service identity, absent for ordinary processes.
+    service_identity: Option<String>,
     /// Код последней ошибки процесса (значение `diag::ErrorCode`), 0 — ошибок не было.
     pub last_error_code: u32,
     /// Описание последней ошибки процесса.
@@ -197,6 +199,7 @@ impl Process {
             started_at_ms: 0,
             heartbeat: None,
             image_path: String::new(),
+            service_identity: None,
             last_error_code: 0,
             last_error: String::new(),
         }
@@ -218,13 +221,14 @@ impl Process {
 // ==================== Таблица процессов ====================
 
 static PROCS: IrqSpinLock<[Process; MAX_PROCS]> = IrqSpinLock::new([const { Process::blank(0) }; MAX_PROCS]);
-static NEXT_PID: SpinLock<u32> = SpinLock::new(2);
+static NEXT_PID: IrqSpinLock<u32> = IrqSpinLock::new(2);
 
 /// Ошибки менеджера процессов.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessError {
     TableFull,
     NotFound(u32),
+    AlreadyManaged(u32),
     BadImage(String),
     Vfs(String),
 }
@@ -234,6 +238,7 @@ impl ProcessError {
         match self {
             ProcessError::TableFull => String::from("таблица процессов заполнена"),
             ProcessError::NotFound(pid) => format!("процесс {} не найден", pid),
+            ProcessError::AlreadyManaged(pid) => format!("служба уже закреплена за процессом {}", pid),
             ProcessError::BadImage(e) => format!("образ не загружен: {}", e),
             ProcessError::Vfs(e) => format!("файловая система: {}", e),
         }
@@ -258,47 +263,66 @@ pub struct SpawnRequest {
 /// образа, потом задача планировщика. Если образ не загрузился,
 /// процесс не остаётся висеть в таблице.
 pub fn spawn(req: &SpawnRequest) -> Result<u32, ProcessError> {
+    spawn_inner(req, None)
+}
+
+/// Reserve a stable service identity atomically. This is a kernel-only
+/// mechanism, not a user-facing capability or a restart policy.
+pub fn spawn_managed(req: &SpawnRequest) -> Result<u32, ProcessError> {
+    if req.name.trim().is_empty() || req.name.len() > 128 {
+        return Err(ProcessError::BadImage(String::from("неверный идентификатор службы")));
+    }
+    spawn_inner(req, Some(req.name.as_str()))
+}
+
+fn spawn_inner(req: &SpawnRequest, service: Option<&str>) -> Result<u32, ProcessError> {
     let pid = {
         let mut next = NEXT_PID.lock();
         let pid = *next;
         *next = next.checked_add(1).ok_or(ProcessError::TableFull)?;
         pid
     };
-
-    let index = {
-        let mut table = PROCS.lock();
-        let idx = table.iter().position(|p| !p.state.occupies_slot() && p.state != ProcessState::Zombie);
-        let idx = idx.ok_or(ProcessError::TableFull)?;
-
-        let p = &mut table[idx];
-        *p = Process::blank(pid);
-        p.name = req.name.clone();
-        p.uid = req.uid;
-        p.parent = req.parent;
-        p.caps = req.caps;
-        p.cwd = if req.cwd.is_empty() { String::from("/userdata") } else { req.cwd.clone() };
-        p.state = ProcessState::Created;
-        p.started_at_ms = crate::timer::uptime_ms();
-        p.image_path = req.image_path.clone();
-        idx
-    };
-
-    // Стандартные дескрипторы: консоль на ввод и вывод.
-    {
-        let mut table = PROCS.lock();
-        if let Some(p) = table.get_mut(index) {
-            let _ = p.fds.alloc(Fd {
-                path: String::from("/dev/console"),
-                read_only: true,
-            });
-            let _ = p.fds.alloc(Fd {
-                path: String::from("/dev/console"),
-                read_only: false,
-            });
+    let mut table = PROCS.lock();
+    if let Some(service) = service {
+        if let Some(p) = table.iter().find(|p| p.state.occupies_slot()
+            && p.service_identity.as_deref() == Some(service)) {
+            return Err(ProcessError::AlreadyManaged(p.pid));
         }
     }
-
+    let idx = table.iter().position(|p| !p.state.occupies_slot() && p.state != ProcessState::Zombie)
+        .ok_or(ProcessError::TableFull)?;
+    let p = &mut table[idx];
+    *p = Process::blank(pid);
+    p.name = req.name.clone();
+    p.uid = req.uid;
+    p.parent = req.parent;
+    p.caps = req.caps;
+    p.cwd = if req.cwd.is_empty() { String::from("/userdata") } else { req.cwd.clone() };
+    p.state = ProcessState::Created;
+    p.started_at_ms = crate::timer::uptime_ms();
+    p.image_path = req.image_path.clone();
+    p.service_identity = service.map(String::from);
+    // Populate descriptors under the same lock as reservation: a concurrent
+    // kill/reap cannot recycle the slot between reservation and initialization.
+    let _ = p.fds.alloc(Fd { path: String::from("/dev/console"), read_only: true });
+    let _ = p.fds.alloc(Fd { path: String::from("/dev/console"), read_only: false });
     Ok(pid)
+}
+
+/// Snapshot of a managed identity for supervisor reconciliation. Zombies
+/// are intentionally excluded; they cannot block a replacement from starting.
+#[derive(Debug, Clone)]
+pub struct ManagedProcess {
+    pub pid: u32,
+    pub state: ProcessState,
+    pub image_path: String,
+    pub uid: u32,
+    pub caps: u64,
+}
+pub fn managed_process(service: &str) -> Option<ManagedProcess> {
+    let table = PROCS.lock();
+    let p = table.iter().find(|p| p.state.occupies_slot() && p.service_identity.as_deref() == Some(service))?;
+    Some(ManagedProcess { pid: p.pid, state: p.state, image_path: p.image_path.clone(), uid: p.uid, caps: p.caps })
 }
 
 /// Контекст запуска: PID процесса и точка входа MEX-образа.

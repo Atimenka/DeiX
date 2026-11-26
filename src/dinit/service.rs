@@ -150,6 +150,13 @@ impl ServiceDescriptor {
         desc
     }
 
+    /// Recovery may reattach only a process with exactly the expected image
+    /// and authority. This is supervisor policy, not a kernel decision.
+    pub fn can_reconcile(&self, path: &str, uid: u32, caps: u64, expected_caps: u64) -> bool {
+        self.kind == ServiceKind::Process && !self.binary_path.is_empty()
+            && self.binary_path == path && uid == 0 && caps == expected_caps
+    }
+
     /// Проверка, готов ли сервис к перезапуску с учётом backoff
     pub fn can_restart(&self, now: u64) -> bool {
         self.status == ServiceStatus::Restarting

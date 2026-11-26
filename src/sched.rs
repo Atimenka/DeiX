@@ -754,6 +754,26 @@ pub fn private_ipc_selftest() -> bool {
     ok
 }
 
+/// Real process survives reconstruction of the in-kernel Dinit object.
+/// This validates identity-based reconciliation, not Dinit isolation.
+pub fn managed_service_selftest() -> bool {
+    use crate::process::{self, SpawnRequest, ProcessError, ProcessState};
+    let path = "/system/tests/private_managed_probe.elf";
+    let name = "managed-recovery-test";
+    let req = SpawnRequest { name: String::from(name), uid: 0, parent: 1,
+        caps: process::cap::SYSTEM, cwd: String::from("/userdata"), image_path: String::from(path) };
+    let Ok(pid) = process::spawn_managed(&req) else { return false; };
+    if process::exec(pid).is_err() { let _ = process::kill(pid, -1); let _ = process::reap(pid); return false; }
+    let duplicate_blocked = matches!(process::spawn_managed(&req), Err(ProcessError::AlreadyManaged(p)) if p == pid);
+    let mut supervisor = crate::dinit::Dinit::new();
+    supervisor.services.insert(String::from(name), crate::dinit::service::ServiceDescriptor::new(name, path, 3));
+    let adopted = supervisor.start_service(name).ok() == Some(pid)
+        && process::managed_process(name).map_or(false, |p| p.pid == pid && p.state == ProcessState::Running);
+    let stopped = supervisor.stop_service(name).is_ok() && process::managed_process(name).is_none();
+    if !stopped { let _ = process::kill(pid, -1); let _ = process::reap(pid); }
+    duplicate_blocked && adopted && stopped
+}
+
 // Real CR3 context-switch smoke test; it runs only in explicitly enabled
 // test builds. This is a supervisor-mode test, not proof of Ring-3 isolation.
 static VM_TEST_RESULTS: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];

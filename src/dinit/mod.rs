@@ -473,6 +473,22 @@ impl Dinit {
         if binary_path.is_empty() {
             return Err(String::from("у службы не задан путь к бинарнику"));
         }
+        // A surviving service may outlive a rebuilt supervisor. Adopt only
+        // an active process that was explicitly registered under this service
+        // identity and still matches the configured image and privileges.
+        if let Some(existing) = crate::process::managed_process(name) {
+            if existing.state != crate::process::ProcessState::Running {
+                return Err(String::from("служба уже запускается"));
+            }
+            let compatible = self.services.get(name).map_or(false, |desc|
+                desc.can_reconcile(&existing.image_path, existing.uid, existing.caps, crate::process::cap::SYSTEM));
+            if !compatible { return Err(String::from("существующая служба не совпадает с конфигурацией")); }
+            if let Some(desc) = self.services.get_mut(name) { desc.mark_started(existing.pid, now); }
+            self.namespace.attach_process(existing.pid);
+            self.audit.record(now, existing.pid, 0, AuditOp::ServiceSpawn, name, AuditResult::Allowed,
+                "Восстановлена привязка к работающей службе");
+            return Ok(existing.pid);
+        }
         if !crate::vfs::exists(&binary_path) {
             crate::diag::error_with(
                 crate::diag::ErrorCode::new(crate::diag::Subsystem::Dinit, 8),
@@ -492,7 +508,9 @@ impl Dinit {
             image_path: binary_path,
         };
 
-        let pid = crate::process::spawn(&req).map_err(|e| e.message())?;
+        // The process manager rejects a concurrent reservation even if a
+        // service appeared after the reconciliation snapshot above.
+        let pid = crate::process::spawn_managed(&req).map_err(|e| e.message())?;
 
         match crate::process::exec(pid) {
             Ok(()) => {}
