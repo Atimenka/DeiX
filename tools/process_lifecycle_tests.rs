@@ -106,3 +106,23 @@ fn ipc_checks_sender_and_receiver_caps_and_running_state() {
     process::kill(sender, 0).unwrap();
     process::reap(sender).unwrap(); process::reap(receiver).unwrap();
 }
+
+#[test]
+fn repeated_kill_and_slot_reuse_cannot_terminate_the_new_owner() {
+    let req = process::SpawnRequest { name: "slot-reuse".into(), uid: 0, parent: 1,
+        caps: 0, cwd: "/".into(), image_path: "".into() };
+    let old = process::spawn(&req).unwrap();
+    process::mark_running(old, 57).unwrap();
+    process::notify_private_exit(57, 17);
+    let new = process::spawn(&req).unwrap();
+    process::mark_running(new, 57).unwrap();
+    process::kill(old, 9).unwrap();
+    assert_eq!(process::info(old).unwrap().exit_code, Some(17));
+    assert_eq!(process::info(new).unwrap().state, process::ProcessState::Running);
+    assert!(!sched::TERMINATED.lock().unwrap().contains(&57));
+    // The normal task-exit path must resolve the new live owner, not the old zombie.
+    process::notify_exit(57, 23);
+    assert_eq!(process::info(new).unwrap().exit_code, Some(23));
+    assert_eq!(process::reap(old).unwrap(), Some(17));
+    assert_eq!(process::reap(new).unwrap(), Some(23));
+}

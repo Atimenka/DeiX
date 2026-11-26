@@ -413,6 +413,9 @@ pub fn mark_running(pid: u32, sched_id: usize) -> Result<(), ProcessError> {
         .iter_mut()
         .find(|p| p.pid == pid)
         .ok_or(ProcessError::NotFound(pid))?;
+    if p.state != ProcessState::Created {
+        return Err(ProcessError::BadImage(String::from("процесс уже запущен или завершён")));
+    }
     p.sched_id = Some(sched_id);
     p.state = ProcessState::Running;
     Ok(())
@@ -424,8 +427,11 @@ pub fn kill(pid: u32, code: i32) -> Result<(), ProcessError> {
         let mut table = PROCS.lock();
         let p = table
             .iter_mut()
-            .find(|p| p.pid == pid)
+            .find(|p| p.pid == pid && p.state != ProcessState::Empty && p.state != ProcessState::Reaped)
             .ok_or(ProcessError::NotFound(pid))?;
+        // A finished scheduler slot may already belong to a different task.
+        // Repeated kills must not terminate that new occupant or change status.
+        if p.state == ProcessState::Zombie { return Ok(()); }
         p.exit_code = Some(code);
         p.state = ProcessState::Zombie;
         p.fds = FdTable::new();
@@ -454,7 +460,7 @@ pub fn notify_exit(sched_id: usize, code: i32) {
         let table = PROCS.lock();
         table
             .iter()
-            .find(|p| p.sched_id == Some(sched_id))
+            .find(|p| p.state == ProcessState::Running && p.sched_id == Some(sched_id))
             .map(|p| p.pid)
     };
     if let Some(pid) = pid {
