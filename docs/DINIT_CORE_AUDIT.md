@@ -55,8 +55,9 @@ no private address space or process IPC used by Dinit, and no bootstrap gate.
   capabilities; it does not yet implement a Dinit request/reply protocol.
   VFS, logs, timers, process state, session events and security monitoring
   are currently accessed as internal functions.
-* The heartbeat trackers monitor Nano-Core services; they do not supervise an
-  independent Dinit process. Current Dinit startup returns no bootstrap result
+* Nano-Core heartbeat trackers monitor Nano-Core services. A separate
+  capability-checked private-process heartbeat primitive records and classifies
+  liveness, but no monitor supervises an independent Dinit process. Current Dinit startup returns no bootstrap result
   and does not reconcile surviving services after Dinit failure.
 
 ## Required evidence before claiming completion

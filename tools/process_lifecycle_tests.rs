@@ -50,6 +50,7 @@ mod vfs {
     pub fn read_file(_: &str) -> Result<alloc::vec::Vec<u8>, Error> { Err(Error) }
     pub fn write_file(_: &str, _: &[u8]) -> Result<(), Error> { Err(Error) }
 }
+#[path = "../src/process_heartbeat.rs"] mod process_heartbeat;
 #[path = "../src/process.rs"] mod process;
 
 #[test]

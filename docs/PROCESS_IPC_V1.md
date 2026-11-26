@@ -38,3 +38,14 @@ unavailable, -22 for an invalid length, or -14 for an invalid output buffer.
 The complete output range is checked before copying. This is a byte transport;
 the existing kernel Dinit still parses its embedded fallback. The snapshot does
 not reflect later on-disk edits or implement reload.
+
+## Process heartbeat
+
+`0x44580005` records a heartbeat for the currently running private process.
+It requires `HEARTBEAT`, takes no arguments and returns 0 or -1 on denial.
+Neither PID nor time is supplied by userspace: the kernel derives the process
+from its scheduler slot and samples monotonic uptime. The last observation is
+available in the kernel's process snapshot. `heartbeat_health` classifies a
+running process as starting, alive or timed out using a caller-specified grace
+period; the deadline is inclusive. It does not make restart decisions. This
+is not yet a Dinit watchdog, bootstrap gate, or recovery implementation.

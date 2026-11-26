@@ -91,6 +91,8 @@ pub mod cap {
     pub const IPC_RECEIVE: u64 = 1 << 8;
     /// Read the bounded boot-time /system/etc/init.deix snapshot.
     pub const READ_BOOT_CONFIG: u64 = 1 << 9;
+    /// Send authenticated liveness heartbeats for this process only.
+    pub const HEARTBEAT: u64 = 1 << 10;
     /// Полный набор для системных служб Dinit.
     pub const SYSTEM: u64 = READ_ANY
         | WRITE_USERDATA
@@ -170,6 +172,7 @@ pub struct Process {
     pub sched_id: Option<usize>,
     pub exit_code: Option<i32>,
     pub started_at_ms: u64,
+    heartbeat: Option<crate::process_heartbeat::Heartbeat>,
     /// Путь к образу, из которого процесс запущен.
     pub image_path: String,
     /// Код последней ошибки процесса (значение `diag::ErrorCode`), 0 — ошибок не было.
@@ -192,6 +195,7 @@ impl Process {
             sched_id: None,
             exit_code: None,
             started_at_ms: 0,
+            heartbeat: None,
             image_path: String::new(),
             last_error_code: 0,
             last_error: String::new(),
@@ -359,6 +363,9 @@ pub fn exec(pid: u32) -> Result<(), ProcessError> {
             let slot = crate::sched::spawn_private_user_pid(&p.name, loaded.entry,
                 loaded.stack_top, space, pid).ok_or(ProcessError::TableFull)?;
             p.sched_id = Some(slot);
+            if p.caps & cap::HEARTBEAT != 0 {
+                p.heartbeat = Some(crate::process_heartbeat::Heartbeat::new(crate::timer::uptime_ms()));
+            }
             p.state = ProcessState::Running;
             Ok(())
         });
@@ -419,6 +426,9 @@ pub fn mark_running(pid: u32, sched_id: usize) -> Result<(), ProcessError> {
         return Err(ProcessError::BadImage(String::from("процесс уже запущен или завершён")));
     }
     p.sched_id = Some(sched_id);
+    if p.caps & cap::HEARTBEAT != 0 {
+        p.heartbeat = Some(crate::process_heartbeat::Heartbeat::new(crate::timer::uptime_ms()));
+    }
     p.state = ProcessState::Running;
     Ok(())
 }
@@ -520,6 +530,8 @@ pub struct ProcInfo {
     pub sched_id: Option<usize>,
     pub exit_code: Option<i32>,
     pub started_at_ms: u64,
+    /// Last authenticated heartbeat; None means none has been received.
+    pub last_heartbeat_ms: Option<u64>,
     /// Код последней ошибки (значение `diag::ErrorCode`), 0 — ошибок не было.
     pub last_error_code: u32,
     /// Описание последней ошибки.
@@ -544,6 +556,7 @@ pub fn list() -> Vec<ProcInfo> {
             sched_id: p.sched_id,
             exit_code: p.exit_code,
             started_at_ms: p.started_at_ms,
+            last_heartbeat_ms: p.heartbeat.and_then(|h| h.last_ms()),
             last_error_code: p.last_error_code,
             last_error: p.last_error.clone(),
         })
@@ -569,6 +582,7 @@ pub fn info(pid: u32) -> Result<ProcInfo, ProcessError> {
         sched_id: p.sched_id,
         exit_code: p.exit_code,
         started_at_ms: p.started_at_ms,
+        last_heartbeat_ms: p.heartbeat.and_then(|h| h.last_ms()),
         last_error_code: p.last_error_code,
         last_error: p.last_error.clone(),
     })
@@ -609,6 +623,25 @@ pub fn current_has_capability(capability: u64) -> bool {
     let table = PROCS.lock();
     table.iter().any(|p| p.state == ProcessState::Running && p.sched_id == Some(sid)
         && p.caps & capability == capability)
+}
+
+/// Record only the calling task's heartbeat; no user-supplied PID or time.
+pub fn heartbeat_current() -> bool {
+    let sid = crate::sched::current_id();
+    let mut table = PROCS.lock();
+    let Some(p) = table.iter_mut().find(|p| p.state == ProcessState::Running && p.sched_id == Some(sid)
+        && p.caps & cap::HEARTBEAT != 0) else { return false; };
+    let Some(hb) = p.heartbeat.as_mut() else { return false; };
+    hb.record(crate::timer::uptime_ms());
+    true
+}
+
+/// Mechanism for a future monitor; it does not kill or restart processes.
+/// None means the PID is absent, not running, or has no heartbeat capability.
+pub fn heartbeat_health(pid: u32, timeout_ms: u64) -> Option<crate::process_heartbeat::Health> {
+    let table = PROCS.lock();
+    let p = table.iter().find(|p| p.pid == pid && p.state == ProcessState::Running)?;
+    Some(p.heartbeat?.health(crate::timer::uptime_ms(), timeout_ms))
 }
 
 /// Имя процесса по PID.

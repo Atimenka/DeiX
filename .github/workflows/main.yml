@@ -99,6 +99,11 @@ jobs:
           rustc --edition=2021 --test tools/process_lifecycle_tests.rs -o /tmp/deix-process-tests
           /tmp/deix-process-tests
 
+      - name: Process heartbeat mechanism tests
+        run: |
+          rustc --edition=2021 --test src/process_heartbeat.rs -o /tmp/deix-process-heartbeat-tests
+          /tmp/deix-process-heartbeat-tests
+
       - name: Boot configuration parser tests
         run: |
           rustc --edition=2021 --test tools/init_config_tests.rs -o /tmp/deix-init-config-tests

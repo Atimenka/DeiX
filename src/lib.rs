@@ -70,6 +70,7 @@ mod png;
 mod port;
 mod process;
 mod process_ipc;
+mod process_heartbeat;
 mod boot_config;
 mod renderer;
 mod rng;
