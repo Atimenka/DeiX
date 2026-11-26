@@ -1,8 +1,8 @@
 # Dinit / Core audit (current implementation)
 
 This records existing behaviour, not a declaration that the requested
-separation exists. Dinit is still in the kernel and there is no Dinit binary,
-private address space, authenticated process IPC or bootstrap gate.
+separation exists. Dinit is still in the kernel: there is no Dinit binary,
+no private address space or process IPC used by Dinit, and no bootstrap gate.
 
 ## Boot and callers
 
@@ -91,6 +91,7 @@ isolation or a working user-process API.
 pages, applies supported relative relocations and creates a zeroed stack.
 `DEIX_TEST_ADDRESS_SPACE=1` adds a separately compiled test ELF to the image
 and QEMU verifies execution from the system VFS in CPL3, plus process exit
-and page-fault accounting. This probe is not
+and page-fault accounting. A second QEMU test exchanges authenticated
+mailbox messages between two separate CPL3 ELF processes. These probes are not
 Dinit, does not implement its policy or ABI, and is not included in normal
 images. NX is not enabled; page permissions do not enforce non-executable data.
