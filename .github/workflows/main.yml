@@ -99,6 +99,11 @@ jobs:
           rustc --edition=2021 --test tools/process_lifecycle_tests.rs -o /tmp/deix-process-tests
           /tmp/deix-process-tests
 
+      - name: Boot configuration parser tests
+        run: |
+          rustc --edition=2021 --test tools/init_config_tests.rs -o /tmp/deix-init-config-tests
+          /tmp/deix-init-config-tests
+
       - name: Boot configuration snapshot tests
         run: |
           rustc --edition=2021 --test tools/boot_config_tests.rs -o /tmp/deix-boot-config-tests
