@@ -455,6 +455,19 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u
             0x4458_0005 => { // heartbeat; identity and time are kernel-derived
                 return if crate::process::heartbeat_current() { 0 } else { (-1i64) as u64 };
             }
+            0x4458_000c => return crate::process::current_parent().map_or((-1i64) as u64, |pid| pid as u64),
+            0x4458_000b => { // async start with explicit delegated caps in a5
+                if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
+                let Some(pid) = crate::process::current_pid() else { return (-1i64) as u64; };
+                if !crate::process::pid_can_delegate(pid, a5) { return (-1i64) as u64; }
+                let Ok(name_len) = usize::try_from(a2) else { return (-22i64) as u64; };
+                let Ok(path_len) = usize::try_from(a4) else { return (-22i64) as u64; };
+                if name_len == 0 || name_len > crate::service_rpc::MAX_NAME || path_len == 0 || path_len > crate::service_rpc::MAX_PATH { return (-22i64) as u64; }
+                let mut name = [0u8; crate::service_rpc::MAX_NAME];
+                let mut path = [0u8; crate::service_rpc::MAX_PATH];
+                if !crate::sched::current_copy_from_user(a1, &mut name[..name_len]) || !crate::sched::current_copy_from_user(a3, &mut path[..path_len]) { return (-14i64) as u64; }
+                return crate::service_rpc::submit_start_delegated(pid, &name[..name_len], &path[..path_len], a5).map_or_else(|e| e as i64 as u64, |token| token);
+            }
             0x4458_0008 => { // async start(name ptr, len, path ptr, len)
                 if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
                 let Some(pid) = crate::process::current_pid() else { return (-1i64) as u64; };

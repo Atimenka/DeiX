@@ -212,3 +212,22 @@ fn status_snapshot_distinguishes_created_running_zombie_and_reaped() {
     process::reap(pid).unwrap();
     assert_eq!(process::status_snapshot(pid), None);
 }
+
+#[test]
+fn delegation_requires_owned_delegable_rights_and_never_grants_supervisor() {
+    let req = process::SpawnRequest { name: "delegation-test".into(), uid: 0, parent: 1,
+        caps: process::cap::MANAGE_SERVICES | process::cap::DELEGATE_SERVICES | process::cap::IPC_SEND,
+        cwd: "/".into(), image_path: "".into() };
+    let pid = process::spawn(&req).unwrap();
+    assert!(!process::pid_can_delegate(pid, process::cap::IPC_SEND));
+    process::mark_running(pid, 62).unwrap();
+    assert!(process::pid_can_delegate(pid, 0));
+    assert!(process::pid_can_delegate(pid, process::cap::IPC_SEND));
+    assert!(!process::pid_can_delegate(pid, process::cap::IPC_RECEIVE));
+    assert!(!process::pid_can_delegate(pid, process::cap::MANAGE_SERVICES));
+    assert!(!process::pid_can_delegate(pid, process::cap::DELEGATE_SERVICES));
+    assert!(!process::pid_can_delegate(pid, u64::MAX));
+    process::kill(pid, 0).unwrap();
+    assert!(!process::pid_can_delegate(pid, process::cap::IPC_SEND));
+    process::reap(pid).unwrap();
+}

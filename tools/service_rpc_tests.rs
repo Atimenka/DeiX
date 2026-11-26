@@ -19,6 +19,7 @@ mod process {
     pub struct SpawnRequest { pub name: String, pub uid: u32, pub parent: u32, pub caps: u64, pub cwd: String, pub image_path: String }
     pub struct ManagedProcess { pub pid: u32 }
     pub fn pid_has_capability(_: u32, _: u64) -> bool { false }
+    pub fn pid_can_delegate(_: u32, _: u64) -> bool { false }
     pub fn spawn_managed(_: &SpawnRequest) -> Result<u32, ProcessError> { Err(ProcessError::Other) }
     pub fn exec(_: u32) -> Result<(), ()> { Err(()) }
     pub fn kill(_: u32, _: i32) -> Result<(), ()> { Err(()) }

@@ -18,7 +18,7 @@ struct Request {
     token: u64, caller: u32, state: State, action: Action,
     name: [u8; MAX_NAME], name_len: usize,
     path: [u8; MAX_PATH], path_len: usize,
-    target: u32, result: i32, result_pid: u32,
+    target: u32, grant: u64, result: i32, result_pid: u32,
 }
 struct Queue { slots: [Option<Request>; CAPACITY], next: u64 }
 impl Queue {
@@ -72,22 +72,26 @@ fn valid_path(bytes: &[u8]) -> bool {
         && !path.chars().any(|c| c.is_control())
         && !path.split('/').any(|component| component == "." || component == "..")
 }
-fn request(caller: u32, action: Action, name: &[u8], path: &[u8], target: u32) -> Result<u64, i32> {
+fn request(caller: u32, action: Action, name: &[u8], path: &[u8], target: u32, grant: u64) -> Result<u64, i32> {
     if !valid_name(name) || (matches!(action, Action::Start) && !valid_path(path)) { return Err(-22); }
     if !WORKER_ACTIVE.load(Ordering::Acquire) { return Err(-5); }
     let mut req = Request { token: 0, caller, state: State::Pending, action,
         name: [0; MAX_NAME], name_len: name.len(), path: [0; MAX_PATH], path_len: path.len(),
-        target, result: 0, result_pid: 0 };
+        target, grant, result: 0, result_pid: 0 };
     req.name[..name.len()].copy_from_slice(name);
     req.path[..path.len()].copy_from_slice(path);
     QUEUE.lock().submit(req)
 }
 pub fn submit_start(caller: u32, name: &[u8], path: &[u8]) -> Result<u64, i32> {
-    request(caller, Action::Start, name, path, 0)
+    request(caller, Action::Start, name, path, 0, 0)
+}
+pub fn submit_start_delegated(caller: u32, name: &[u8], path: &[u8], grant: u64) -> Result<u64, i32> {
+    if !crate::process::pid_can_delegate(caller, grant) { return Err(-1); }
+    request(caller, Action::Start, name, path, 0, grant)
 }
 pub fn submit_stop(caller: u32, name: &[u8], target: u32) -> Result<u64, i32> {
     if target == 0 || target == caller { return Err(-22); }
-    request(caller, Action::Stop, name, &[], target)
+    request(caller, Action::Stop, name, &[], target, 0)
 }
 pub fn take(caller: u32, token: u64) -> Result<(i32, u32), i32> { QUEUE.lock().take(caller, token) }
 pub fn purge(caller: u32) { QUEUE.lock().purge(caller); }
@@ -115,10 +119,10 @@ fn execute(req: Request) -> (i32, u32) {
     match req.action {
         Action::Start => {
             let Ok(path) = core::str::from_utf8(&req.path[..req.path_len]) else { return (-22, 0); };
+            // Recheck at execution time as well as submission time.
+            if !process::pid_can_delegate(req.caller, req.grant) { return (-1, 0); }
             let spawn = process::SpawnRequest { name: String::from(name), uid: 0, parent: req.caller,
-                // No authority is inherited from the manager. Explicit grants
-                // will require a separate kernel policy and ABI.
-                caps: 0, cwd: String::from("/userdata"), image_path: String::from(path) };
+                caps: req.grant, cwd: String::from("/userdata"), image_path: String::from(path) };
             let pid = match process::spawn_managed(&spawn) {
                 Ok(pid) => pid,
                 Err(ProcessError::AlreadyManaged(pid)) => return (-17, pid),
@@ -127,7 +131,8 @@ fn execute(req: Request) -> (i32, u32) {
             if process::exec(pid).is_err() { let _ = process::kill(pid, -1); let _ = process::reap(pid); return (-5, 0); }
             // If the submitter died while the filesystem operation was in
             // progress, do not leave a newly started service orphaned.
-            if !process::pid_has_capability(req.caller, process::cap::MANAGE_SERVICES) {
+            if !process::pid_has_capability(req.caller, process::cap::MANAGE_SERVICES)
+                || !process::pid_can_delegate(req.caller, req.grant) {
                 let _ = process::kill(pid, -1); let _ = process::reap(pid); return (-1, 0);
             }
             (0, pid)
@@ -146,7 +151,7 @@ fn execute(req: Request) -> (i32, u32) {
 mod tests {
     use super::*;
     fn sample(caller: u32) -> Request { Request { token: 0, caller, state: State::Pending, action: Action::Stop,
-        name: [0; MAX_NAME], name_len: 0, path: [0; MAX_PATH], path_len: 0, target: 3, result: 0, result_pid: 0 } }
+        name: [0; MAX_NAME], name_len: 0, path: [0; MAX_PATH], path_len: 0, target: 3, grant: 0, result: 0, result_pid: 0 } }
     #[test] fn queue_enforces_ownership_backpressure_and_one_shot_completion() {
         let mut q = Queue::new();
         let a = q.submit(sample(1)).unwrap();

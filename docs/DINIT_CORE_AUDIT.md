@@ -43,10 +43,10 @@ no private address space or process IPC used by Dinit, and no bootstrap gate.
   rejecting duplicate live reservations. The in-kernel Dinit can reattach a
   matching live process to a fresh supervisor instance. A capability-checked
   lookup and process-status syscalls let authorized private processes find
-  and inspect such an identity. A bounded asynchronous worker can start
-  capability-free ELF services and stop matching managed processes; delegated
-  capabilities, sessions, logs, dependencies and a complete Dinit API are
-  still absent. This is not an independent Dinit restart.
+  and inspect such an identity. A bounded asynchronous worker can start ELF
+  services and stop matching managed processes. Delegation is limited to IPC,
+  heartbeat and boot-config capabilities; sessions, logs, dependencies and a
+  complete Dinit API are still absent. This is not an independent Dinit restart.
 * `src/usermode.rs` changes the active page tables in place for user memory,
   and the legacy Ring-3 return state and syscall stack are global. The
   scheduler can now switch owned CR3 roots and launch a low-level CPL3 task

@@ -93,6 +93,11 @@ pub mod cap {
     pub const READ_BOOT_CONFIG: u64 = 1 << 9;
     /// Send authenticated liveness heartbeats for this process only.
     pub const HEARTBEAT: u64 = 1 << 10;
+    /// Permission to grant a bounded subset of the caller's own rights.
+    pub const DELEGATE_SERVICES: u64 = 1 << 11;
+    /// Only capabilities with implemented isolated-process interfaces are
+    /// currently delegable. Supervisor/installer authority is never delegated.
+    pub const DELEGABLE: u64 = IPC_SEND | IPC_RECEIVE | HEARTBEAT | READ_BOOT_CONFIG;
     /// Полный набор для системных служб Dinit.
     pub const SYSTEM: u64 = READ_ANY
         | WRITE_USERDATA
@@ -668,6 +673,15 @@ pub fn pid_has_capability(pid: u32, capability: u64) -> bool {
         && p.caps & capability == capability)
 }
 
+/// Delegation never adds rights the caller lacks and never grants supervisor
+/// authority. A zero grant does not require the delegation capability.
+pub fn pid_can_delegate(pid: u32, grant: u64) -> bool {
+    let table = PROCS.lock();
+    let Some(p) = table.iter().find(|p| p.pid == pid && p.state == ProcessState::Running) else { return false; };
+    grant == 0 || (p.caps & cap::DELEGATE_SERVICES != 0
+        && grant & !cap::DELEGABLE == 0 && grant & !p.caps == 0)
+}
+
 pub fn current_has_capability(capability: u64) -> bool {
     let sid = crate::sched::current_id();
     let table = PROCS.lock();
@@ -692,6 +706,13 @@ pub fn heartbeat_health(pid: u32, timeout_ms: u64) -> Option<crate::process_hear
     let table = PROCS.lock();
     let p = table.iter().find(|p| p.pid == pid && p.state == ProcessState::Running)?;
     Some(p.heartbeat?.health(crate::timer::uptime_ms(), timeout_ms))
+}
+
+/// Parent of the current running process, derived from the process table.
+pub fn current_parent() -> Option<u32> {
+    let sid = crate::sched::current_id();
+    let table = PROCS.lock();
+    table.iter().find(|p| p.state == ProcessState::Running && p.sched_id == Some(sid)).map(|p| p.parent)
 }
 
 /// Имя процесса по PID.

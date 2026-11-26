@@ -98,8 +98,24 @@ Submission can return -1 for missing permission, -5 if no worker is available,
 are exhausted. Completion status is 0 on success, -17 for an already-reserved
 identity (PID returned), -2 for an absent/mismatched stop target, -5 on image
 load failure, -12 on allocation/table failure, or -1 if the caller is no longer
-authorized. New children start with **zero capabilities**; there is no delegated
-capability-granting ABI yet. Failed starts are killed and reaped. Requests are
+authorized. The original `0x44580008` starts children with zero capabilities. Failed starts are killed and reaped. Requests are
 purged when a caller exits; in-flight operations may already have taken effect,
 so a replacement supervisor must reconcile actual process state rather than
 assuming cancellation. The worker rechecks the caller before and after a start.
+
+### Explicit capability delegation
+
+`0x4458000b` submits a start with arguments `(name_ptr, name_len, path_ptr,
+path_len, capability_mask)` in RDI, RSI, RDX, R10 and R8. It has the same
+request/result semantics as `0x44580008`. A nonzero grant additionally requires
+`DELEGATE_SERVICES`, must be a subset of the caller's own capabilities, and
+may contain only `IPC_SEND`, `IPC_RECEIVE`, `HEARTBEAT` and
+`READ_BOOT_CONFIG`. In particular, service-management, delegation and install
+rights cannot be delegated. The kernel checks authority at submission, before
+execution and after the image starts. This limited whitelist covers only
+currently implemented private-process interfaces; it does not yet provide the
+full authority needed to preserve every legacy service.
+
+`0x4458000c` returns the current process's parent PID derived from the process
+table, or -1 if the current task has no running process record. Userspace
+cannot set its own parent PID through this interface.

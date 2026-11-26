@@ -14,7 +14,10 @@ Dinit bootstrap, no Dinit watchdog, and no login gate.
   bounded mailboxes, boot-config snapshot read, heartbeat, managed service
   lookup, status, and non-blocking start/stop. A kernel worker performs VFS
   operations. Starts currently allow only `.elf` under `/system/services/`,
-  create children with **zero** capabilities, and cannot run legacy MEX.
+  normally create children with zero capabilities, and cannot run legacy MEX.
+  A separate explicit grant supports a restricted subset of the manager's
+  capabilities (IPC, heartbeat and boot-config read), but not full legacy
+  service authority.
 * The process table can reserve stable service identities. The existing in-kernel
   Dinit can reattach a surviving, matching managed process. A QEMU-only test
   checks this with a real CPL3 service; this is not Dinit restart recovery.

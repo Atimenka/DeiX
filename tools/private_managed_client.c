@@ -5,6 +5,14 @@ static inline long call4(unsigned long nr, unsigned long a, unsigned long b, uns
     __asm__ volatile("syscall" : "=a"(result) : "a"(nr), "D"(a), "S"(b), "d"(c), "r"(r10) : "rcx", "r11", "memory");
     return result;
 }
+static inline long call5(unsigned long nr, unsigned long a, unsigned long b, unsigned long c, unsigned long d, unsigned long e) {
+    register unsigned long r10 __asm__("r10") = d;
+    register unsigned long r8 __asm__("r8") = e;
+    long result;
+    __asm__ volatile("syscall" : "=a"(result) : "a"(nr), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8) : "rcx", "r11", "memory");
+    return result;
+}
+struct message { unsigned sender, reserved; unsigned long tag, a, b; };
 static inline long find(const void *ptr, unsigned long len) { return call4(0x44580006UL, (unsigned long)ptr, len, 0, 0); }
 struct process_status { unsigned pid, state; int exit_code; unsigned has_exit; };
 struct result { int status; unsigned pid; };
@@ -47,6 +55,29 @@ __attribute__((noreturn)) void _start(void) {
                     token = call4(0x44580009UL, (unsigned long)rpc, sizeof(rpc)-1, child, 0);
                     if (token <= 0 || wait_result(token, &result) != 0 || result.status != 0 || result.pid != child || find(rpc, sizeof(rpc)-1) != -2) code = 12;
                 }
+            }
+        }
+    }
+    if (!code) {
+        static const char delegated[] = "delegated-ipc-test";
+        static const char delegated_image[] = "/system/tests/private_delegated_probe.elf";
+        const unsigned long ipc_send = 1UL << 7;
+        long denied = call5(0x4458000bUL, (unsigned long)delegated, sizeof(delegated)-1,
+                            (unsigned long)delegated_image, sizeof(delegated_image)-1, 1UL << 5);
+        if (denied != -1) code = 13;
+        else {
+            long token = call5(0x4458000bUL, (unsigned long)delegated, sizeof(delegated)-1,
+                               (unsigned long)delegated_image, sizeof(delegated_image)-1, ipc_send);
+            if (token <= 0 || wait_result(token, &result) != 0 || result.status != 0 || !result.pid) code = 14;
+            else {
+                unsigned child = result.pid;
+                struct message msg;
+                long rc = -11;
+                for (unsigned i = 0; i < 200000 && rc == -11; i++)
+                    rc = call4(0x44580002UL, (unsigned long)&msg, 0, 0, 0);
+                if (rc != 0 || msg.sender != child || msg.tag != 0x99 || msg.a != 0x1234) code = 15;
+                token = call4(0x44580009UL, (unsigned long)delegated, sizeof(delegated)-1, child, 0);
+                if (token <= 0 || wait_result(token, &result) != 0 || result.status != 0 || result.pid != child) code = 16;
             }
         }
     }
