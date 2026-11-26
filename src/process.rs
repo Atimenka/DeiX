@@ -319,6 +319,11 @@ pub struct ManagedProcess {
     pub uid: u32,
     pub caps: u64,
 }
+/// Return the live PID without allocating while executing a syscall.
+pub fn managed_pid(service: &str) -> Option<u32> {
+    let table = PROCS.lock();
+    table.iter().find(|p| p.state.occupies_slot() && p.service_identity.as_deref() == Some(service)).map(|p| p.pid)
+}
 pub fn managed_process(service: &str) -> Option<ManagedProcess> {
     let table = PROCS.lock();
     let p = table.iter().find(|p| p.state.occupies_slot() && p.service_identity.as_deref() == Some(service))?;

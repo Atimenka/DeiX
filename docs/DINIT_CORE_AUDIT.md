@@ -41,9 +41,10 @@ no private address space or process IPC used by Dinit, and no bootstrap gate.
   syscall surface; MEX uses one fixed shared region and one launch context.
   The kernel process table can reserve and query a stable service identity,
   rejecting duplicate live reservations. The in-kernel Dinit can reattach a
-  matching live process to a fresh supervisor instance, but this is not an
-  independent Dinit restart or userspace API. The required scoped process-facing
-  Dinit API is not implemented.
+  matching live process to a fresh supervisor instance. A capability-checked
+  lookup syscall lets private processes find such an identity, but does not
+  start, stop, or query service state. This is not an independent Dinit restart
+  or the full scoped Dinit API.
 * `src/usermode.rs` changes the active page tables in place for user memory,
   and the legacy Ring-3 return state and syscall stack are global. The
   scheduler can now switch owned CR3 roots and launch a low-level CPL3 task

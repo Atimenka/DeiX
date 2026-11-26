@@ -49,3 +49,15 @@ available in the kernel's process snapshot. `heartbeat_health` classifies a
 running process as starting, alive or timed out using a caller-specified grace
 period; the deadline is inclusive. It does not make restart decisions. This
 is not yet a Dinit watchdog, bootstrap gate, or recovery implementation.
+
+## Managed service lookup
+
+`0x44580006` looks up a kernel-reserved service identity. It takes the pointer
+and length of a UTF-8 name in RDI and RSI, and requires `MANAGE_SERVICES`.
+The name is copied from the caller's private pages after checking the entire
+range; it may reside in read-only memory. Length must be 1–128 bytes. The
+return value is the PID of a Created or Running managed process, -1 for missing
+capability, -2 if no such process exists, -14 for an invalid user range, or
+-22 for invalid length or UTF-8. This lookup does not launch or stop services,
+and a returned process can exit immediately afterward; callers must recheck
+its status. Names are assigned by trusted kernel code, not arbitrary user PIDs.

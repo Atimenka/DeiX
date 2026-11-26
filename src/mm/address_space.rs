@@ -43,6 +43,7 @@ impl Page {
     fn address(&self) -> u64 { self.ptr.as_ptr() as u64 }
     fn entries(&self) -> &[u64; ENTRIES] { unsafe { &*(self.ptr.as_ptr() as *const [u64; ENTRIES]) } }
     fn entries_mut(&mut self) -> &mut [u64; ENTRIES] { unsafe { &mut *(self.ptr.as_ptr() as *mut [u64; ENTRIES]) } }
+    fn bytes(&self) -> &[u8; PAGE] { unsafe { &*(self.ptr.as_ptr() as *const [u8; PAGE]) } }
     fn bytes_mut(&mut self) -> &mut [u8; PAGE] { unsafe { &mut *(self.ptr.as_ptr() as *mut [u8; PAGE]) } }
 }
 impl Drop for Page {
@@ -134,6 +135,22 @@ impl AddressSpace {
             page = next;
         }
     }
+    /// Read only from owned user-mapped pages, including read-only pages.
+    /// Validate the entire range before copying any byte into the kernel buffer.
+    pub fn copy_from_user(&self, address: u64, data: &mut [u8]) -> Result<(), Error> {
+        if !self.user_range_accessible(address, data.len(), false) { return Err(Error::InvalidAddress); }
+        let mut copied = 0;
+        while copied < data.len() {
+            let va = address + copied as u64;
+            let offset = (va & (PAGE as u64 - 1)) as usize;
+            let n = (PAGE - offset).min(data.len() - copied);
+            let (table, index) = self.leaf_table(va & !(PAGE as u64 - 1))?;
+            let page = self.owned_index(self.pages[table].entries()[index])?;
+            data[copied..copied+n].copy_from_slice(&self.pages[page].bytes()[offset..offset+n]);
+            copied += n;
+        }
+        Ok(())
+    }
     pub fn copy_to_user(&mut self, address: u64, data: &[u8]) -> Result<(), Error> {
         if !self.user_range_accessible(address, data.len(), true) { return Err(Error::InvalidAddress); }
         let mut copied = 0;
@@ -183,6 +200,22 @@ mod tests {
         assert!(!a.user_range_accessible(u64::MAX, 2, true));
         assert!(a.copy_to_user(USER_BASE + 8, &[7, 8]).is_ok());
         assert_eq!(&a.page_for_loading(USER_BASE).unwrap()[8..10], &[7, 8]);
+    }
+    #[test]
+    fn user_read_validates_full_range_and_allows_readonly_pages() {
+        let mut space = AddressSpace::new(&[0; ENTRIES]).unwrap();
+        space.map_zeroed(USER_BASE, true).unwrap();
+        space.map_zeroed(USER_BASE + PAGE as u64, false).unwrap();
+        space.page_for_loading(USER_BASE).unwrap()[PAGE - 1] = 41;
+        space.page_for_loading(USER_BASE + PAGE as u64).unwrap()[0] = 42;
+        let mut out = [0; 2];
+        assert_eq!(space.copy_from_user(USER_BASE + PAGE as u64 - 1, &mut out), Ok(()));
+        assert_eq!(out, [41, 42]);
+        let mut bad = [9; 2];
+        assert_eq!(space.copy_from_user(USER_BASE + 2 * PAGE as u64 - 1, &mut bad), Err(Error::InvalidAddress));
+        assert_eq!(bad, [9, 9]);
+        assert_eq!(space.copy_from_user(u64::MAX, &mut bad), Err(Error::InvalidAddress));
+        assert_eq!(space.copy_from_user(0x100000, &mut bad), Err(Error::InvalidAddress));
     }
     #[test]
     fn rejects_conflicts_and_non_user_addresses() {

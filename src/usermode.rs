@@ -455,6 +455,15 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u
             0x4458_0005 => { // heartbeat; identity and time are kernel-derived
                 return if crate::process::heartbeat_current() { 0 } else { (-1i64) as u64 };
             }
+            0x4458_0006 => { // find managed service (utf8 pointer, byte length)
+                if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
+                let Ok(len) = usize::try_from(a2) else { return (-22i64) as u64; };
+                if len == 0 || len > 128 { return (-22i64) as u64; }
+                let mut name = [0u8; 128];
+                if !crate::sched::current_copy_from_user(a1, &mut name[..len]) { return (-14i64) as u64; }
+                let Ok(name) = core::str::from_utf8(&name[..len]) else { return (-22i64) as u64; };
+                return crate::process::managed_pid(name).map_or((-2i64) as u64, |pid| pid as u64);
+            }
             0x4458_0004 => { // read boot config (out, offset, length)
                 if !crate::process::current_has_capability(crate::process::cap::READ_BOOT_CONFIG) { return (-1i64) as u64; }
                 return crate::boot_config::read_to_user(a1, a2, a3) as u64;

@@ -603,6 +603,11 @@ pub fn current_user_range_writable(address: u64, len: usize) -> bool {
     let task = unsafe { &(*(&raw const TASKS))[cur] };
     task.user_mode && task._address_space.as_ref().map_or(false, |s| s.user_range_accessible(address, len, true))
 }
+pub fn current_copy_from_user(address: u64, data: &mut [u8]) -> bool {
+    let cur = CURRENT.load(Ordering::Relaxed);
+    let task = unsafe { &(*(&raw const TASKS))[cur] };
+    task.user_mode && task._address_space.as_ref().map_or(false, |s| s.copy_from_user(address, data).is_ok())
+}
 pub fn current_copy_to_user(address: u64, data: &[u8]) -> bool {
     let cur = CURRENT.load(Ordering::Relaxed);
     let task = unsafe { &mut (*(&raw mut TASKS))[cur] };
@@ -765,13 +770,25 @@ pub fn managed_service_selftest() -> bool {
     let Ok(pid) = process::spawn_managed(&req) else { return false; };
     if process::exec(pid).is_err() { let _ = process::kill(pid, -1); let _ = process::reap(pid); return false; }
     let duplicate_blocked = matches!(process::spawn_managed(&req), Err(ProcessError::AlreadyManaged(p)) if p == pid);
+    let client_req = SpawnRequest { name: String::from("managed-lookup-test"), uid: 0, parent: 1,
+        caps: process::cap::MANAGE_SERVICES, cwd: String::from("/userdata"),
+        image_path: String::from("/system/tests/private_managed_client.elf") };
+    let lookup_ok = if let Ok(client) = process::spawn(&client_req) {
+        if process::exec(client).is_ok() {
+            if let Some(id) = process::info(client).ok().and_then(|p| p.sched_id) { join(id); }
+        }
+        let ok = process::info(client).map_or(false, |p| p.state == ProcessState::Zombie && p.exit_code == Some(0));
+        if !ok { let _ = process::kill(client, -1); }
+        let _ = process::reap(client);
+        ok
+    } else { false };
     let mut supervisor = crate::dinit::Dinit::new();
     supervisor.services.insert(String::from(name), crate::dinit::service::ServiceDescriptor::new(name, path, 3));
     let adopted = supervisor.start_service(name).ok() == Some(pid)
         && process::managed_process(name).map_or(false, |p| p.pid == pid && p.state == ProcessState::Running);
     let stopped = supervisor.stop_service(name).is_ok() && process::managed_process(name).is_none();
     if !stopped { let _ = process::kill(pid, -1); let _ = process::reap(pid); }
-    duplicate_blocked && adopted && stopped
+    duplicate_blocked && lookup_ok && adopted && stopped
 }
 
 // Real CR3 context-switch smoke test; it runs only in explicitly enabled
