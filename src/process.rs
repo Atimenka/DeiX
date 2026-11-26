@@ -89,6 +89,8 @@ pub mod cap {
     pub const IPC_SEND: u64 = 1 << 7;
     /// Приём адресованных этому процессу сообщений.
     pub const IPC_RECEIVE: u64 = 1 << 8;
+    /// Read the bounded boot-time /system/etc/init.deix snapshot.
+    pub const READ_BOOT_CONFIG: u64 = 1 << 9;
     /// Полный набор для системных служб Dinit.
     pub const SYSTEM: u64 = READ_ANY
         | WRITE_USERDATA
@@ -600,6 +602,13 @@ pub fn ipc_receiver() -> Option<u32> {
     let table = PROCS.lock();
     table.iter().find(|p| p.state == ProcessState::Running && p.sched_id == Some(sid)
         && p.caps & cap::IPC_RECEIVE != 0).map(|p| p.pid)
+}
+
+pub fn current_has_capability(capability: u64) -> bool {
+    let sid = crate::sched::current_id();
+    let table = PROCS.lock();
+    table.iter().any(|p| p.state == ProcessState::Running && p.sched_id == Some(sid)
+        && p.caps & capability == capability)
 }
 
 /// Имя процесса по PID.

@@ -25,3 +25,16 @@ Queue traffic is volatile and messages are not durable. Caps permit sending to
 any opted-in receiver, not scoped service capabilities. This ABI has not yet
 been used by Dinit, which remains inside the kernel; no bootstrap or watchdog
 contract is implied.
+
+## Boot configuration read
+
+`0x44580004` reads the boot-time snapshot of `/system/etc/init.deix`:
+arguments are `(out_pointer, offset, length)`. It requires `READ_BOOT_CONFIG`.
+The kernel snapshots the file before scheduling starts, rejects directories and
+files larger than 8192 bytes, and makes no filesystem calls from the syscall.
+Each read is limited to 1024 bytes. The return value is the number of bytes
+copied (zero at EOF), -1 for missing capability, -2 when the snapshot is
+unavailable, -22 for an invalid length, or -14 for an invalid output buffer.
+The complete output range is checked before copying. This is a byte transport;
+the existing kernel Dinit still parses its embedded fallback. The snapshot does
+not reflect later on-disk edits or implement reload.

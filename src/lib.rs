@@ -70,6 +70,7 @@ mod png;
 mod port;
 mod process;
 mod process_ipc;
+mod boot_config;
 mod renderer;
 mod rng;
 mod rtc;
@@ -304,6 +305,12 @@ pub extern "C" fn kernel_main() -> ! {
         module::load_boot_modules();
     }
     bootprof::mark("kmod load");
+
+    // Snapshot the on-disk configuration before task scheduling. The kernel
+    // exposes bytes to authorized processes; it does not parse them here.
+    if !boot_config::init() {
+        crate::serial_println!("[boot-config] /system/etc/init.deix unavailable or too large");
+    }
 
     // GDT/TSS ставим ПЕРВЫМИ: планировщик кладёт в начальный кадр задачи
     // SS=0x10 (kernel data), а в GDT загрузчика есть только null и

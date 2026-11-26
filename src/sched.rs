@@ -686,7 +686,7 @@ pub fn ring3_address_space_selftest() -> bool {
 pub fn private_elf_selftest() -> bool {
     use crate::process::{self, ProcessState, SpawnRequest};
     let req = SpawnRequest { name: String::from("elf-test"), uid: 0, parent: 0,
-        caps: process::cap::IPC_SEND | process::cap::IPC_RECEIVE, cwd: String::from("/"), image_path: String::from("/system/tests/private_elf_probe.elf") };
+        caps: process::cap::IPC_SEND | process::cap::IPC_RECEIVE | process::cap::READ_BOOT_CONFIG, cwd: String::from("/"), image_path: String::from("/system/tests/private_elf_probe.elf") };
     RING3_TEST_RESULTS[0].store(0, Ordering::SeqCst);
     let Ok(pid) = process::spawn(&req) else { return false; };
     if process::exec(pid).is_err() { let _ = process::kill(pid, -1); let _ = process::reap(pid); return false; }

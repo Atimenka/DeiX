@@ -15,13 +15,20 @@ __attribute__((noreturn)) void _start(void) {
     struct message message;
     long pid = call4(0x44580003, 0, 0, 0, 0);
     if (pid <= 0 || call4(0x44580001, pid, 1, 2, 3) != -1 ||
-        call4(0x44580002, (unsigned long)&message, 0, 0, 0) != -1)
+        call4(0x44580002, (unsigned long)&message, 0, 0, 0) != -1 ||
+        call4(0x44580004, (unsigned long)&message, 0, 1, 0) != -1)
         call4(60, 42, 0, 0, 0);
     unsigned long cs;
     __asm__ volatile("mov %%cs, %0" : "=r"(cs));
     call4(0x4458564d, 0x72, cs, 0, 0);
 #else
     struct message message;
+    unsigned char config[8];
+    if (call4(0x44580004, (unsigned long)config, 0, 8, 0) != 8 || config[0] != '#' || config[1] != ' ' ||
+        call4(0x44580004, 0x100000, 0, 8, 0) != -14 ||
+        call4(0x44580004, (unsigned long)config, 0, 1025, 0) != -22 ||
+        call4(0x44580004, (unsigned long)config, ~0UL, 8, 0) != 0)
+        call4(60, 47, 0, 0, 0);
     long pid = call4(0x44580003, 0, 0, 0, 0);
     if (pid <= 0) call4(60, 41, 0, 0, 0);
     if (call4(0x44580001, pid, 123, 456, 789) != 0) call4(60, 42, 0, 0, 0);
