@@ -418,6 +418,7 @@ pub fn spawn_private_user_pid(name: &str, entry: u64, stack: u64,
 
 /// Construct a private root from the scheduler's kernel page table.
 pub fn new_user_address_space() -> Result<crate::mm::address_space::AddressSpace, crate::mm::address_space::Error> {
+    if !crate::usermode::nx_enabled() { return Err(crate::mm::address_space::Error::NoExecuteUnsupported); }
     let root = KERNEL_CR3.load(Ordering::SeqCst) & 0x000f_ffff_ffff_f000;
     if root == 0 { return Err(crate::mm::address_space::Error::InvalidPhysicalAddress); }
     let table = unsafe { &*(root as *const [u64; 512]) };
@@ -715,7 +716,7 @@ pub fn private_elf_selftest() -> bool {
         && process::info(denied_pid).map_or(false, |p| p.state == ProcessState::Zombie && p.exit_code == Some(0));
     let denied_reaped = process::reap(denied_pid).ok() == Some(Some(0));
     if !denied_ok || !denied_reaped { return false; }
-    let fault_req = SpawnRequest { image_path: String::from("/system/tests/private_elf_fault.elf"), ..req };
+    let fault_req = SpawnRequest { image_path: String::from("/system/tests/private_elf_fault.elf"), ..req.clone() };
     let Ok(fault_pid) = process::spawn(&fault_req) else { return false; };
     if process::exec(fault_pid).is_err() { let _ = process::kill(fault_pid, -1); let _ = process::reap(fault_pid); return false; }
     let Ok(fault_info) = process::info(fault_pid) else { return false; };
@@ -723,7 +724,17 @@ pub fn private_elf_selftest() -> bool {
     join(fault_id);
     let faulted = process::info(fault_pid).map_or(false, |p| p.state == ProcessState::Zombie && p.exit_code == Some(-14));
     let reaped_fault = process::reap(fault_pid).ok() == Some(Some(-14));
-    faulted && reaped_fault
+    if !faulted || !reaped_fault { return false; }
+    // This ELF writes RET to its own stack and attempts to execute it. Without
+    // enforced NX it returns and exits 99; with NX it must fault and exit -14.
+    let nx_req = SpawnRequest { image_path: String::from("/system/tests/private_elf_nx_stack.elf"), ..req };
+    let Ok(nx_pid) = process::spawn(&nx_req) else { return false; };
+    if process::exec(nx_pid).is_err() { let _ = process::kill(nx_pid, -1); let _ = process::reap(nx_pid); return false; }
+    let Some(nx_id) = process::info(nx_pid).ok().and_then(|info| info.sched_id) else { return false; };
+    join(nx_id);
+    let nx_faulted = process::info(nx_pid).map_or(false, |p| p.state == ProcessState::Zombie && p.exit_code == Some(-14));
+    let nx_reaped = process::reap(nx_pid).ok() == Some(Some(-14));
+    nx_faulted && nx_reaped
 }
 
 /// Run two independently loaded processes through the real mailbox syscalls.

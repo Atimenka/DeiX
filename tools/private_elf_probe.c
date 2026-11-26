@@ -8,7 +8,12 @@ static inline long call4(unsigned long nr, unsigned long a, unsigned long b,
     return result;
 }
 __attribute__((noreturn)) void _start(void) {
-#ifdef DEIX_PROBE_FAULT
+#if defined(DEIX_PROBE_NX_STACK)
+    volatile unsigned char code[] = { 0xc3 }; /* RET */
+    ((void (*)(void))(unsigned long)&code[0])();
+    /* Reaching here would prove execution from the writable stack succeeded. */
+    call4(60, 99, 0, 0, 0);
+#elif defined(DEIX_PROBE_FAULT)
     (void)*(volatile unsigned char *)0x100000;
     call4(60, 99, 0, 0, 0);
 #elif defined(DEIX_PROBE_DENIED)

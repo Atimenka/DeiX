@@ -341,7 +341,7 @@ pub fn load_private(img: &[u8], space: &mut crate::mm::address_space::AddressSpa
     if headers.iter().any(|p| p.p_type == PT_INTERP) { return Err("динамический интерпретатор не поддерживается".to_string()); }
     let loads: Vec<&Phdr> = headers.iter().filter(|p| p.p_type == PT_LOAD).collect();
     if loads.is_empty() { return Err("нет сегментов PT_LOAD".to_string()); }
-    let mut pages: BTreeMap<u64, bool> = BTreeMap::new();
+    let mut pages: BTreeMap<u64, (bool, bool)> = BTreeMap::new();
     let mut executable_entry = false;
     for (idx, p) in loads.iter().enumerate() {
         if p.p_filesz > p.p_memsz { return Err("filesz больше memsz".to_string()); }
@@ -361,12 +361,18 @@ pub fn load_private(img: &[u8], space: &mut crate::mm::address_space::AddressSpa
             let mut page = start;
             while page < page_end {
                 let writable = p.p_flags & PF_W != 0;
-                pages.entry(page).and_modify(|old| *old |= writable).or_insert(writable);
+                let executable = p.p_flags & PF_X != 0;
+                pages.entry(page).and_modify(|old| { old.0 |= writable; old.1 |= executable; }).or_insert((writable, executable));
                 page += PAGE;
             }
         }
     }
     if !executable_entry { return Err("точка входа вне исполняемого сегмента".to_string()); }
+    // Page granularity matters: otherwise distinct segments sharing a page
+    // could accidentally produce an executable, writable mapping.
+    if pages.values().any(|(writable, executable)| *writable && *executable) {
+        return Err("страница ELF одновременно записываемая и исполняемая".to_string());
+    }
     let relocations = relocation_plan(img, &headers)?;
     let mut writes = Vec::with_capacity(relocations.len());
     for (offset, addend) in relocations {
@@ -375,12 +381,12 @@ pub fn load_private(img: &[u8], space: &mut crate::mm::address_space::AddressSpa
             .ok_or("переполнение значения RELA")?;
         writes.push((offset, value));
     }
-    for (offset, writable) in pages {
-        space.map_zeroed(USER_BASE + offset, writable).map_err(|_| "не удалось выделить страницу")?;
+    for (offset, (writable, executable)) in pages {
+        space.map_zeroed_with_permissions(USER_BASE + offset, writable, executable).map_err(|_| "не удалось выделить страницу")?;
     }
     let mut stack = LIMIT - STACK;
     while stack < LIMIT {
-        space.map_zeroed(USER_BASE + stack, true).map_err(|_| "не удалось выделить стек")?;
+        space.map_zeroed_with_permissions(USER_BASE + stack, true, false).map_err(|_| "не удалось выделить стек")?;
         stack += PAGE;
     }
     for p in &loads {

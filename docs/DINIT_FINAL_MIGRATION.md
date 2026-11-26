@@ -8,8 +8,9 @@ Dinit bootstrap, no Dinit watchdog, and no login gate.
 ## Mechanisms available now
 
 * A static PIE ELF can be loaded from VFS into a private address space and run
-  at CPL3. The process manager records exit and fault status. NX is not enabled;
-  writable pages are currently executable, so isolation is incomplete.
+  at CPL3. The process manager records exit and fault status. On supported CPUs,
+  private ELF mappings enforce NX and W^X; unsupported CPUs refuse private ELF
+  execution. Legacy MEX mappings are not covered by this guarantee.
 * Private processes have a restricted ABI (`PROCESS_IPC_V1.md`): authenticated
   bounded mailboxes, boot-config snapshot read, heartbeat, managed service
   lookup, status, managed identity metadata, logging, and non-blocking start/stop. A kernel worker performs VFS
@@ -58,7 +59,8 @@ Dinit bootstrap, no Dinit watchdog, and no login gate.
    registration and security events. Account for Nano-Core's independent
    boot/dependency policy rather than leaving it duplicated in the kernel.
    Remove the old implementation only after equivalent behavior is tested.
-6. Complete memory protection (including NX and validated user-copy paths),
+6. Complete the memory-protection and user-copy audit beyond the current private
+   ELF NX/W^X and validated-copy mechanisms,
    prevent capability escalation and ensure no shared kernel/user writable
    mappings. Audit syscall context, IRQ locks, task and page-table lifetime,
    bounded queues, cancellation and denial-of-service limits.

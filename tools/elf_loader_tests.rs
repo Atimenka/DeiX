@@ -62,10 +62,29 @@ fn attempt(bytes: &[u8]) -> (bool, Vec<u8>) {
     assert_eq!(space.page_for_loading(address_space::USER_BASE).unwrap()[128], 0xc3);
     assert!(space.user_accessible(loaded.stack_top, true));
     assert!(!space.user_accessible(address_space::USER_BASE, true));
+    assert!(space.user_executable(loaded.entry));
+    assert!(!space.user_executable(loaded.stack_top));
 }
 #[test] fn private_loader_rejects_out_of_range_and_bad_entry() {
     let mut image=image(); put64(&mut image,104, 0x400000);
     let mut space=address_space::AddressSpace::new(&[0;512]).unwrap();
     assert!(elf::load_private(&image, &mut space).is_err());
+    assert!(!space.user_accessible(address_space::USER_BASE, false));
+}
+
+#[test] fn private_loader_rejects_writable_executable_segment() {
+    let mut bytes=image(); put32(&mut bytes,68,7);
+    let mut space=address_space::AddressSpace::new(&[0;512]).unwrap();
+    assert!(elf::load_private(&bytes, &mut space).is_err());
+    assert!(!space.user_accessible(address_space::USER_BASE, false));
+}
+#[test] fn private_loader_rejects_page_shared_by_writable_and_executable_segments() {
+    let mut bytes=image(); bytes.resize(512, 0);
+    put16(&mut bytes,56,2); put64(&mut bytes,96,192); put64(&mut bytes,104,192);
+    put32(&mut bytes,120,1); put32(&mut bytes,124,6);
+    put64(&mut bytes,128,256); put64(&mut bytes,136,256);
+    put64(&mut bytes,152,16); put64(&mut bytes,160,16);
+    let mut space=address_space::AddressSpace::new(&[0;512]).unwrap();
+    assert!(elf::load_private(&bytes, &mut space).is_err());
     assert!(!space.user_accessible(address_space::USER_BASE, false));
 }

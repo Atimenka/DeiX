@@ -90,8 +90,8 @@ self-test runs two kernel-mode tasks at the same virtual address with different
 backing pages, yielding between them, and verifies that the kernel root is
 restored. A second QEMU test executes two CPL3 tasks using distinct pages and
 checks that a third CPL3 task faults when reading kernel memory. These tests
-do not cover all syscalls, devices, or scheduler interactions. NX is not
-enabled and Dinit does not use these spaces. Slot reuse frees a finished task's
+do not cover all syscalls, devices, or scheduler interactions. Private ELF
+pages now use NX on supported CPUs; Dinit does not use these spaces. Slot reuse frees a finished task's
 tables only after it is no longer current. This does not establish Dinit
 isolation or a working user-process API.
 
@@ -104,7 +104,10 @@ and QEMU verifies execution from the system VFS in CPL3, plus process exit
 and page-fault accounting. A second QEMU test exchanges authenticated
 mailbox messages between two separate CPL3 ELF processes. These probes are not
 Dinit, does not implement its policy or ABI, and is not included in normal
-images. NX is not enabled; page permissions do not enforce non-executable data.
+images. Private ELF loading rejects writable-executable pages and marks the
+stack and non-executable segments NX. A QEMU probe attempts to execute a RET
+on the stack and must fault. CPUs without NX cannot launch private ELF; legacy
+MEX and synthetic scheduler test mappings are outside this guarantee.
 
 ## Managed service reconciliation
 

@@ -19,6 +19,7 @@ const ENTRIES: usize = 512;
 const PRESENT: u64 = 1;
 const WRITE: u64 = 2;
 const USER: u64 = 4;
+const NO_EXECUTE: u64 = 1 << 63;
 const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
 /// PML4 slot 1, separate from the kernel identity map in slot 0.
 pub const USER_BASE: u64 = 0x0000_0080_0000_0000;
@@ -26,7 +27,7 @@ pub const USER_END: u64 = 0x0000_0100_0000_0000;
 const MAX_USER_PAGES: usize = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Error { OutOfMemory, KernelMappingConflict, InvalidAddress, AlreadyMapped, NotMapped, InvalidPhysicalAddress }
+pub enum Error { OutOfMemory, KernelMappingConflict, InvalidAddress, AlreadyMapped, NotMapped, InvalidPhysicalAddress, NoExecuteUnsupported }
 
 struct Page { ptr: NonNull<u64> }
 impl Page {
@@ -86,9 +87,12 @@ impl AddressSpace {
         }
         Ok((table, idx[3]))
     }
-    /// Allocates a zero-filled, private user page. Executability is not yet
-    /// controlled here (NX setup is not enabled by the existing boot code).
+    /// Legacy test mapping; may be executable even when writable.
     pub fn map_zeroed(&mut self, va: u64, writable: bool) -> Result<(), Error> {
+        self.map_zeroed_with_permissions(va, writable, true)
+    }
+    /// Call only after NXE is enabled on the CPU that will use this table.
+    pub fn map_zeroed_with_permissions(&mut self, va: u64, writable: bool, executable: bool) -> Result<(), Error> {
         let idx = Self::indices(va)?;
         if self.user_pages >= MAX_USER_PAGES { return Err(Error::OutOfMemory); }
         let mut table = 0;
@@ -108,7 +112,7 @@ impl AddressSpace {
         let page = Page::new()?;
         let address = page.address();
         self.pages.push(page);
-        self.pages[table].entries_mut()[idx[3]] = address | PRESENT | USER | if writable { WRITE } else { 0 };
+        self.pages[table].entries_mut()[idx[3]] = address | PRESENT | USER | if writable { WRITE } else { 0 } | if executable { 0 } else { NO_EXECUTE };
         self.user_pages += 1;
         Ok(())
     }
@@ -119,6 +123,14 @@ impl AddressSpace {
         let entry = self.pages[table].entries()[index];
         entry & (PRESENT | USER) == (PRESENT | USER)
             && (!write || entry & WRITE != 0)
+            && self.owned_index(entry).is_ok()
+    }
+    /// Inspect the leaf execute permission; caller must ensure NXE is enabled.
+    pub fn user_executable(&self, address: u64) -> bool {
+        let page = address & !(PAGE as u64 - 1);
+        let Ok((table, index)) = self.leaf_table(page) else { return false; };
+        let entry = self.pages[table].entries()[index];
+        entry & (PRESENT | USER) == (PRESENT | USER) && entry & NO_EXECUTE == 0
             && self.owned_index(entry).is_ok()
     }
     /// Validate the complete range before writing, so an invalid trailing page

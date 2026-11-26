@@ -23,6 +23,13 @@
 //! в ядро через `exit`. Результат виден в serial-логе при загрузке.
 
 use core::arch::{asm, global_asm};
+use core::sync::atomic::{AtomicBool, Ordering};
+
+// Scheduler currently runs only on the bootstrap CPU. Any future SMP support
+// must enable NXE separately on every CPU before it runs private tasks.
+static NX_ENABLED: AtomicBool = AtomicBool::new(false);
+pub fn nx_enabled() -> bool { NX_ENABLED.load(Ordering::Acquire) }
+
 
 // ==================== Селекторы GDT ====================
 
@@ -628,9 +635,14 @@ pub fn init() {
         wrmsr(0xC000_0082, syscall_entry as *const () as u64); // LSTAR
         wrmsr(0xC000_0084, 0x0000_0300); // SFMASK: гасим IF и TF
 
-        // EFER.SCE — без него инструкция syscall вызывает #UD.
+        // NX requires extended CPUID leaf 0x80000001 EDX bit 20. CPUs
+        // without it continue booting, but private ELF execution fails closed.
+        let max_ext = core::arch::x86_64::__cpuid(0x8000_0000).eax;
+        let nx = max_ext >= 0x8000_0001 && (core::arch::x86_64::__cpuid(0x8000_0001).edx & (1 << 20) != 0);
+        // EFER.SCE enables syscall; NXE makes leaf bit 63 non-executable.
         let efer = rdmsr(0xC000_0080);
-        wrmsr(0xC000_0080, efer | 1);
+        wrmsr(0xC000_0080, efer | 1 | if nx { 1 << 11 } else { 0 });
+        NX_ENABLED.store(nx && rdmsr(0xC000_0080) & (1 << 11) != 0, Ordering::Release);
 
         // Открываем пользователю доступ к его 2-МиБ странице.
         make_user_accessible(USER_BASE);

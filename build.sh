@@ -108,6 +108,9 @@ if [ "${DEIX_TEST_ADDRESS_SPACE:-}" = "1" ]; then
     gcc -nostdlib -nostartfiles -static-pie -fPIE -Os -DDEIX_PROBE_FAULT \
         -Wl,--build-id=none -Wl,-z,noseparate-code \
         -o "$BUILD/private_elf_fault.elf" tools/private_elf_probe.c
+    gcc -nostdlib -nostartfiles -static-pie -fPIE -Os -DDEIX_PROBE_NX_STACK \
+        -Wl,--build-id=none -Wl,-z,noseparate-code \
+        -o "$BUILD/private_elf_nx_stack.elf" tools/private_elf_probe.c
     gcc -nostdlib -nostartfiles -static-pie -fPIE -Os -DDEIX_PROBE_DENIED \
         -Wl,--build-id=none -Wl,-z,noseparate-code \
         -o "$BUILD/private_elf_denied.elf" tools/private_elf_probe.c
