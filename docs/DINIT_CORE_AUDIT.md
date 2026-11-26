@@ -38,9 +38,12 @@ no private address space or process IPC used by Dinit, and no bootstrap gate.
 
 * `process::spawn/exec/info/kill/reap` are direct Rust calls, not a stable
   userspace ABI. `exec` supports isolated static PIE ELF with a restricted
-  syscall surface; MEX uses one fixed shared region and one launch context. `ProcInfo` does not provide a stable service identity for
-  restart reconciliation. Capabilities are recorded but the required scoped
-  process-facing Dinit API is not implemented.
+  syscall surface; MEX uses one fixed shared region and one launch context.
+  The kernel process table can reserve and query a stable service identity,
+  rejecting duplicate live reservations. The in-kernel Dinit can reattach a
+  matching live process to a fresh supervisor instance, but this is not an
+  independent Dinit restart or userspace API. The required scoped process-facing
+  Dinit API is not implemented.
 * `src/usermode.rs` changes the active page tables in place for user memory,
   and the legacy Ring-3 return state and syscall stack are global. The
   scheduler can now switch owned CR3 roots and launch a low-level CPL3 task
