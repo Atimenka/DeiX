@@ -195,3 +195,19 @@ fn competing_service_reservations_have_exactly_one_winner() {
     };
     process::kill(winner, 0).unwrap(); process::reap(winner).unwrap();
 }
+
+#[test]
+fn status_snapshot_distinguishes_created_running_zombie_and_reaped() {
+    let req = process::SpawnRequest { name: "status-snapshot".into(), uid: 0, parent: 1,
+        caps: 0, cwd: "/".into(), image_path: "".into() };
+    let pid = process::spawn(&req).unwrap();
+    assert_eq!(process::status_snapshot(pid).unwrap().state, process::ProcessState::Created);
+    process::mark_running(pid, 61).unwrap();
+    assert_eq!(process::status_snapshot(pid).unwrap().state, process::ProcessState::Running);
+    process::notify_private_exit(61, -14);
+    let info = process::status_snapshot(pid).unwrap();
+    assert_eq!(info.state, process::ProcessState::Zombie);
+    assert_eq!(info.exit_code, Some(-14));
+    process::reap(pid).unwrap();
+    assert_eq!(process::status_snapshot(pid), None);
+}

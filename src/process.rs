@@ -309,6 +309,20 @@ fn spawn_inner(req: &SpawnRequest, service: Option<&str>) -> Result<u32, Process
     Ok(pid)
 }
 
+/// Small allocation-free snapshot for the capability-checked process ABI.
+/// Empty and reaped slots are not process identities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessStatusSnapshot {
+    pub pid: u32,
+    pub state: ProcessState,
+    pub exit_code: Option<i32>,
+}
+pub fn status_snapshot(pid: u32) -> Option<ProcessStatusSnapshot> {
+    let table = PROCS.lock();
+    let p = table.iter().find(|p| p.pid == pid && !matches!(p.state, ProcessState::Empty | ProcessState::Reaped))?;
+    Some(ProcessStatusSnapshot { pid: p.pid, state: p.state, exit_code: p.exit_code })
+}
+
 /// Snapshot of a managed identity for supervisor reconciliation. Zombies
 /// are intentionally excluded; they cannot block a replacement from starting.
 #[derive(Debug, Clone)]

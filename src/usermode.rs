@@ -455,6 +455,23 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u
             0x4458_0005 => { // heartbeat; identity and time are kernel-derived
                 return if crate::process::heartbeat_current() { 0 } else { (-1i64) as u64 };
             }
+            0x4458_0007 => { // process status (pid, output pointer)
+                if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
+                let Ok(pid) = u32::try_from(a1) else { return (-22i64) as u64; };
+                let Some(snapshot) = crate::process::status_snapshot(pid) else { return (-2i64) as u64; };
+                let state = match snapshot.state {
+                    crate::process::ProcessState::Created => 1u32,
+                    crate::process::ProcessState::Running => 2,
+                    crate::process::ProcessState::Zombie => 3,
+                    _ => return (-2i64) as u64,
+                };
+                let mut out = [0u8; 16];
+                out[..4].copy_from_slice(&snapshot.pid.to_le_bytes());
+                out[4..8].copy_from_slice(&state.to_le_bytes());
+                out[8..12].copy_from_slice(&snapshot.exit_code.unwrap_or(0).to_le_bytes());
+                out[12..16].copy_from_slice(&(snapshot.exit_code.is_some() as u32).to_le_bytes());
+                return if crate::sched::current_copy_to_user(a2, &out) { 0 } else { (-14i64) as u64 };
+            }
             0x4458_0006 => { // find managed service (utf8 pointer, byte length)
                 if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
                 let Ok(len) = usize::try_from(a2) else { return (-22i64) as u64; };

@@ -61,3 +61,11 @@ capability, -2 if no such process exists, -14 for an invalid user range, or
 -22 for invalid length or UTF-8. This lookup does not launch or stop services,
 and a returned process can exit immediately afterward; callers must recheck
 its status. Names are assigned by trusted kernel code, not arbitrary user PIDs.
+
+`0x44580007` reads a process status snapshot: RDI is a PID, RSI points to a
+16-byte output buffer. It requires `MANAGE_SERVICES`. The output is
+little-endian: PID (u32), state (u32: 1 Created, 2 Running, 3 Zombie), exit
+code (i32), and exit-code-present (u32, 0 or 1). Returns 0 on success, -1
+without the capability, -2 for an absent or reaped PID, -14 for an invalid
+output range, and -22 if the PID does not fit u32. A snapshot can become
+stale immediately after the call; it cannot be used as a guarantee of liveness.
