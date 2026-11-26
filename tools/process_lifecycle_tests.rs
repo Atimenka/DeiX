@@ -171,7 +171,12 @@ fn managed_identity_prevents_duplicates_and_survives_supervisor_recreation() {
     assert_eq!(recovered.state, process::ProcessState::Running);
     assert_eq!(recovered.image_path, req.image_path);
     assert_eq!(recovered.caps, req.caps);
+    let snapshot = process::managed_snapshot(&req.name).unwrap().unwrap();
+    assert_eq!((snapshot.pid, snapshot.state, snapshot.uid, snapshot.caps), (pid, process::ProcessState::Running, req.uid, req.caps));
+    assert_eq!(&snapshot.path[..snapshot.path_len], req.image_path.as_bytes());
+    assert!(snapshot.path[snapshot.path_len..].iter().all(|b| *b == 0));
     process::kill(pid, 7).unwrap();
+    assert!(process::managed_snapshot(&req.name).unwrap().is_none());
     assert!(process::managed_process(&req.name).is_none());
     let replacement = process::spawn_managed(&req).unwrap();
     assert_ne!(pid, replacement);
@@ -230,4 +235,13 @@ fn delegation_requires_owned_delegable_rights_and_never_grants_supervisor() {
     process::kill(pid, 0).unwrap();
     assert!(!process::pid_can_delegate(pid, process::cap::IPC_SEND));
     process::reap(pid).unwrap();
+}
+
+#[test]
+fn managed_snapshot_rejects_oversized_path_without_truncation() {
+    let req = process::SpawnRequest { name: "long-image-test".into(), uid: 0, parent: 1,
+        caps: 0, cwd: "/".into(), image_path: "x".repeat(process::MANAGED_PATH_MAX + 1) };
+    let pid = process::spawn_managed(&req).unwrap();
+    assert!(process::managed_snapshot(&req.name).is_err());
+    process::kill(pid, 0).unwrap(); process::reap(pid).unwrap();
 }

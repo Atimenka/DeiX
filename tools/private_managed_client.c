@@ -14,6 +14,7 @@ static inline long call5(unsigned long nr, unsigned long a, unsigned long b, uns
 }
 struct message { unsigned sender, reserved; unsigned long tag, a, b; };
 static inline long find(const void *ptr, unsigned long len) { return call4(0x44580006UL, (unsigned long)ptr, len, 0, 0); }
+struct managed_snapshot { unsigned pid, state, uid, path_len; unsigned long caps; char path[256]; };
 struct process_status { unsigned pid, state; int exit_code; unsigned has_exit; };
 struct result { int status; unsigned pid; };
 static long wait_result(long token, struct result *out) {
@@ -37,12 +38,20 @@ __attribute__((noreturn)) void _start(void) {
     if (pid <= 0) code = 1;
     else if (call4(0x44580007UL, pid, (unsigned long)&info, 0, 0) != 0 || info.pid != (unsigned)pid || info.state != 2 || info.has_exit != 0) code = 6;
     else if (call4(0x44580007UL, pid, 0x100000, 0, 0) != -14 || call4(0x44580007UL, 0xffffffffUL, (unsigned long)&info, 0, 0) != -2) code = 7;
-    else if (find(absent, sizeof(absent)-1) != -2) code = 2;
-    else if (find((void *)0x100000, 1) != -14) code = 3;
-    else if (find(service, 0) != -22 || find(service, 129) != -22) code = 4;
-    else if (find(invalid, 1) != -22) code = 5;
-    else if (call4(0x44580008UL, (unsigned long)rpc, sizeof(rpc)-1, (unsigned long)badpath, sizeof(badpath)-1) != -22) code = 8;
     else {
+        struct managed_snapshot snap;
+        long r = call4(0x4458000fUL, (unsigned long)service, sizeof(service)-1, (unsigned long)&snap, 0);
+        if (r != 0 || snap.pid != (unsigned)pid || snap.state != 2 || snap.uid != 0 || snap.caps != 127 || snap.path_len != sizeof(image)-1) code = 19;
+        for (unsigned i = 0; !code && i < sizeof(image)-1; i++) if (snap.path[i] != image[i]) code = 19;
+        if (!code && (call4(0x4458000fUL, (unsigned long)service, sizeof(service)-1, 0x100000, 0) != -14 ||
+            call4(0x4458000fUL, (unsigned long)absent, sizeof(absent)-1, (unsigned long)&snap, 0) != -2)) code = 20;
+    }
+    if (!code && find(absent, sizeof(absent)-1) != -2) code = 2;
+    else if (!code && find((void *)0x100000, 1) != -14) code = 3;
+    else if (!code && (find(service, 0) != -22 || find(service, 129) != -22)) code = 4;
+    else if (!code && find(invalid, 1) != -22) code = 5;
+    else if (!code && call4(0x44580008UL, (unsigned long)rpc, sizeof(rpc)-1, (unsigned long)badpath, sizeof(badpath)-1) != -22) code = 8;
+    else if (!code) {
         long token = call4(0x44580008UL, (unsigned long)rpc, sizeof(rpc)-1, (unsigned long)image, sizeof(image)-1);
         if (token <= 0 || call4(0x4458000aUL, token, 0x100000, 0, 0) != -14 || wait_result(token, &result) != 0 || result.status != 0 || !result.pid) code = 9;
         else {

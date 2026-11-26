@@ -12,11 +12,11 @@ Dinit bootstrap, no Dinit watchdog, and no login gate.
   writable pages are currently executable, so isolation is incomplete.
 * Private processes have a restricted ABI (`PROCESS_IPC_V1.md`): authenticated
   bounded mailboxes, boot-config snapshot read, heartbeat, managed service
-  lookup, status, and non-blocking start/stop. A kernel worker performs VFS
+  lookup, status, managed identity metadata, logging, and non-blocking start/stop. A kernel worker performs VFS
   operations. Starts currently allow only `.elf` under `/system/services/`,
   normally create children with zero capabilities, and cannot run legacy MEX.
   A separate explicit grant supports a restricted subset of the manager's
-  capabilities (IPC, heartbeat and boot-config read), but not full legacy
+  capabilities (IPC, heartbeat, boot-config read and logging), but not full legacy
   service authority.
 * The process table can reserve stable service identities. The existing in-kernel
   Dinit can reattach a surviving, matching managed process. A QEMU-only test

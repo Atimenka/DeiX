@@ -140,3 +140,22 @@ different PIDs are not aggregated together. Poll the returned token with
 the diagnostic event ID in the result's second field. Queue quotas and purge on
 caller exit apply. This supplies log writing, not Dinit's full log policy,
 query API, or durable audit guarantees.
+
+### Managed identity metadata
+
+`0x4458000f` takes `(name_ptr, name_len, out_ptr)`, requires
+`MANAGE_SERVICES`, and atomically snapshots a currently Created or Running
+managed identity under the process-table lock. Its fixed 280-byte little-endian
+output is PID, state, UID and path length (four u32s), capability mask (u64),
+and 256 bytes containing the exact UTF-8 image path followed by zeros. State
+values are 1 Created and 2 Running. It returns 0, -1 for missing capability,
+-2 if the identity is absent, -14 for invalid user memory, -22 for invalid name
+length or UTF-8, and -75 if the stored path exceeds 256 bytes. No allocation,
+truncation or filesystem I/O occurs in the syscall.
+
+A replacement manager can compare the recorded path, UID and capabilities to
+its desired policy before adopting a process. This is a point-in-time snapshot:
+the process can exit immediately afterwards; compare PID again for subsequent
+actions. A pathname is not a cryptographic identity of executable bytes, and
+this interface does not independently authenticate a changed disk image, list
+all identities, or implement adoption, recovery or restart policy.

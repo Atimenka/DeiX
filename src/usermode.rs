@@ -530,6 +530,31 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u
                 out[12..16].copy_from_slice(&(snapshot.exit_code.is_some() as u32).to_le_bytes());
                 return if crate::sched::current_copy_to_user(a2, &out) { 0 } else { (-14i64) as u64 };
             }
+            0x4458_000f => { // managed identity snapshot (name, len, out)
+                if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
+                let Ok(len) = usize::try_from(a2) else { return (-22i64) as u64; };
+                if len == 0 || len > crate::service_rpc::MAX_NAME { return (-22i64) as u64; }
+                let mut name = [0u8; crate::service_rpc::MAX_NAME];
+                if !crate::sched::current_copy_from_user(a1, &mut name[..len]) { return (-14i64) as u64; }
+                let Ok(name) = core::str::from_utf8(&name[..len]) else { return (-22i64) as u64; };
+                let snapshot = match crate::process::managed_snapshot(name) {
+                    Ok(Some(value)) => value, Ok(None) => return (-2i64) as u64,
+                    Err(()) => return (-75i64) as u64,
+                };
+                let state = match snapshot.state {
+                    crate::process::ProcessState::Created => 1u32,
+                    crate::process::ProcessState::Running => 2,
+                    _ => return (-2i64) as u64,
+                };
+                let mut out = [0u8; 280];
+                out[0..4].copy_from_slice(&snapshot.pid.to_le_bytes());
+                out[4..8].copy_from_slice(&state.to_le_bytes());
+                out[8..12].copy_from_slice(&snapshot.uid.to_le_bytes());
+                out[12..16].copy_from_slice(&(snapshot.path_len as u32).to_le_bytes());
+                out[16..24].copy_from_slice(&snapshot.caps.to_le_bytes());
+                out[24..].copy_from_slice(&snapshot.path);
+                return if crate::sched::current_copy_to_user(a3, &out) { 0 } else { (-14i64) as u64 };
+            }
             0x4458_0006 => { // find managed service (utf8 pointer, byte length)
                 if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
                 let Ok(len) = usize::try_from(a2) else { return (-22i64) as u64; };

@@ -340,6 +340,24 @@ pub struct ManagedProcess {
     pub uid: u32,
     pub caps: u64,
 }
+/// Fixed-size, allocation-free identity snapshot, taken under one table lock.
+/// A path too long for the ABI is rejected rather than silently truncated.
+pub const MANAGED_PATH_MAX: usize = 256;
+#[derive(Debug, Clone)]
+pub struct ManagedSnapshot {
+    pub pid: u32, pub state: ProcessState, pub uid: u32, pub caps: u64,
+    pub path_len: usize, pub path: [u8; MANAGED_PATH_MAX],
+}
+pub fn managed_snapshot(service: &str) -> Result<Option<ManagedSnapshot>, ()> {
+    let table = PROCS.lock();
+    let Some(p) = table.iter().find(|p| p.state.occupies_slot() && p.service_identity.as_deref() == Some(service)) else { return Ok(None); };
+    let bytes = p.image_path.as_bytes();
+    if bytes.len() > MANAGED_PATH_MAX { return Err(()); }
+    let mut result = ManagedSnapshot { pid: p.pid, state: p.state, uid: p.uid, caps: p.caps,
+        path_len: bytes.len(), path: [0; MANAGED_PATH_MAX] };
+    result.path[..bytes.len()].copy_from_slice(bytes);
+    Ok(Some(result))
+}
 /// Return the live PID without allocating while executing a syscall.
 pub fn managed_pid(service: &str) -> Option<u32> {
     let table = PROCS.lock();
