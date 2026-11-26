@@ -323,6 +323,11 @@ pub extern "C" fn kernel_main() -> ! {
         } else {
             crate::serial_println!("[vm-test] FAIL: CPL3 isolation test");
         }
+        if sched::private_ipc_selftest() {
+            crate::serial_println!("[vm-test] PASS: IPC exchanged between isolated processes");
+        } else {
+            crate::serial_println!("[vm-test] FAIL: isolated process IPC exchange");
+        }
         if sched::private_elf_selftest() {
             crate::serial_println!("[vm-test] PASS: system VFS ELF executed in private CPL3");
         } else {

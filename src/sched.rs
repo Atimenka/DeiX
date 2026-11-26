@@ -721,6 +721,39 @@ pub fn private_elf_selftest() -> bool {
     faulted && reaped_fault
 }
 
+/// Run two independently loaded processes through the real mailbox syscalls.
+/// The kernel seeds only the receiver PID for this CI-only test.
+pub fn private_ipc_selftest() -> bool {
+    use crate::process::{self, SpawnRequest};
+    let req = SpawnRequest { name: String::from("ipc-receiver"), uid: 0, parent: 0,
+        caps: process::cap::IPC_SEND | process::cap::IPC_RECEIVE,
+        cwd: String::from("/"), image_path: String::from("/system/tests/private_ipc_receiver.elf") };
+    let Ok(receiver) = process::spawn(&req) else { return false; };
+    let sender_req = SpawnRequest { name: String::from("ipc-sender"),
+        image_path: String::from("/system/tests/private_ipc_sender.elf"), ..req };
+    let Ok(sender) = process::spawn(&sender_req) else {
+        let _ = process::kill(receiver, -1); let _ = process::reap(receiver); return false;
+    };
+    let seeded = crate::process_ipc::send(crate::process_ipc::Message {
+        sender: 0, receiver: sender, tag: 100, a: receiver as u64, b: 0,
+    });
+    let started = seeded && process::exec(receiver).is_ok() && process::exec(sender).is_ok();
+    if started {
+        let rid = process::info(receiver).ok().and_then(|p| p.sched_id);
+        let sid = process::info(sender).ok().and_then(|p| p.sched_id);
+        if let (Some(rid), Some(sid)) = (rid, sid) { join(rid); join(sid); }
+    }
+    let sender_code = process::info(sender).ok().and_then(|p| p.exit_code);
+    let receiver_code = process::info(receiver).ok().and_then(|p| p.exit_code);
+    let ok = started && sender_code == Some(0) && receiver_code == Some(0);
+    if !ok { crate::serial_println!("[vm-test] IPC peers: sender={:?}, receiver={:?}", sender_code, receiver_code); }
+    for pid in [sender, receiver] {
+        if process::info(pid).map_or(false, |p| p.state != process::ProcessState::Zombie) { let _ = process::kill(pid, -1); }
+        let _ = process::reap(pid);
+    }
+    ok
+}
+
 // Real CR3 context-switch smoke test; it runs only in explicitly enabled
 // test builds. This is a supervisor-mode test, not proof of Ring-3 isolation.
 static VM_TEST_RESULTS: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];

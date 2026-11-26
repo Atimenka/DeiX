@@ -62,7 +62,8 @@ with tempfile.TemporaryDirectory() as tmp:
     required = [b'[ramdisk] active', b'ATA disk: not used', b'[hda]', b'[ OK ] STORAGE', b'BOOT COMPLETE', b'[loginui]',
                 b'boot chain done: 3 launched, 0 failed', b'[vm-test] PASS: private CR3 switched between tasks',
                 b'[vm-test] PASS: CPL3 private pages and kernel access fault',
-                b'[vm-test] PASS: system VFS ELF executed in private CPL3']
+                b'[vm-test] PASS: system VFS ELF executed in private CPL3',
+                b'[vm-test] PASS: IPC exchanged between isolated processes']
     missing = [x.decode() for x in required if x not in data]
     unchanged = hashlib.sha256(disk.read_bytes()).digest() == original
     if missing or not unchanged or b'KERNEL PANIC' in data or b'DX-DISK-0004' in data:

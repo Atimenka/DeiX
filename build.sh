@@ -111,6 +111,12 @@ if [ "${DEIX_TEST_ADDRESS_SPACE:-}" = "1" ]; then
     gcc -nostdlib -nostartfiles -static-pie -fPIE -Os -DDEIX_PROBE_DENIED \
         -Wl,--build-id=none -Wl,-z,noseparate-code \
         -o "$BUILD/private_elf_denied.elf" tools/private_elf_probe.c
+    gcc -nostdlib -nostartfiles -static-pie -fPIE -Os -DDEIX_IPC_SENDER \
+        -Wl,--build-id=none -Wl,-z,noseparate-code \
+        -o "$BUILD/private_ipc_sender.elf" tools/private_ipc_peer.c
+    gcc -nostdlib -nostartfiles -static-pie -fPIE -Os \
+        -Wl,--build-id=none -Wl,-z,noseparate-code \
+        -o "$BUILD/private_ipc_receiver.elf" tools/private_ipc_peer.c
 fi
 
 echo "==> [2d/8] Готовим загрузочное лого (assets/logo.dxlg или assets/logo.png -> DXLG+RLE)"

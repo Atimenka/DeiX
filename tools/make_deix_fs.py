@@ -478,7 +478,7 @@ def init_all_partitions(img, boot_files):
             })
             # Test-only guest binary; do not ship a probe in normal images.
             if os.environ.get("DEIX_TEST_ADDRESS_SPACE") == "1":
-                for name in ("private_elf_probe.elf", "private_elf_fault.elf", "private_elf_denied.elf"):
+                for name in ("private_elf_probe.elf", "private_elf_fault.elf", "private_elf_denied.elf", "private_ipc_sender.elf", "private_ipc_receiver.elf"):
                     with open(os.path.join("build", name), "rb") as probe:
                         system_files["tests/" + name] = probe.read()
             # UI-звуки лежат ТОЛЬКО в /system/media/audio/ui/ —
