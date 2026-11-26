@@ -231,6 +231,7 @@ fn delegation_requires_owned_delegable_rights_and_never_grants_supervisor() {
     assert!(!process::pid_can_delegate(pid, process::cap::IPC_RECEIVE));
     assert!(!process::pid_can_delegate(pid, process::cap::MANAGE_SERVICES));
     assert!(!process::pid_can_delegate(pid, process::cap::DELEGATE_SERVICES));
+    assert!(!process::pid_can_delegate(pid, process::cap::READ_SESSION));
     assert!(!process::pid_can_delegate(pid, u64::MAX));
     process::kill(pid, 0).unwrap();
     assert!(!process::pid_can_delegate(pid, process::cap::IPC_SEND));

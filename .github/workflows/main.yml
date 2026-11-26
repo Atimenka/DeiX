@@ -104,6 +104,11 @@ jobs:
           rustc --edition=2021 --test src/process_heartbeat.rs -o /tmp/deix-process-heartbeat-tests
           /tmp/deix-process-heartbeat-tests
 
+      - name: Authenticated session snapshot tests
+        run: |
+          rustc --edition=2021 --test tools/session_snapshot_tests.rs -o /tmp/deix-session-tests
+          /tmp/deix-session-tests
+
       - name: Boot configuration parser tests
         run: |
           rustc --edition=2021 --test tools/init_config_tests.rs -o /tmp/deix-init-config-tests

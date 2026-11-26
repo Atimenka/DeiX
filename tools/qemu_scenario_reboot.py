@@ -128,6 +128,8 @@ try:
         snapshot('фаза 1 до создания')
         print('>>> ФАЗА 1 FAIL: шифрование не включено', flush=True); sys.exit(2)
     wait_for([b'Welcome to DeiX, alice!'], desc='вход после создания', timeout=60)
+    if not wait_for([b'[vm-test] PASS: authenticated session snapshot'], desc='private session ABI', timeout=60):
+        print('>>> Session snapshot ABI FAIL', flush=True); sys.exit(8)
     wait_for([b'Welcome to DeiX CLI'], desc='CLI после первого входа', timeout=60)
     snapshot('фаза 1 после создания (TPM записан)')
     stop_qemu()

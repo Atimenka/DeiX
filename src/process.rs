@@ -97,6 +97,8 @@ pub mod cap {
     pub const DELEGATE_SERVICES: u64 = 1 << 11;
     /// Submit bounded messages to the kernel diagnostic log.
     pub const WRITE_LOG: u64 = 1 << 12;
+    /// Read the current authenticated local session identity.
+    pub const READ_SESSION: u64 = 1 << 13;
     /// Only capabilities with implemented isolated-process interfaces are
     /// currently delegable. Supervisor/installer authority is never delegated.
     pub const DELEGABLE: u64 = IPC_SEND | IPC_RECEIVE | HEARTBEAT | READ_BOOT_CONFIG | WRITE_LOG;

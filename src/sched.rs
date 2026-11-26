@@ -737,6 +737,24 @@ pub fn private_elf_selftest() -> bool {
     nx_faulted && nx_reaped
 }
 
+/// Test-only process reads the real session only after successful login.
+pub fn session_snapshot_selftest(uid: u32, username: &str) -> bool {
+    use crate::process::{self, ProcessState, SpawnRequest};
+    let Ok(snapshot) = crate::session_snapshot::snapshot() else { return false; };
+    if snapshot[0..4] != uid.to_le_bytes() || snapshot[4..8] != (username.len() as u32).to_le_bytes()
+        || snapshot.get(16..16 + username.len()) != Some(username.as_bytes()) { return false; }
+    let req = SpawnRequest { name: String::from("session-abi-test"), uid: 0, parent: 0,
+        caps: process::cap::READ_SESSION, cwd: String::from("/"),
+        image_path: String::from("/system/tests/private_session_probe.elf") };
+    let Ok(pid) = process::spawn(&req) else { return false; };
+    if process::exec(pid).is_err() { let _ = process::kill(pid, -1); let _ = process::reap(pid); return false; }
+    let Some(id) = process::info(pid).ok().and_then(|p| p.sched_id) else { return false; };
+    join(id);
+    let ok = process::info(pid).map_or(false, |p| p.state == ProcessState::Zombie && p.exit_code == Some(0));
+    let reaped = process::reap(pid).ok() == Some(Some(0));
+    ok && reaped
+}
+
 /// Run two independently loaded processes through the real mailbox syscalls.
 /// The kernel seeds only the receiver PID for this CI-only test.
 pub fn private_ipc_selftest() -> bool {
@@ -783,7 +801,7 @@ pub fn managed_service_selftest() -> bool {
     let duplicate_blocked = matches!(process::spawn_managed(&req), Err(ProcessError::AlreadyManaged(p)) if p == pid);
     let client_req = SpawnRequest { name: String::from("managed-lookup-test"), uid: 0, parent: 1,
         caps: process::cap::MANAGE_SERVICES | process::cap::DELEGATE_SERVICES
-            | process::cap::IPC_SEND | process::cap::IPC_RECEIVE | process::cap::READ_BOOT_CONFIG | process::cap::WRITE_LOG,
+            | process::cap::IPC_SEND | process::cap::IPC_RECEIVE | process::cap::READ_BOOT_CONFIG | process::cap::WRITE_LOG | process::cap::READ_SESSION,
         cwd: String::from("/userdata"), image_path: String::from("/system/tests/private_managed_client.elf") };
     let lookup_ok = if let Ok(client) = process::spawn(&client_req) {
         if process::exec(client).is_ok() {

@@ -68,6 +68,10 @@ __attribute__((noreturn)) void _start(void) {
         }
     }
     if (!code) {
+        char session[48];
+        if (call4(0x44580013UL, (unsigned long)session, 0, 0, 0) != -2) code = 23;
+    }
+    if (!code) {
         long first = call4(0x44580010UL, 0, 0, 0, 0);
         long second = call4(0x44580010UL, 0, 0, 0, 0);
         if (first < 0 || second < first) code = 21;

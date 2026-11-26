@@ -26,6 +26,8 @@ Dinit bootstrap, no Dinit watchdog, and no login gate.
   current kernel fallback. The private ABI provides a boot-time snapshot; it
   supports explicit asynchronous refresh. Applying the refreshed content still
   belongs to the future Dinit process.
+* The kernel exposes a capability-checked snapshot of the current authenticated
+  local login. It is not a full session lifecycle/event protocol or policy.
 
 ## Work required before the switch
 

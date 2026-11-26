@@ -72,6 +72,7 @@ mod process;
 mod process_ipc;
 mod service_rpc;
 mod process_heartbeat;
+mod session_snapshot;
 mod boot_config;
 mod renderer;
 mod rng;
@@ -428,6 +429,16 @@ pub extern "C" fn kernel_main() -> ! {
     update::run_apply_mode();
     cli::set_current_user(&username);
     let uid = if username == "root" { 0 } else { 1000 };
+    if !session_snapshot::publish_authenticated(uid, &username, timer::uptime_ms()) {
+        crate::serial_println!("[session] authenticated login cannot be represented in private ABI");
+    }
+    if option_env!("DEIX_TEST_ADDRESS_SPACE") == Some("1") {
+        if sched::session_snapshot_selftest(uid, &username) {
+            crate::serial_println!("[vm-test] PASS: authenticated session snapshot");
+        } else {
+            crate::serial_println!("[vm-test] FAIL: authenticated session snapshot");
+        }
+    }
     if let Some(dinit) = crate::dinit::DINIT.lock().as_mut() {
         dinit.register_user(uid, &username);
     }

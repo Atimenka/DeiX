@@ -179,3 +179,18 @@ chunks and retry on -116. Generations increase on each successful refresh,
 including an identical file, never wrap, and a failed refresh preserves the
 last good snapshot and generation. The older read call does not offer this
 consistency guarantee.
+
+### Authenticated local session snapshot
+
+`0x44580013` takes an output pointer and requires the non-delegable
+`READ_SESSION` capability. After successful local login, the trusted kernel
+login flow publishes a point-in-time 48-byte record: UID and username length
+(two little-endian u32s), login uptime in milliseconds (u64), then 32 bytes of
+UTF-8 username, zero-padded. Return values are 0, -1 without permission, -2
+before login, -14 for invalid output memory and -75 if the authenticated name
+cannot be represented without truncation. No password, hash or token is exposed.
+The kernel assigns UID as in the existing login flow; it is not supplied by the
+private process. This is a single local-login snapshot, not a session event
+stream, logout API, authorization gate, policy implementation or Dinit session
+ownership. Current UI has no corresponding logout path. A replacement manager
+must still handle future session lifecycle and reconciliation explicitly.
