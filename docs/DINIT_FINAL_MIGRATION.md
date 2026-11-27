@@ -13,7 +13,8 @@ Dinit bootstrap, no Dinit watchdog, and no login gate.
   execution. Legacy MEX mappings are not covered by this guarantee.
 * Private processes have a restricted ABI (`PROCESS_IPC_V1.md`): authenticated
   bounded mailboxes, boot-config snapshot read, heartbeat, managed service
-  lookup, status, managed identity metadata, heartbeat observation,
+  lookup, status, live managed-process enumeration and identity metadata,
+  heartbeat observation,
   zombie discovery/reap, logging,
   and non-blocking start/stop. A kernel worker performs VFS
   operations. Starts currently allow only `.elf` under `/system/services/`,

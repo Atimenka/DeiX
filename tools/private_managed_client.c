@@ -17,6 +17,7 @@ static inline long find(const void *ptr, unsigned long len) { return call4(0x445
 struct managed_snapshot { unsigned pid, state, uid, path_len; unsigned long caps; char path[256]; };
 struct process_status { unsigned pid, state; int exit_code; unsigned has_exit; };
 struct result { int status; unsigned pid; };
+struct managed_listing { unsigned pid, state, uid, name_len, path_len, flags; unsigned long caps; char name[128], path[256]; };
 struct heartbeat { unsigned health, has_last; unsigned long last, now; };
 struct zombie { unsigned pid, name_len; int code; unsigned reserved; char name[128]; };
 static long wait_result(long token, struct result *out) {
@@ -45,6 +46,15 @@ __attribute__((noreturn)) void _start(void) {
         long r = call4(0x4458000fUL, (unsigned long)service, sizeof(service)-1, (unsigned long)&snap, 0);
         if (r != 0 || snap.pid != (unsigned)pid || snap.state != 2 || snap.uid != 0 || snap.caps != 127 || snap.path_len != sizeof(image)-1) code = 19;
         for (unsigned i = 0; !code && i < sizeof(image)-1; i++) if (snap.path[i] != image[i]) code = 19;
+        struct managed_listing listing;
+        if (!code && (call4(0x44580017UL, pid-1, (unsigned long)&listing, 0, 0) != 0 ||
+            listing.pid != (unsigned)pid || listing.state != 2 || listing.uid != 0 || listing.caps != 127 ||
+            listing.name_len != sizeof(service)-1 || listing.path_len != sizeof(image)-1 || listing.flags)) code = 29;
+        for (unsigned i = 0; !code && i < sizeof(service)-1; i++) if (listing.name[i] != service[i]) code = 29;
+        for (unsigned i = 0; !code && i < sizeof(image)-1; i++) if (listing.path[i] != image[i]) code = 29;
+        if (!code && (call4(0x44580017UL, pid-1, 0x100000, 0, 0) != -14 ||
+            call4(0x44580017UL, 0xffffffffUL, (unsigned long)&listing, 0, 0) != -2 ||
+            call4(0x44580017UL, 0x100000000UL, (unsigned long)&listing, 0, 0) != -22)) code = 30;
         if (!code && (call4(0x4458000fUL, (unsigned long)service, sizeof(service)-1, 0x100000, 0) != -14 ||
             call4(0x4458000fUL, (unsigned long)absent, sizeof(absent)-1, (unsigned long)&snap, 0) != -2)) code = 20;
     }

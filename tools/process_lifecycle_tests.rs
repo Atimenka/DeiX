@@ -279,3 +279,23 @@ fn managed_heartbeat_is_observed_without_changing_supervisor_policy() {
     timer::set(171); assert_eq!(process::managed_heartbeat(pid, 50), Ok((Health::TimedOut, Some(120), 171)));
     process::kill(pid, 0).unwrap(); assert_eq!(process::managed_heartbeat(pid, 50), Err(-2)); process::reap(pid).unwrap();
 }
+
+#[test]
+fn live_managed_enumeration_exposes_identity_and_never_truncates_path() {
+    let req = process::SpawnRequest { name: "live-enumeration-test".into(), uid: 42, parent: 1,
+        caps: process::cap::IPC_SEND, cwd: "/".into(), image_path: "/system/services/a.elf".into() };
+    let pid = process::spawn_managed(&req).unwrap();
+    let item = process::next_managed(pid - 1).unwrap();
+    assert_eq!((item.pid, item.state, item.uid, item.caps), (pid, process::ProcessState::Created, 42, req.caps));
+    assert_eq!(&item.name[..item.name_len], req.name.as_bytes());
+    assert_eq!(&item.path[..item.path_len], req.image_path.as_bytes());
+    assert!(!item.path_omitted);
+    process::kill(pid, 0).unwrap(); process::reap(pid).unwrap();
+    let oversized = process::SpawnRequest { name: "live-long-path-test".into(), image_path: "x".repeat(257), ..req };
+    let next = process::spawn_managed(&oversized).unwrap();
+    let item = process::next_managed(next - 1).unwrap();
+    assert_eq!(item.pid, next); assert!(item.path_omitted); assert_eq!(item.path_len, 0);
+    assert!(item.path.iter().all(|v| *v == 0));
+    process::kill(next, 0).unwrap(); process::reap(next).unwrap();
+    assert!(process::next_managed(u32::MAX).is_none());
+}

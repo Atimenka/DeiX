@@ -238,3 +238,23 @@ Service worker starts always use the private ELF execution path. A legacy MEX
 image is rejected by content as well as by extension; renaming a MEX file to
 `.elf` cannot select the legacy shared mapping. A failed image start is killed
 and reaped and completes with -5. Legacy non-service MEX behavior is unchanged.
+
+### Live managed process discovery
+
+`0x44580017` returns the next live managed identity after a PID cursor. It
+requires `MANAGE_SERVICES` and takes `(after_pid, out_ptr)`. The 416-byte
+little-endian record consists of PID, state (1 Created / 2 Running), UID, name
+length, image-path length and flags (six u32s), capabilities (u64), a 128-byte
+zero-padded identity and a 256-byte zero-padded image path. Bit 0 of flags means
+the legacy path exceeded the limit and was omitted; in that case path length
+is zero and a supervisor must not adopt based on this record. Other flags are
+zero. Returns 0, -1 for missing permission, -2 at the end, -14 for invalid
+output memory, or -22 for an out-of-range cursor. No allocation or VFS I/O
+occurs in the syscall.
+
+The list is not a transaction: processes may start or exit between calls, and a
+Created process may finish loading or fail. PIDs do not repeat. After a pass,
+a supervisor must rescan as needed and recheck identity, state and authority
+before acting. The separately enumerated zombie list covers exited processes;
+this discovery interface is not itself recovery, adoption, or a guarantee that
+path contents match previously executed bytes.

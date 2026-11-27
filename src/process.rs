@@ -360,6 +360,30 @@ pub fn managed_snapshot(service: &str) -> Result<Option<ManagedSnapshot>, ()> {
     result.path[..bytes.len()].copy_from_slice(bytes);
     Ok(Some(result))
 }
+/// Enumerate live identities by monotonically increasing PID, without heap
+/// allocation. A legacy path beyond the ABI bound is explicitly omitted, so a
+/// manager can discover it but must not adopt it based on incomplete metadata.
+#[derive(Debug, Clone)]
+pub struct ManagedListing {
+    pub pid: u32, pub state: ProcessState, pub uid: u32, pub caps: u64,
+    pub name: [u8; 128], pub name_len: usize,
+    pub path: [u8; MANAGED_PATH_MAX], pub path_len: usize, pub path_omitted: bool,
+}
+pub fn next_managed(after: u32) -> Option<ManagedListing> {
+    let table = PROCS.lock();
+    let p = table.iter().filter(|p| p.pid > after && p.state.occupies_slot() && p.service_identity.is_some())
+        .min_by_key(|p| p.pid)?;
+    let name = p.service_identity.as_ref()?.as_bytes();
+    if name.len() > 128 { return None; } // spawn_managed enforces this invariant
+    let image = p.image_path.as_bytes();
+    let omitted = image.len() > MANAGED_PATH_MAX;
+    let mut snapshot = ManagedListing { pid: p.pid, state: p.state, uid: p.uid, caps: p.caps,
+        name: [0; 128], name_len: name.len(), path: [0; MANAGED_PATH_MAX],
+        path_len: if omitted { 0 } else { image.len() }, path_omitted: omitted };
+    snapshot.name[..name.len()].copy_from_slice(name);
+    if !omitted { snapshot.path[..image.len()].copy_from_slice(image); }
+    Some(snapshot)
+}
 /// Return the live PID without allocating while executing a syscall.
 pub fn managed_pid(service: &str) -> Option<u32> {
     let table = PROCS.lock();

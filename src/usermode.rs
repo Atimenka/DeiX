@@ -537,6 +537,24 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u
                 out[12..16].copy_from_slice(&(snapshot.exit_code.is_some() as u32).to_le_bytes());
                 return if crate::sched::current_copy_to_user(a2, &out) { 0 } else { (-14i64) as u64 };
             }
+            0x4458_0017 => { // enumerate live managed processes (after PID, out)
+                if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
+                let Ok(after) = u32::try_from(a1) else { return (-22i64) as u64; };
+                let Some(s) = crate::process::next_managed(after) else { return (-2i64) as u64; };
+                let state: u32 = match s.state { crate::process::ProcessState::Created => 1,
+                    crate::process::ProcessState::Running => 2, _ => return (-2i64) as u64 };
+                let mut out = [0u8; 416];
+                out[0..4].copy_from_slice(&s.pid.to_le_bytes());
+                out[4..8].copy_from_slice(&state.to_le_bytes());
+                out[8..12].copy_from_slice(&s.uid.to_le_bytes());
+                out[12..16].copy_from_slice(&(s.name_len as u32).to_le_bytes());
+                out[16..20].copy_from_slice(&(s.path_len as u32).to_le_bytes());
+                out[20..24].copy_from_slice(&(s.path_omitted as u32).to_le_bytes());
+                out[24..32].copy_from_slice(&s.caps.to_le_bytes());
+                out[32..160].copy_from_slice(&s.name);
+                out[160..416].copy_from_slice(&s.path);
+                return if crate::sched::current_copy_to_user(a2, &out) { 0 } else { (-14i64) as u64 };
+            }
             0x4458_0016 => { // observe managed heartbeat (pid, timeout ms, out)
                 if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
                 let Ok(pid) = u32::try_from(a1) else { return (-22i64) as u64; };
