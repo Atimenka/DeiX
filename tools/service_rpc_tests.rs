@@ -21,7 +21,7 @@ mod process {
     pub fn pid_has_capability(_: u32, _: u64) -> bool { false }
     pub fn pid_can_delegate(_: u32, _: u64) -> bool { false }
     pub fn spawn_managed(_: &SpawnRequest) -> Result<u32, ProcessError> { Err(ProcessError::Other) }
-    pub fn exec(_: u32) -> Result<(), ()> { Err(()) }
+    pub fn exec_private(_: u32) -> Result<(), ()> { Err(()) }
     pub fn kill(_: u32, _: i32) -> Result<(), ()> { Err(()) }
     pub fn reap(_: u32) -> Result<Option<i32>, ()> { Err(()) }
     pub fn managed_process(_: &str) -> Option<ManagedProcess> { None }

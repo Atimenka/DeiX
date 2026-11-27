@@ -163,7 +163,7 @@ fn execute(req: Request) -> (i32, u32) {
                 Err(ProcessError::AlreadyManaged(pid)) => return (-17, pid),
                 Err(_) => return (-12, 0),
             };
-            if process::exec(pid).is_err() { let _ = process::kill(pid, -1); let _ = process::reap(pid); return (-5, 0); }
+            if process::exec_private(pid).is_err() { let _ = process::kill(pid, -1); let _ = process::reap(pid); return (-5, 0); }
             // If the submitter died while the filesystem operation was in
             // progress, do not leave a newly started service orphaned.
             if !process::pid_has_capability(req.caller, process::cap::MANAGE_SERVICES)

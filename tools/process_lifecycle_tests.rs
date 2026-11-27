@@ -265,3 +265,17 @@ fn managed_zombie_discovery_and_exact_reap_survive_replacement() {
     assert_eq!(process::managed_pid(&req.name), Some(new));
     process::kill(new, 0).unwrap(); process::reap(new).unwrap();
 }
+
+#[test]
+fn managed_heartbeat_is_observed_without_changing_supervisor_policy() {
+    use process_heartbeat::Health;
+    let req = process::SpawnRequest { name: "managed-heartbeat-observe".into(), uid: 0, parent: 1,
+        caps: process::cap::HEARTBEAT, cwd: "/".into(), image_path: "/svc.elf".into() };
+    let pid = process::spawn_managed(&req).unwrap();
+    timer::set(100); process::mark_running(pid, 64).unwrap();
+    assert_eq!(process::managed_heartbeat(pid, 50), Ok((Health::Starting, None, 100)));
+    sched::set_current(64); timer::set(120); assert!(process::heartbeat_current());
+    assert_eq!(process::managed_heartbeat(pid, 50), Ok((Health::Alive, Some(120), 120)));
+    timer::set(171); assert_eq!(process::managed_heartbeat(pid, 50), Ok((Health::TimedOut, Some(120), 171)));
+    process::kill(pid, 0).unwrap(); assert_eq!(process::managed_heartbeat(pid, 50), Err(-2)); process::reap(pid).unwrap();
+}

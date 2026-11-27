@@ -7,7 +7,7 @@ static inline long call4(unsigned long nr, unsigned long a, unsigned long b, uns
 }
 __attribute__((noreturn)) void _start(void) {
     long parent = call4(0x4458000cUL, 0, 0, 0, 0);
-    if (parent <= 0 || call4(0x44580001UL, parent, 0x99, 0x1234, 0) != 0)
+    if (parent <= 0 || call4(0x44580005UL, 0, 0, 0, 0) != 0 || call4(0x44580001UL, parent, 0x99, 0x1234, 0) != 0)
         call4(60, 51, 0, 0, 0);
     for (;;) __asm__ volatile("pause");
 }

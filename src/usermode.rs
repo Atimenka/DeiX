@@ -537,6 +537,19 @@ extern "C" fn syscall_handler(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u
                 out[12..16].copy_from_slice(&(snapshot.exit_code.is_some() as u32).to_le_bytes());
                 return if crate::sched::current_copy_to_user(a2, &out) { 0 } else { (-14i64) as u64 };
             }
+            0x4458_0016 => { // observe managed heartbeat (pid, timeout ms, out)
+                if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
+                let Ok(pid) = u32::try_from(a1) else { return (-22i64) as u64; };
+                let (health, last, now) = match crate::process::managed_heartbeat(pid, a2) { Ok(v) => v, Err(e) => return e as i64 as u64 };
+                let status: u32 = match health { crate::process_heartbeat::Health::Starting => 1,
+                    crate::process_heartbeat::Health::Alive => 2, crate::process_heartbeat::Health::TimedOut => 3 };
+                let mut out = [0u8; 24];
+                out[..4].copy_from_slice(&status.to_le_bytes());
+                out[4..8].copy_from_slice(&(last.is_some() as u32).to_le_bytes());
+                out[8..16].copy_from_slice(&last.unwrap_or(0).to_le_bytes());
+                out[16..24].copy_from_slice(&now.to_le_bytes());
+                return if crate::sched::current_copy_to_user(a3, &out) { 0 } else { (-14i64) as u64 };
+            }
             0x4458_0014 => { // reap exact managed zombie (name, len, pid, out)
                 if !crate::process::current_has_capability(crate::process::cap::MANAGE_SERVICES) { return (-1i64) as u64; }
                 let Ok(len) = usize::try_from(a2) else { return (-22i64) as u64; };

@@ -400,8 +400,13 @@ extern "C" fn launch_trampoline() {
 /// Загружает образ процесса и создаёт для него задачу планировщика.
 ///
 /// MEX uses the legacy shared mapping; static PIE ELF uses private CPL3 pages.
-/// The private ELF syscall ABI currently supports only termination.
-pub fn exec(pid: u32) -> Result<(), ProcessError> {
+pub fn exec(pid: u32) -> Result<(), ProcessError> { exec_inner(pid, false) }
+
+/// Service ABI entry point: never dispatch a disguised MEX image to the
+/// legacy shared address space, regardless of its path or filename.
+pub fn exec_private(pid: u32) -> Result<(), ProcessError> { exec_inner(pid, true) }
+
+fn exec_inner(pid: u32, private_only: bool) -> Result<(), ProcessError> {
     let path = {
         let table = PROCS.lock();
         let p = table
@@ -418,6 +423,9 @@ pub fn exec(pid: u32) -> Result<(), ProcessError> {
     let img = crate::vfs::read_file(&path).map_err(|e| ProcessError::Vfs(e.message()))?;
 
     let is_mex = path.ends_with(".mex") || crate::mex::is_mex_image(&img);
+    if private_only && is_mex {
+        return Err(ProcessError::BadImage(String::from("legacy MEX не разрешён для приватной службы")));
+    }
 
     if !is_mex {
         let mut space = crate::sched::new_user_address_space()
@@ -754,6 +762,16 @@ pub fn heartbeat_health(pid: u32, timeout_ms: u64) -> Option<crate::process_hear
     let table = PROCS.lock();
     let p = table.iter().find(|p| p.pid == pid && p.state == ProcessState::Running)?;
     Some(p.heartbeat?.health(crate::timer::uptime_ms(), timeout_ms))
+}
+
+/// Observe a managed process's authenticated heartbeat without transferring
+/// supervision policy into the kernel. PID is never reused and may be stale.
+pub fn managed_heartbeat(pid: u32, timeout_ms: u64) -> Result<(crate::process_heartbeat::Health, Option<u64>, u64), i32> {
+    let table = PROCS.lock();
+    let Some(p) = table.iter().find(|p| p.pid == pid && p.state == ProcessState::Running && p.service_identity.is_some()) else { return Err(-2); };
+    let Some(hb) = p.heartbeat else { return Err(-95); };
+    let now = crate::timer::uptime_ms();
+    Ok((hb.health(now, timeout_ms), hb.last_ms(), now))
 }
 
 /// Parent of the current running process, derived from the process table.

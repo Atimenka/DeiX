@@ -801,7 +801,7 @@ pub fn managed_service_selftest() -> bool {
     let duplicate_blocked = matches!(process::spawn_managed(&req), Err(ProcessError::AlreadyManaged(p)) if p == pid);
     let client_req = SpawnRequest { name: String::from("managed-lookup-test"), uid: 0, parent: 1,
         caps: process::cap::MANAGE_SERVICES | process::cap::DELEGATE_SERVICES
-            | process::cap::IPC_SEND | process::cap::IPC_RECEIVE | process::cap::READ_BOOT_CONFIG | process::cap::WRITE_LOG | process::cap::READ_SESSION,
+            | process::cap::IPC_SEND | process::cap::IPC_RECEIVE | process::cap::READ_BOOT_CONFIG | process::cap::WRITE_LOG | process::cap::READ_SESSION | process::cap::HEARTBEAT,
         cwd: String::from("/userdata"), image_path: String::from("/system/tests/private_managed_client.elf") };
     let lookup_ok = if let Ok(client) = process::spawn(&client_req) {
         if process::exec(client).is_ok() {

@@ -216,3 +216,25 @@ for a still-live instance, -14 for invalid memory, -22 for invalid input, or
 -5 for a zombie lacking exit status. Output memory is checked before removal.
 This provides bounded discovery and cleanup, not restart policy or a reliable
 event stream; another authorized manager may reap an entry first.
+
+### Observation of managed heartbeats
+
+`0x44580016` takes `(pid, timeout_ms, out_ptr)` and requires
+`MANAGE_SERVICES`. The target must be a running managed process with the
+`HEARTBEAT` capability; the caller cannot supply or modify heartbeat times.
+The 24-byte little-endian result contains health (u32: 1 starting, 2 alive,
+3 timed out), last-heartbeat-present (u32), last heartbeat uptime (u64, zero
+if absent), and the kernel's sampled uptime (u64). Timeout is evaluated as
+elapsed strictly greater than the supplied interval. Return values: 0, -1
+without permission, -2 for an absent/non-running/unmanaged PID, -95 when the
+process has no heartbeat, -14 for an invalid output range and -22 for an
+invalid PID. The snapshot can become stale immediately; deciding whether and
+when to restart remains supervisor policy. This interface is not the Dinit
+watchdog.
+
+### Private service image enforcement
+
+Service worker starts always use the private ELF execution path. A legacy MEX
+image is rejected by content as well as by extension; renaming a MEX file to
+`.elf` cannot select the legacy shared mapping. A failed image start is killed
+and reaped and completes with -5. Legacy non-service MEX behavior is unchanged.

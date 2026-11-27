@@ -17,6 +17,7 @@ static inline long find(const void *ptr, unsigned long len) { return call4(0x445
 struct managed_snapshot { unsigned pid, state, uid, path_len; unsigned long caps; char path[256]; };
 struct process_status { unsigned pid, state; int exit_code; unsigned has_exit; };
 struct result { int status; unsigned pid; };
+struct heartbeat { unsigned health, has_last; unsigned long last, now; };
 struct zombie { unsigned pid, name_len; int code; unsigned reserved; char name[128]; };
 static long wait_result(long token, struct result *out) {
     for (unsigned i = 0; i < 200000; i++) {
@@ -67,6 +68,13 @@ __attribute__((noreturn)) void _start(void) {
                 }
             }
         }
+    }
+    if (!code) {
+        static const char name[] = "disguised-legacy-test";
+        static const char path[] = "/system/tests/disguised_mex.elf";
+        long token = call4(0x44580008UL, (unsigned long)name, sizeof(name)-1, (unsigned long)path, sizeof(path)-1);
+        if (token <= 0 || wait_result(token, &result) != 0 || result.status != -5 ||
+            find(name, sizeof(name)-1) != -2) code = 27;
     }
     if (!code) {
         static const char dead_name[] = "exited-service-test";
@@ -121,7 +129,7 @@ __attribute__((noreturn)) void _start(void) {
     if (!code) {
         static const char delegated[] = "delegated-ipc-test";
         static const char delegated_image[] = "/system/tests/private_delegated_probe.elf";
-        const unsigned long ipc_send = 1UL << 7;
+        const unsigned long ipc_send = (1UL << 7) | (1UL << 10);
         long denied = call5(0x4458000bUL, (unsigned long)delegated, sizeof(delegated)-1,
                             (unsigned long)delegated_image, sizeof(delegated_image)-1, 1UL << 5);
         if (denied != -1) code = 13;
@@ -136,6 +144,11 @@ __attribute__((noreturn)) void _start(void) {
                 for (unsigned i = 0; i < 200000 && rc == -11; i++)
                     rc = call4(0x44580002UL, (unsigned long)&msg, 0, 0, 0);
                 if (rc != 0 || msg.sender != child || msg.tag != 0x99 || msg.a != 0x1234) code = 15;
+                struct heartbeat hb;
+                if (!code && (call4(0x44580016UL, child, 10000, (unsigned long)&hb, 0) != 0 ||
+                    hb.health != 2 || hb.has_last != 1 || hb.last > hb.now ||
+                    call4(0x44580016UL, child, 10000, 0x100000, 0) != -14 ||
+                    call4(0x44580016UL, 0xffffffffUL, 10000, (unsigned long)&hb, 0) != -2)) code = 28;
                 token = call4(0x44580009UL, (unsigned long)delegated, sizeof(delegated)-1, child, 0);
                 if (token <= 0 || wait_result(token, &result) != 0 || result.status != 0 || result.pid != child) code = 16;
             }
